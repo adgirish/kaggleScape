@@ -1,37 +1,75 @@
-import pandas as pd
+# Create training and validation data sets that mirror the relationship
+#   between the training data and the test data
+
+# Based on my script
+#   https://www.kaggle.com/aharless/training-and-validation-data
+# which is based on Konrad's script
+#   https://www.kaggle.com/konradb/validation-set
+# and Alexander Firsov's discussion thread
+#   https://www.kaggle.com/c/talkingdata-adtracking-fraud-detection/discussion/51877
+
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-from sklearn.grid_search import GridSearchCV
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+import gc
 
+# Data specifications
+columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        'is_attributed' : 'uint8',
+        }
+        
+# Training data
+print( "Extracting training data...")
+training = pd.read_csv( "../input/train.csv", 
+                        nrows=122071523, 
+                        usecols=columns, 
+                        dtype=dtypes)
+                        
+# Validation data
+print( "Extracting first chunk of validation data...")
+valid1 = pd.read_csv( "../input/train.csv", 
+                      skiprows=range(1,144708153), 
+                      nrows=7705357, 
+                      usecols=columns, 
+                      dtype=dtypes)
+print( "Extracting second chunk of validation data...")
+valid2 = pd.read_csv( "../input/train.csv", 
+                      skiprows=range(1,161974466), 
+                      nrows=6291379, 
+                      usecols=columns, 
+                      dtype=dtypes)
+valid2 = pd.concat([valid1, valid2])
+del valid1
+gc.collect()
+print( "Extracting third chunk of validation data...")
+valid3 = pd.read_csv( "../input/train.csv", 
+                      skiprows=range(1,174976527), 
+                      nrows=6901686, 
+                      usecols=columns, 
+                      dtype=dtypes)
+valid3 = pd.concat([valid2,valid3])
+del valid2
+gc.collect()
+validation = valid3
+del valid3
+gc.collect()
 
-np.random.seed(42)
+print( "\nTraining data:")
+print( training.shape )
+print( training.head() )
+print( "Saving training data...")
+training.to_pickle('training.pkl.gz')
 
-train = pd.read_csv('../input/train.csv')
-x_train = train.drop(['id', 'species'], axis=1).values
-le = LabelEncoder().fit(train['species'])
-y_train = le.transform(train['species'])
+validation.reset_index(drop=True,inplace=True)
+print( "\nValidation data:")
+print( validation.shape )
+print( validation.head() )
+print( "Saving validation data...")
+validation.to_pickle('validation.pkl.gz')
 
-scaler = StandardScaler().fit(x_train)
-x_train = scaler.transform(x_train)
-
-params = {'C':[100, 1000], 'tol': [0.001, 0.0001]}
-log_reg = LogisticRegression(solver='lbfgs', multi_class='multinomial')
-clf = GridSearchCV(log_reg, params, scoring='log_loss', refit='True', n_jobs=-1, cv=5)
-clf.fit(x_train, y_train)
-
-print("best params: " + str(clf.best_params_))
-for params, mean_score, scores in clf.grid_scores_:
-  print("%0.3f (+/-%0.03f) for %r" % (mean_score, scores.std(), params))
-  print(scores)
-
-test = pd.read_csv('../input/test.csv')
-test_ids = test.pop('id')
-x_test = test.values
-x_test = scaler.transform(x_test)
-
-y_test = clf.predict_proba(x_test)
-
-submission = pd.DataFrame(y_test, index=test_ids, columns=le.classes_)
-submission.to_csv('submission_log_reg.csv')
+print("\nDone")

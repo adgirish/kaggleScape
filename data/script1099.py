@@ -1,141 +1,199 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# ### Target encoding with smoothing
-# min_samples_leaf define a threshold where prior and target mean (for a given category value) have the same weight. Below the threshold prior becomes more important and above mean becomes more important.
+# ## Subplots
 # 
-# How weight behaves against value counts is controlled by smoothing parameter
-
-# In[ ]:
-
-
-def add_noise(series, noise_level):
-    return series * (1 + noise_level * np.random.randn(len(series)))
-
-def target_encode(trn_series=None, 
-                  tst_series=None, 
-                  target=None, 
-                  min_samples_leaf=1, 
-                  smoothing=1,
-                  noise_level=0):
-    """
-    Smoothing is computed like in the following paper by Daniele Micci-Barreca
-    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
-    trn_series : training categorical feature as a pd.Series
-    tst_series : test categorical feature as a pd.Series
-    target : target data as a pd.Series
-    min_samples_leaf (int) : minimum samples to take category average into account
-    smoothing (int) : smoothing effect to balance categorical average vs prior  
-    """ 
-    assert len(trn_series) == len(target)
-    assert trn_series.name == tst_series.name
-    temp = pd.concat([trn_series, target], axis=1)
-    # Compute target mean 
-    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
-    # Compute smoothing
-    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
-    # Apply average function to all target data
-    prior = target.mean()
-    # The bigger the count the less full_avg is taken into account
-    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
-    averages.drop(["mean", "count"], axis=1, inplace=True)
-    # Apply averages to trn and tst series
-    ft_trn_series = pd.merge(
-        trn_series.to_frame(trn_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=trn_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_trn_series.index = trn_series.index 
-    ft_tst_series = pd.merge(
-        tst_series.to_frame(tst_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=tst_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_tst_series.index = tst_series.index
-    return add_noise(ft_trn_series, noise_level), add_noise(ft_tst_series, noise_level)
-
-
-# ### Testing with ps_car_11_cat
-
-# In[ ]:
-
-
-# reading data
-trn_df = pd.read_csv("../input/train.csv", index_col=0)
-sub_df = pd.read_csv("../input/test.csv", index_col=0)
-
-# Target encode ps_car_11_cat
-trn, sub = target_encode(trn_df["ps_car_11_cat"], 
-                         sub_df["ps_car_11_cat"], 
-                         target=trn_df.target, 
-                         min_samples_leaf=100,
-                         smoothing=10,
-                         noise_level=0.01)
-trn.head(10)
-
-
-# ### Scatter plot of category values vs target encoding
-# We see that the category values are not ordered
+# In the previous section, "Styling your plots", we set the title of a plot using a bit of `matplotlib` code. We did this by grabbing the underlying "axis" and then calling `set_title` on that.
 # 
+# In this section we'll explore another `matplotlib`-based stylistic feature: **subplotting**.
+
+# In[ ]:
+
+
+import pandas as pd
+reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
+reviews.head(3)
+
+
+# ## Subplotting
+# 
+# Subplotting is a technique for creating multiple plots that live side-by-side in one overall figure. We can use the `subplots` method to create a figure with multiple subplots. `subplots` takes two arguments. The first one controls the number of *rows*, the second one the number of *columns*.
 
 # In[ ]:
 
 
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-plt.scatter(trn_df["ps_car_11_cat"], trn)
-plt.xlabel("ps_car_11_cat category values")
-plt.ylabel("Noisy target encoding")
+fig, axarr = plt.subplots(2, 1, figsize=(12, 8))
 
 
-# ### Check AUC metric improvement after noisy encoding over 5 folds
+# Since we asked for a `subplots(2, 1)`, we got a figure with two rows and one column.
+# 
+# Let's break this down a bit. When `pandas` generates a bar chart, behind the scenes here is what it actually does:
+# 
+# 1. Generate a new `matplotlib` `Figure` object.
+# 2. Create a new `matplotlib` `AxesSubplot` object, and assign it to the `Figure`.
+# 3. Use `AxesSubplot` methods to draw the information on the screen.
+# 4. Return the result to the user.
+# 
+# In a similar way, our `subplots` operation above created one overall `Figure` with two `AxesSubplots` vertically nested inside of it.
+# 
+# `subplots` returns two things, a figure (which we assigned to `fig`) and an array of the axes contained therein (which we assigned to `axarr`). Here are the `axarr` contents:
 
 # In[ ]:
 
 
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import StratifiedKFold
+axarr
 
-folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-f_cats = [f for f in trn_df.columns if "_cat" in f]
-print("%20s   %20s | %20s" % ("", "Raw Categories", "Encoded Categories"))
-for f in f_cats:
-    print("%-20s : " % f, end="")
-    e_scores = []
-    f_scores = []
-    for trn_idx, val_idx in folds.split(trn_df.values, trn_df.target.values):
-        trn_f, trn_tgt = trn_df[f].iloc[trn_idx], trn_df.target.iloc[trn_idx]
-        val_f, val_tgt = trn_df[f].iloc[trn_idx], trn_df.target.iloc[trn_idx]
-        trn_tf, val_tf = target_encode(trn_series=trn_f, 
-                                       tst_series=val_f, 
-                                       target=trn_tgt, 
-                                       min_samples_leaf=100, 
-                                       smoothing=20,
-                                       noise_level=0.01)
-        f_scores.append(max(roc_auc_score(val_tgt, val_f), 1 - roc_auc_score(val_tgt, val_f)))
-        e_scores.append(roc_auc_score(val_tgt, val_tf))
-    print(" %.6f + %.6f | %6f + %.6f" 
-          % (np.mean(f_scores), np.std(f_scores), np.mean(e_scores), np.std(e_scores)))
 
+# To tell `pandas` which subplot we want a new plot to go in&mdash;the first one or the second one&mdash;we need to grab the proper axis out of the list and pass it into `pandas` via the `ax` parameter:
+
+# In[ ]:
+
+
+fig, axarr = plt.subplots(2, 1, figsize=(12, 8))
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    ax=axarr[0]
+)
+
+reviews['province'].value_counts().head(20).plot.bar(
+    ax=axarr[1]
+)
+
+
+# We are of course not limited to having only a single row. We can create as many subplots as we want, in whatever configuration we need.
+# 
+# For example:
+
+# In[ ]:
+
+
+fig, axarr = plt.subplots(2, 2, figsize=(12, 8))
+
+
+# If there are multiple columns *and* multiple rows, as above, the axis array becoming a list of lists:
+
+# In[ ]:
+
+
+axarr
+
+
+# That means that to plot our data from earlier, we now need a row number, then a column number.
+
+# In[ ]:
+
+
+fig, axarr = plt.subplots(2, 2, figsize=(12, 8))
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    ax=axarr[0][0]
+)
+
+reviews['province'].value_counts().head(20).plot.bar(
+    ax=axarr[1][1]
+)
+
+
+# Notice that the bar plot of wines by point counts is in the first row and first column (the `[0][0]` position), while the bar plot of wines by origin is in the second row and second column (`[1][1]`).
+# 
+# By combining subplots with the styles we learned in the last section, we can create appealing-looking panel displays.
+
+# In[ ]:
+
+
+fig, axarr = plt.subplots(2, 2, figsize=(12, 8))
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    ax=axarr[0][0], fontsize=12, color='mediumvioletred'
+)
+axarr[0][0].set_title("Wine Scores", fontsize=18)
+
+reviews['variety'].value_counts().head(20).plot.bar(
+    ax=axarr[1][0], fontsize=12, color='mediumvioletred'
+)
+axarr[1][0].set_title("Wine Varieties", fontsize=18)
+
+reviews['province'].value_counts().head(20).plot.bar(
+    ax=axarr[1][1], fontsize=12, color='mediumvioletred'
+)
+axarr[1][1].set_title("Wine Origins", fontsize=18)
+
+reviews['price'].value_counts().plot.hist(
+    ax=axarr[0][1], fontsize=12, color='mediumvioletred'
+)
+axarr[0][1].set_title("Wine Prices", fontsize=18)
+
+plt.subplots_adjust(hspace=.3)
+
+import seaborn as sns
+sns.despine()
+
+
+# # Why subplot?
+# 
+# Why are subplots useful?
+# 
+# Oftentimes as a part of the exploratory data visualization process you will find yourself creating a large number of smaller charts probing one or a few specific aspects of the data. For example, suppose we're interested in comparing the scores for relatively common wines with those for relatively rare ones. In these cases, it makes logical sense to combine the two plots we would produce into one visual "unit" for analysis and discussion.
+# 
+# When we combine subplots with the style attributes we explored in the previous notebook, this technique allows us to create extremely attractive and informative panel displays.
+# 
+# Finally, subplots are critically useful because they enable **faceting**. Faceting is the act of breaking data variables up across multiple subplots, and combining those subplots into a single figure. So instead of one bar chart, we might have, say, four, arranged together in a grid.
+# 
+# The recommended way to perform faceting is to use the `seaborn` `FacetGrid` facility. This feature is explored in a separate section of this tutorial.
+# 
+# # Exercises
+# 
+# Let's test ourselves by answering some questions about the plots we've used in this section. Once you have your answers, click on "Output" button below to show the correct answers.
+# 
+# 1. A `matplotlib` plot consists of a single X composed of one or more Y. What are X and Y?
+# 2. The `subplots` function takes which two parameters as input?
+# 3. The `subplots` function returns what two variables? 
+
+# In[ ]:
+
+
+from IPython.display import HTML
+HTML("""
+<ol>
+<li>The plot consists of one overall figure composed of one or more axes.</li>
+<li>The subplots function takes the number of rows as the first parameter, and the number of columns as the second.</li>
+<li>The subplots function returns a figure and an array of axes.</li>
+</ol>
+""")
+
+
+# To put your design skills to the test, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
+
+# In[ ]:
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+pokemon = pd.read_csv("../input/pokemon/Pokemon.csv")
+pokemon.head(3)
+
+
+# (Hint: use `figsize=(8, 8)`)
+
+# In[ ]:
+
+
+plt.subplots(2, 1, figsize=(8, 8))
+
+
+# In[ ]:
+
+
+fig, axarr = plt.subplots(2, 1, figsize=(8, 8))
+pokemon['Attack'].plot.hist(ax=axarr[0], title='Pokemon Attack Ratings')
+pokemon['Defense'].plot.hist(ax=axarr[1], title='Pokemon Defense Ratings')
+
+
+# # Conclusion
+# 
+# In the previous section we explored some `pandas`/`matplotlib` style parameters. In this section, we dove a little deeper still by exploring subplots.
+# 
+# Together these two sections conclude our primer on style. Hopefully our plots will now be more legible and informative.
+# 
+# [Click here to go to the next section, "Plotting with seaborn"](https://www.kaggle.com/residentmario/plotting-with-seaborn).

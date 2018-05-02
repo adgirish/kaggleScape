@@ -1,426 +1,590 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# An Example of using bayesian optimization for tuning optimal parameters for a
+# random forest model.
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# The simple idea is to add more intelligence to parameter tuning than a grid search
+# or a random search. (The Guassian Process is the clever part and something that hyperopt
+# doesnt currently have -- though i could be wrong)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# Original library https://github.com/fmfn/BayesianOptimization
+# Example using xgboost and optimal parameters https://github.com/mpearmain/BayesBoost
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+# This script is VERY long due to the need to copy all functions from the original 
+# bayesian optimization script.
 
-# Any results you write to the current directory are saved as output.
-"""
-Created on Sat Jul  8 08:45:55 2017
+# The data preparation is a complete steal from trottefox's blending script.
+# https://www.kaggle.com/trottefox/bnp-paribas-cardif-claims-management/blending-trees/code
+# It just makes life easy to ctrl-c ctrl-v :)
 
-@author: rupesh
-"""
+# I strongly advise downoading the libs from git to play around with.
 
-## This script contains four independent models, the stacking part: Use lgb, gbdt and Lasso as 
-## Level 1 models. Meta model is xgb. This may count for 25% of the final result.
-## Then, we use a single xgb model forked from this kernel : https://www.kaggle.com/hakeem/stacked-then-averaged-models-0-5697
-## Only take single XGB.
-## Then, finally replace some values with LB Probing Values. I am not sure whether this is a good idea, just try
-
+import numpy
 import pandas as pd
-import xgboost as xgb
-from sklearn.model_selection import KFold
-import numpy as np
-from sklearn.metrics import mean_squared_error as MSE
-from sklearn.metrics import r2_score
-from sklearn.random_projection import GaussianRandomProjection
-from sklearn.random_projection import SparseRandomProjection
-from sklearn.decomposition import PCA
-from sklearn.decomposition import FastICA
-from sklearn.decomposition import TruncatedSVD
-import lightgbm as lgb
-from sklearn.preprocessing import LabelEncoder
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.linear_model import Lasso
+import random
+from datetime import datetime
+from sklearn.gaussian_process import GaussianProcess as GP
+from sklearn.metrics import log_loss
+from scipy.optimize import minimize
+from scipy.stats import norm
+from math import exp, fabs, sqrt, log, pi
+from sklearn.ensemble import RandomForestClassifier as RFC
+rnd=57
+maxCategories=20
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+def acq_max(ac, gp, ymax, restarts, bounds):
+    """
+    A function to find the maximum of the acquisition function using the 'L-BFGS-B' method.
 
-from subprocess import check_output
-#print(check_output(["ls", "../input"]).decode("utf8"))
+    Parameters
+    ----------
+    :param ac: The acquisition function object that return its pointwise value.
 
-# Any results you write to the current directory are saved as output.
+    :param gp: A gaussian process fitted to the relevant data.
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+    :param ymax: The current maximum known value of the target function.
 
+    :param restarts: The number of times minimation if to be repeated. Larger number of restarts
+                     improves the chances of finding the true maxima.
 
-#target=train['y']
-#train.drop(['y'],axis=1,inplace=True)
-#test['y']=np.zeros(train.shape[0])
-# Cat conversion
+    :param bounds: The variables bounds to limit the search of the acq max.
 
 
-for c in train.columns:
-    if train[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(train[c].values) + list(test[c].values))
-        train[c] = lbl.transform(list(train[c].values))
-        test[c] = lbl.transform(list(test[c].values))
+    Returns
+    -------
+    :return: x_max, The arg max of the acquisition function.
+    """
 
-y=train['y'] 
-train.drop(['y'],inplace=True,axis=1)       
-combine=pd.concat([train,test])
-columns=['X1','X2','X3','X4','X5','X6','X8']
-for column in columns:
-    temp=pd.get_dummies(pd.Series(combine[column]))
-    combine=pd.concat([combine,temp],axis=1)
-    combine= combine.drop([column], axis=1)
+    x_max = bounds[:, 0]
+    ei_max = 0
+
+    for i in range(restarts):
+        #Sample some points at random.
+        x_try = numpy.asarray([numpy.random.uniform(x[0], x[1], size=1) for x in bounds]).T
+
+        #Find the minimum of minus the acquisition function
+        res = minimize(lambda x: -ac(x.reshape(1, -1), gp=gp, ymax=ymax), x_try, bounds=bounds, method='L-BFGS-B')
+
+        #Store it if better than previous minimum(maximum).
+        if -res.fun >= ei_max:
+            x_max = res.x
+            ei_max = -res.fun
+
+    return x_max
+
+def unique_rows(a):
+    """
+    A functions to trim repeated rows that may appear when optimizing.
+    This is necessary to avoid the sklearn GP object from breaking
+
+    :param a: array to trim repeated rows from
+
+    :return: mask of unique rows
+    """
+
+    # Sort array and kep track of where things should go back to
+    order = numpy.lexsort(a.T)
+    reorder = numpy.argsort(order)
+
+    a = a[order]
+    diff = numpy.diff(a, axis=0)
+    ui = numpy.ones(len(a), 'bool')
+    ui[1:] = (diff != 0).any(axis=1)
+
+    return ui[reorder]
+
+
+class BayesianOptimization(object):
+    """
+    Bayesian global optimization with Gaussian Process.
+
+    See papers: http://papers.nips.cc/paper/4522-practical-bayesian-optimization-of-machine-learning-algorithms.pdf
+                http://arxiv.org/pdf/1012.2599v1.pdf
+                http://www.gaussianprocess.org/gpml/
+    for references.
+
+    """
+
+    def __init__(self, f, pbounds, verbose=1):
+        """
+        :param f: Function to be maximized.
+
+        :param pbounds: Dictionary with parameters names as keys and a tuple with
+                        minimum and maximum values.
+
+        :param verbose: Controls levels of verbosity.
+
+        """
+        # Store the original dictionary
+        self.pbounds = pbounds
+
+        # Get the name of the parameters
+        self.keys = list(pbounds.keys())
+
+        # Find number of parameters
+        self.dim = len(pbounds)
+
+        # Create an array with parameters bounds
+        self.bounds = []
+        for key in self.pbounds.keys():
+            self.bounds.append(self.pbounds[key])
+        self.bounds = numpy.asarray(self.bounds)
+
+        # Some function to be optimized
+        self.f = f
+
+        # Initialization flag
+        self.initialized = False
+
+        # Initialization lists --- stores starting points before process begins
+        self.init_points = []
+        self.x_init = []
+        self.y_init = []
+
+        # Verbose
+        self.verbose = verbose
+
+    def init(self, init_points):
+        """
+        Initialization method to kick start the optimization process. It is a combination of
+        points passed by the user, and randomly sampled ones.
+
+        :param init_points: Number of random points to probe.
+        """
+
+        # Generate random points
+        l = [numpy.random.uniform(x[0], x[1], size=init_points) for x in self.bounds]
+
+        # Concatenate new random points to possible existing points from self.explore method.
+        self.init_points += list(map(list, zip(*l)))
+
+        # Create empty list to store the new values of the function
+        y_init = []
+
+        # Evaluate target function at all initialization points (random + explore)
+        for x in self.init_points:
+
+            if self.verbose:
+                print('Initializing function at point: ', dict(zip(self.keys, x)), end='')
+
+            y_init.append(self.f(**dict(zip(self.keys, x))))
+
+            if self.verbose:
+                print(' | result: %f' % y_init[-1])
+
+        # Append any other points passed by the self.initialize method (these also have
+        # a corresponding target value passed by the user).
+        self.init_points += self.x_init
+
+        # Append the target value of self.initialize method.
+        y_init += self.y_init
+
+        # Turn it into numpy array and store.
+        self.X = numpy.asarray(self.init_points)
+        self.Y = numpy.asarray(y_init)
+
+        # Updates the flag
+        self.initialized = True
+
+    def explore(self, points_dict):
+        """ Main optimization method.
+            Parameters
+            ----------
+            points_dict: {p1: [x1, x2...], p2: [y1, y2, ...]}
+
+            Returns
+            -------
+            Nothing.
+
+        """
+
+        ################################################
+        # Consistency check
+        param_tup_lens = []
+
+        for key in self.keys:
+            param_tup_lens.append(len(list(points_dict[key])))
+
+        if all([e == param_tup_lens[0] for e in param_tup_lens]):
+            pass
+        else:
+            raise ValueError('The same number of initialization points must be entered for every parameter.')
+
+        ################################################
+        # Turn into list of lists
+        all_points = []
+        for key in self.keys:
+            all_points.append(points_dict[key])
+
+        # Take transpose of list
+        self.init_points = list(map(list, zip(*all_points)))
+
+    def initialize(self, points_dict):
+        """
+            Main optimization method.
+            Parameters
+            ----------
+            points_dict: {y: {x1: x, ...}}
+
+
+            Returns
+            -------
+            Nothing.
+
+        """
+
+        for target in points_dict:
+
+            self.y_init.append(target)
+
+            all_points = []
+            for key in self.keys:
+                all_points.append(points_dict[target][key])
+
+            self.x_init.append(all_points)
+
+    def set_bounds(self, new_bounds):
+        """
+        A method that allows changing the lower and upper searching bounds
+
+        :param new_boudns: A dictionary with the parameter name and its new bounds
+
+        """
+
+        # Update the internal object stored dict
+        self.pbounds.update(new_bounds)
+
+        # Loop through the all bounds and reset the min-max bound matrix
+        for row, key in enumerate(self.pbounds.keys()):
+
+            # Reset all entries, even if the same.
+            self.bounds[row] = self.pbounds[key]
+
+    def maximize(self, init_points=5, restarts=50, n_iter=25, acq='ei', **gp_params):
+        """
+        Main optimization method.
+
+        Parameters
+        ----------
+        :param init_points: Number of randomly chosen points to sample the target function before fitting the gp.
+
+        :param restarts: The number of times minimation if to be repeated. Larger number of restarts
+                         improves the chances of finding the true maxima.
+
+        :param n_iter: Total number of times the process is to reapeated. Note that currently this methods does not have
+                       stopping criteria (due to a number of reasons), therefore the total number of points to be sampled
+                       must be specified.
+
+        :param acq: Acquisition function to be used, defaults to Expected Improvement.
+
+        :param gp_params: Parameters to be passed to the Scikit-learn Gaussian Process object
+
+        Returns
+        -------
+        :return: Nothing
+        """
+        # Start a timer
+        total_time = datetime.now()
+
+        # Create instance of printer object
+        printI = PrintInfo(self.verbose)
+
+        # Set acquisition function
+        AC = AcquisitionFunction()
+        ac_types = {'ei': AC.EI, 'pi': AC.PoI, 'ucb': AC.UCB}
+        ac = ac_types[acq]
+
+        # Initialize x, y and find current ymax
+        if not self.initialized:
+            self.init(init_points)
+
+        ymax = self.Y.max()
+
+        # ------------------------------ // ------------------------------ // ------------------------------ #
+        # Fitting the gaussian process.
+        # Since scipy 0.16 passing lower and upper bound to theta seems to be
+        # broken. However, there is a lot of development going on around GP
+        # is scikit-learn. So I'll pick the easy route here and simple specify
+        # only theta0.
+        gp = GP(theta0=numpy.random.uniform(0.001, 0.05, self.dim),
+                random_start=25)
+
+        gp.set_params(**gp_params)
+
+        # Find unique rows of X to avoid GP from breaking
+        ur = unique_rows(self.X)
+        gp.fit(self.X[ur], self.Y[ur])
+
+        # Finding argmax of the acquisition function.
+        x_max = acq_max(ac, gp, ymax, restarts, self.bounds)
+
+        # ------------------------------ // ------------------------------ // ------------------------------ #
+        # Iterative process of searching for the maximum. At each round the most recent x and y values
+        # probed are added to the X and Y arrays used to train the Gaussian Process. Next the maximum
+        # known value of the target function is found and passed to the acq_max function. The arg_max
+        # of the acquisition function is found and this will be the next probed value of the tharget
+        # function in the next round.
+        for i in range(n_iter):
+            op_start = datetime.now()
+
+            # Append most recently generated values to X and Y arrays
+            self.X = numpy.concatenate((self.X, x_max.reshape((1, self.dim))), axis=0)
+            self.Y = numpy.append(self.Y, self.f(**dict(zip(self.keys, x_max))))
+
+            # Updating the GP.
+            ur = unique_rows(self.X)
+            gp.fit(self.X[ur], self.Y[ur])
+
+            # Update maximum value to search for next probe point.
+            if self.Y[-1] > ymax:
+                ymax = self.Y[-1]
+
+            # Maximize acquisition function to find next probing point
+            x_max = acq_max(ac, gp, ymax, restarts, self.bounds)
+
+            # Print stuff
+            printI.print_info(op_start, i, x_max, ymax, self.X, self.Y, self.keys)
+
+        # ------------------------------ // ------------------------------ // ------------------------------ #
+        # Output dictionary
+        self.res = {}
+        self.res['max'] = {'max_val': self.Y.max(), 'max_params': dict(zip(self.keys, self.X[self.Y.argmax()]))}
+        self.res['all'] = {'values': [], 'params': []}
+
+        # Fill values
+        for t, p in zip(self.Y, self.X):
+            self.res['all']['values'].append(t)
+            self.res['all']['params'].append(dict(zip(self.keys, p)))
+
+        # Print a final report if verbose active.
+        if self.verbose:
+            tmin, tsec = divmod((datetime.now() - total_time).total_seconds(), 60)
+            print('Optimization finished with maximum: %8f, at position: %8s.' % (self.res['max']['max_val'],\
+                                                                                  self.res['max']['max_params']))
+            print('Time taken: %i minutes and %s seconds.' % (tmin, tsec))
+
+
+class AcquisitionFunction(object):
+    '''An object to compute the acquisition functions.'''
+
+
+    def __init__(self, k=1):
+        '''If UCB is to be used, a constant kappa is needed.'''
+        self.kappa = k
+
+    # ------------------------------ // ------------------------------ #
+    # Methods for single sample calculation.
+    def UCB(self, x, gp, ymax):
+        mean, var = gp.predict(x, eval_MSE=True)
+        return mean + self.kappa * sqrt(var)
+
+    def EI(self, x, gp, ymax):
+        mean, var = gp.predict(x, eval_MSE=True)
+        if var == 0:
+            return 0
+        else:
+            Z = (mean - ymax)/sqrt(var)
+            return (mean - ymax) * norm.cdf(Z) + sqrt(var) * norm.pdf(Z)
+
+    def PoI(self, x, gp, ymax):
+        mean, var = gp.predict(x, eval_MSE=True)
+        if var == 0:
+            return 1
+        else:
+            Z = (mean - ymax)/sqrt(var)
+            return norm.cdf(Z)
+
+    # ------------------------------ // ------------------------------ #
+    # Methods for bulk calculation.
+    def full_UCB(self, mean, var):
+        mean = mean.reshape(len(mean))
         
-# Define some useful functions
-
-train=combine[:train.shape[0]]
-test=combine[train.shape[0]:] 
+        return (mean + self.kappa * numpy.sqrt(var)).reshape(len(mean))
 
 
-def df_column_uniquify(df):
-    df_columns = df.columns
-    new_columns = []
-    for item in df_columns:
-        counter = 0
-        newitem = item
-        while newitem in new_columns:
-            counter += 1
-            newitem = "{}_{}".format(item, counter)
-        new_columns.append(newitem)
-    df.columns = new_columns
-    return df
+    def full_EI(self, ymax, mean, var, verbose = False):
+        '''
+        Function to calculate the expected improvement. Robust agains noiseless
+        systems.
+        '''
+        if verbose:
+            print('EI was called with ymax: %f' % ymax)
 
-train = df_column_uniquify(train)  
-test = df_column_uniquify(test)   
-train['y']=y
+        ei = numpy.zeros(len(mean))
 
-def get_additional_features(train,test,magic=False,ID=False):
-    col = list(test.columns)
-    if ID!=True:
-        col.remove('ID')
-    n_comp = 12
-    # tSVD
-    tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
-    tsvd_results_train = tsvd.fit_transform(train[col])
-    tsvd_results_test = tsvd.transform(test[col])
-    # PCA
-    pca = PCA(n_components=n_comp, random_state=420)
-    pca2_results_train = pca.fit_transform(train[col])
-    pca2_results_test = pca.transform(test[col])
-    # ICA
-    ica = FastICA(n_components=n_comp, random_state=420)
-    ica2_results_train = ica.fit_transform(train[col])
-    ica2_results_test = ica.transform(test[col])
-    # GRP
-    grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
-    grp_results_train = grp.fit_transform(train[col])
-    grp_results_test = grp.transform(test[col])
-    # SRP
-    srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
-    srp_results_train = srp.fit_transform(train[col])
-    srp_results_test = srp.transform(test[col])
-    for i in range(1, n_comp + 1):
-        train['tsvd_' + str(i)] = tsvd_results_train[:, i - 1]
-        test['tsvd_' + str(i)] = tsvd_results_test[:, i - 1]
-        train['pca_' + str(i)] = pca2_results_train[:, i - 1]
-        test['pca_' + str(i)] = pca2_results_test[:, i - 1]
-        train['ica_' + str(i)] = ica2_results_train[:, i - 1]
-        test['ica_' + str(i)] = ica2_results_test[:, i - 1]
-        train['grp_' + str(i)] = grp_results_train[:, i - 1]
-        test['grp_' + str(i)] = grp_results_test[:, i - 1]
-        train['srp_' + str(i)] = srp_results_train[:, i - 1]
-        test['srp_' + str(i)] = srp_results_test[:, i - 1]
-    if magic==True:
-        magic_mat = train[['ID','X0','y']]
-        magic_mat = magic_mat.groupby(['X0'])['y'].mean()
-        magic_mat = pd.DataFrame({'X0':magic_mat.index,'magic':list(magic_mat)})
-        mean_magic = magic_mat['magic'].mean()
-        train = train.merge(magic_mat,on='X0',how='left')
-        test = test.merge(magic_mat,on='X0',how = 'left')
-        test['magic'] = test['magic'].fillna(mean_magic)
-    return train,test
+        mean = mean.reshape(len(mean))
+        var = numpy.sqrt(var)
 
-## Preparing stacking functions. Each one takes the out of bag values as the Input
+        Z = (mean[var > 0] - ymax)/var[var > 0]
 
-## xgb will not be used in this case, but still post it here.
-def get_xgb_stack_data(params,rounds,train,col,label,test):
-    ID = []
-    train = train.reset_index(drop=True)
-    kf = KFold(n_splits=5,shuffle=False)
-    i=0
-    R2_Score = []
-    RMSE = []
-    for train_index, test_index in kf.split(train):
-        print("Training "+str(i+1)+' Fold')
-        X_train, X_test = train.iloc[train_index,:], train.iloc[test_index,:]
-        y_train, y_test = label.iloc[train_index],label.iloc[test_index]
-        dtrain = xgb.DMatrix(X_train[col],y_train)
-        dtest = xgb.DMatrix(X_test[col])
-        model = xgb.train(params,dtrain,num_boost_round=rounds)
-        pred = model.predict(dtest)
-        X_test['label'] = list(y_test)
-        X_test['predicted'] = pred
-        r2 = r2_score(y_test,pred)
-        rmse = MSE(y_test,pred)**0.5
-        print('R2 Scored of Fold '+str(i+1)+' is '+str(r2))
-        R2_Score.append(r2)
-        RMSE.append(rmse)
-        print('RMSE of Fold '+str(i+1)+' is '+str(rmse))
-        ID.append(X_test['ID'])
-        if i==0:
-            Final = X_test
-        else:
-            Final = Final.append(X_test,ignore_index=True)
-        i+=1
-    dtrain_ = xgb.DMatrix(train[col],label)
-    dtest_ = xgb.DMatrix(test[col])
-    print('Start Training')
-    model_ = xgb.train(params,dtrain_,num_boost_round=rounds)
-    Final_pred = model_.predict(dtest_)
-    Final_pred = pd.DataFrame({'ID':test['ID'],'y':Final_pred})
-    print('Calculating In-Bag R2 Score')
-    print(r2_score(dtrain_.get_label(), model.predict(dtrain_)))
-    print('Calculating Out-Bag R2 Score')
-    print(np.mean(R2_Score))
-    print('Calculating In-Bag RMSE')
-    print(MSE(dtrain_.get_label(), model.predict(dtrain_))**0.5)
-    print('Calculating Out-Bag RMSE')
-    print(np.mean(RMSE))
-    return Final,Final_pred
+        ei[var > 0] = (mean[var > 0] - ymax) * norm.cdf(Z) + var[var > 0] * norm.pdf(Z)
 
+        return ei
 
-def get_lgb_stack_data(params,rounds,train,col,label,test):
-    ID = []
-    train = train.reset_index(drop=True)
-    kf = KFold(n_splits=5,shuffle=False)
-    i=0
-    R2_Score = []
-    RMSE = []
-    for train_index, test_index in kf.split(train):
-        print("Training "+str(i+1)+' Fold')
-        X_train, X_test = train.iloc[train_index,:], train.iloc[test_index,:]
-        y_train, y_test = label.iloc[train_index],label.iloc[test_index]
-        train_lgb=lgb.Dataset(X_train[col],y_train)
-        model = lgb.train(params,train_lgb,num_boost_round=rounds)
-        pred = model.predict(X_test[col])
-        X_test['label'] = list(y_test)
-        X_test['predicted'] = pred
-        r2 = r2_score(y_test,pred)
-        rmse = MSE(y_test,pred)**0.5
-        print('R2 Scored of Fold '+str(i+1)+' is '+str(r2))
-        R2_Score.append(r2)
-        RMSE.append(rmse)
-        print('RMSE of Fold '+str(i+1)+' is '+str(rmse))
-        ID.append(X_test['ID'])
-        if i==0:
-            Final = X_test
-        else:
-            Final = Final.append(X_test,ignore_index=True)
-        i+=1
-    lgb_train_ = lgb.Dataset(train[col],label)
-    print('Start Training')
-    model_ = lgb.train(params,lgb_train_,num_boost_round=rounds)
-    Final_pred = model_.predict(test[col])
-    Final_pred = pd.DataFrame({'ID':test['ID'],'y':Final_pred})
-    print('Calculating In-Bag R2 Score')
-    print(r2_score(label, model.predict(train[col])))
-    print('Calculating Out-Bag R2 Score')
-    print(np.mean(R2_Score))
-    print('Calculating In-Bag RMSE')
-    print(MSE(label, model.predict(train[col]))**0.5)
-    print('Calculating Out-Bag RMSE')
-    print(np.mean(RMSE))
-    return Final,Final_pred
+    def full_PoI(self, ymax, mean, var):
+        '''
+        Function to calculate the probability of improvement. In the current implementation
+        it breaks down in the system has no noise (even though it shouldn't!). It can easily
+        be fixed and I will do it later...
+        '''
+        mean = mean.reshape(len(mean))
+        var = numpy.sqrt(var)
 
-
-
-def get_sklearn_stack_data(model,train,col,label,test):
-    ID = []
-    R2_Score = []
-    RMSE = []
-    train = train.reset_index(drop=True)
-    kf = KFold(n_splits=5,shuffle=False)
-    i=0
-    for train_index, test_index in kf.split(train):
-        print("Training "+str(i+1)+' Fold')
-        X_train, X_test = train.iloc[train_index,:], train.iloc[test_index,:]
-        y_train, y_test = label.iloc[train_index],label.iloc[test_index]
-        model.fit(X_train[col],y_train)
-        pred = model.predict(X_test[col])
-        X_test['label'] = list(y_test)
-        X_test['predicted'] = pred
-        r2 = r2_score(y_test,pred)
-        rmse = MSE(y_test,pred)**0.5
-        print('R2 Scored of Fold '+str(i+1)+' is '+str(r2))
-        R2_Score.append(r2)
-        RMSE.append(rmse)
-        print('RMSE of Fold '+str(i+1)+' is '+str(rmse))
-        ID.append(X_test['ID'])
-        if i==0:
-            Final = X_test
-        else:
-            Final = Final.append(X_test,ignore_index=True)
-        i+=1
-    print('Start Training')
-    model.fit(train[col],label)
-    Final_pred = model.predict(test[col])
-    Final_pred = pd.DataFrame({'ID':test['ID'],'y':Final_pred})
-    print('Calculating In-Bag R2 Score')
-    print(r2_score(label, model.predict(train[col])))
-    print('Calculating Out-Bag R2 Score')
-    print(np.mean(R2_Score))
-    print('Calculating In-Bag RMSE')
-    print(MSE(label, model.predict(train[col]))**0.5)
-    print('Calculating Out-Bag RMSE')
-    print(np.mean(RMSE))
-    return Final,Final_pred
+        gamma = (mean - ymax)/var
     
-## Prepare output of level 1.
+        return norm.cdf(gamma)
 
-## Prepare data
+################################## Print Info ##################################
 
-train_,test_ = get_additional_features(train,test,magic=True)
-train_ = train_.sample(frac=1,random_state=420)
-col = list(test.columns)
-## Input 1: GBDT
+class PrintInfo(object):
+    '''A class to take care of the verbosity of the other classes.'''
+    '''Under construction!'''
 
-gb1 = GradientBoostingRegressor(n_estimators=1000,max_features=0.95,learning_rate=0.005,max_depth=4)
-gb1_train,gb1_test = get_sklearn_stack_data(gb1,train_,col,train_['y'],test_)
+    def __init__(self, level=0):
 
-## Input2: Lasso
-las1 = Lasso(alpha=5,random_state=42)
-las1_train,las1_test = get_sklearn_stack_data(las1,train_,col,train_['y'],test_)
-
-## Input 3: LGB
-params = {
-            'objective': 'regression',
-            'metric': 'rmse',
-            'boosting': 'gbdt',
-            'learning_rate': 0.0045 , #small learn rate, large number of iterations
-            'verbose': 0,
-            'num_iterations': 500,
-            'bagging_fraction': 0.95,
-            'bagging_freq': 1,
-            'bagging_seed': 42,
-            'feature_fraction': 0.95,
-            'feature_fraction_seed': 42,
-            'max_bin': 100,
-            'max_depth': 3,
-            'num_rounds': 800
-        }
-lgb_train, lgb_test = get_lgb_stack_data(params,800,train_,col,train_['y'],test_)
-
-## Stacking By xgb
-
-stack_train = gb1_train[['label','predicted']]
-stack_train.columns=[['label','gbdt']]
-stack_train['lgb']=lgb_train['predicted']
-stack_train['las'] = las1_train['predicted']
-
-stack_test = gb1_test[['ID','y']]
-stack_test.columns=[['ID','gbdt']]
-stack_test['lgb']=lgb_test['y']
-stack_test['las'] = las1_test['y']
-del stack_test['ID']
-
-## Meta Model: xgb
-
-y_mean = np.mean(train.y)
-
-col = list(stack_test.columns)
-
-params = {
-    'eta': 0.005,
-    'max_depth': 2,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'base_score': y_mean, # base prediction = mean(target)
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(stack_train[col], stack_train['label'])
-dtest = xgb.DMatrix(stack_test[col])
-
-#xgb_cvalid = xgb.cv(params, dtrain, num_boost_round=2000, early_stopping_rounds=20,
- #   verbose_eval=50, show_stdv=True,seed=42)
-#xgb_cvalid[['train-rmse-mean', 'test-rmse-mean']].plot()
-#print('Performance does not improve from '+str(len(xgb_cvalid))+' rounds')
-
-model = xgb.train(params,dtrain,num_boost_round =900)
-pred_1 = model.predict(dtest)
+        self.lvl = level
+        self.timer = 0
 
 
-## Original XGB In Popular Kernel
+    def print_info(self, op_start, i, x_max, ymax, xtrain, ytrain, keys):
+
+        if self.lvl:
+            numpy.set_printoptions(precision=4, suppress=True)
+            print('Iteration: %3i | Last sampled value: %11f' % ((i+1), ytrain[-1]), '| with parameters: ', dict(zip(keys, xtrain[-1])))
+            print('               | Current maximum: %14f | with parameters: ' % ymax, dict(zip(keys, xtrain[numpy.argmax(ytrain)])))
+            
+            minutes, seconds = divmod((datetime.now() - op_start).total_seconds(), 60)
+            print('               | Time taken: %i minutes and %s seconds' % (minutes, seconds))
+            print('')
+
+        else:
+            pass
 
 
+    def print_log(self, op_start, i, x_max, xmins, min_max_ratio, ymax, xtrain, ytrain, keys):
 
-train_,test_ = get_additional_features(train,test,ID=True)
+        def return_log(x):
+            return xmins * (10 ** (x * min_max_ratio))
 
-xgb_params = {
-        'n_trees': 520, 
-        'eta': 0.0045,
-        'max_depth': 4,
-        'subsample': 0.93,
-        'objective': 'reg:linear',
-        'eval_metric': 'rmse',
-        'base_score': y_mean, # base prediction = mean(target)
-        'silent': True,
-        'seed': 42,
-    }
-dtrain = xgb.DMatrix(train_.drop('y', axis=1), train_.y)
-dtest = xgb.DMatrix(test_)
+        dict_len = len(keys)
+
+        if self.lvl:
+                
+            numpy.set_printoptions(precision=4, suppress=True)
+            print('Iteration: %3i | Last sampled value: %8f' % ((i+1), ytrain[-1]), '| with parameters: ',  dict(zip(keys, return_log(xtrain[-1])) ))
+            print('               | Current maximum: %11f | with parameters: ' % ymax, dict(zip(keys, return_log( xtrain[numpy.argmax(ytrain)]))))
+
+            minutes, seconds = divmod((datetime.now() - op_start).total_seconds(), 60)
+            print('               | Time taken: %i minutes and %s seconds' % (minutes, seconds))
+            print('')
+
+        else:
+            pass
+        
+########################### Define Random Forest Optimization ###################
+def rfccv(n_estimators, min_samples_split, max_features):
+    rf = RFC(n_estimators=int(n_estimators),
+             min_samples_split=int(min_samples_split),
+             max_features=min(max_features, 0.999),
+             random_state=2,
+             n_jobs=-1)
+    rf.fit(X, Xtarget)
+    return -log_loss(Ytarget, rf.predict_proba(Y)[:,1])
+
+################################## Actual Run Code ##################################
+
+train=pd.read_csv('../input/train.csv')
+test=pd.read_csv('../input/test.csv')
+random.seed(rnd)
+train.index=train.ID
+test.index=test.ID
+del train['ID'], test['ID']
+target=train.target
+del train['target']
+
+#prepare data
+traindummies=pd.DataFrame()
+testdummies=pd.DataFrame()
+
+for elt in train.columns:
+    vector=pd.concat([train[elt],test[elt]], axis=0)
+
+    #count as categorial if number of unique values is less than maxCategories
+    if len(vector.unique())<maxCategories:
+        traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+        testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+        del train[elt], test[elt]
+    else:
+        typ=str(train[elt].dtype)[:3]
+        if (typ=='flo') or (typ=='int'):
+            minimum=vector.min()
+            maximum=vector.max()
+            train[elt]=train[elt].fillna(int(minimum)-2)
+            test[elt]=test[elt].fillna(int(minimum)-2)
+            minimum=int(minimum)-2
+            traindummies[elt+'_na']=train[elt].apply(lambda x: 1 if x==minimum else 0)
+            testdummies[elt+'_na']=test[elt].apply(lambda x: 1 if x==minimum else 0)
+            
+
+            #resize between 0 and 1 linearly ax+b
+            a=1/(maximum-minimum)
+            b=-a*minimum
+            train[elt]=a*train[elt]+b
+            test[elt]=a*test[elt]+b
+        else:
+            if (typ=='obj'):
+                list2keep=vector.value_counts()[:maxCategories].index
+                train[elt]=train[elt].apply(lambda x: x if x in list2keep else numpy.nan)
+                test[elt]=test[elt].apply(lambda x: x if x in list2keep else numpy.nan)                
+                traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+                testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+                
+                #Replace categories by their weights
+                tempTable=pd.concat([train[elt], target], axis=1)
+                tempTable=tempTable.groupby(by=elt, axis=0).agg(['sum','count']).target
+                tempTable['weight']=tempTable.apply(lambda x: .5+.5*x['sum']/x['count'] if (x['sum']>x['count']-x['sum']) else .5+.5*(x['sum']-x['count'])/x['count'], axis=1)
+                tempTable.reset_index(inplace=True)
+                train[elt+'weight']=pd.merge(train, tempTable, how='left', on=elt)['weight']
+                test[elt+'weight']=pd.merge(test, tempTable, how='left', on=elt)['weight']
+                train[elt+'weight']=train[elt+'weight'].fillna(.5)
+                test[elt+'weight']=test[elt+'weight'].fillna(.5)
+                del train[elt], test[elt]
+            else:
+                print('error', typ)
+
+#remove na values too similar to v2_na
+from sklearn import metrics
+for elt in train.columns:
+    if (elt[-2:]=='na') & (elt!='v2_na'):
+        dist=metrics.pairwise_distances(train.v2_na.reshape(1, -1),train[elt].reshape(1, -1))
+        if dist<8:
+            del train[elt],test[elt]
+        else:
+            print(elt, dist)
+            
+            
+train=pd.concat([train,traindummies, target], axis=1)
+test=pd.concat([test,testdummies], axis=1)
+del traindummies,testdummies
+
+#remove features only present in train or test
+for elt in list(set(train.columns)-set(test.columns)):
+    del train[elt]
+for elt in list(set(test.columns)-set(train.columns)):
+    del test[elt]
     
-num_boost_rounds = 1250
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
-y_pred = model.predict(dtest)
+#run cross validation
+from sklearn import cross_validation
+X, Y, Xtarget, Ytarget=cross_validation.train_test_split(train, target, test_size=0.1)
+del train
 
-## Average Two Solutions
+rfcBO = BayesianOptimization(rfccv, {'n_estimators': (10, 25),
+                                     'min_samples_split': (2, 20),
+                                     'max_features': (0.1, 0.999)})
 
-Average = 0.70*y_pred + 0.30*pred_1
+print('-'*53)
 
-sub = pd.DataFrame({'ID':test['ID'],'y':Average})
+# Change the values below to run for longer and getting better results.
+rfcBO.maximize(init_points=2, restarts=50, n_iter=3)
 
-## LB Prob Values 
-
-## I forget whose credit should be given, Please help me to find him/her!!
-
-leaks = {
-    1:71.34112,
-    12:109.30903,
-    23:115.21953,
-    28:92.00675,
-    42:87.73572,
-    43:129.79876,
-    45:99.55671,
-    57:116.02167,
-    3977:132.08556,
-    88:90.33211,
-    89:130.55165,
-    93:105.79792,
-    94:103.04672,
-    1001:111.65212,
-    104:92.37968,
-    72:110.54742,
-    78:125.28849,
-    105:108.5069,
-    110:83.31692,
-    1004:91.472,
-    1008:106.71967,
-    1009:108.21841,
-    973:106.76189,
-    8002:95.84858,
-    8007:87.44019,
-    1644:99.14157,
-    337:101.23135,
-    253:115.93724,
-    8416:96.84773,
-    259:93.33662,
-    262:75.35182,
-    1652:89.77625
-    }
-sub['y'] = sub.apply(lambda r: leaks[int(r['ID'])] if int(r['ID']) in leaks else r['y'], axis=1)
-
-sub.to_csv('subXgb_Stack_Stack_No_ID_with_onehot.csv',index=False)
+print('-'*53)
+print('Final Results')
+print('RFC: %f' % rfcBO.res['max']['max_val'])

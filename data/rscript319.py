@@ -13,91 +13,102 @@ print(check_output(["ls", "../input"]).decode("utf8"))
 
 # Any results you write to the current directory are saved as output.
 
-from sklearn.metrics import mean_squared_error
-from sklearn import model_selection
-from catboost import CatBoostRegressor
-from sklearn.decomposition import PCA
+import itertools
+import pandas as pd
+import numpy as np
 
-def rmsle(h, y): 
-    """
-    Compute the Root Mean Squared Log Error for hypthesis h and targets y
+class F1Optimizer():
+    def __init__(self):
+        pass
 
-    Args:
-        h - numpy array containing predictions with shape (n_samples, n_targets)
-        y - numpy array containing targets with shape (n_samples, n_targets)
-    """
-    return np.sqrt(np.square(np.log(h + 1) - np.log(y + 1)).mean())
+    @staticmethod
+    def get_expectations(P, pNone=None):
+        expectations = []
+        P = np.sort(P)[::-1]
 
+        n = np.array(P).shape[0]
+        DP_C = np.zeros((n + 2, n + 1))
+        if pNone is None:
+            pNone = (1.0 - P).prod()
 
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-test_id=test.id
+        DP_C[0][0] = 1.0
+        for j in range(1, n):
+            DP_C[0][j] = (1.0 - P[j - 1]) * DP_C[0, j - 1]
 
-#train = train.drop(['id'], axis=1)
-#train = train.drop_duplicates()
+        for i in range(1, n + 1):
+            DP_C[i, i] = DP_C[i - 1, i - 1] * P[i - 1]
+            for j in range(i + 1, n + 1):
+                DP_C[i, j] = P[j - 1] * DP_C[i - 1, j - 1] + (1.0 - P[j - 1]) * DP_C[i, j - 1]
 
-#train = train.reset_index(drop=True)
-vector = np.vstack((train[['lattice_vector_1_ang', 'lattice_vector_2_ang','lattice_vector_3_ang']].values,
-                    test[['lattice_vector_1_ang', 'lattice_vector_2_ang','lattice_vector_3_ang']].values))
+        DP_S = np.zeros((2 * n + 1,))
+        DP_SNone = np.zeros((2 * n + 1,))
+        for i in range(1, 2 * n + 1):
+            DP_S[i] = 1. / (1. * i)
+            DP_SNone[i] = 1. / (1. * i + 1)
+        for k in range(n + 1)[::-1]:
+            f1 = 0
+            f1None = 0
+            for k1 in range(n + 1):
+                f1 += 2 * k1 * DP_C[k1][k] * DP_S[k + k1]
+                f1None += 2 * k1 * DP_C[k1][k] * DP_SNone[k + k1]
+            for i in range(1, 2 * k - 1):
+                DP_S[i] = (1 - P[k - 1]) * DP_S[i] + P[k - 1] * DP_S[i + 1]
+                DP_SNone[i] = (1 - P[k - 1]) * DP_SNone[i] + P[k - 1] * DP_SNone[i + 1]
+            expectations.append([f1None + 2 * pNone / (2 + k), f1])
 
-pca = PCA().fit(vector)
-train['vector_pca0'] = pca.transform(train[['lattice_vector_1_ang', 'lattice_vector_2_ang','lattice_vector_3_ang']])[:, 0]
-test['vector_pca0'] = pca.transform(test[['lattice_vector_1_ang', 'lattice_vector_2_ang','lattice_vector_3_ang']])[:, 0]
+        return np.array(expectations[::-1]).T
 
+    @staticmethod
+    def maximize_expectation(P, pNone=None):
+        expectations = F1Optimizer.get_expectations(P, pNone)
 
-X = train.drop(['id','bandgap_energy_ev','formation_energy_ev_natom'], axis=1)
-Y_feen = np.log(train['formation_energy_ev_natom']+1)
-Y_bee = np.log(train['bandgap_energy_ev']+1)
+        ix_max = np.unravel_index(expectations.argmax(), expectations.shape)
+        max_f1 = expectations[ix_max]
 
-test = test.drop(['id'], axis = 1)
+        predNone = True if ix_max[0] == 0 else False
+        best_k = ix_max[1]
 
+        return best_k, predNone, max_f1
 
-def runCatBoost(x_train, y_train,x_test, y_test,test,depth):
-    model=CatBoostRegressor(iterations=1200,
-                            learning_rate=0.03,
-                            depth=depth,
-                            loss_function='RMSE',
-                            eval_metric='RMSE',
-                            random_seed=99,
-                            od_type='Iter',
-                            od_wait=50)
-    model.fit(x_train, y_train, eval_set=(x_test, y_test), use_best_model=True, verbose=False)
-    y_pred_train=model.predict(x_test)
-    rmsle_result = rmsle(np.exp(y_pred_train)-1,np.exp(y_test)-1)
-    y_pred_test=model.predict(test)
-    return y_pred_train,rmsle_result,y_pred_test
+    @staticmethod
+    def _F1(tp, fp, fn):
+        return 2 * tp / (2 * tp + fp + fn)
 
-pred_full_test_cat_feen = 0
-mse_cat_list_feen=[]
-kf = model_selection.KFold(n_splits=10, shuffle=True, random_state=30)
-for dev_index, val_index in kf.split(X):
-    dev_X, val_X = X.loc[dev_index], X.loc[val_index]
-    dev_y, val_y = Y_feen.loc[dev_index], Y_feen.loc[val_index]
-    y_pred_feen,rmsle_feen,y_pred_test_feen=runCatBoost(dev_X, dev_y, val_X, val_y,test,depth=4)
-    mse_cat_list_feen.append(rmsle_feen)
-    pred_full_test_cat_feen = pred_full_test_cat_feen + y_pred_test_feen
-mse_cat_feen_mean=np.mean(mse_cat_list_feen)
-print("Mean cv score : ", np.mean(mse_cat_feen_mean))
-y_pred_test_feen=pred_full_test_cat_feen/10
+    @staticmethod
+    def _Fbeta(tp, fp, fn, beta=1.0):
+        beta_squared = beta ** 2
+        return (1.0 + beta_squared) * tp / ((1.0 + beta_squared) * tp + fp + beta_squared * fn)
 
-pred_full_test_cat_bee = 0
-mse_cat_list_bee=[]
-kf = model_selection.KFold(n_splits=10, shuffle=True, random_state=30)
-for dev_index, val_index in kf.split(X):
-    dev_X, val_X = X.loc[dev_index], X.loc[val_index]
-    dev_y, val_y = Y_bee.loc[dev_index], Y_bee.loc[val_index]
-    y_pred_bee,rmsle_bee,y_pred_test_bee=runCatBoost(dev_X, dev_y, val_X, val_y,test,depth=4)
-    mse_cat_list_bee.append(rmsle_bee)
-    pred_full_test_cat_bee = pred_full_test_cat_bee + y_pred_test_bee
-mse_cat_bee_mean=np.mean(mse_cat_list_bee)
-print("Mean cv score : ", np.mean(mse_cat_bee_mean))
-y_pred_test_bee=pred_full_test_cat_bee/10
+from tqdm import tqdm
 
 
-sub=pd.DataFrame()
-sub["id"]=test_id
-sub["formation_energy_ev_natom"]=np.clip(np.exp(y_pred_test_feen)-1, 0, None)
-sub["bandgap_energy_ev"]=np.clip(np.exp(y_pred_test_bee)-1, 0, None)
-rmsle_total=np.mean([mse_cat_bee_mean,mse_cat_feen_mean])
-print(rmsle_total)
-sub.to_csv(str(rmsle_total)+"_.csv",index=False)
+def create_products_faron(df):
+    products = df.product_id.values
+    prob = df.prediction.values
+
+    sort_index = np.argsort(prob)[::-1]
+    prob = prob[sort_index]
+    products = products[sort_index]
+
+    opt = F1Optimizer.maximize_expectation(prob)
+    
+    best_prediction = ['None'] if opt[1] else []
+    best_prediction += [str(p) for p in products[:opt[0]]]
+    f1_max = opt[2]
+
+    best = ' '.join(best_prediction)
+    return (df.iloc[0,0], best)
+
+
+if __name__ == '__main__':
+    data = pd.read_pickle('data/prediction_rnn.pkl')
+
+    data = data.loc[data.prediction > 0.01, ['order_id', 'prediction', 'product_id']]
+    out = [create_products_faron(group) for name, group in tqdm(data.groupby(data.order_id))]
+
+    data = pd.DataFrame(data=out, columns=['order_id', 'products'])
+
+    data.to_csv('data/sub.csv', index=False)
+
+
+

@@ -1,473 +1,703 @@
 
 # coding: utf-8
 
-# In addition to the 3 models used in the *surpise me 2!* script, I have added a feed forward neural network for the prediction of visitors.
+# **Predicting Pathologies In X-Ray Images**  *--work in progress--*
+
+# The NIH Clinical Center recently released over 100,000 anonymized chest x-ray images and their corresponding data to the scientific community. The release will allow researchers across the country and around the world to freely access the datasets and increase their ability to teach computers how to detect and diagnose disease. Ultimately, this artificial intelligence mechanism can lead to clinicians making better diagnostic decisions for patients.   
 # 
-# **Update**:
-# Took pointers from @aharless kernel: https://www.kaggle.com/aharless/exclude-same-wk-res-from-nitin-s-surpriseme2-w-nn
+# https://www.nih.gov/news-events/news-releases/nih-clinical-center-provides-one-largest-publicly-available-chest-x-ray-datasets-scientific-community
+# 
+# https://stanfordmlgroup.github.io/projects/chexnet/
 
 # In[ ]:
 
 
-"""
-Contributions from:
-DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
-https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
-JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
-https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
-hklee - weighted mean comparisons, LB 0.497, 1ST
-https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
-tunguz - Surprise Me 2!
-https://www.kaggle.com/tunguz/surprise-me-2/code
-aharless - Exclude same wk res from Nitin's SurpriseMe2 w NN
-https://www.kaggle.com/aharless/exclude-same-wk-res-from-nitin-s-surpriseme2-w-nn/versions#base=2217075&new=2253052
-
-Also all comments for changes, encouragement, and forked scripts rock
-
-Keep the Surprise Going
-"""
-
-import glob, re
-import numpy as np
 import pandas as pd
-from sklearn import *
-from datetime import datetime
-from xgboost import XGBRegressor
-
-from keras.layers import Embedding, Input, Dense
-from keras.models import Model
+import numpy as np
+import os
+from glob import glob
+import random
+import matplotlib.pylab as plt
+import cv2
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+import zlib
+import itertools
+import sklearn
+from sklearn import model_selection
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import learning_curve
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.utils import class_weight
+from sklearn.metrics import confusion_matrix
 import keras
-import keras.backend as K
+from keras.models import Sequential
+from keras.optimizers import SGD, RMSprop, Adam, Adagrad, Adadelta
+from keras.layers import Dense, Activation, Dropout
+from keras.utils.np_utils import to_categorical
+from keras.models import Sequential
+from keras.layers import Activation,Dense, Dropout, Flatten, Conv2D, MaxPool2D,MaxPooling2D,AveragePooling2D, BatchNormalization
+from keras.optimizers import RMSprop
+from keras.preprocessing.image import ImageDataGenerator
+from keras.callbacks import ReduceLROnPlateau, ModelCheckpoint
+from keras.models import model_from_json
+from keras import backend as K
+from keras.layers import Conv2D, MaxPooling2D
+from keras.applications.mobilenet import MobileNet
 
-import matplotlib.pyplot as plt
+
+# Load the data
+
+# In[ ]:
+
+
+PATH = os.path.abspath(os.path.join('..', 'input/sample/'))
+SOURCE_IMAGES = os.path.join(PATH, "sample", "images")
+images = glob(os.path.join(SOURCE_IMAGES, "*.png"))
+
+images[0:10]
 
 
 # In[ ]:
 
 
-def RMSLE(y, pred):
-    return metrics.mean_squared_error(y, pred)**0.5
+labels = pd.read_csv('../input/sample/sample_labels.csv')
+labels.head(10)
 
-def plot_actual_predicted(actual, predicted):
-    print('RMSE: ', RMSLE(actual, predicted))
-    tmp = pd.DataFrame({'actual': actual, 'predicted': predicted}).sort_values(['actual'])
-    plt.scatter(range(tmp.shape[0]), tmp['predicted'], color='green')
-    plt.scatter(range(tmp.shape[0]), tmp['actual'], color='blue')
-    plt.show()
-    del tmp
+
+# Plot a representative image
+
+# It should be noted that these images require some significant pre-processing and/or relabeling for best results.  For this exercise we will do only minimal pre-processing of the images.  See the following blogpost for more detail about specific challenges associated with this dataset: https://lukeoakdenrayner.wordpress.com/2017/12/18/the-chestxray14-dataset-problems/. 
+
+# In[ ]:
+
+
+multipleImages = glob('/kaggle/input/sample/sample/images/**')
+i_ = 0
+plt.rcParams['figure.figsize'] = (10.0, 10.0)
+plt.subplots_adjust(wspace=0, hspace=0)
+for l in multipleImages[:25]:
+    im = cv2.imread(l)
+    im = cv2.resize(im, (128, 128)) 
+    plt.subplot(5, 5, i_+1) #.set_title(l)
+    plt.imshow(cv2.cvtColor(im, cv2.COLOR_BGR2RGB)); plt.axis('off')
+    i_ += 1
 
 
 # In[ ]:
 
 
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['reserve_visitors'] = np.log1p(data[df]['reserve_visitors'])
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_dow'] = data[df]['visit_datetime'].dt.dayofweek
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    # NEW FEATURE FROM aharless kernel
-    data[df]['early_reservation'] = data[df]['reserve_datetime_diff'] > 2
-    data[df]['late_reservation'] = data[df]['reserve_datetime_diff'] <= 2
-    tmp1 = data[df][data[df]['early_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-    tmp2 = data[df][data[df]['early_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-    tmp3 = data[df][data[df]['late_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs12', 'reserve_visitors':'rv12'})
-    tmp4 = data[df][data[df]['late_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs22', 'reserve_visitors':'rv22'})
-    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
-    data[df] = pd.merge(data[df], tmp3, how='left', on=['air_store_id','visit_date'])
-    data[df] = pd.merge(data[df], tmp4, how='left', on=['air_store_id','visit_date'])
-    
-# for df in ['ar','hr']:
-#     data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-#     data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-#     data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-#     data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-#     data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-#     # NEW FEATURE FROM aharless kernel
-#     # Exclude less than 2 days gap
-#     data[df] = data[df][data[df]['reserve_datetime_diff'] > 2]
-#     tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-#     tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-#     data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-# NEW FEATURE FROM aharless kernel
-data['tra']['week'] = data['tra']['visit_date'].dt.week
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['week'] = data['tes']['visit_date'].dt.week
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-# NEW FEATURES FROM Georgii Vyshnia
-stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
-stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
-lbl = preprocessing.LabelEncoder()
-for i in range(10):
-    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
-
-train = pd.merge(train, stores, how='inner', on=['air_store_id','dow']) 
-test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
-
-train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
-train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
-train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
-
-test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
-test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
-test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
-
-# NEW FEATURES FROM JMBULL
-train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-train['var_max_lat'] = train['latitude'].max() - train['latitude']
-train['var_max_long'] = train['longitude'].max() - train['longitude']
-test['var_max_lat'] = test['latitude'].max() - test['latitude']
-test['var_max_long'] = test['longitude'].max() - test['longitude']
-
-# NEW FEATURES FROM Georgii Vyshnia
-train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
-test['lon_plus_lat'] = test['longitude'] + test['latitude']
-
-lbl = preprocessing.LabelEncoder()
-train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
-test['air_store_id2'] = lbl.transform(test['air_store_id'])
-
-col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
-
-train['visitors'] = np.log1p(train['visitors'].values)
+r = random.sample(images, 3)
+plt.figure(figsize=(16,16))
+plt.subplot(131)
+plt.imshow(cv2.imread(r[0]))
+plt.subplot(132)
+plt.imshow(cv2.imread(r[1]))
+plt.subplot(133)
+plt.imshow(cv2.imread(r[2])); 
 
 
-# Here we prepare data required for the neural network model.
-# 
-# **value_col**:  taken as float input(which are normalized)
-# 
-# **nn_col - value_col**: taken as categorical inputs(embedding layers used)
+# What types of ailments are identified in these annotated X-ray images?
 
 # In[ ]:
 
 
-value_col = ['holiday_flg','min_visitors','mean_visitors','median_visitors','max_visitors','count_observations',
-'rs1_x','rv1_x','rs2_x','rv2_x','rs1_y','rv1_y','rs2_y','rv2_y','total_reserv_sum','total_reserv_mean',
-'total_reserv_dt_diff_mean','date_int','var_max_lat','var_max_long','lon_plus_lat']
+labels = pd.read_csv('../input/sample/sample_labels.csv')
+labels.head(10)
 
-nn_col = value_col + ['dow', 'year', 'month', 'air_store_id2', 'air_area_name', 'air_genre_name',
-'air_area_name0', 'air_area_name1', 'air_area_name2', 'air_area_name3', 'air_area_name4',
-'air_area_name5', 'air_area_name6', 'air_genre_name0', 'air_genre_name1',
-'air_genre_name2', 'air_genre_name3', 'air_genre_name4']
-
-X = train.copy()
-X_test = test[nn_col].copy()
-
-value_scaler = preprocessing.MinMaxScaler()
-for vcol in value_col:
-    X[vcol] = value_scaler.fit_transform(X[vcol].values.astype(np.float64).reshape(-1, 1))
-    X_test[vcol] = value_scaler.transform(X_test[vcol].values.astype(np.float64).reshape(-1, 1))
-
-X_train = list(X[nn_col].T.as_matrix())
-Y_train = X['visitors'].values
-nn_train = [X_train, Y_train]
-nn_test = [list(X_test[nn_col].T.as_matrix())]
-print("Train and test data prepared for NN")
-
-
-# Following function implements the Keras neural network model.
-# 
-# Basic structure:
-# - categorical columns get independent inputs, passed through embedding layer and then flattened.
-# - numeric columns are simply taken as float32 inputs
-# - the final tensors of categorical and numerical are then concatenated together
-# - following the concatenated layer and simple feed forward neural network is implemented.
-# - output layer has 'ReLU' activation function
 
 # In[ ]:
 
 
-def get_nn_complete_model(train, hidden1_neurons=35, hidden2_neurons=15):
+#drop unused columns
+labels = labels[['Image Index','Finding Labels','Follow-up #','Patient ID','Patient Age','Patient Gender']]
+#create new columns for each decease
+pathology_list = ['Cardiomegaly','Emphysema','Effusion','Hernia','Nodule','Pneumothorax','Atelectasis','Pleural_Thickening','Mass','Edema','Consolidation','Infiltration','Fibrosis','Pneumonia']
+for pathology in pathology_list :
+    labels[pathology] = labels['Finding Labels'].apply(lambda x: 1 if pathology in x else 0)
+#remove Y after age
+labels['Age']=labels['Patient Age'].apply(lambda x: x[:-1]).astype(int)
+
+plt.figure(figsize=(15,10))
+gs = gridspec.GridSpec(8,1)
+ax1 = plt.subplot(gs[:7, :])
+ax2 = plt.subplot(gs[7, :])
+data1 = pd.melt(labels,
+             id_vars=['Patient Gender'],
+             value_vars = list(pathology_list),
+             var_name = 'Category',
+             value_name = 'Count')
+data1 = data1.loc[data1.Count>0]
+g=sns.countplot(y='Category',hue='Patient Gender',data=data1, ax=ax1, order = data1['Category'].value_counts().index)
+ax1.set( ylabel="",xlabel="")
+ax1.legend(fontsize=20)
+ax1.set_title('X Ray partition',fontsize=18);
+
+labels['Nothing']=labels['Finding Labels'].apply(lambda x: 1 if 'No Finding' in x else 0)
+
+data2 = pd.melt(labels,
+             id_vars=['Patient Gender'],
+             value_vars = list(['Nothing']),
+             var_name = 'Category',
+             value_name = 'Count')
+data2 = data2.loc[data2.Count>0]
+g=sns.countplot(y='Category',hue='Patient Gender',data=data2,ax=ax2)
+ax2.set( ylabel="",xlabel="Number of decease")
+ax2.legend('')
+plt.subplots_adjust(hspace=.5)
+
+
+# In[ ]:
+
+
+df=labels
+data=df.groupby('Finding Labels').count().sort_values('Patient ID',ascending=False)
+df1=data[['|' in index for index in data.index]].copy()
+df2=data[['|' not in index for index in data.index]]
+df2=df2[['No Finding' not in index for index in df2.index]]
+df2['Finding Labels']=df2.index.values
+df1['Finding Labels']=df1.index.values
+
+f, ax = plt.subplots(sharex=True,figsize=(15, 10))
+g=sns.countplot(y='Category',data=data1, ax=ax, order = data1['Category'].value_counts().index,color='b',label="Multiple Pathologies")
+sns.set_color_codes("muted")
+g=sns.barplot(x='Patient ID',y='Finding Labels',data=df2, ax=ax, color="r",label="Single Pathology")
+ax.legend(ncol=2, loc="center right", frameon=True,fontsize=20)
+ax.set( ylabel="",xlabel="Number of Patients")
+ax.set_title("Comparaison between Single or Multiple Pathologies",fontsize=20)      
+sns.despine(left=True)
+
+
+# Convert annotated .png images into labeled numpy arrays.  Discard all images with more than one pathology.
+
+# In[ ]:
+
+
+df=labels
+data=df.groupby('Finding Labels').count().sort_values('Patient ID',ascending=False)
+df1=data[['|' in index for index in data.index]].copy()
+df2=data[['|' not in index for index in data.index]]
+
+
+# In[ ]:
+
+
+def proc_images():
     """
-    Input:
-        train:           train dataframe(used to define the input size of the embedding layer)
-        hidden1_neurons: number of neurons in the first hidden layer
-        hidden2_neurons: number of neurons in the first hidden layer
-    Output:
-        return 'keras neural network model'
+    Returns two arrays: 
+        x is an array of resized images
+        y is an array of labels
     """
-    K.clear_session()
-
-    air_store_id = Input(shape=(1,), dtype='int32', name='air_store_id')
-    air_store_id_emb = Embedding(len(train['air_store_id2'].unique()) + 1, 15, input_shape=(1,),
-                                 name='air_store_id_emb')(air_store_id)
-    air_store_id_emb = keras.layers.Flatten(name='air_store_id_emb_flatten')(air_store_id_emb)
-
-    dow = Input(shape=(1,), dtype='int32', name='dow')
-    dow_emb = Embedding(8, 3, input_shape=(1,), name='dow_emb')(dow)
-    dow_emb = keras.layers.Flatten(name='dow_emb_flatten')(dow_emb)
-
-    month = Input(shape=(1,), dtype='int32', name='month')
-    month_emb = Embedding(13, 3, input_shape=(1,), name='month_emb')(month)
-    month_emb = keras.layers.Flatten(name='month_emb_flatten')(month_emb)
-
-    air_area_name, air_genre_name = [], []
-    air_area_name_emb, air_genre_name_emb = [], []
-    for i in range(7):
-        area_name_col = 'air_area_name' + str(i)
-        air_area_name.append(Input(shape=(1,), dtype='int32', name=area_name_col))
-        tmp = Embedding(len(train[area_name_col].unique()), 3, input_shape=(1,),
-                        name=area_name_col + '_emb')(air_area_name[-1])
-        tmp = keras.layers.Flatten(name=area_name_col + '_emb_flatten')(tmp)
-        air_area_name_emb.append(tmp)
-
-        if i > 4:
+    NoFinding = "No Finding" #0
+    Consolidation="Consolidation" #1
+    Infiltration="Infiltration" #2
+    Pneumothorax="Pneumothorax" #3
+    Edema="Edema" # 7
+    Emphysema="Emphysema" #7
+    Fibrosis="Fibrosis" #7
+    Effusion="Effusion" #4
+    Pneumonia="Pneumonia" #7
+    Pleural_Thickening="Pleural_Thickening" #7
+    Cardiomegaly="Cardiomegaly" #7
+    NoduleMass="Nodule" #5
+    Hernia="Hernia" #7
+    Atelectasis="Atelectasis"  #6 
+    RareClass = ["Edema", "Emphysema", "Fibrosis", "Pneumonia", "Pleural_Thickening", "Cardiomegaly","Hernia"]
+    x = [] # images as arrays
+    y = [] # labels
+    WIDTH = 128
+    HEIGHT = 128
+    for img in images:
+        base = os.path.basename(img)
+        # Read and resize image
+        full_size_image = cv2.imread(img)
+        finding = labels["Finding Labels"][labels["Image Index"] == base].values[0]
+        symbol = "|"
+        if symbol in finding:
             continue
-        area_genre_col = 'air_genre_name' + str(i)
-        air_genre_name.append(Input(shape=(1,), dtype='int32', name=area_genre_col))
-        tmp = Embedding(len(train[area_genre_col].unique()), 3, input_shape=(1,),
-                        name=area_genre_col + '_emb')(air_genre_name[-1])
-        tmp = keras.layers.Flatten(name=area_genre_col + '_emb_flatten')(tmp)
-        air_genre_name_emb.append(tmp)
+        else:
+            if NoFinding in finding:
+                finding = 0
+                #y.append(finding)
+                #x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))      
+            elif Consolidation in finding:
+                finding = 1
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Infiltration in finding:
+                finding = 2
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Pneumothorax in finding:
+                finding = 3
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Edema in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Emphysema in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Fibrosis in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Effusion in finding:
+                finding = 4
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Pneumonia in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Pleural_Thickening in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Cardiomegaly in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif NoduleMass in finding:
+                finding = 5
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Hernia in finding:
+                finding = 7
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            elif Atelectasis in finding:
+                finding = 6
+                y.append(finding)
+                x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
+            else:
+                continue
+    return x,y
 
-    air_genre_name_emb = keras.layers.concatenate(air_genre_name_emb)
-    air_genre_name_emb = Dense(4, activation='sigmoid', name='final_air_genre_emb')(air_genre_name_emb)
 
-    air_area_name_emb = keras.layers.concatenate(air_area_name_emb)
-    air_area_name_emb = Dense(4, activation='sigmoid', name='final_air_area_emb')(air_area_name_emb)
-    
-    air_area_code = Input(shape=(1,), dtype='int32', name='air_area_code')
-    air_area_code_emb = Embedding(len(train['air_area_name'].unique()), 8, input_shape=(1,), name='air_area_code_emb')(air_area_code)
-    air_area_code_emb = keras.layers.Flatten(name='air_area_code_emb_flatten')(air_area_code_emb)
-    
-    air_genre_code = Input(shape=(1,), dtype='int32', name='air_genre_code')
-    air_genre_code_emb = Embedding(len(train['air_genre_name'].unique()), 5, input_shape=(1,),
-                                   name='air_genre_code_emb')(air_genre_code)
-    air_genre_code_emb = keras.layers.Flatten(name='air_genre_code_emb_flatten')(air_genre_code_emb)
+# In[ ]:
 
-    
-    holiday_flg = Input(shape=(1,), dtype='float32', name='holiday_flg')
-    year = Input(shape=(1,), dtype='float32', name='year')
-    min_visitors = Input(shape=(1,), dtype='float32', name='min_visitors')
-    mean_visitors = Input(shape=(1,), dtype='float32', name='mean_visitors')
-    median_visitors = Input(shape=(1,), dtype='float32', name='median_visitors')
-    max_visitors = Input(shape=(1,), dtype='float32', name='max_visitors')
-    count_observations = Input(shape=(1,), dtype='float32', name='count_observations')
-    rs1_x = Input(shape=(1,), dtype='float32', name='rs1_x')
-    rv1_x = Input(shape=(1,), dtype='float32', name='rv1_x')
-    rs2_x = Input(shape=(1,), dtype='float32', name='rs2_x')
-    rv2_x = Input(shape=(1,), dtype='float32', name='rv2_x')
-    rs1_y = Input(shape=(1,), dtype='float32', name='rs1_y')
-    rv1_y = Input(shape=(1,), dtype='float32', name='rv1_y')
-    rs2_y = Input(shape=(1,), dtype='float32', name='rs2_y')
-    rv2_y = Input(shape=(1,), dtype='float32', name='rv2_y')
-    total_reserv_sum = Input(shape=(1,), dtype='float32', name='total_reserv_sum')
-    total_reserv_mean = Input(shape=(1,), dtype='float32', name='total_reserv_mean')
-    total_reserv_dt_diff_mean = Input(shape=(1,), dtype='float32', name='total_reserv_dt_diff_mean')
-    date_int = Input(shape=(1,), dtype='float32', name='date_int')
-    var_max_lat = Input(shape=(1,), dtype='float32', name='var_max_lat')
-    var_max_long = Input(shape=(1,), dtype='float32', name='var_max_long')
-    lon_plus_lat = Input(shape=(1,), dtype='float32', name='lon_plus_lat')
 
-    date_emb = keras.layers.concatenate([dow_emb, month_emb, year, holiday_flg])
-    date_emb = Dense(5, activation='sigmoid', name='date_merged_emb')(date_emb)
+X,y = proc_images()
+df = pd.DataFrame()
+df["images"]=X
+df["labels"]=y
+print(len(df), df.images[0].shape)
+print(type(X))
 
-    cat_layer = keras.layers.concatenate([holiday_flg, min_visitors, mean_visitors,
-                    median_visitors, max_visitors, count_observations, rs1_x, rv1_x,
-                    rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y,
-                    total_reserv_sum, total_reserv_mean, total_reserv_dt_diff_mean,
-                    date_int, var_max_lat, var_max_long, lon_plus_lat,
-                    date_emb, air_area_name_emb, air_genre_name_emb,
-                    air_area_code_emb, air_genre_code_emb, air_store_id_emb])
 
-    m = Dense(hidden1_neurons, name='hidden1',
-             kernel_initializer=keras.initializers.RandomNormal(mean=0.0,
-                            stddev=0.05, seed=None))(cat_layer)
-    m = keras.layers.LeakyReLU(alpha=0.2)(m)
-    m = keras.layers.BatchNormalization()(m)
-    
-    m1 = Dense(hidden2_neurons, name='hidden2')(m)
-    m1 = keras.layers.LeakyReLU(alpha=0.2)(m1)
-    m = Dense(1, activation='relu')(m1)
+# Describe new numpy arrays
 
-    inp_ten = [
-        holiday_flg, min_visitors, mean_visitors, median_visitors, max_visitors, count_observations,
-        rs1_x, rv1_x, rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y, total_reserv_sum, total_reserv_mean,
-        total_reserv_dt_diff_mean, date_int, var_max_lat, var_max_long, lon_plus_lat,
-        dow, year, month, air_store_id, air_area_code, air_genre_code
-    ]
-    inp_ten += air_area_name
-    inp_ten += air_genre_name
-    model = Model(inp_ten, m)
-    model.compile(loss='mse', optimizer='rmsprop', metrics=['acc'])
+# In[ ]:
 
+
+dict_characters = {1: 'Consolidation', 2: 'Infiltration', 
+        3: 'Pneumothorax', 4:'Effusion', 5: 'Nodule Mass', 6: 'Atelectasis', 7: "Other Rare Classes"}
+
+print(df.head(10))
+print("")
+print(dict_characters)
+
+
+# Describe the distribution of pixel intensities within a representative image
+
+# In[ ]:
+
+
+def plotHistogram(a):
+    """
+    Plot histogram of RGB Pixel Intensities
+    """
+    plt.figure(figsize=(10,5))
+    plt.subplot(1,2,1)
+    plt.title('Representative Image')
+    b = cv2.resize(a, (512,512))
+    plt.imshow(b)
+    plt.axis('off')
+    histo = plt.subplot(1,2,2)
+    histo.set_ylabel('Count')
+    histo.set_xlabel('Pixel Intensity')
+    n_bins = 30
+    plt.hist(a[:,:,0].flatten(), bins= n_bins, lw = 0, color='r', alpha=0.5);
+    plt.hist(a[:,:,1].flatten(), bins= n_bins, lw = 0, color='g', alpha=0.5);
+    plt.hist(a[:,:,2].flatten(), bins= n_bins, lw = 0, color='b', alpha=0.5);
+plotHistogram(X[1])
+
+
+# Normalize the pixel intensities between zero and one.
+
+# In[ ]:
+
+
+X=np.array(X)
+X=X/255.0
+plotHistogram(X[1])
+
+
+# Describe distribution of class labels
+
+# In[ ]:
+
+
+lab = df['labels']
+dist = lab.value_counts()
+sns.countplot(lab)
+print(dict_characters)
+#print(dist)
+
+
+# We have imbalanced sample sizes.  This is a problem that needs to be addressed.
+# 
+# But for now we can proceed with a preliminary analysis.
+
+# In[ ]:
+
+
+X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.2)
+# Reduce Sample Size for DeBugging
+X_train = X_train[0:5000] 
+Y_train = Y_train[0:5000]
+X_test = X_test[0:2000] 
+Y_test = Y_test[0:2000]
+
+
+# In[ ]:
+
+
+print("Training Data Shape:", X_train.shape)
+print("Testing Data Shape:", X_test.shape)
+print("Training Data Shape:", len(X_train), X_train[0].shape)
+print("Testing Data Shape:", len(X_test), X_test[0].shape)
+
+
+# Now I will try to use a CNN to predict each ailment based off of the X-Ray image.
+
+# In[ ]:
+
+
+# Encode labels to hot vectors (ex : 2 -> [0,0,1,0,0,0,0,0,0,0])
+Y_trainHot = to_categorical(Y_train, num_classes = 8)
+Y_testHot = to_categorical(Y_test, num_classes = 8)
+
+
+# In order to avoid having a biased model because of skewed class sizes, I will modify the class_weights parameter in order to give more weight to the rare classes.  In this case the class_weights parameter will eventually be passed to the model.fit function.
+
+# In[ ]:
+
+
+from sklearn.utils import class_weight
+class_weight = class_weight.compute_class_weight('balanced', np.unique(y), y)
+print(class_weight)
+
+
+# In[ ]:
+
+
+# Helper Functions  Learning Curves and Confusion Matrix
+
+from keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+
+class MetricsCheckpoint(Callback):
+    """Callback that saves metrics after each epoch"""
+    def __init__(self, savepath):
+        super(MetricsCheckpoint, self).__init__()
+        self.savepath = savepath
+        self.history = {}
+    def on_epoch_end(self, epoch, logs=None):
+        for k, v in logs.items():
+            self.history.setdefault(k, []).append(v)
+        np.save(self.savepath, self.history)
+
+def plotKerasLearningCurve():
+    plt.figure(figsize=(10,5))
+    metrics = np.load('logs.npy')[()]
+    filt = ['acc'] # try to add 'loss' to see the loss learning curve
+    for k in filter(lambda x : np.any([kk in x for kk in filt]), metrics.keys()):
+        l = np.array(metrics[k])
+        plt.plot(l, c= 'r' if 'val' not in k else 'b', label='val' if 'val' in k else 'train')
+        x = np.argmin(l) if 'loss' in k else np.argmax(l)
+        y = l[x]
+        plt.scatter(x,y, lw=0, alpha=0.25, s=100, c='r' if 'val' not in k else 'b')
+        plt.text(x, y, '{} = {:.4f}'.format(x,y), size='15', color= 'r' if 'val' not in k else 'b')   
+    plt.legend(loc=4)
+    plt.axis([0, None, None, None]);
+    plt.grid()
+    plt.xlabel('Number of epochs')
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize = (5,5))
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=90)
+    plt.yticks(tick_marks, classes)
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+def plot_learning_curve(history):
+    plt.figure(figsize=(8,8))
+    plt.subplot(1,2,1)
+    plt.plot(history.history['acc'])
+    plt.plot(history.history['val_acc'])
+    plt.title('model accuracy')
+    plt.ylabel('accuracy')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'test'], loc='upper left')
+    plt.savefig('./accuracy_curve.png')
+    #plt.clf()
+    # summarize history for loss
+    plt.subplot(1,2,2)
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('model loss')
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'test'], loc='upper left')
+    plt.savefig('./loss_curve.png')
+
+
+# In[ ]:
+
+
+def runCNNconfusion(a,b,c,d,e,f,g,h):
+    # In -> [[Conv2D->relu]*2 -> MaxPool2D -> Dropout]*2 -> Flatten -> Dense -> Dropout -> Out
+    batch_size = 128
+    num_classes = f
+    epochs = g
+    #img_rows, img_cols = X_train.shape[1],b.shape[2]
+    input_shape = (128, 128, 3)
+    model = Sequential()
+    model.add(Conv2D(filters = 32, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu', input_shape = input_shape,strides=h))
+    model.add(Conv2D(filters = 32, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu'))
+    model.add(MaxPool2D(pool_size=(2,2)))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.25))
+    model.add(Conv2D(filters = 128, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu'))
+    model.add(Conv2D(filters = 128, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu'))
+    model.add(MaxPool2D(pool_size=(2,2)))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.25))
+    model.add(Conv2D(filters = 86, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu'))
+    model.add(Conv2D(filters = 86, kernel_size = (3,3),padding = 'Same', 
+                     activation ='relu'))
+    model.add(MaxPool2D(pool_size=(2,2)))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.25))
+    model.add(Flatten())
+    #model.add(Dense(1024, activation = "relu"))
+    #model.add(Dropout(0.5))
+    model.add(Dense(512, activation = "relu"))
+    model.add(Dropout(0.5))
+    model.add(Dense(num_classes, activation = "softmax"))
+    # Define the optimizer
+    optimizer = Adagrad()
+    model.compile(optimizer = optimizer , loss = "categorical_crossentropy", metrics=["accuracy"])
+    datagen = ImageDataGenerator(
+        featurewise_center=False,  # set input mean to 0 over the dataset
+        samplewise_center=True,  # set each sample mean to 0
+        featurewise_std_normalization=False,  # divide inputs by std of the dataset
+        samplewise_std_normalization=False,  # divide each input by its std
+        zca_whitening=False,  # apply ZCA whitening
+        rotation_range=40,  # randomly rotate images in the range (degrees, 0 to 180)
+        width_shift_range=0.4,  # randomly shift images horizontally (fraction of total width)
+        height_shift_range=0.4,  # randomly shift images vertically (fraction of total height)
+        horizontal_flip=True,  # randomly flip images
+        vertical_flip=False)  # randomly flip images
+    datagen.fit(a)
+    history = model.fit_generator(datagen.flow(a,b, batch_size=32),
+                        steps_per_epoch=len(a) / 32, epochs=epochs, class_weight = e,  validation_data = [c, d],callbacks = [MetricsCheckpoint('logs')])
+    score = model.evaluate(c,d, verbose=0) 
+    plot_learning_curve(history)
+    plt.show()
+    plotKerasLearningCurve()
+    plt.show()
+    print('\nKeras CNN #2B - accuracy:', score[1],'\n')
+    Y_pred = model.predict(c)
+    print('\n', sklearn.metrics.classification_report(np.where(d > 0)[1], np.argmax(Y_pred, axis=1), target_names=list(dict_characters.values())), sep='')    
+    Y_pred_classes = np.argmax(Y_pred,axis = 1) 
+    Y_true = np.argmax(d,axis = 1) 
+    confusion_mtx = confusion_matrix(Y_true, Y_pred_classes) 
+    plot_confusion_matrix(confusion_mtx, classes = list(dict_characters.values()))
+    plt.show()
+#runCNNconfusion(X_train, Y_trainHot, X_test, Y_testHot,class_weight,8,6,1)
+
+
+# In[ ]:
+
+
+from keras.applications.vgg16 import VGG16
+from keras.models import Model
+weight_path = '../input/keras-pretrained-models/vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5'
+im_size = 128
+map_characters=dict_characters
+def vgg16network(a,b,c,d,e,f,g):
+    num_class = f
+    epochs = g
+    base_model = VGG16(#weights='imagenet',
+        weights = weight_path, include_top=False, input_shape=(im_size, im_size, 3))
+    # Add a new top layer
+    x = base_model.output
+    x = Flatten()(x)
+    predictions = Dense(num_class, activation='softmax')(x)
+    # This is the model we will train
+    model = Model(inputs=base_model.input, outputs=predictions)
+    # First: train only the top layers (which were randomly initialized)
+    for layer in base_model.layers:
+        layer.trainable = False
+    model.compile(loss='categorical_crossentropy', 
+                  optimizer=keras.optimizers.RMSprop(lr=0.0001), 
+                  metrics=['accuracy'])
+    callbacks_list = [keras.callbacks.EarlyStopping(monitor='val_acc', patience=3, verbose=1)]
+    model.summary()
+    model.fit(a,b, epochs=epochs, class_weight=e, validation_data=(c,d), verbose=1,callbacks = [MetricsCheckpoint('logs')])
+    score = model.evaluate(c,d, verbose=0)
+    print('\nKeras CNN #2 - accuracy:', score[1], '\n')
+    y_pred = model.predict(c)
+    print('\n', sklearn.metrics.classification_report(np.where(d > 0)[1], np.argmax(y_pred, axis=1), target_names=list(map_characters.values())), sep='') 
+    Y_pred_classes = np.argmax(y_pred,axis = 1) 
+    Y_true = np.argmax(d,axis = 1) 
+    confusion_mtx = confusion_matrix(Y_true, Y_pred_classes) 
+    plotKerasLearningCurve()
+    plt.show()
+    plot_confusion_matrix(confusion_mtx, classes = list(map_characters.values()))
+    plt.show()
     return model
+#vgg16network(X_train, Y_trainHot, X_test, Y_testHot,class_weight,8,5)
+
+
+# The imbalance in our dataset has resulted in a biased model.  I tried to prevent this by modifying the class_weights parameter and using in the model.fit function but apparently that was not enough.  Now I will try to compensate for the imbalanced sample size by oversampling or upsampling the minority classes.
+
+# In[ ]:
+
+
+lab = df['labels']
+dist = lab.value_counts()
+sns.countplot(lab)
+print(dict_characters)
+
+
+# It is very import to do upsampling AFTER the train_test_split function otherwise you can end up with values in the testing dataset that are related to the values within the training dataset.
+
+# In[ ]:
+
+
+X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.2)
+# Reduce Sample Size for DeBugging
+X_train = X_train[0:5000] 
+Y_train = Y_train[0:5000]
+X_test = X_test[0:2000] 
+Y_test = Y_test[0:2000]
 
 
 # In[ ]:
 
 
-model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3,
-                    n_estimators=180, subsample=0.78, max_depth=10)
-# model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
-# model2 = ensemble.RandomForestRegressor(n_estimators=13, random_state=3, max_depth=18,
-#                                         min_weight_fraction_leaf=0.0002)
-model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=330, subsample=0.8, 
-                      colsample_bytree=0.8, max_depth=10)
-model4 = get_nn_complete_model(train, hidden1_neurons=45)
-
-model1.fit(train[col], train['visitors'].values)
-print("Model1 trained")
-
-model3.fit(train[col], train['visitors'].values)
-print("Model3 trained")
-
-for i in range(5):
-    model4.fit(nn_train[0], nn_train[1], epochs=8, verbose=0, batch_size=256, shuffle=True)
-    model4.fit(nn_train[0], nn_train[1], epochs=3, verbose=0,
-        batch_size=256, shuffle=True, validation_split=0.15)
-model4.fit(nn_train[0], nn_train[1], epochs=4, verbose=0, batch_size=512, shuffle=True)
-print("Model4 trained")
-
-preds1 = model1.predict(train[col])
-preds3 = model3.predict(train[col])
-preds4 = pd.Series(model4.predict(nn_train[0]).reshape(-1)).clip(0, 6.8).values
-
-actual_output = train['visitors'].values
-print('GradientBoostingRegressor:')
-plot_actual_predicted(actual_output, preds1)
-print('XGBRegressor:')
-plot_actual_predicted(actual_output, preds3)
-print('NeuralNetwork:')
-plot_actual_predicted(actual_output, preds4)
-
-preds1 = model1.predict(test[col])
-preds3 = model3.predict(test[col])
-# .clip(0, 6.8) used to avoid random high values that might occur
-preds4 = pd.Series(model4.predict(nn_test[0]).reshape(-1)).clip(0, 6.8).values
-
-test['visitors'] = 0.2*preds1+0.4*preds3+0.4*preds4
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
-sub1['preds1'] = pd.Series(preds1)
-sub1['preds3'] = pd.Series(preds3)
-sub1['preds4'] = pd.Series(preds4)
-print("Model predictions done.")
-# del train; del data;
-
-
-# In the following, a small modification from the original kernal is made, we only get the visitors values from history only if they match ['air_store_id', 'day_of_week', 'holiday_flg'] or ['air_store_id', 'day_of_week'] columns match
-
-# In[ ]:
-
-
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
-
-for k, v in dfs.items(): locals()[k] = v
-
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
-
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
-
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
-
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
-
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
-    how='left')['visitors_y'].values
-
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub2 = sub2.fillna(-1) # for the unfound values
+# Make Data 1D for compatability upsampling methods
+X_trainShape = X_train.shape[1]*X_train.shape[2]*X_train.shape[3]
+X_testShape = X_test.shape[1]*X_test.shape[2]*X_test.shape[3]
+X_trainFlat = X_train.reshape(X_train.shape[0], X_trainShape)
+X_testFlat = X_test.reshape(X_test.shape[0], X_testShape)
+print("X_train Shape: ",X_train.shape)
+print("X_test Shape: ",X_test.shape)
+print("X_trainFlat Shape: ",X_trainFlat.shape)
+print("X_testFlat Shape: ",X_testFlat.shape)
 
 
 # In[ ]:
 
 
-def final_visitors(x, alt=False):
-    visitors_x, visitors_y = x['visitors_x'], x['visitors_y']
-    if x['visitors_y'] == -1:
-        return visitors_x
-    else:
-        return 0.7*visitors_x + 0.3*visitors_y* 1.1
+from imblearn.over_sampling import RandomOverSampler
+ros = RandomOverSampler(ratio='auto')
+X_trainRos, Y_trainRos = ros.fit_sample(X_trainFlat, Y_train)
+X_testRos, Y_testRos = ros.fit_sample(X_testFlat, Y_test)
 
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
-sub_merge['visitors'] = sub_merge.apply(lambda x: final_visitors(x), axis=1)
-print("Done")
-sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
+# Encode labels to hot vectors (ex : 2 -> [0,0,1,0,0,0,0,0,0,0])
+Y_trainRosHot = to_categorical(Y_trainRos, num_classes = 8)
+Y_testRosHot = to_categorical(Y_testRos, num_classes = 8)
+print("X_train: ", X_train.shape)
+print("X_trainFlat: ", X_trainFlat.shape)
+print("X_trainRos Shape: ",X_trainRos.shape)
+print("X_testRos Shape: ",X_testRos.shape)
+print("Y_trainRosHot Shape: ",Y_trainRosHot.shape)
+print("Y_testRosHot Shape: ",Y_testRosHot.shape)
 
 
 # In[ ]:
 
 
-sub_merge.head()
+for i in range(len(X_trainRos)):
+    height, width, channels = 128,128,3
+    X_trainRosReshaped = X_trainRos.reshape(len(X_trainRos),height,width,channels)
+print("X_trainRos Shape: ",X_trainRos.shape)
+print("X_trainRosReshaped Shape: ",X_trainRosReshaped.shape)
 
+for i in range(len(X_testRos)):
+    height, width, channels = 128,128,3
+    X_testRosReshaped = X_testRos.reshape(len(X_testRos),height,width,channels)
+print("X_testRos Shape: ",X_testRos.shape)
+print("X_testRosReshaped Shape: ",X_testRosReshaped.shape)
+
+
+# In[ ]:
+
+
+dfRos = pd.DataFrame()
+dfRos["labels"]=Y_trainRos
+labRos = dfRos['labels']
+distRos = lab.value_counts()
+sns.countplot(labRos)
+print(dict_characters)
+
+
+# Now we have a much more even distriution of sample sizes for each of our 7 ailments (plus an 8th category for other/typos).  This should help make our model less biased in favor of the majority class (0=No Finding).
+
+# In[ ]:
+
+
+from sklearn.utils import class_weight
+class_weight = class_weight.compute_class_weight('balanced', np.unique(y), y)
+print("Old Class Weights: ",class_weight)
+from sklearn.utils import class_weight
+class_weight = class_weight.compute_class_weight('balanced', np.unique(Y_trainRos), Y_trainRos)
+print("New Class Weights: ",class_weight)
+
+
+# In[ ]:
+
+
+#runCNNconfusion(X_trainRosReshaped[:10000], Y_trainRosHot[:10000], X_testRosReshaped[:3000], Y_testRosHot[:3000],class_weight,8,6,1)
+
+
+# In[ ]:
+
+
+vgg16network(X_trainRosReshaped[:10000], Y_trainRosHot[:10000], X_testRosReshaped[:3000], Y_testRosHot[:3000],class_weight,8,15)
+
+
+# Our model can predict pathologies in x-ray images with an accuracy rate that is much better than random chance but there is still a lot of room for improvement.  Please see the [following blogpost](https://lukeoakdenrayner.wordpress.com/2017/12/18/the-chestxray14-dataset-problems/) for more detail about specific challenges associated with this dataset . 

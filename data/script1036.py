@@ -1,367 +1,359 @@
 
 # coding: utf-8
 
-# *Last edit by David Lao - 2018/04/01*
-# <br>
-# <br>
-# 
-# 
-# ![](http://digitalspyuk.cdnds.net/17/28/768x1138/gallery-1499785028-stranger-things-2-full-poster.jpg)
-# # Netflix Analytics - Movie Recommendation through Correlations
-# <br>
-# 
-# I love Netflix!
-# 
-# This project aims to build a movie recommendation mechanism within Netflix. The dataset I used here come directly from Netflix. It consists of 4 text data files, each file contains over 20M rows, i.e. over 4K movies and 400K customers. All together **over 17K movies** and **500K+ customers**! 
-# 
-# <br>
-# One of the major challenges is to get all these data loaded into the Kernel for analysis, I have encountered many times of Kernel running out of memory and tried many different ways of how to do it more efficiently. Welcome any suggestions!!!
-# 
-# This kernel will be consistently be updated! Welcome any suggestions! Let's get started!
-# 
-# <br>
-# Feel free to fork and upvote if this notebook is helpful to you in some ways!
-# 
-
-# ## Table of Content:
-# 
-# * Objective
-# 
-# * Data manipulation
-#     -  Data loading
-#     -  Data viewing
-#     -  Data cleaning
-#     -  Data slicing
-#     -  Data mapping
-#     
-# * Recommendation models
-#     -  Recommend with Collaborative Filtering (*Edit on 2017/11/07*)
-#     -  Recommend with Pearsons' R correlation
-
-# # Objective
-# <br>
-# Learn from data and recommend best TV shows to users, based on self & others behaviour
-# <br>
-
-# # Data manipulation
-
-# ## Data loading
-
-# Each data file (there are 4 of them) contains below columns:
-# 
-# * Movie ID (as first line of each new movie record / file)
-# * Customer ID
-# * Rating (1 to 5)
-# * Date they gave the ratings
-# 
-# There is another file contains the mapping of Movie ID to the movie background like name, year of release, etc
-
-# Let's import the library we needed before we get started:
-
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
-import math
-import re
-from scipy.sparse import csr_matrix
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from surprise import Reader, Dataset, SVD, evaluate
-sns.set_style("darkgrid")
+
+# Draw inline
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+# Set figure aesthetics
+sns.set_style("white", {'ytick.major.size': 10.0})
+sns.set_context("poster", font_scale=1.1)
 
 
-# Next let's load first data file and get a feeling of how huge the dataset is:
-
-# In[ ]:
-
-
-# Skip date
-df1 = pd.read_csv('../input/combined_data_1.txt', header = None, names = ['Cust_Id', 'Rating'], usecols = [0,1])
-
-df1['Rating'] = df1['Rating'].astype(float)
-
-print('Dataset 1 shape: {}'.format(df1.shape))
-print('-Dataset examples-')
-print(df1.iloc[::5000000, :])
-
-
-# Let's try to load the 3 remaining dataset as well:
-
-# In[ ]:
-
-
-#df2 = pd.read_csv('../input/combined_data_2.txt', header = None, names = ['Cust_Id', 'Rating'], usecols = [0,1])
-#df3 = pd.read_csv('../input/combined_data_3.txt', header = None, names = ['Cust_Id', 'Rating'], usecols = [0,1])
-#df4 = pd.read_csv('../input/combined_data_4.txt', header = None, names = ['Cust_Id', 'Rating'], usecols = [0,1])
-
-
-#df2['Rating'] = df2['Rating'].astype(float)
-#df3['Rating'] = df3['Rating'].astype(float)
-#df4['Rating'] = df4['Rating'].astype(float)
-
-#print('Dataset 2 shape: {}'.format(df2.shape))
-#print('Dataset 3 shape: {}'.format(df3.shape))
-#print('Dataset 4 shape: {}'.format(df4.shape))
-
-
-# Now we combine datasets:
-
-# In[ ]:
-
-
-# load less data for speed
-
-df = df1
-#df = df1.append(df2)
-#df = df.append(df3)
-#df = df.append(df4)
-
-df.index = np.arange(0,len(df))
-print('Full dataset shape: {}'.format(df.shape))
-print('-Dataset examples-')
-print(df.iloc[::5000000, :])
-
-
-# ## Data viewing
-
-# Let's give a first look on how the data spread:
-
-# In[ ]:
-
-
-p = df.groupby('Rating')['Rating'].agg(['count'])
-
-# get movie count
-movie_count = df.isnull().sum()[1]
-
-# get customer count
-cust_count = df['Cust_Id'].nunique() - movie_count
-
-# get rating count
-rating_count = df['Cust_Id'].count() - movie_count
-
-ax = p.plot(kind = 'barh', legend = False, figsize = (15,10))
-plt.title('Total pool: {:,} Movies, {:,} customers, {:,} ratings given'.format(movie_count, cust_count, rating_count), fontsize=20)
-plt.axis('off')
-
-for i in range(1,6):
-    ax.text(p.iloc[i-1][0]/4, i-1, 'Rating {}: {:.0f}%'.format(i, p.iloc[i-1][0]*100 / p.sum()[0]), color = 'white', weight = 'bold')
-
-
-
-# We can see that the rating tends to be relatively positive (>3). This may be due to the fact that unhappy customers tend to just leave instead of making efforts to rate. We can keep this in mind - low rating movies mean they are generally really bad
-
-# ## Data cleaning
-
-# Movie ID is really a mess import! Looping through dataframe to add Movie ID column WILL make the Kernel run out of memory as it is too inefficient. I achieve my task by first creating a numpy array with correct length then add the whole array as column into the main dataframe! Let's see how it is done below:
-
-# In[ ]:
-
-
-df_nan = pd.DataFrame(pd.isnull(df.Rating))
-df_nan = df_nan[df_nan['Rating'] == True]
-df_nan = df_nan.reset_index()
-
-movie_np = []
-movie_id = 1
-
-for i,j in zip(df_nan['index'][1:],df_nan['index'][:-1]):
-    # numpy approach
-    temp = np.full((1,i-j-1), movie_id)
-    movie_np = np.append(movie_np, temp)
-    movie_id += 1
-
-# Account for last record and corresponding length
-# numpy approach
-last_record = np.full((1,len(df) - df_nan.iloc[-1, 0] - 1),movie_id)
-movie_np = np.append(movie_np, last_record)
-
-print('Movie numpy: {}'.format(movie_np))
-print('Length: {}'.format(len(movie_np)))
-
-
-# In[ ]:
-
-
-# remove those Movie ID rows
-df = df[pd.notnull(df['Rating'])]
-
-df['Movie_Id'] = movie_np.astype(int)
-df['Cust_Id'] = df['Cust_Id'].astype(int)
-print('-Dataset examples-')
-print(df.iloc[::5000000, :])
-
-
-# ## Data slicing
-
-# The data set now is super huge. I have tried many different ways but can't get the Kernel running as intended without memory error. Therefore I tried to reduce the data volumn by improving the data quality below:
+# I wanted to take a look at the user data we have for this competition so I made this little notebook to share my findings and discuss about those. At the moment I've started with the basic user data, I'll take a look at sessions and the other *csv* files later on this month.
 # 
-# * Remove movie with too less reviews (they are relatively not popular)
-# * Remove customer who give too less reviews (they are relatively less active)
+# Please, feel free to comment with anything you think it can be improved or fixed. I am not a professional in this field and there will be mistakes or things that can be *improved*. This is the flow I took and there are some plots not really interesting but I thought on keeping it in case someone see something interesting.
 # 
-# Having above benchmark will have significant improvement on efficiency, since those unpopular movies and non-active customers still occupy same volumn as those popular movies and active customers in the view of matrix (NaN still occupy space). This should help improve the statistical signifiance too.
+# Let's see the data!
+
+# ## Data Exploration
+
+# Generally, when I start with a Data Science project I'm looking to answer the following questions:
 # 
-# Let's see how it is implemented:
+# - Is there any mistakes in the data?
+# - Does the data have peculiar behavior?
+# - Do I need to fix or remove any of the data to be more realistic?
 
 # In[ ]:
 
 
-f = ['count','mean']
+# Load the data into DataFrames
+train_users = pd.read_csv('../input/train_users.csv')
+test_users = pd.read_csv('../input/test_users.csv')
 
-df_movie_summary = df.groupby('Movie_Id')['Rating'].agg(f)
-df_movie_summary.index = df_movie_summary.index.map(int)
-movie_benchmark = round(df_movie_summary['count'].quantile(0.8),0)
-drop_movie_list = df_movie_summary[df_movie_summary['count'] < movie_benchmark].index
-
-print('Movie minimum times of review: {}'.format(movie_benchmark))
-
-df_cust_summary = df.groupby('Cust_Id')['Rating'].agg(f)
-df_cust_summary.index = df_cust_summary.index.map(int)
-cust_benchmark = round(df_cust_summary['count'].quantile(0.8),0)
-drop_cust_list = df_cust_summary[df_cust_summary['count'] < cust_benchmark].index
-
-print('Customer minimum times of review: {}'.format(cust_benchmark))
-
-
-# Now let's trim down our data, whats the difference in data size?
 
 # In[ ]:
 
 
-print('Original Shape: {}'.format(df.shape))
-df = df[~df['Movie_Id'].isin(drop_movie_list)]
-df = df[~df['Cust_Id'].isin(drop_cust_list)]
-print('After Trim Shape: {}'.format(df.shape))
-print('-Data Examples-')
-print(df.iloc[::5000000, :])
+print("We have", train_users.shape[0], "users in the training set and", 
+      test_users.shape[0], "in the test set.")
+print("In total we have", train_users.shape[0] + test_users.shape[0], "users.")
 
 
-# Let's pivot the data set and put it into a giant matrix - we need it for our recommendation system:
+# Let's get those together so we can work with all the data.
 
 # In[ ]:
 
 
-df_p = pd.pivot_table(df,values='Rating',index='Cust_Id',columns='Movie_Id')
+# Merge train and test users
+users = pd.concat((train_users, test_users), axis=0, ignore_index=True)
 
-print(df_p.shape)
+# Remove ID's since now we are not interested in making predictions
+users.drop('id',axis=1, inplace=True)
 
-# Below is another way I used to sparse the dataframe...doesn't seem to work better
-
-#Cust_Id_u = list(sorted(df['Cust_Id'].unique()))
-#Movie_Id_u = list(sorted(df['Movie_Id'].unique()))
-#data = df['Rating'].tolist()
-#row = df['Cust_Id'].astype('category', categories=Cust_Id_u).cat.codes
-#col = df['Movie_Id'].astype('category', categories=Movie_Id_u).cat.codes
-#sparse_matrix = csr_matrix((data, (row, col)), shape=(len(Cust_Id_u), len(Movie_Id_u)))
-#df_p = pd.DataFrame(sparse_matrix.todense(), index=Cust_Id_u, columns=Movie_Id_u)
-#df_p = df_p.replace(0, np.NaN)
+users.head()
 
 
-# ## Data mapping
+# The data seems to be in an ussable format so the next important thing is to take a look at the missing data.
 
-# Now we load the movie mapping file:
+# ### Missing Data
+
+# Usually the missing data comes in the way of *NaN*, but if we take a look at the DataFrame printed above we can see at the `gender` column some values being `-unknown-`. We will need to transform those values into *NaN* first:
 
 # In[ ]:
 
 
-df_title = pd.read_csv('../input/movie_titles.csv', encoding = "ISO-8859-1", header = None, names = ['Movie_Id', 'Year', 'Name'])
-df_title.set_index('Movie_Id', inplace = True)
-print (df_title.head(10))
+users.gender.replace('-unknown-', np.nan, inplace=True)
 
 
-# # Recommendation models
-
-# Well all data required is loaded and cleaned! Next let's get into the recommendation system.
-
-# ## Recommend with Collaborative Filtering
-
-# Evalute performance of [collaborative filtering](https://en.wikipedia.org/wiki/Collaborative_filtering), with just first 100K rows for faster process:
+# Now let's see how much data we are missing. For this purpose let's compute the NaN percentage of each feature.
 
 # In[ ]:
 
 
-reader = Reader()
-
-# get just top 100K rows for faster run time
-data = Dataset.load_from_df(df[['Cust_Id', 'Movie_Id', 'Rating']][:100000], reader)
-data.split(n_folds=3)
-
-svd = SVD()
-evaluate(svd, data, measures=['RMSE', 'MAE'])
+users_nan = (users.isnull().sum() / users.shape[0]) * 100
+users_nan[users_nan > 0].drop('country_destination')
 
 
-# Below is what user 783514 liked in the past:
+# We have quite a lot of *NaN* in the `age` and `gender` wich will yield in lesser performance of the classifiers we will build. The feature `date_first_booking` has a 58% of NaN values because this feature is not present at the tests users, and therefore, we won't need it at the *modeling* part.
 
 # In[ ]:
 
 
-df_785314 = df[(df['Cust_Id'] == 785314) & (df['Rating'] == 5)]
-df_785314 = df_785314.set_index('Movie_Id')
-df_785314 = df_785314.join(df_title)['Name']
-print(df_785314)
+print("Just for the sake of curiosity; we have", 
+      int((train_users.date_first_booking.isnull().sum() / train_users.shape[0]) * 100), 
+      "% of missing values at date_first_booking in the training data")
 
 
-# Let's predict which movies user 785314 would love to watch:
-
-# In[ ]:
-
-
-user_785314 = df_title.copy()
-user_785314 = user_785314.reset_index()
-user_785314 = user_785314[~user_785314['Movie_Id'].isin(drop_movie_list)]
-
-# getting full dataset
-data = Dataset.load_from_df(df[['Cust_Id', 'Movie_Id', 'Rating']], reader)
-
-trainset = data.build_full_trainset()
-svd.train(trainset)
-
-user_785314['Estimate_Score'] = user_785314['Movie_Id'].apply(lambda x: svd.predict(785314, x).est)
-
-user_785314 = user_785314.drop('Movie_Id', axis = 1)
-
-user_785314 = user_785314.sort_values('Estimate_Score', ascending=False)
-print(user_785314.head(10))
-
-
-# ## Recommend with Pearsons' R correlations
-
-# The way it works is we use Pearsons' R correlation to measure the linear correlation between review scores of all pairs of movies, then we provide the top 10 movies with highest correlations:
+# The other feature with a high rate of *NaN* was `age`. Let's see:
 
 # In[ ]:
 
 
-def recommend(movie_title, min_count):
-    print("For movie ({})".format(movie_title))
-    print("- Top 10 movies recommended based on Pearsons'R correlation - ")
-    i = int(df_title.index[df_title['Name'] == movie_title][0])
-    target = df_p[i]
-    similar_to_target = df_p.corrwith(target)
-    corr_target = pd.DataFrame(similar_to_target, columns = ['PearsonR'])
-    corr_target.dropna(inplace = True)
-    corr_target = corr_target.sort_values('PearsonR', ascending = False)
-    corr_target.index = corr_target.index.map(int)
-    corr_target = corr_target.join(df_title).join(df_movie_summary)[['PearsonR', 'Name', 'count', 'mean']]
-    print(corr_target[corr_target['count']>min_count][:10].to_string(index=False))
+users.age.describe()
 
 
-# A recommendation for you if you like 'What the #$*! Do We Know!?'
+# There is some inconsistency in the age of some users as we can see above. It could be because the `age` inpout field was not sanitized or there was some mistakes handlig the data.
 
 # In[ ]:
 
 
-recommend("What the #$*! Do We Know!?", 0)
+print(sum(users.age > 122))
+print(sum(users.age < 18))
 
 
-# X2: X-Men United:
+# So far, do we have 801 users with [the longest confirmed human lifespan record](https://en.wikipedia.org/wiki/Jeanne_Calment) and 176 little *gangsters* breaking the [Aribnb Eligibility Terms](https://www.airbnb.com/terms)?
 
 # In[ ]:
 
 
-recommend("X2: X-Men United", 0)
+users[users.age > 122]['age'].describe()
 
 
-# Hope it is a good read. I will keep updating this Kernel (more models etc). Welcome any suggestions!
+# It's seems that the weird values are caused by the appearance of 2014. I didn't figured why, but I supose that might be related with a wrong input being added with the new users.
+
+# In[ ]:
+
+
+users[users.age < 18]['age'].describe()
+
+
+# The young users seems to be under an acceptable range being the 50% of those users above 16 years old. 
+# We will need to hande the outliers. The simple thing that came to my mind it's to set an acceptance range and put those out of it to NaN.
+
+# In[ ]:
+
+
+users.loc[users.age > 95, 'age'] = np.nan
+users.loc[users.age < 13, 'age'] = np.nan
+
+
+# ### Data Types
+
+# Let's treat each feature as what they are. This means we need to transform into categorical those features that we treas as categories and the same with the dates:
+
+# In[ ]:
+
+
+categorical_features = [
+    'affiliate_channel',
+    'affiliate_provider',
+    'country_destination',
+    'first_affiliate_tracked',
+    'first_browser',
+    'first_device_type',
+    'gender',
+    'language',
+    'signup_app',
+    'signup_method'
+]
+
+for categorical_feature in categorical_features:
+    users[categorical_feature] = users[categorical_feature].astype('category')
+
+
+# In[ ]:
+
+
+users['date_account_created'] = pd.to_datetime(users['date_account_created'])
+users['date_first_booking'] = pd.to_datetime(users['date_first_booking'])
+users['date_first_active'] = pd.to_datetime((users.timestamp_first_active // 1000000), format='%Y%m%d')
+
+
+# ### Visualizing the Data
+
+# Usually, looking at tables, percentiles, means, and other several measures at this state is rarely useful unless you know very well your data.
 # 
+# For me, it's usually better to visualize the data in some way. Visualization makes me see the outliers and errors immediately!
+
+# #### Gender
+
+# In[ ]:
+
+
+users.gender.value_counts(dropna=False).plot(kind='bar', color='#FD5C64', rot=0)
+plt.xlabel('Gender')
+sns.despine()
+
+
+# As we've seen before at this plot we can see the ammount of missing data in perspective. Also, notice that there is a slight difference between user gender.
+# 
+# Next thing it might be interesting to see if there is any gender preferences when travelling:
+
+# In[ ]:
+
+
+women = sum(users['gender'] == 'FEMALE')
+men = sum(users['gender'] == 'MALE')
+
+female_destinations = users.loc[users['gender'] == 'FEMALE', 'country_destination'].value_counts() / women * 100
+male_destinations = users.loc[users['gender'] == 'MALE', 'country_destination'].value_counts() / men * 100
+
+# Bar width
+width = 0.4
+
+male_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=0, label='Male', rot=0)
+female_destinations.plot(kind='bar', width=width, color='#FFA35D', position=1, label='Female', rot=0)
+
+plt.legend()
+plt.xlabel('Destination Country')
+plt.ylabel('Percentage')
+
+sns.despine()
+plt.show()
+
+
+# There are no big differences between the 2 main genders, so this plot it's not really ussefull except to know the relative destination frecuency of the countries. Let's see it clear here:
+
+# In[ ]:
+
+
+destination_percentage = users.country_destination.value_counts() / users.shape[0] * 100
+destination_percentage.plot(kind='bar',color='#FD5C64', rot=0)
+# Using seaborn can also be plotted
+# sns.countplot(x="country_destination", data=users, order=list(users.country_destination.value_counts().keys()))
+plt.xlabel('Destination Country')
+plt.ylabel('Percentage')
+sns.despine()
+
+
+# The first thing we can see that if there is a reservation, it's likely to be inside the US. But there is a 45% of people that never did a reservation.
+
+# #### Age
+
+# Now that I know there is no difference between male and female reservations at first sight I'll dig into the age.
+
+# In[ ]:
+
+
+sns.distplot(users.age.dropna(), color='#FD5C64')
+plt.xlabel('Age')
+sns.despine()
+
+
+# As expected, the common age to travel is between 25 and 40. Let's see if, for example, older people travel in a different way. Let's pick an arbitrary age to split into two groups. Maybe 45?
+
+# In[ ]:
+
+
+age = 45
+
+younger = sum(users.loc[users['age'] < age, 'country_destination'].value_counts())
+older = sum(users.loc[users['age'] > age, 'country_destination'].value_counts())
+
+younger_destinations = users.loc[users['age'] < age, 'country_destination'].value_counts() / younger * 100
+older_destinations = users.loc[users['age'] > age, 'country_destination'].value_counts() / older * 100
+
+younger_destinations.plot(kind='bar', width=width, color='#63EA55', position=0, label='Youngers', rot=0)
+older_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=1, label='Olders', rot=0)
+
+plt.legend()
+plt.xlabel('Destination Country')
+plt.ylabel('Percentage')
+
+sns.despine()
+plt.show()
+
+
+# We can see that the young people tends to stay in the US, and the older people choose to travel outside the country. Of vourse, there are no big differences between them and we must remember that we do not have the 42% of the ages. 
+# 
+# The first thing I thought when reading the problem was the importance of the native lenguage when choosing the destination country. So let's see how manny users use english as main language:
+
+# In[ ]:
+
+
+print((sum(users.language == 'en') / users.shape[0])*100)
+
+
+# With the 96% of users using English as their language, it is understandable that a lot of people stay in the US. Someone maybe thinking, if the language is important, why not travel to GB? We need to remember that there is also a lot of factor we are not acounting so making assumpions or predictions like that might be dangerous.
+
+# #### Dates
+
+# To see the dates of our users and the timespan of them, let's plot the number of accounts created by time:
+
+# In[ ]:
+
+
+sns.set_style("whitegrid", {'axes.edgecolor': '0'})
+sns.set_context("poster", font_scale=1.1)
+users.date_account_created.value_counts().plot(kind='line', linewidth=1.2, color='#FD5C64')
+
+
+# It's appreciable how fast Airbnb has grown over the last 3 years. Does this correlate with the date when the user was active for the first time? It should be very similar, so doing this is a way to check the data!
+
+# In[ ]:
+
+
+users.date_first_active.value_counts().plot(kind='line', linewidth=1.2, color='#FD5C64')
+
+
+# We can se that's almost the same as `date_account_created`, and also, notice the small peaks. We can, either smooth the graph or dig into those peaks. Let's dig in:
+
+# In[ ]:
+
+
+users_2013 = users[users['date_first_active'] > pd.to_datetime(20130101, format='%Y%m%d')]
+users_2013 = users_2013[users_2013['date_first_active'] < pd.to_datetime(20140101, format='%Y%m%d')]
+users_2013.date_first_active.value_counts().plot(kind='line', linewidth=2, color='#FD5C64')
+plt.show()
+
+
+# At first sight we can see a small pattern, there are some peaks at the same distance. Looking more closely:
+
+# In[ ]:
+
+
+weekdays = []
+for date in users.date_account_created:
+    weekdays.append(date.weekday())
+weekdays = pd.Series(weekdays)
+
+
+# In[ ]:
+
+
+sns.barplot(x = weekdays.value_counts().index, y=weekdays.value_counts().values, order=range(0,7))
+plt.xlabel('Week Day')
+sns.despine()
+
+
+# The local minimums where the Sundays(where the people use less *the Internet*), and it's usually to hit a maximum at Tuesdays!
+# 
+# The last date related plot I want to see is the next:
+
+# In[ ]:
+
+
+date = pd.to_datetime(20140101, format='%Y%m%d')
+
+before = sum(users.loc[users['date_first_active'] < date, 'country_destination'].value_counts())
+after = sum(users.loc[users['date_first_active'] > date, 'country_destination'].value_counts())
+before_destinations = users.loc[users['date_first_active'] < date, 
+                                'country_destination'].value_counts() / before * 100
+after_destinations = users.loc[users['date_first_active'] > date, 
+                               'country_destination'].value_counts() / after * 100
+before_destinations.plot(kind='bar', width=width, color='#63EA55', position=0, label='Before 2014', rot=0)
+after_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=1, label='After 2014', rot=0)
+
+plt.legend()
+plt.xlabel('Destination Country')
+plt.ylabel('Percentage')
+
+sns.despine()
+plt.show()
+
+
+# It's a clean comparision of usual destinations then and now, where we can see how the new users, register more and book less, and when they book they stay at the US.
+
+# I'll make more plots about the devices and singup methods/flow later this week. I hope you all have enjoyed this little analysis that despine not being very rellevant to make the predictions, it is to understand the problem and the user behaviour. 
+# 
+# Again, criticism is welcomed!
+# 
+#                                                                                 David Gasquez

@@ -1,315 +1,168 @@
-# Parameters
-XGB_WEIGHT = 0.6500
-BASELINE_WEIGHT = 0.0056
 
-BASELINE_PRED = 0.0115
+''' 
+Author: Danijel Kivaranovic 
+Title: Neural network (Keras) with sparse data
+'''
 
-# version 61
-#   Drop fireplacecnt and fireplaceflag, following Jayaraman:
-#     https://www.kaggle.com/valadi/xgb-w-o-outliers-lgb-with-outliers-combo-tune5
-
-# version 60
-#   Try BASELINE_PRED=0.0115, since that's the actual baseline from
-#     https://www.kaggle.com/aharless/oleg-s-original-better-baseline
-
-# version 59
-#   Looks like 0.0056 is the optimum BASELINE_WEIGHT
-
-# versions 57, 58
-#   Playing with BASELINE_WEIGHT parameter:
-#     3 values will determine quadratic approximation of optimum
-
-# version 55
-#   OK, it doesn't get the same result, but I also get a different result
-#     if I fork the earlier version and run it again.
-#   So something weird is going on (maybe software upgrade??)
-#   I'm just going to submit this version and make it my new benchmark.
-
-# version 53
-#   Re-parameterize ensemble (should get same result).
-
-# version 51
-#   Quadratic approximation based on last 3 submissions gives 0.3533
-#     as optimal lgb_weight.  To be slightly conservative,
-#     I'm rounding down to 0.35
-
-# version 50
-#   Quadratic approximation based on last 3 submissions gives 0.3073 
-#     as optimal lgb_weight
-
-# version 49
-#   My latest quadratic approximation is concave, so I'm just taking
-#     a shot in the dark with lgb_weight=.3
-
-# version 45
-#   Increase lgb_weight to 0.25 based on new quadratic approximation.
-#   Based on scores for versions 41, 43, and 44, the optimum is 0.261
-#     if I've done the calculations right.
-#   I'm being conservative and only going 2/3 of the way there.
-#   (FWIW my best guess is that even this will get a worse score,
-#    but you gotta pay some attention to the math.)
-
-# version 44
-#   Increase lgb_weight to 0.23, per Nikunj's suggestion, even though
-#     my quadratic approximation said I was already at the optimum
-
-# verison 43
-#   Higher lgb_weight, so I can do a quadratic approximation of the optimum
-
-# version 42
-#   The answer to the ultimate question of life, the universe, and everything
-#     comes down to a slightly higher lgb_weight
-
-# version 41
-#   Trying Nikunj's suggestion of imputing missing values.
-
-# version 39
-#   Trying higher lgb_weight again but with old learning rate.
-#   The new one did better with LGB only but makes the combination worse.
-
-# version 38
-#   OK back to baseline 0.2 weight
-
-# version 37
-#   Looks like increasing lgb_weight was better
-
-# version 34
-#   OK, try reducing lgb_weight instead
-
-# version 32
-#   Increase lgb_weight because LGB performance has imporved more than XGB
-#   Increase learning rate for LGB: 0029 is compromise;  CV prefers 0033
-#     (and reallly would prefer more boosting rounds with old value instead
-#      but constaints on running time are getting hard)
-
-# Version 27:
-#   Control LightGBM's loquacity
-
-# Version 26:
-# Getting rid of the LightGBM validation, since this script doesn't use the result.
-# Now use all training data to fit model.
-# I have a separate script for validation:
-#    https://www.kaggle.com/aharless/lightgbm-outliers-remaining-cv
-
-
+## import libraries
 import numpy as np
+np.random.seed(123)
+
 import pandas as pd
-import xgboost as xgb
-from sklearn.preprocessing import LabelEncoder
-import lightgbm as lgb
-import gc
+import subprocess
+from scipy.sparse import csr_matrix, hstack
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import StandardScaler
+from sklearn.cross_validation import KFold
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation
+from keras.layers.normalization import BatchNormalization
+from keras.layers.advanced_activations import PReLU
 
+## Batch generators ##################################################################################################################################
 
-##### READ IN RAW DATA
+def batch_generator(X, y, batch_size, shuffle):
+    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
+    number_of_batches = np.ceil(X.shape[0]/batch_size)
+    counter = 0
+    sample_index = np.arange(X.shape[0])
+    if shuffle:
+        np.random.shuffle(sample_index)
+    while True:
+        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
+        X_batch = X[batch_index,:].toarray()
+        y_batch = y[batch_index]
+        counter += 1
+        yield X_batch, y_batch
+        if (counter == number_of_batches):
+            if shuffle:
+                np.random.shuffle(sample_index)
+            counter = 0
 
-print( "\nReading data from disk ...")
-prop = pd.read_csv('../input/properties_2016.csv')
-train = pd.read_csv("../input/train_2016_v2.csv")
+def batch_generatorp(X, batch_size, shuffle):
+    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
+    counter = 0
+    sample_index = np.arange(X.shape[0])
+    while True:
+        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
+        X_batch = X[batch_index, :].toarray()
+        counter += 1
+        yield X_batch
+        if (counter == number_of_batches):
+            counter = 0
 
+########################################################################################################################################################
 
+## read data
+train = pd.read_csv('input/train.csv')
+test = pd.read_csv('input/test.csv')
 
-##### PROCESS DATA FOR LIGHTGBM
+index = list(train.index)
+print index[0:10]
+np.random.shuffle(index)
+print index[0:10]
+train = train.iloc[index]
+'train = train.iloc[np.random.permutation(len(train))]'
 
-print( "\nProcessing data for LightGBM ..." )
-for c, dtype in zip(prop.columns, prop.dtypes):	
-    if dtype == np.float64:		
-        prop[c] = prop[c].astype(np.float32)
+## set test loss to NaN
+test['loss'] = np.nan
 
-df_train = train.merge(prop, how='left', on='parcelid')
-df_train.fillna(df_train.median(),inplace = True)
+## response and IDs
+y = np.log(train['loss'].values+200)
+id_train = train['id'].values
+id_test = test['id'].values
 
-x_train = df_train.drop(['parcelid', 'logerror', 'transactiondate', 'propertyzoningdesc', 
-                         'propertycountylandusecode', 'fireplacecnt', 'fireplaceflag'], axis=1)
-y_train = df_train['logerror'].values
-print(x_train.shape, y_train.shape)
+## stack train test
+ntrain = train.shape[0]
+tr_te = pd.concat((train, test), axis = 0)
 
+## Preprocessing and transforming to sparse data
+sparse_data = []
 
-train_columns = x_train.columns
+f_cat = [f for f in tr_te.columns if 'cat' in f]
+for f in f_cat:
+    dummy = pd.get_dummies(tr_te[f].astype('category'))
+    tmp = csr_matrix(dummy)
+    sparse_data.append(tmp)
 
-for c in x_train.dtypes[x_train.dtypes == object].index.values:
-    x_train[c] = (x_train[c] == True)
+f_num = [f for f in tr_te.columns if 'cont' in f]
+scaler = StandardScaler()
+tmp = csr_matrix(scaler.fit_transform(tr_te[f_num]))
+sparse_data.append(tmp)
 
-del df_train; gc.collect()
+del(tr_te, train, test)
 
-x_train = x_train.values.astype(np.float32, copy=False)
-d_train = lgb.Dataset(x_train, label=y_train)
+## sparse train and test data
+xtr_te = hstack(sparse_data, format = 'csr')
+xtrain = xtr_te[:ntrain, :]
+xtest = xtr_te[ntrain:, :]
 
+print('Dim train', xtrain.shape)
+print('Dim test', xtest.shape)
 
+del(xtr_te, sparse_data, tmp)
 
-##### RUN LIGHTGBM
+## neural net
+def nn_model():
+    model = Sequential()
+    
+    model.add(Dense(400, input_dim = xtrain.shape[1], init = 'he_normal'))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(0.4))
+        
+    model.add(Dense(200, init = 'he_normal'))
+    model.add(PReLU())
+    model.add(BatchNormalization())    
+    model.add(Dropout(0.2))
+    
+    model.add(Dense(50, init = 'he_normal'))
+    model.add(PReLU())
+    model.add(BatchNormalization())    
+    model.add(Dropout(0.2))
+    
+    model.add(Dense(1, init = 'he_normal'))
+    model.compile(loss = 'mae', optimizer = 'adadelta')
+    return(model)
 
-params = {}
-params['max_bin'] = 10
-params['learning_rate'] = 0.0021 # shrinkage_rate
-params['boosting_type'] = 'gbdt'
-params['objective'] = 'regression'
-params['metric'] = 'l1'          # or 'mae'
-params['sub_feature'] = 0.5      # feature_fraction -- OK, back to .5, but maybe later increase this
-params['bagging_fraction'] = 0.85 # sub_row
-params['bagging_freq'] = 40
-params['num_leaves'] = 512        # num_leaf
-params['min_data'] = 500         # min_data_in_leaf
-params['min_hessian'] = 0.05     # min_sum_hessian_in_leaf
-params['verbose'] = 0
+## cv-folds
+nfolds = 10
+folds = KFold(len(y), n_folds = nfolds, shuffle = True, random_state = 111)
 
-print("\nFitting LightGBM model ...")
-clf = lgb.train(params, d_train, 430)
+## train models
+i = 0
+nbags = 10
+nepochs = 55
+pred_oob = np.zeros(xtrain.shape[0])
+pred_test = np.zeros(xtest.shape[0])
 
-del d_train; gc.collect()
-del x_train; gc.collect()
+for (inTr, inTe) in folds:
+    xtr = xtrain[inTr]
+    ytr = y[inTr]
+    xte = xtrain[inTe]
+    yte = y[inTe]
+    pred = np.zeros(xte.shape[0])
+    for j in range(nbags):
+        model = nn_model()
+        fit = model.fit_generator(generator = batch_generator(xtr, ytr, 128, True),
+                                  nb_epoch = nepochs,
+                                  samples_per_epoch = xtr.shape[0],
+                                  verbose = 0)
+        pred += np.exp(model.predict_generator(generator = batch_generatorp(xte, 800, False), val_samples = xte.shape[0])[:,0])-200
+        pred_test += np.exp(model.predict_generator(generator = batch_generatorp(xtest, 800, False), val_samples = xtest.shape[0])[:,0])-200
+    pred /= nbags
+    pred_oob[inTe] = pred
+    score = mean_absolute_error(np.exp(yte)-200, pred)
+    i += 1
+    print('Fold ', i, '- MAE:', score)
 
-print("\nPrepare for LightGBM prediction ...")
-print("   Read sample file ...")
-sample = pd.read_csv('../input/sample_submission.csv')
-print("   ...")
-sample['parcelid'] = sample['ParcelId']
-print("   Merge with property data ...")
-df_test = sample.merge(prop, on='parcelid', how='left')
-print("   ...")
-del sample, prop; gc.collect()
-print("   ...")
-x_test = df_test[train_columns]
-print("   ...")
-del df_test; gc.collect()
-print("   Preparing x_test...")
-for c in x_test.dtypes[x_test.dtypes == object].index.values:
-    x_test[c] = (x_test[c] == True)
-print("   ...")
-x_test = x_test.values.astype(np.float32, copy=False)
+print('Total - MAE:', mean_absolute_error(np.exp(y)-200, pred_oob))
 
-print("\nStart LightGBM prediction ...")
-# num_threads > 1 will predict very slow in kernal
-clf.reset_parameter({"num_threads":1})
-p_test = clf.predict(x_test)
+## train predictions
+df = pd.DataFrame({'id': id_train, 'loss': pred_oob})
+df.to_csv('preds_oob.csv', index = False)
 
-del x_test; gc.collect()
-
-print( "\nUnadjusted LightGBM predictions:" )
-print( pd.DataFrame(p_test).head() )
-
-
-
-##### RE-READ PROPERTIES FILE
-##### (I tried keeping a copy, but the program crashed.)
-
-print( "\nRe-reading properties file ...")
-properties = pd.read_csv('../input/properties_2016.csv')
-
-
-
-##### PROCESS DATA FOR XGBOOST
-
-print( "\nProcessing data for XGBoost ...")
-for c in properties.columns:
-    properties[c]=properties[c].fillna(-1)
-    if properties[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(properties[c].values))
-        properties[c] = lbl.transform(list(properties[c].values))
-
-train_df = train.merge(properties, how='left', on='parcelid')
-x_train = train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-x_test = properties.drop(['parcelid'], axis=1)
-# shape        
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
-
-# drop out ouliers
-train_df=train_df[ train_df.logerror > -0.4 ]
-train_df=train_df[ train_df.logerror < 0.418 ]
-x_train=train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-y_train = train_df["logerror"].values.astype(np.float32)
-y_mean = np.mean(y_train)
-
-print('After removing outliers:')     
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
-
-
-
-##### RUN XGBOOST
-
-print("\nSetting up data for XGBoost ...")
-# xgboost params
-xgb_params = {
-    'eta': 0.037,
-    'max_depth': 5,
-    'subsample': 0.80,
-    'objective': 'reg:linear',
-    'eval_metric': 'mae',
-    'lambda': 0.8,   
-    'alpha': 0.4, 
-    'base_score': y_mean,
-    'silent': 1
-}
-# Enough with the ridiculously overfit parameters.
-# I'm going back to my version 20 instead of copying Jayaraman.
-# I want a num_boost_rounds that's chosen by my CV,
-# not one that's chosen by overfitting the public leaderboard.
-# (There may be underlying differences between the train and test data
-#  that will affect some parameters, but they shouldn't affect that.)
-
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
-
-# cross-validation
-#print( "Running XGBoost CV ..." )
-#cv_result = xgb.cv(xgb_params, 
-#                   dtrain, 
-#                   nfold=5,
-#                   num_boost_round=350,
-#                   early_stopping_rounds=50,
-#                   verbose_eval=10, 
-#                   show_stdv=False
-#                  )
-#num_boost_rounds = len(cv_result)
-
-# num_boost_rounds = 150
-num_boost_rounds = 242
-print("\nXGBoost tuned with CV in:")
-print("   https://www.kaggle.com/aharless/xgboost-without-outliers-tweak ")
-print("num_boost_rounds="+str(num_boost_rounds))
-
-# train model
-print( "\nTraining XGBoost ...")
-model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
-
-print( "\nPredicting with XGBoost ...")
-xgb_pred = model.predict(dtest)
-
-print( "\nXGBoost predictions:" )
-print( pd.DataFrame(xgb_pred).head() )
-
-
-
-##### COMBINE PREDICTIONS
-
-print( "\nCombining XGBoost, LightGBM, and baseline predicitons ..." )
-lgb_weight = 1 - XGB_WEIGHT - BASELINE_WEIGHT
-pred = XGB_WEIGHT*xgb_pred + BASELINE_WEIGHT*BASELINE_PRED + lgb_weight*p_test
-
-print( "\nCombined predictions:" )
-print( pd.DataFrame(pred).head() )
-
-
-
-##### WRITE THE RESULTS
-
-print( "\nPreparing results for write ..." )
-y_pred=[]
-
-for i,predict in enumerate(pred):
-    y_pred.append(str(round(predict,4)))
-y_pred=np.array(y_pred)
-
-output = pd.DataFrame({'ParcelId': properties['parcelid'].astype(np.int32),
-        '201610': y_pred, '201611': y_pred, '201612': y_pred,
-        '201710': y_pred, '201711': y_pred, '201712': y_pred})
-# set col 'ParceID' to first col
-cols = output.columns.tolist()
-cols = cols[-1:] + cols[:-1]
-output = output[cols]
-from datetime import datetime
-
-print( "\nWriting results to disk ..." )
-output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
-
-print( "\nFinished ..." )
+## test predictions
+pred_test /= (nfolds*nbags)
+df = pd.DataFrame({'id': id_test, 'loss': pred_test})
+df.to_csv('submission_keras_shift_perm.csv', index = False)

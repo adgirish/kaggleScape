@@ -1,65 +1,93 @@
+__author__ = 'Tilii: https://kaggle.com/tilii7'
+
 import pandas as pd
 import numpy as np
+from datetime import datetime
 import matplotlib.pyplot as plt
-from matplotlib import animation
-from mpl_toolkits.basemap import Basemap  
-
-#read in data
-shipdata = pd.read_csv('../input/CLIWOC15.csv')
-lat = shipdata.Lat3
-lon = shipdata.Lon3
-coord=np.column_stack((list(lon),list(lat)))
-ship=shipdata.ShipName
-utc=shipdata.UTC
-year=shipdata.Year
-month=shipdata.Month
-day=shipdata.Day
-
-#take out lon/lat nan
-utc=utc[~np.isnan(coord).any(axis=1)]
-ship=ship[~np.isnan(coord).any(axis=1)]
-year=year[~np.isnan(coord).any(axis=1)]
-month=month[~np.isnan(coord).any(axis=1)]
-day=day[~np.isnan(coord).any(axis=1)]
-coord=coord[~np.isnan(coord).any(axis=1)]
-data=np.column_stack((coord,ship,year,month,day,utc))
-
-#find Endeavour
-np.count_nonzero(data[:,2]=='Endeavour')
-cook=data[data[:,2]=='Endeavour']
-
-#sort time
-cook=cook[cook[:,6].argsort()]
-
-#set up map
-m = Basemap(projection='robin',lon_0=180,resolution='c', llcrnrlon=120, urcrnrlon=-30)
-m.drawcoastlines()
-m.drawcountries()
-m.drawmeridians(np.arange(0,360,30))
-m.drawparallels(np.arange(-90,90,30))
-m.fillcontinents(color='grey')
-
-#draw path on the background
-x,y=m(cook[:,0],cook[:,1])
-m.plot(x,y,'.',color='grey',alpha=0.2)
-
-#animation (based on https://jakevdp.github.io/blog/2012/08/18/matplotlib-animation-tutorial/)
-
-x,y = m(0, 0)
-point = m.plot(x, y, 'o', markersize=7, color='red')[0]
-def init():
-    point.set_data([], [])
-    return point,
-
-def animate(i):
-    x,y=m(cook[i][0],cook[i][1])
-    point.set_data(x,y)
-    plt.title('%d %d %d' % (cook[i][3],cook[i][4],cook[i][5]))
-    return point,
-
-output = animation.FuncAnimation(plt.gcf(), animate, init_func=init, frames=355, interval=100, blit=True, repeat=False)
+from sklearn.cross_validation import StratifiedKFold, KFold
+from sklearn.feature_selection import RFECV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
 
 
-#have problems with saving
-output.save('captaincook.gif', writer='imagemagick')
-plt.show()
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        tmin, tsec = divmod((datetime.now() - start_time).total_seconds(), 60)
+        print(' Time taken: %i minutes and %s seconds.' % (tmin, round(tsec, 2)))
+
+
+train = pd.read_csv('../input/train.csv', dtype={'ID': np.str, 'y': np.float32})
+y = np.array(train['y'])
+test = pd.read_csv('../input/test.csv', dtype={'ID': np.str})
+
+# Analyze all features ; modify categorical features
+trainc = train.drop(['ID', 'y'], axis=1)
+testc = test.drop(['ID'], axis=1)
+ntrain = trainc.shape[0]
+ntest = testc.shape[0]
+train_test = pd.concat((trainc, testc)).reset_index(drop=True)
+all_features = [x for x in trainc.columns]
+cat_features = [x for x in trainc.select_dtypes(include=['object']).columns]
+num_features = [x for x in trainc.select_dtypes(exclude=['object']).columns]
+print('\n Categorical features: %d' % len(cat_features))
+print('\n Numerical features: %d\n' % len(num_features))
+for c in range(len(cat_features)):
+    train_test[cat_features[c]] = train_test[cat_features[c]].astype('category').cat.codes
+trainc = train_test.iloc[:ntrain,:]
+testc = train_test.iloc[ntrain:,:]
+X = np.array(trainc)
+Xt = np.array(testc)
+
+# Define regressor and RFECV parameters
+# To test the features properly, it is probably a good idea to change n_estimators to 200
+# and max_depth=20 (or remove max_depth). It will take longer, on the order of 1-2 hours
+rfr = RandomForestRegressor(n_estimators=100, max_features='sqrt', max_depth=20, n_jobs=-1)
+rfecv = RFECV(estimator=rfr,
+              step=2,
+              cv=KFold(y.shape[0],
+                       n_folds=5,
+                       shuffle=False,
+                       random_state=1001),
+              scoring='r2',
+              verbose=2)
+
+# Estimate feature importance and time the whole process
+starttime = timer(None)
+start_time = timer(None)
+rfecv.fit(X, y)
+timer(start_time)
+
+# Summarize the output
+print(' Optimal number of features: %d' % rfecv.n_features_)
+sel_features = [f for f, s in zip(all_features, rfecv.support_) if s]
+print(' The selected features are {}'.format(sel_features))
+
+# Plot number of features vs CV scores
+plt.figure(figsize=(16, 12))
+plt.xlabel('Number of features tested x 2')
+plt.ylabel('Cross-validation score (R^2)')
+plt.plot(range(1, len(rfecv.grid_scores_) + 1), rfecv.grid_scores_)
+plt.savefig('Mercedes-RFECV-01.png')
+#plt.show()
+plt.show(block=False)
+
+# Save sorted feature rankings
+ranking = pd.DataFrame({'Features': all_features})
+ranking['Rank'] = np.asarray(rfecv.ranking_)
+ranking.sort_values('Rank', inplace=True)
+ranking.to_csv('Mercedes-RFECV-ranking-01.csv', index=False)
+print(' Ranked features saved:  Mercedes-RFECV-ranking-01.csv')
+
+# Make a prediction ; this is only a proof of principle as
+# the prediction will be poor until smaller step is are used
+score = round(np.max(rfecv.grid_scores_), 6)
+test['y'] = rfecv.predict(Xt)
+test = test[['ID', 'y']]
+now = datetime.now()
+sub_file = 'submission_5fold-RFECV-RandomForest-01_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+print("\n Writing submission file: %s" % sub_file)
+test.to_csv(sub_file, index=False)
+timer(starttime)

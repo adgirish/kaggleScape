@@ -1,1809 +1,777 @@
 
 # coding: utf-8
 
-# ### work with data
+# I am predicting which employees are the most likely to change jobs, explore why, and come up with recommendations what employers can do to keep staff.
 
 # In[ ]:
 
 
-base_path = '../input/' # your folder
-
-import pandas as pd
-train=pd.read_csv(base_path + 'train.csv')
-test=pd.read_csv(base_path + 'test.csv')
-
-train['ps_ind_0609_bin'] = train.apply(lambda x: 1 if x['ps_ind_06_bin'] == 1 else (2 if x['ps_ind_07_bin'] == 1 else 
-(
-3 if x['ps_ind_08_bin'] == 1 else (4 if x['ps_ind_09_bin'] == 1 else 5)
-
-)), axis = 1)
-
-test['ps_ind_0609_bin'] = test.apply(lambda x: 1 if x['ps_ind_06_bin'] == 1 else (2 if x['ps_ind_07_bin'] == 1 else 
-(
-3 if x['ps_ind_08_bin'] == 1 else (4 if x['ps_ind_09_bin'] == 1 else 5)
-
-)), axis = 1)
-
-train.drop(['ps_ind_06_bin', 'ps_ind_07_bin', 'ps_ind_08_bin', 'ps_ind_09_bin'], axis = 1, inplace = True)
-
-test.drop(['ps_ind_06_bin', 'ps_ind_07_bin', 'ps_ind_08_bin', 'ps_ind_09_bin'], axis = 1, inplace = True)
-
-train['ps_car_13'] = (train['ps_car_13']*train['ps_car_13']* 48400).round(0)
-
-test['ps_car_13'] = (test['ps_car_13']*test['ps_car_13']* 48400).round(0)
-
-train['ps_car_12'] = (train['ps_car_12']*train['ps_car_12']).round(4) * 10000
-
-test['ps_car_12'] = (test['ps_car_12']*test['ps_car_12']).round(4) * 10000
-
-for c in train[[c for c in train.columns if 'bin' in c]].columns:
-    for cc in train[[c for c in train.columns if 'bin' in c]].columns:
-            if train[train[cc] * train[c] == 0].shape[0] == train.shape[0]:
-                print(c, cc)
-
-train['ps_ind_161718_bin'] = train.apply(lambda x: 1 if x['ps_ind_16_bin'] == 1 else
-                                        (2 if x['ps_ind_17_bin'] == 1 else 3), axis = 1
-                                        )
-
-test['ps_ind_161718_bin'] = test.apply(lambda x: 1 if x['ps_ind_16_bin'] == 1 else
-                                        (2 if x['ps_ind_17_bin'] == 1 else 3), axis = 1
-                                        )
-
-train.drop(['ps_ind_16_bin', 'ps_ind_17_bin', 'ps_ind_18_bin'], axis = 1, inplace = True)
-
-test.drop(['ps_ind_16_bin', 'ps_ind_17_bin', 'ps_ind_18_bin'], axis = 1, inplace = True)
-
-train.to_csv(base_path + 'train_p.csv', index = False)
-
-test.to_csv(base_path + 'test_p.csv', index = False)
-
-
-# #  Set your folder
-
-# In[ ]:
-
-
-base_path = '../input/' # your folder
-
-
-# # XGBOOST and LGB from kaggle kernel https://www.kaggle.com/rshally/porto-xgb-lgb-kfold-lb-0-282
-
-# In[ ]:
-
+# Import the modules
 
 import pandas as pd
 import numpy as np
-import xgboost as xgb
-import lightgbm as lgb
-from sklearn.model_selection import StratifiedKFold
-import gc
-
-print('loading files...')
-train = pd.read_csv(base_path+'train_p.csv', na_values=-1)
-test = pd.read_csv(base_path+'test_p.csv', na_values=-1)
-col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
-train = train.drop(col_to_drop, axis=1)  
-test = test.drop(col_to_drop, axis=1)  
-
-for c in train.select_dtypes(include=['float64']).columns:
-    train[c]=train[c].astype(np.float32)
-    test[c]=test[c].astype(np.float32)
-for c in train.select_dtypes(include=['int64']).columns[2:]:
-    train[c]=train[c].astype(np.int8)
-    test[c]=test[c].astype(np.int8)    
-
-print(train.shape, test.shape)
-
-# custom objective function (similar to auc)
-
-def gini(y, pred):
-    g = np.asarray(np.c_[y, pred, np.arange(len(y)) ], dtype=np.float)
-    g = g[np.lexsort((g[:,2], -1*g[:,1]))]
-    gs = g[:,0].cumsum().sum() / g[:,0].sum()
-    gs -= (len(y) + 1) / 2.
-    return gs / len(y)
-
-def gini_xgb(pred, y):
-    y = y.get_label()
-    return 'gini', gini(y, pred) / gini(y, y)
-
-def gini_lgb(preds, dtrain):
-    y = list(dtrain.get_label())
-    score = gini(y, preds) / gini(y, y)
-    return 'gini', score, True
-
-# xgb
-params = {'eta': 0.02, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 
-          'objective': 'binary:logistic', 'eval_metric': 'auc', 'silent': True}
-
-X = train.drop(['id', 'target'], axis=1)
-features = X.columns
-X = X.values
-y = train['target'].values
-sub=test['id'].to_frame()
-sub['target']=0
-
-sub_train = train['id'].to_frame()
-sub_train['target']=0
-
-nrounds=10**6  # need to change to 2000
-kfold = 5  # need to change to 5
-skf = StratifiedKFold(n_splits=kfold, random_state=0)
-for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-    print(' xgb kfold: {}  of  {} : '.format(i+1, kfold))
-    X_train, X_valid = X[train_index], X[test_index]
-    y_train, y_valid = y[train_index], y[test_index]
-    d_train = xgb.DMatrix(X_train, y_train) 
-    d_valid = xgb.DMatrix(X_valid, y_valid) 
-    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-    xgb_model = xgb.train(params, d_train, nrounds, watchlist, early_stopping_rounds=100, 
-                          feval=gini_xgb, maximize=True, verbose_eval=100)
-    sub['target'] += xgb_model.predict(xgb.DMatrix(test[features].values), 
-                        ntree_limit=xgb_model.best_ntree_limit+50) / (kfold)
-    
-    sub_train['target'] += xgb_model.predict(xgb.DMatrix(train[features].values), 
-                        ntree_limit=xgb_model.best_ntree_limit+50) / (kfold)
-    
-gc.collect()
-sub.head(2)
-
-sub.to_csv(base_path+'test_sub_xgb.csv', index=False, float_format='%.5f')
-sub_train.to_csv(base_path+'train_sub_xgb.csv', index=False, float_format='%.5f')
-
-
-# lgb
-sub['target']=0
-sub_train['target']=0
-
-params = {'metric': 'auc', 'learning_rate' : 0.01, 'max_depth':8, 'max_bin':10,  'objective': 'binary', 
-          'feature_fraction': 0.8,'bagging_fraction':0.9,'bagging_freq':5,  'min_data': 500}
-
-skf = StratifiedKFold(n_splits=kfold, random_state=1)
-for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-    print(' lgb kfold: {}  of  {} : '.format(i+1, kfold))
-    X_train, X_eval = X[train_index], X[test_index]
-    y_train, y_eval = y[train_index], y[test_index]
-    lgb_model = lgb.train(params, lgb.Dataset(X_train, label=y_train), nrounds, 
-                  lgb.Dataset(X_eval, label=y_eval), verbose_eval=100, 
-                  feval=gini_lgb, early_stopping_rounds=100)
-    sub['target'] += lgb_model.predict(test[features].values, 
-                        num_iteration=lgb_model.best_iteration) / (kfold)
-    sub_train['target'] += lgb_model.predict(train[features].values, 
-                        num_iteration=lgb_model.best_iteration) / (kfold)
-    
-sub.to_csv(base_path+'test_sub_lgb.csv', index=False, float_format='%.5f') 
-sub_train.to_csv(base_path+'train_sub_lgb.csv', index=False, float_format='%.5f')
-
-gc.collect()
-sub.head(2)
-
-
-# ### Catboost
-
-# In[ ]:
-
-
-import numpy as np
-import pandas as pd
-from sklearn import *
-from catboost import CatBoostClassifier
-from multiprocessing import *
-
-train = pd.read_csv(base_path + 'train_p.csv')
-test = pd.read_csv(base_path + 'test_p.csv')
-col = [c for c in train.columns if c not in ['id','target']]
-print(len(col))
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(len(col))
-
-train = train.replace(-1, np.NaN)
-d_median = train.median(axis=0)
-d_mean = train.mean(axis=0)
-train = train.fillna(-1)
-
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c: #standard arithmetic
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
-            #df[c+str('_sq')] = np.power(df[c].values,2).astype(np.float32)
-            #df[c+str('_sqr')] = np.square(df[c].values).astype(np.float32)
-            #df[c+str('_log')] = np.log(np.abs(df[c].values) + 1)
-            #df[c+str('_exp')] = np.exp(df[c].values) - 1
-    
-    return df
-
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    #p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    #p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
-
-def gini(y, pred):
-    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
-    g = 2 * metrics.auc(fpr, tpr) -1
-    return g
-
-def gini_catboost(pred, y):
-    return gini(y, pred)
-
-x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
-
-x1 = transform_df(x1)
-x2 = transform_df(x2)
-test = transform_df(test)
-train = transform_df(train)
-
-col = [c for c in x1.columns if c not in ['id','target']]
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(x1.values.shape, x2.values.shape)
-
-#remove duplicates just in case
-#tdups = transform_df(train)
-#dups = tdups[tdups.duplicated(subset=col, keep=False)]
-
-#x1 = x1[~(x1['id'].isin(dups['id'].values))]
-#x2 = x2[~(x2['id'].isin(dups['id'].values))]
-#print(x1.values.shape, x2.values.shape)
-
-y1 = x1['target']
-y2 = x2['target']
-x1 = x1[col]
-x2 = x2[col]
-
-model3 = CatBoostClassifier(iterations=1200, learning_rate=0.02, depth=7, loss_function='Logloss', eval_metric='AUC', random_seed=99, od_type='Iter', od_wait=100) 
-model3.fit(x1[col], y1, eval_set=(x2[col], y2), use_best_model=True, verbose=True)
-print(gini_catboost(model3.predict_proba(x2[col])[:,1], y2))
-test['target'] = model3.predict_proba(test[col])[:,1]
-test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
-train['target'] = model3.predict_proba(train[col])[:,1]
-train['target'] = (np.exp(train['target'].values) - 1.0).clip(0,1)
-test[['id','target']].to_csv(base_path + 'test_catboost_submission.csv', index=False, float_format='%.5f')
-train[['id','target']].to_csv(base_path + 'train_catboost_submission.csv', index=False, float_format='%.5f')
-
-#Extras
+from scipy import stats
+import sklearn as sk
+import itertools
 import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings 
+warnings.filterwarnings('ignore')
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-df = pd.DataFrame({'imp': model3.feature_importances_, 'col':col})
-df = df.sort_values(['imp','col'], ascending=[True, False])
-_ = df.plot(kind='barh', x='col', y='imp', figsize=(7,12))
-plt.savefig('catboost_feature_importance.png')
-
-
-# # xgboost upsampled https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283
-
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-"""
-This simple scripts demonstrates the use of xgboost eval results to get the best round
-for the current fold and accross folds. 
-It also shows an upsampling method that limits cross-validation overfitting.
-"""
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from xgboost import XGBClassifier
-from sklearn.model_selection import StratifiedKFold
-import gc
-from numba import jit
-from sklearn.preprocessing import LabelEncoder
-import time 
+from sklearn import tree
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import Perceptron
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import BaggingClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import VotingClassifier
+from sklearn import svm
 import xgboost as xgb
 
 
-@jit
-def eval_gini(y_true, y_prob):
-    """
-    Original author CPMP : https://www.kaggle.com/cpmpml
-    In kernel : https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
-    """
-    y_true = np.asarray(y_true)
-    y_true = y_true[np.argsort(y_prob)]
-    ntrue = 0
-    gini = 0
-    delta = 0
-    n = len(y_true)
-    for i in range(n-1, -1, -1):
-        y_i = y_true[i]
-        ntrue += y_i
-        gini += y_i * delta
-        delta += 1 - y_i
-    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
-    return gini
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split 
+from sklearn.model_selection import GridSearchCV
 
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = eval_gini(labels, preds)
-    return [('gini', gini_score)]
+sns.set(style='white', context='notebook', palette='deep') 
+
+from sklearn import metrics
+from sklearn.metrics import accuracy_score
 
 
-def add_noise(series, noise_level):
-    return series * (1 + noise_level * np.random.randn(len(series)))
-
-
-def target_encode(trn_series=None,
-                  tst_series=None,
-                  target=None,
-                  min_samples_leaf=1,
-                  smoothing=1,
-                  noise_level=0):
-    """
-    Smoothing is computed like in the following paper by Daniele Micci-Barreca
-    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
-    trn_series : training categorical feature as a pd.Series
-    tst_series : test categorical feature as a pd.Series
-    target : target data as a pd.Series
-    min_samples_leaf (int) : minimum samples to take category average into account
-    smoothing (int) : smoothing effect to balance categorical average vs prior
-    """
-    assert len(trn_series) == len(target)
-    assert trn_series.name == tst_series.name
-    temp = pd.concat([trn_series, target], axis=1)
-    # Compute target mean
-    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
-    # Compute smoothing
-    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
-    # Apply average function to all target data
-    prior = target.mean()
-    # The bigger the count the less full_avg is taken into account
-    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
-    averages.drop(["mean", "count"], axis=1, inplace=True)
-    # Apply averages to trn and tst series
-    ft_trn_series = pd.merge(
-        trn_series.to_frame(trn_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=trn_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_trn_series.index = trn_series.index
-    ft_tst_series = pd.merge(
-        tst_series.to_frame(tst_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=tst_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_tst_series.index = tst_series.index
-    return add_noise(ft_trn_series, noise_level), add_noise(ft_tst_series, noise_level)
-
-gc.enable()
-
-trn_df = pd.read_csv(base_path + "train_p.csv", index_col=0)
-sub_df = pd.read_csv(base_path + "test_p.csv", index_col=0)
-
-target = trn_df["target"]
-del trn_df["target"]
-
-train_features = [
-    "ps_car_13",  #            : 1571.65 / shadow  609.23
-"ps_reg_03",  #            : 1408.42 / shadow  511.15
-"ps_ind_05_cat",  #        : 1387.87 / shadow   84.72
-"ps_ind_03",  #            : 1219.47 / shadow  230.55
-"ps_ind_15",  #            :  922.18 / shadow  242.00
-"ps_reg_02",  #            :  920.65 / shadow  267.50
-"ps_car_14",  #            :  798.48 / shadow  549.58
-"ps_car_12",  #            :  731.93 / shadow  293.62
-"ps_car_01_cat",  #        :  698.07 / shadow  178.72
-"ps_car_07_cat",  #        :  694.53 / shadow   36.35
-"ps_car_03_cat",  #        :  611.73 / shadow   50.67
-"ps_reg_01",  #            :  598.60 / shadow  178.57
-"ps_car_15",  #            :  593.35 / shadow  226.43
-"ps_ind_01",  #            :  547.32 / shadow  154.58
-"ps_ind_161718_bin",  #        :  475.37 / shadow   34.17
-"ps_ind_0609_bin",  #        :  435.28 / shadow   28.92
-"ps_car_06_cat",  #        :  398.02 / shadow  212.43
-"ps_car_04_cat",  #        :  376.87 / shadow   76.98
-"ps_car_09_cat",  #        :  214.12 / shadow   81.38
-"ps_car_02_cat",  #        :  203.03 / shadow   26.67
-"ps_ind_02_cat",  #        :  189.47 / shadow   65.68
-"ps_car_11",  #            :  173.28 / shadow   76.45
-"ps_car_05_cat",  #        :  172.75 / shadow   62.92
-"ps_calc_09",  #           :  169.13 / shadow  129.72
-"ps_calc_05",  #           :  148.83 / shadow  120.68
-"ps_car_08_cat",  #        :  120.87 / shadow   28.82
-"ps_ind_04_cat",  #        :  107.27 / shadow   37.43
-"ps_ind_12_bin",  #        :   39.67 / shadow   15.52
-"ps_ind_14",  #            :   37.37 / shadow   16.65
-]
-# add combinations
-combs = [
-    ('ps_reg_01', 'ps_car_02_cat'),  
-    ('ps_reg_01', 'ps_car_04_cat'),
-]
-start = time.time()
-for n_c, (f1, f2) in enumerate(combs):
-    name1 = f1 + "_plus_" + f2
-    print('current feature %60s %4d in %5.1f'
-          % (name1, n_c + 1, (time.time() - start) / 60), end='')
-    print('\r' * 75, end='')
-    trn_df[name1] = trn_df[f1].apply(lambda x: str(x)) + "_" + trn_df[f2].apply(lambda x: str(x))
-    sub_df[name1] = sub_df[f1].apply(lambda x: str(x)) + "_" + sub_df[f2].apply(lambda x: str(x))
-    # Label Encode
-    lbl = LabelEncoder()
-    lbl.fit(list(trn_df[name1].values) + list(sub_df[name1].values))
-    trn_df[name1] = lbl.transform(list(trn_df[name1].values))
-    sub_df[name1] = lbl.transform(list(sub_df[name1].values))
-
-    train_features.append(name1)
-    
-trn_df = trn_df[train_features]
-sub_df = sub_df[train_features]
-
-f_cats = [f for f in trn_df.columns if "_cat" in f]
-
-for f in f_cats:
-    trn_df[f + "_avg"], sub_df[f + "_avg"] = target_encode(trn_series=trn_df[f],
-                                         tst_series=sub_df[f],
-                                         target=target,
-                                         min_samples_leaf=200,
-                                         smoothing=10,
-                                         noise_level=0)
-
-n_splits = 5
-n_estimators = 200
-folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=15) 
-imp_df = np.zeros((len(trn_df.columns), n_splits))
-xgb_evals = np.zeros((n_estimators, n_splits))
-oof = np.empty(len(trn_df))
-sub_preds = np.zeros(len(sub_df))
-sub_preds_train = np.zeros(len(trn_df))
-increase = True
-np.random.seed(0)
-
-for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
-    trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
-    val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
-    
-   
-
-
-    params = {'n_estimators':n_estimators,
-                        'max_depth':4,
-                        'objective':"binary:logistic",
-                        'learning_rate':.1, 
-                        'subsample':.8, 
-                        'colsample_bytree':.8,
-                        'gamma':1,
-                        'reg_alpha':0,
-                        'reg_lambda':1,
-                        'nthread':2}
-    # Upsample during cross validation to avoid having the same samples
-    # in both train and validation sets
-    # Validation set is not up-sampled to monitor overfitting
-    if increase:
-        # Get positive examples
-        pos = pd.Series(trn_tgt == 1)
-        # Add positive examples
-        trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
-        trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
-        # Shuffle data
-        idx = np.arange(len(trn_dat))
-        np.random.shuffle(idx)
-        trn_dat = trn_dat.iloc[idx]
-        trn_tgt = trn_tgt.iloc[idx]
-        
-    d_train = xgb.DMatrix(trn_dat, trn_tgt) 
-    d_valid = xgb.DMatrix(val_dat, val_tgt) 
-    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-        
-    clf = xgb.train(params, d_train, 10**6, watchlist, early_stopping_rounds=20, 
-                          feval=gini_xgb, maximize=True, verbose_eval=100)
-            
-
-    sub_preds += clf.predict(xgb.DMatrix(sub_df), ntree_limit=clf.best_ntree_limit) / n_splits
-    sub_preds_train += clf.predict(xgb.DMatrix(trn_df), ntree_limit=clf.best_ntree_limit) / n_splits
-
-    # Display results
-#     print("Fold %2d : %.6f @%4d / best score is %.6f @%4d"
-#           % (fold_ + 1,
-#              eval_gini(val_tgt, oof[val_idx]),
-#              n_estimators,
-#              xgb_evals[best_round, fold_],
-#              best_round))
-          
-print("Full OOF score : %.6f" % eval_gini(target, oof))
-
-# Compute mean score and std
-mean_eval = np.mean(xgb_evals, axis=1)
-std_eval = np.std(xgb_evals, axis=1)
-best_round = np.argsort(mean_eval)[::-1][0]
-
-print("Best mean score : %.6f + %.6f @%4d"
-      % (mean_eval[best_round], std_eval[best_round], best_round))
-    
-importances = sorted([(trn_df.columns[i], imp) for i, imp in enumerate(imp_df.mean(axis=1))],
-                     key=lambda x: x[1])
-
-for f, imp in importances[::-1]:
-    print("%-34s : %10.4f" % (f, imp))
-    
-sub_df["target"] = sub_preds
-trn_df["target"] = sub_preds_train
-
-sub_df[["target"]].to_csv(base_path + "test_submission.csv", index=True, float_format="%.9f")
-trn_df[["target"]].to_csv(base_path + "train_submission.csv", index=True, float_format="%.9f")
-
-
-# # GP https://www.kaggle.com/scirpus/big-gp/code
 
 # In[ ]:
 
 
-import numpy as np 
-import pandas as pd
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score
+#Load data
+data = pd.read_csv('../input/HR_comma_sep.csv')
 
 
+# # Data Inspection
 
-def GiniScore(y_actual, y_pred):
-  return 2*roc_auc_score(y_actual, y_pred)-1
-
-
-def Outputs(p):
-    return 1./(1.+np.exp(-p))
-
-
-def GPI(data):
-    v = pd.DataFrame()
-    v["0"] = -3.274750
-    v["1"] = 0.020000*np.tanh((data["loo_ps_ind_06_bin"] + (data["ps_reg_01"] + (data["ps_car_12"] + (data["loo_ps_car_03_cat"] + data["loo_ps_car_07_cat"])))))
-    v["2"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] + ((data["ps_reg_03"] + data["ps_car_12"]) + (data["loo_ps_ind_06_bin"] + data["loo_ps_ind_05_cat"]))))
-    v["3"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] + (data["loo_ps_ind_17_bin"] + ((data["ps_car_12"] + data["ps_reg_03"]) + data["loo_ps_ind_07_bin"]))))
-    v["4"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] + ((data["loo_ps_car_04_cat"] + (data["ps_reg_03"] + data["ps_car_15"])) * 3.0)))
-    v["5"] = 0.020000*np.tanh(((data["ps_car_13"] + ((data["loo_ps_car_05_cat"] + (data["ps_reg_01"] + data["loo_ps_car_09_cat"]))/2.0)) * (10.28825187683105469)))
-    v["6"] = 0.020000*np.tanh(((8.0) * (data["loo_ps_car_04_cat"] + ((data["loo_ps_car_01_cat"] + data["loo_ps_ind_05_cat"]) + data["ps_car_15"]))))
-    v["7"] = 0.020000*np.tanh(((data["ps_car_13"] + (((data["loo_ps_car_01_cat"] + data["ps_reg_03"]) + data["loo_ps_ind_16_bin"])/2.0)) * 8.428570))
-    v["8"] = 0.020000*np.tanh(((10.86397266387939453) * (((data["ps_reg_03"] + data["loo_ps_car_07_cat"]) + data["loo_ps_ind_06_bin"]) + data["loo_ps_car_11_cat"])))
-    v["9"] = 0.020000*np.tanh((data["ps_reg_03"] + (data["loo_ps_ind_16_bin"] + (data["loo_ps_ind_07_bin"] + (data["ps_car_13"] + data["loo_ps_car_03_cat"])))))
-    v["10"] = 0.020000*np.tanh((((data["ps_car_13"] + data["ps_reg_02"]) - data["ps_ind_15"]) + (data["loo_ps_car_11_cat"] + data["loo_ps_ind_17_bin"])))
-    v["11"] = 0.020000*np.tanh(((data["ps_car_13"] + data["ps_reg_02"]) + (data["loo_ps_ind_07_bin"] + (data["loo_ps_ind_17_bin"] + data["loo_ps_car_01_cat"]))))
-    v["12"] = 0.020000*np.tanh(((data["ps_car_13"] + (data["ps_reg_02"] + ((data["loo_ps_car_09_cat"] + data["loo_ps_ind_16_bin"])/2.0))) * 8.428570))
-    v["13"] = 0.020000*np.tanh((data["ps_reg_02"] + (data["loo_ps_ind_08_bin"] + ((data["loo_ps_ind_16_bin"] + data["ps_car_13"]) + data["loo_ps_ind_07_bin"]))))
-    v["14"] = 0.020000*np.tanh((29.500000 * (((data["ps_car_13"] + (data["loo_ps_car_09_cat"] + data["loo_ps_ind_16_bin"]))/2.0) + data["loo_ps_ind_05_cat"])))
-    v["15"] = 0.020000*np.tanh((29.500000 * ((data["loo_ps_car_04_cat"] + (data["loo_ps_car_03_cat"] + data["ps_car_13"])) + 0.945455)))
-    v["16"] = 0.020000*np.tanh((8.428570 * ((data["loo_ps_ind_05_cat"] + data["loo_ps_car_06_cat"]) + (data["loo_ps_car_07_cat"] + data["loo_ps_ind_17_bin"]))))
-    v["17"] = 0.020000*np.tanh((((0.633333 + (data["loo_ps_ind_17_bin"] + data["ps_car_13"])) + data["ps_reg_03"]) * 29.500000))
-    v["18"] = 0.020000*np.tanh((((data["loo_ps_ind_17_bin"] + data["loo_ps_car_11_cat"]) + (data["loo_ps_car_07_cat"] - data["ps_ind_15"])) + data["ps_ind_03"]))
-    v["19"] = 0.020000*np.tanh(((data["loo_ps_car_07_cat"] + (data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_09_bin"] + data["loo_ps_ind_06_bin"]))) * (4.85490655899047852)))
-    v["20"] = 0.020000*np.tanh(((((data["loo_ps_ind_06_bin"] + data["loo_ps_car_11_cat"]) + data["loo_ps_car_07_cat"]) + data["loo_ps_car_09_cat"]) - data["ps_ind_15"]))
-    v["21"] = 0.020000*np.tanh((8.428570 * ((data["loo_ps_ind_05_cat"] + data["ps_car_13"]) + ((data["loo_ps_car_05_cat"] + data["loo_ps_car_01_cat"])/2.0))))
-    v["22"] = 0.020000*np.tanh((((data["ps_ind_03"] + (data["loo_ps_ind_16_bin"] + (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_06_bin"])))/2.0) * 29.500000))
-    v["23"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_09_bin"] + (data["ps_reg_03"] + data["loo_ps_ind_05_cat"]))) * 29.500000))
-    v["24"] = 0.020000*np.tanh((data["loo_ps_car_03_cat"] - (data["ps_ind_15"] - (data["loo_ps_ind_05_cat"] + ((data["loo_ps_ind_07_bin"] + data["loo_ps_ind_17_bin"])/2.0)))))
-    v["25"] = 0.020000*np.tanh(((data["ps_reg_02"] + ((data["loo_ps_car_07_cat"] - -1.0) + data["ps_car_13"])) * (13.29769420623779297)))
-    v["26"] = 0.020000*np.tanh((29.500000 * ((((data["loo_ps_car_01_cat"] + data["ps_car_13"])/2.0) + (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_17_bin"]))/2.0)))
-    v["27"] = 0.020000*np.tanh((data["ps_reg_03"] + (1.480000 + (data["loo_ps_ind_06_bin"] + (data["loo_ps_car_11_cat"] + data["loo_ps_car_01_cat"])))))
-    v["28"] = 0.020000*np.tanh((data["loo_ps_car_11_cat"] + ((data["loo_ps_ind_05_cat"] + (data["loo_ps_car_09_cat"] - data["ps_ind_15"])) + data["loo_ps_car_03_cat"])))
-    v["29"] = 0.020000*np.tanh(((10.24501132965087891) * (data["loo_ps_ind_05_cat"] + (data["ps_ind_03"] + (data["loo_ps_ind_09_bin"] - data["ps_ind_15"])))))
-    v["30"] = 0.020000*np.tanh(((data["loo_ps_car_11_cat"] + (data["loo_ps_ind_05_cat"] + data["loo_ps_car_07_cat"])) + (data["loo_ps_car_09_cat"] - data["missing"])))
-    v["31"] = 0.020000*np.tanh((29.500000 * (data["loo_ps_car_01_cat"] + ((data["loo_ps_car_07_cat"] + data["loo_ps_ind_05_cat"]) + data["loo_ps_ind_16_bin"]))))
-    v["32"] = 0.020000*np.tanh(((data["ps_reg_03"] + ((data["ps_ind_01"] + 0.887097) + data["loo_ps_car_09_cat"])) * (10.0)))
-    v["33"] = 0.020000*np.tanh(((data["loo_ps_car_03_cat"] + (data["loo_ps_car_03_cat"] - (data["ps_ind_15"] - 1.480000))) * 29.500000))
-    v["34"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] + ((14.32789230346679688) * (data["ps_ind_03"] + (data["ps_ind_03"] * data["ps_ind_03"])))))
-    v["35"] = 0.020000*np.tanh((29.500000 * (data["loo_ps_ind_17_bin"] + (((data["ps_car_13"] + data["ps_ind_03"])/2.0) + data["loo_ps_ind_05_cat"]))))
-    v["36"] = 0.020000*np.tanh(((9.0) * (data["ps_reg_02"] + (data["loo_ps_car_07_cat"] + ((data["ps_car_15"] + 1.0)/2.0)))))
-    v["37"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_08_bin"] + ((data["loo_ps_ind_16_bin"] + data["loo_ps_ind_07_bin"])/2.0))) * 8.428570))
-    v["38"] = 0.020000*np.tanh(((2.0 * ((data["loo_ps_car_03_cat"] + data["loo_ps_car_07_cat"]) + data["loo_ps_ind_05_cat"])) + data["loo_ps_car_04_cat"]))
-    v["39"] = 0.020000*np.tanh((29.500000 * (data["loo_ps_ind_07_bin"] + ((data["loo_ps_car_07_cat"] + 1.089890) - data["ps_ind_15"]))))
-    v["40"] = 0.020000*np.tanh(((10.18701076507568359) * ((data["ps_ind_03"] * data["ps_ind_03"]) + (data["loo_ps_ind_05_cat"] + data["ps_ind_03"]))))
-    v["41"] = 0.020000*np.tanh((8.428570 * (data["loo_ps_ind_02_cat"] + (data["ps_car_13"] + (data["loo_ps_car_07_cat"] + data["loo_ps_ind_09_bin"])))))
-    v["42"] = 0.020000*np.tanh((8.428570 * (((data["loo_ps_car_01_cat"] - 0.435484) + data["loo_ps_ind_05_cat"]) + data["loo_ps_ind_17_bin"])))
-    v["43"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] + (29.500000 * (data["ps_ind_03"] + (data["ps_ind_03"] * data["ps_ind_03"])))))
-    v["44"] = 0.020000*np.tanh((8.428570 * ((data["loo_ps_ind_05_cat"] + data["loo_ps_car_09_cat"]) - (data["ps_ind_15"] + data["loo_ps_ind_18_bin"]))))
-    v["45"] = 0.020000*np.tanh((data["ps_ind_01"] + ((5.76565647125244141) * (data["loo_ps_ind_07_bin"] + (0.887097 - data["ps_ind_15"])))))
-    v["46"] = 0.020000*np.tanh(((7.0) * (2.352940 * ((data["ps_ind_03"] * data["ps_ind_03"]) + data["ps_ind_03"]))))
-    v["47"] = 0.020000*np.tanh((29.500000 * ((data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_17_bin"] + data["loo_ps_ind_05_cat"])) - data["ps_ind_03"])))
-    v["48"] = 0.020000*np.tanh(((9.90538215637207031) * (((data["loo_ps_ind_06_bin"] + data["loo_ps_car_07_cat"]) + data["loo_ps_ind_09_bin"]) + data["loo_ps_ind_09_bin"])))
-    v["49"] = 0.020000*np.tanh((data["ps_ind_01"] + ((data["loo_ps_car_01_cat"] + (data["ps_ind_01"] + data["loo_ps_ind_06_bin"])) + data["loo_ps_car_09_cat"])))
-    v["50"] = 0.020000*np.tanh((29.500000 * (data["loo_ps_ind_02_cat"] + (data["loo_ps_car_09_cat"] + ((data["loo_ps_car_07_cat"] + data["loo_ps_ind_05_cat"])/2.0)))))
-    v["51"] = 0.020000*np.tanh((29.500000 * (data["ps_car_13"] + (data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_06_bin"] - 2.352940)))))
-    v["52"] = 0.020000*np.tanh((29.500000 * (data["loo_ps_ind_04_cat"] + (data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_07_bin"] * data["ps_ind_03"])))))
-    v["53"] = 0.020000*np.tanh((29.500000 * (((9.0) * ((data["loo_ps_ind_04_cat"] + data["ps_reg_03"])/2.0)) - data["ps_ind_15"])))
-    v["54"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_04_cat"] + (data["loo_ps_ind_17_bin"] + (data["ps_reg_02"] * data["loo_ps_ind_05_cat"])))))
-    v["55"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] + ((data["loo_ps_ind_06_bin"] * (data["ps_ind_03"] + data["loo_ps_ind_05_cat"])) - data["ps_car_11"])))
-    v["56"] = 0.020000*np.tanh(((data["ps_ind_01"] + (data["ps_ind_03"] + data["loo_ps_ind_05_cat"])) * (data["loo_ps_ind_07_bin"] + data["loo_ps_car_05_cat"])))
-    v["57"] = 0.020000*np.tanh(((data["loo_ps_ind_16_bin"] * data["loo_ps_car_03_cat"]) - (data["ps_ind_15"] - ((data["ps_reg_02"] + data["loo_ps_ind_02_cat"])/2.0))))
-    v["58"] = 0.020000*np.tanh((((data["ps_car_13"] + -2.0) + (data["loo_ps_ind_05_cat"] - data["ps_ind_15"])) - data["ps_car_11"]))
-    v["59"] = 0.020000*np.tanh(((data["ps_car_15"] + (3.0 * data["loo_ps_ind_17_bin"])) + (data["ps_ind_03"] * data["ps_ind_03"])))
-    v["60"] = 0.020000*np.tanh((29.500000 * ((data["ps_ind_03"] * data["ps_ind_03"]) + data["ps_ind_03"])))
-    v["61"] = 0.020000*np.tanh((((data["loo_ps_ind_17_bin"] + data["missing"]) + (data["loo_ps_car_11_cat"] + data["loo_ps_ind_17_bin"])) * data["loo_ps_car_05_cat"]))
-    v["62"] = 0.020000*np.tanh((8.428570 + (((data["loo_ps_car_03_cat"] * data["loo_ps_ind_09_bin"]) + data["loo_ps_car_01_cat"]) * 29.500000)))
-    v["63"] = 0.020000*np.tanh(((data["ps_ind_01"] + (data["loo_ps_car_11_cat"] + data["loo_ps_car_05_cat"])) * (data["loo_ps_ind_05_cat"] - data["ps_car_11"])))
-    v["64"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] + (data["ps_ind_01"] + (data["loo_ps_ind_09_bin"] * (data["ps_ind_03"] + data["ps_ind_01"])))))
-    v["65"] = 0.020000*np.tanh(((data["loo_ps_car_11_cat"] + data["loo_ps_ind_02_cat"]) + (data["loo_ps_car_05_cat"] * (data["loo_ps_ind_09_bin"] + data["loo_ps_ind_06_bin"]))))
-    v["66"] = 0.020000*np.tanh((((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_06_bin"]) * 29.500000) + (data["loo_ps_ind_02_cat"] * data["loo_ps_ind_05_cat"])))
-    v["67"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] - data["ps_reg_01"]) * ((data["ps_ind_01"] + data["loo_ps_ind_06_bin"]) + data["loo_ps_car_11_cat"])))
-    v["68"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] - data["ps_car_11"]) * (3.0 * (data["loo_ps_ind_17_bin"] + data["loo_ps_car_04_cat"]))))
-    v["69"] = 0.019996*np.tanh((((data["ps_reg_02"] - data["ps_car_11"]) + (data["loo_ps_ind_04_cat"] * 3.0)) - data["ps_ind_15"]))
-    v["70"] = 0.020000*np.tanh((-((data["loo_ps_ind_02_cat"] * (data["ps_ind_03"] + (data["ps_ind_03"] + data["ps_ind_03"]))))))
-    v["71"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] + (data["missing"] + ((8.37885093688964844) * (data["loo_ps_ind_17_bin"] + data["loo_ps_ind_02_cat"])))))
-    v["72"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] + (data["ps_reg_03"] + (1.480000 * (data["loo_ps_car_04_cat"] * data["ps_ind_01"])))))
-    v["73"] = 0.020000*np.tanh(((((5.0) * data["loo_ps_ind_05_cat"]) + data["loo_ps_car_09_cat"]) * (data["loo_ps_ind_17_bin"] + data["ps_reg_03"])))
-    v["74"] = 0.020000*np.tanh(((((data["loo_ps_ind_07_bin"] + data["loo_ps_car_01_cat"])/2.0) * data["loo_ps_ind_16_bin"]) + (data["ps_ind_15"] * data["loo_ps_ind_18_bin"])))
-    v["75"] = 0.020000*np.tanh((((data["loo_ps_ind_05_cat"] * data["loo_ps_car_01_cat"]) + data["loo_ps_car_05_cat"]) * (data["loo_ps_ind_05_cat"] - data["ps_ind_15"])))
-    v["76"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * ((data["loo_ps_car_04_cat"] + data["loo_ps_ind_05_cat"]) + (data["loo_ps_car_07_cat"] + data["ps_ind_03"]))))
-    v["77"] = 0.020000*np.tanh(((data["loo_ps_car_05_cat"] + data["loo_ps_car_03_cat"]) * (data["ps_ind_03"] + (data["missing"] + data["loo_ps_ind_05_cat"]))))
-    v["78"] = 0.020000*np.tanh(((data["ps_ind_01"] * data["loo_ps_car_03_cat"]) + (data["loo_ps_car_08_cat"] + (data["loo_ps_ind_17_bin"] * data["loo_ps_car_03_cat"]))))
-    v["79"] = 0.020000*np.tanh((data["ps_ind_03"] * (3.0 * (3.0 * (-(data["loo_ps_ind_02_cat"]))))))
-    v["80"] = 0.020000*np.tanh((((data["loo_ps_ind_05_cat"] + data["loo_ps_ind_05_cat"]) * (data["loo_ps_car_09_cat"] + data["ps_reg_03"])) - data["loo_ps_ind_16_bin"]))
-    v["81"] = 0.020000*np.tanh((data["loo_ps_car_03_cat"] * ((data["loo_ps_ind_09_bin"] - data["ps_car_15"]) + (data["loo_ps_ind_02_cat"] - data["loo_ps_ind_18_bin"]))))
-    v["82"] = 0.020000*np.tanh((((data["ps_ind_01"] + data["loo_ps_ind_06_bin"]) * (data["loo_ps_ind_16_bin"] - data["ps_reg_01"])) + data["loo_ps_car_07_cat"]))
-    v["83"] = 0.020000*np.tanh((data["ps_ind_15"] * (data["loo_ps_ind_16_bin"] - ((data["loo_ps_car_11_cat"] + data["missing"]) + data["loo_ps_ind_17_bin"]))))
-    v["84"] = 0.020000*np.tanh((((data["loo_ps_ind_07_bin"] + data["loo_ps_ind_02_cat"])/2.0) + (data["ps_ind_01"] * (0.600000 - data["ps_ind_15"]))))
-    v["85"] = 0.020000*np.tanh(((data["ps_ind_01"] + data["loo_ps_car_04_cat"]) * ((data["loo_ps_ind_05_cat"] - data["ps_ind_15"]) + -1.0)))
-    v["86"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] + (data["ps_reg_03"] + (data["ps_reg_03"] + (data["loo_ps_ind_17_bin"] * data["loo_ps_car_07_cat"])))))
-    v["87"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((((4.0) * data["loo_ps_ind_17_bin"]) + data["loo_ps_car_06_cat"]) - data["ps_reg_01"])))
-    v["88"] = 0.020000*np.tanh(((-1.0 + data["loo_ps_ind_12_bin"]) - (data["loo_ps_car_10_cat"] + (data["ps_car_11"] - data["loo_ps_car_09_cat"]))))
-    v["89"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_car_09_cat"] + ((-1.0 + data["ps_reg_03"])/2.0)) + data["ps_reg_03"])))
-    v["90"] = 0.020000*np.tanh((((data["loo_ps_ind_09_bin"] + data["loo_ps_ind_05_cat"]) * ((data["loo_ps_ind_05_cat"] + data["loo_ps_ind_17_bin"])/2.0)) - data["loo_ps_ind_05_cat"]))
-    v["91"] = 0.020000*np.tanh((-(((data["loo_ps_ind_02_cat"] + data["loo_ps_ind_02_cat"]) * (data["ps_ind_03"] + data["loo_ps_ind_06_bin"])))))
-    v["92"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] + (data["ps_reg_03"] * ((-(data["ps_reg_01"])) + data["loo_ps_ind_17_bin"]))))
-    v["93"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] * 29.500000) * (data["loo_ps_car_08_cat"] + (data["loo_ps_car_08_cat"] - data["ps_ind_03"]))))
-    v["94"] = 0.020000*np.tanh((((data["loo_ps_car_03_cat"] * data["loo_ps_car_09_cat"]) * (data["loo_ps_car_04_cat"] * data["loo_ps_car_04_cat"])) - data["loo_ps_car_04_cat"]))
-    v["95"] = 0.020000*np.tanh(((data["loo_ps_car_07_cat"] + -1.0) - (data["ps_car_12"] * (2.0 * data["ps_car_11"]))))
-    v["96"] = 0.020000*np.tanh((-((data["ps_reg_03"] * ((data["loo_ps_car_01_cat"] - data["loo_ps_car_03_cat"]) + data["loo_ps_ind_08_bin"])))))
-    v["97"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * (data["loo_ps_car_07_cat"] + (((data["loo_ps_ind_07_bin"] + data["ps_car_12"])/2.0) - data["ps_reg_01"]))))
-    v["98"] = 0.020000*np.tanh(((((data["loo_ps_ind_07_bin"] + data["ps_ind_15"])/2.0) + data["loo_ps_ind_17_bin"]) * (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_05_cat"])))
-    v["99"] = 0.019992*np.tanh(((data["loo_ps_ind_05_cat"] * data["loo_ps_car_09_cat"]) + (-((data["ps_reg_01"] * data["ps_ind_03"])))))
-    v["100"] = 0.019988*np.tanh((data["loo_ps_ind_04_cat"] + (data["loo_ps_car_05_cat"] * (data["ps_ind_01"] + (data["ps_ind_01"] + data["loo_ps_car_01_cat"])))))
-    v["101"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_05_cat"] * np.tanh((data["loo_ps_ind_05_cat"] + (-(2.352940)))))))
-    v["102"] = 0.020000*np.tanh((-((data["ps_reg_01"] * (data["loo_ps_car_09_cat"] + (data["ps_reg_03"] + data["loo_ps_ind_05_cat"]))))))
-    v["103"] = 0.020000*np.tanh(((-1.0 + (data["loo_ps_car_09_cat"] + ((data["ps_reg_01"] * data["ps_reg_01"]) + data["ps_reg_01"])))/2.0))
-    v["104"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] + ((data["loo_ps_ind_02_cat"] + -2.0)/2.0)) * (data["loo_ps_ind_05_cat"] - data["ps_car_15"])))
-    v["105"] = 0.019992*np.tanh((((data["loo_ps_ind_17_bin"] + data["loo_ps_car_07_cat"]) + data["loo_ps_ind_17_bin"]) * ((data["ps_reg_02"] + data["loo_ps_car_09_cat"])/2.0)))
-    v["106"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_07_bin"] + (data["loo_ps_ind_07_bin"] + (data["loo_ps_car_09_cat"] + -1.0)))))
-    v["107"] = 0.020000*np.tanh(((data["ps_car_15"] + (data["loo_ps_ind_07_bin"] * data["loo_ps_ind_17_bin"])) - (data["ps_reg_03"] * data["loo_ps_car_01_cat"])))
-    v["108"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * ((data["loo_ps_ind_04_cat"] - (data["loo_ps_ind_06_bin"] - 0.432099)) - data["loo_ps_car_01_cat"])))
-    v["109"] = 0.019988*np.tanh((data["loo_ps_ind_02_cat"] - (data["ps_ind_01"] * (-2.0 + (data["ps_ind_01"] * data["ps_ind_01"])))))
-    v["110"] = 0.020000*np.tanh(((29.500000 + (data["ps_car_15"] * 29.500000)) * (0.791667 - data["ps_car_15"])))
-    v["111"] = 0.020000*np.tanh(((((data["loo_ps_ind_04_cat"] + -1.0) + data["loo_ps_car_08_cat"])/2.0) + (data["loo_ps_ind_05_cat"] * data["ps_reg_03"])))
-    v["112"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] * ((data["ps_reg_03"] * ((data["loo_ps_car_05_cat"] + data["ps_reg_03"])/2.0)) - data["ps_car_15"])))
-    v["113"] = 0.020000*np.tanh((data["ps_reg_02"] * ((data["loo_ps_ind_17_bin"] - data["loo_ps_car_01_cat"]) - (data["ps_ind_01"] - data["loo_ps_ind_17_bin"]))))
-    v["114"] = 0.020000*np.tanh((data["ps_ind_03"] * (data["ps_reg_03"] - (1.480000 + (data["ps_ind_15"] - data["ps_reg_03"])))))
-    v["115"] = 0.019988*np.tanh(((((data["loo_ps_car_01_cat"] + (data["ps_car_11"] * data["ps_car_11"]))/2.0) + (data["ps_reg_01"] * data["missing"]))/2.0))
-    v["116"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] * ((data["loo_ps_ind_04_cat"] - data["ps_ind_01"]) + data["ps_ind_03"])) - data["loo_ps_ind_02_cat"]))
-    v["117"] = 0.020000*np.tanh((data["loo_ps_car_04_cat"] * ((data["loo_ps_car_09_cat"] - data["ps_car_11"]) - ((data["loo_ps_car_06_cat"] + data["loo_ps_car_04_cat"])/2.0))))
-    v["118"] = 0.020000*np.tanh((((data["loo_ps_ind_04_cat"] + data["ps_ind_03"])/2.0) * ((data["loo_ps_car_02_cat"] - data["ps_reg_01"]) + data["loo_ps_car_07_cat"])))
-    v["119"] = 0.020000*np.tanh(((((data["ps_car_15"] * (-(data["loo_ps_car_03_cat"]))) + data["loo_ps_car_01_cat"])/2.0) - data["loo_ps_car_07_cat"]))
-    v["120"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_05_cat"] * (data["loo_ps_car_03_cat"] * data["loo_ps_car_11_cat"])) - 0.633333)))
-    v["121"] = 0.020000*np.tanh(((((data["loo_ps_ind_05_cat"] + data["ps_car_12"]) + data["loo_ps_ind_18_bin"])/2.0) * ((data["missing"] + data["ps_reg_02"])/2.0)))
-    v["122"] = 0.020000*np.tanh(((((data["ps_ind_03"] + data["loo_ps_ind_04_cat"])/2.0) * ((data["ps_ind_03"] + data["loo_ps_ind_04_cat"])/2.0)) - 0.432099))
-    v["123"] = 0.020000*np.tanh(((data["ps_reg_03"] * data["ps_reg_03"]) * (((data["loo_ps_ind_05_cat"] - data["ps_reg_03"]) + data["ps_car_12"])/2.0)))
-    v["124"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (data["ps_car_13"] + ((data["loo_ps_car_04_cat"] - data["ps_ind_03"]) - 1.089890))))
-    v["125"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] + -2.0)/2.0) * (data["loo_ps_ind_02_cat"] + (data["ps_car_11"] * data["ps_ind_01"]))))
-    v["126"] = 0.019988*np.tanh(((data["loo_ps_ind_02_cat"] + ((data["loo_ps_car_07_cat"] * data["loo_ps_ind_08_bin"]) - (data["ps_ind_15"] * data["loo_ps_car_06_cat"])))/2.0))
-    v["127"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] * (data["loo_ps_car_09_cat"] * np.tanh(((data["loo_ps_ind_07_bin"] + (-(data["ps_ind_03"])))/2.0)))))
-    v["128"] = 0.020000*np.tanh((((data["missing"] - data["ps_car_11"]) * (data["loo_ps_car_01_cat"] - data["loo_ps_car_06_cat"])) - data["loo_ps_car_11_cat"]))
-    v["129"] = 0.020000*np.tanh((data["ps_reg_01"] * (-((np.tanh((data["ps_reg_03"] + data["loo_ps_ind_05_cat"])) + data["loo_ps_ind_18_bin"])))))
-    v["130"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * ((data["missing"] + data["ps_car_11"]) + data["ps_ind_15"])))
-    v["131"] = 0.019996*np.tanh((((data["loo_ps_ind_02_cat"] - data["loo_ps_car_04_cat"]) + ((data["loo_ps_ind_07_bin"] * data["ps_car_13"]) * data["ps_reg_03"]))/2.0))
-    v["132"] = 0.020000*np.tanh((data["ps_reg_01"] - (0.791667 - (((data["loo_ps_car_11_cat"] * data["loo_ps_car_11_cat"]) + data["loo_ps_ind_02_cat"])/2.0))))
-    v["133"] = 0.020000*np.tanh(((data["ps_ind_14"] + ((data["loo_ps_ind_04_cat"] + data["ps_ind_15"])/2.0)) * ((data["ps_ind_15"] + data["loo_ps_ind_04_cat"])/2.0)))
-    v["134"] = 0.020000*np.tanh(((0.791667 - data["ps_ind_01"]) * (((data["ps_ind_03"] + data["loo_ps_ind_04_cat"])/2.0) * data["loo_ps_ind_05_cat"])))
-    v["135"] = 0.019992*np.tanh(((-2.0 + (data["ps_car_12"] * ((data["ps_car_12"] - 1.089890) + data["loo_ps_ind_04_cat"])))/2.0))
-    v["136"] = 0.019977*np.tanh(((data["loo_ps_car_09_cat"] * (data["loo_ps_car_01_cat"] * (data["loo_ps_ind_02_cat"] + data["loo_ps_ind_17_bin"]))) - data["loo_ps_ind_02_cat"]))
-    v["137"] = 0.019996*np.tanh(((-1.0 + ((data["ps_reg_03"] * data["ps_reg_03"]) * data["loo_ps_ind_05_cat"])) * data["loo_ps_ind_05_cat"]))
-    v["138"] = 0.020000*np.tanh((((data["ps_car_11"] * (data["ps_ind_14"] - data["ps_car_12"])) + data["loo_ps_car_09_cat"])/2.0))
-    v["139"] = 0.019996*np.tanh((data["loo_ps_car_07_cat"] * ((((data["missing"] * data["missing"]) + data["ps_ind_15"])/2.0) + data["loo_ps_ind_17_bin"])))
-    v["140"] = 0.020000*np.tanh((data["ps_reg_01"] * ((data["ps_reg_01"] - data["ps_reg_03"]) - data["loo_ps_ind_17_bin"])))
-    v["141"] = 0.019996*np.tanh(((data["loo_ps_ind_04_cat"] - ((data["ps_car_13"] + (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_05_cat"]))/2.0)) * data["loo_ps_car_07_cat"]))
-    v["142"] = 0.020000*np.tanh(((data["ps_ind_15"] + (((data["ps_reg_03"] * data["ps_reg_03"]) - 0.432099) + data["loo_ps_ind_16_bin"]))/2.0))
-    v["143"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] + (data["loo_ps_ind_08_bin"] - (data["loo_ps_car_04_cat"] + (data["loo_ps_ind_08_bin"] * data["ps_car_13"]))))/2.0))
-    v["144"] = 0.019996*np.tanh(((((-1.0 - data["ps_ind_03"]) - data["ps_ind_03"]) * data["loo_ps_ind_02_cat"]) - 0.432099))
-    v["145"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_02_cat"] - 0.788462)) * data["loo_ps_ind_02_cat"]) - data["loo_ps_car_10_cat"]))
-    v["146"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * ((data["loo_ps_ind_04_cat"] + data["ps_ind_03"]) * (0.791667 - data["ps_ind_03"]))))
-    v["147"] = 0.020000*np.tanh((np.tanh(data["loo_ps_ind_05_cat"]) * (((-(data["loo_ps_ind_18_bin"])) + (data["ps_car_14"] + data["missing"]))/2.0)))
-    v["148"] = 0.020000*np.tanh((data["ps_reg_03"] * (((data["loo_ps_ind_09_bin"] - data["loo_ps_ind_18_bin"]) - data["ps_car_15"]) - data["loo_ps_ind_02_cat"])))
-    v["149"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] + (data["ps_ind_15"] * (-((data["loo_ps_ind_17_bin"] - data["ps_ind_14"])))))/2.0))
-    v["150"] = 0.020000*np.tanh((((data["loo_ps_ind_04_cat"] * data["loo_ps_car_03_cat"]) + (-(((data["loo_ps_car_01_cat"] + data["loo_ps_car_10_cat"])/2.0))))/2.0))
-    v["151"] = 0.020000*np.tanh(((0.666667 - data["ps_ind_03"]) * ((data["loo_ps_car_07_cat"] + (data["ps_reg_01"] + data["ps_ind_15"]))/2.0)))
-    v["152"] = 0.020000*np.tanh(((data["loo_ps_car_03_cat"] * data["loo_ps_ind_05_cat"]) * ((data["loo_ps_car_06_cat"] + ((-1.0 + data["loo_ps_ind_04_cat"])/2.0))/2.0)))
-    v["153"] = 0.020000*np.tanh(((data["ps_ind_03"] * data["ps_ind_03"]) * (-2.0 + (data["ps_ind_03"] * data["ps_ind_03"]))))
-    v["154"] = 0.020000*np.tanh(((data["loo_ps_ind_13_bin"] - data["loo_ps_ind_11_bin"]) * ((data["loo_ps_ind_02_cat"] + (7.0)) * 29.500000)))
-    v["155"] = 0.019977*np.tanh((((data["loo_ps_ind_02_cat"] + data["loo_ps_car_08_cat"]) * (data["loo_ps_ind_02_cat"] * 2.0)) - 1.089890))
-    v["156"] = 0.020000*np.tanh(((data["ps_car_12"] + (data["loo_ps_ind_16_bin"] * ((-(data["ps_reg_01"])) * data["loo_ps_car_05_cat"])))/2.0))
-    v["157"] = 0.020000*np.tanh((((data["loo_ps_ind_04_cat"] - data["loo_ps_ind_05_cat"]) + (data["loo_ps_ind_05_cat"] * data["ps_ind_15"]))/2.0))
-    v["158"] = 0.020000*np.tanh(((data["loo_ps_car_01_cat"] * (((data["loo_ps_car_02_cat"] + data["loo_ps_ind_17_bin"])/2.0) * data["loo_ps_ind_02_cat"])) * data["loo_ps_car_07_cat"]))
-    v["159"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_16_bin"]) + -3.0) * data["loo_ps_ind_04_cat"])))
-    v["160"] = 0.020000*np.tanh((data["loo_ps_car_05_cat"] * ((data["loo_ps_ind_02_cat"] + (-((data["loo_ps_car_06_cat"] * data["loo_ps_car_02_cat"]))))/2.0)))
-    v["161"] = 0.019961*np.tanh((-((data["loo_ps_car_03_cat"] * (0.753247 - (data["ps_ind_01"] * data["ps_ind_01"]))))))
-    v["162"] = 0.020000*np.tanh(((data["ps_car_13"] + data["loo_ps_ind_17_bin"]) * ((data["ps_ind_03"] + (data["ps_ind_03"] + data["loo_ps_car_07_cat"]))/2.0)))
-    v["163"] = 0.019988*np.tanh(((data["ps_ind_01"] + ((data["loo_ps_ind_09_bin"] + ((data["ps_ind_01"] + data["missing"])/2.0))/2.0)) * data["missing"]))
-    v["164"] = 0.019988*np.tanh((data["ps_reg_03"] * (-(((((data["loo_ps_ind_02_cat"] + (-(data["ps_reg_03"])))/2.0) + data["ps_reg_01"])/2.0)))))
-    v["165"] = 0.020000*np.tanh(((1.480000 + (data["loo_ps_ind_11_bin"] * 29.500000)) * 29.500000))
-    v["166"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] - ((2.0 + data["ps_car_11"]) * (2.352940 * 2.352940))))
-    v["167"] = 0.020000*np.tanh(((data["ps_car_11"] + (((-(data["loo_ps_car_04_cat"])) + ((data["loo_ps_ind_04_cat"] + data["loo_ps_car_02_cat"])/2.0))/2.0))/2.0))
-    v["168"] = 0.019996*np.tanh((((data["loo_ps_car_09_cat"] * (-(data["ps_reg_01"]))) + (data["ps_reg_01"] - data["ps_ind_03"]))/2.0))
-    v["169"] = 0.019996*np.tanh((data["loo_ps_car_09_cat"] * ((data["loo_ps_car_09_cat"] * data["loo_ps_ind_17_bin"]) - (0.791667 - data["ps_reg_02"]))))
-    v["170"] = 0.019992*np.tanh(((data["ps_car_15"] * (data["loo_ps_ind_06_bin"] - data["ps_ind_03"])) * data["loo_ps_car_04_cat"]))
-    v["171"] = 0.020000*np.tanh(((-(data["ps_reg_03"])) * (data["missing"] + ((data["loo_ps_car_03_cat"] + data["ps_car_14"])/2.0))))
-    v["172"] = 0.019996*np.tanh((data["ps_ind_01"] * ((data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_02_cat"] + data["ps_ind_01"])/2.0)) - data["loo_ps_ind_04_cat"])))
-    v["173"] = 0.019953*np.tanh(((data["ps_reg_01"] * (-(((data["loo_ps_ind_06_bin"] + np.tanh(data["loo_ps_ind_17_bin"]))/2.0)))) - data["loo_ps_car_10_cat"]))
-    v["174"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]) - 0.887097) + data["ps_ind_01"])))
-    v["175"] = 0.020000*np.tanh((((data["ps_reg_01"] + (data["loo_ps_car_01_cat"] * 0.117647))/2.0) * (data["loo_ps_car_01_cat"] * data["loo_ps_car_01_cat"])))
-    v["176"] = 0.019988*np.tanh((((data["loo_ps_ind_04_cat"] * np.tanh(data["loo_ps_ind_17_bin"])) + np.tanh((-3.0 + data["ps_car_13"])))/2.0))
-    v["177"] = 0.020000*np.tanh((1.089890 + ((11.83836174011230469) * ((0.666667 * 1.089890) - data["ps_car_15"]))))
-    v["178"] = 0.019996*np.tanh(((-1.0 + (data["loo_ps_ind_17_bin"] * ((data["loo_ps_ind_09_bin"] + ((data["loo_ps_ind_04_cat"] + -3.0)/2.0))/2.0)))/2.0))
-    v["179"] = 0.020000*np.tanh((data["loo_ps_car_03_cat"] * (data["loo_ps_car_04_cat"] * (data["loo_ps_ind_04_cat"] - np.tanh(data["ps_car_15"])))))
-    v["180"] = 0.019887*np.tanh((data["loo_ps_car_08_cat"] + (data["ps_ind_03"] * (data["loo_ps_car_02_cat"] * data["ps_ind_01"]))))
-    v["181"] = 0.020000*np.tanh(((((data["ps_reg_01"] + (-(data["ps_car_13"])))/2.0) * data["ps_ind_15"]) * data["loo_ps_car_01_cat"]))
-    v["182"] = 0.020000*np.tanh((data["ps_reg_01"] * (data["loo_ps_ind_07_bin"] * (((data["loo_ps_ind_02_cat"] + data["loo_ps_car_08_cat"])/2.0) - data["ps_reg_03"]))))
-    v["183"] = 0.020000*np.tanh((((data["ps_ind_14"] + (data["loo_ps_ind_04_cat"] * data["loo_ps_ind_17_bin"]))/2.0) * (data["loo_ps_car_01_cat"] * data["loo_ps_ind_04_cat"])))
-    v["184"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * ((data["loo_ps_ind_02_cat"] + (data["ps_ind_15"] * (-(data["ps_car_15"]))))/2.0)))
-    v["185"] = 0.019973*np.tanh((data["loo_ps_ind_17_bin"] * ((data["loo_ps_car_01_cat"] - data["ps_ind_14"]) * (data["ps_car_11"] + data["loo_ps_car_09_cat"]))))
-    v["186"] = 0.019918*np.tanh((data["loo_ps_ind_02_cat"] * (((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]) - 0.666667) + data["loo_ps_ind_18_bin"])))
-    v["187"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_04_cat"] * (data["ps_car_13"] + (data["loo_ps_car_04_cat"] + data["ps_car_12"])))))
-    v["188"] = 0.020000*np.tanh((data["loo_ps_car_07_cat"] * (data["loo_ps_ind_05_cat"] * (data["ps_car_13"] + data["ps_car_13"]))))
-    v["189"] = 0.019992*np.tanh((data["ps_car_13"] * (data["loo_ps_car_01_cat"] * (data["ps_car_13"] - 2.0))))
-    v["190"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * (data["loo_ps_ind_05_cat"] * (-(data["ps_reg_02"])))))
-    v["191"] = 0.020000*np.tanh((data["loo_ps_car_07_cat"] * (((data["loo_ps_ind_02_cat"] * 0.432099) * data["loo_ps_car_07_cat"]) - data["loo_ps_car_02_cat"])))
-    v["192"] = 0.020000*np.tanh((data["ps_reg_01"] * (data["loo_ps_car_07_cat"] * (-((data["loo_ps_ind_02_cat"] + data["loo_ps_ind_18_bin"]))))))
-    v["193"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * (data["loo_ps_car_08_cat"] * (data["ps_reg_03"] - ((data["ps_ind_03"] + data["ps_ind_03"])/2.0)))))
-    v["194"] = 0.019996*np.tanh(((data["ps_ind_03"] - ((0.600000 + data["loo_ps_ind_08_bin"])/2.0)) * ((data["ps_ind_14"] + data["loo_ps_ind_08_bin"])/2.0)))
-    v["195"] = 0.019992*np.tanh(((data["loo_ps_car_11_cat"] * data["loo_ps_car_04_cat"]) * (((data["ps_ind_01"] + data["ps_ind_01"]) + data["loo_ps_ind_06_bin"])/2.0)))
-    v["196"] = 0.019996*np.tanh(((data["loo_ps_car_04_cat"] - ((data["ps_ind_01"] + data["loo_ps_ind_02_cat"])/2.0)) * (data["loo_ps_ind_02_cat"] * data["ps_ind_03"])))
-    v["197"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["ps_car_11"] * ((data["ps_reg_02"] - data["loo_ps_car_01_cat"]) - data["loo_ps_car_03_cat"]))))
-    v["198"] = 0.020000*np.tanh((data["ps_reg_03"] * ((((data["loo_ps_car_04_cat"] * data["loo_ps_car_08_cat"]) + data["loo_ps_ind_02_cat"])/2.0) * data["loo_ps_car_08_cat"])))
-    v["199"] = 0.020000*np.tanh((((data["ps_car_11"] + data["loo_ps_car_04_cat"])/2.0) * ((data["loo_ps_car_04_cat"] * data["loo_ps_ind_02_cat"]) - data["loo_ps_car_04_cat"])))
-    v["200"] = 0.019992*np.tanh((((data["ps_car_13"] * data["ps_ind_14"]) * data["ps_ind_15"]) * (data["ps_car_13"] * data["ps_car_13"])))
-    v["201"] = 0.019644*np.tanh((data["ps_ind_15"] * (data["ps_reg_03"] + ((data["ps_ind_15"] * data["loo_ps_car_08_cat"]) + data["ps_reg_03"]))))
-    v["202"] = 0.020000*np.tanh(((-((data["ps_reg_02"] * ((data["loo_ps_car_08_cat"] + data["ps_ind_15"])/2.0)))) * data["ps_ind_03"]))
-    v["203"] = 0.020000*np.tanh((0.666667 - (data["ps_car_15"] * (((data["loo_ps_car_08_cat"] + data["loo_ps_car_10_cat"]) + data["loo_ps_car_03_cat"])/2.0))))
-    v["204"] = 0.020000*np.tanh(((data["loo_ps_car_09_cat"] * np.tanh(data["loo_ps_car_02_cat"])) + (data["loo_ps_car_09_cat"] * data["loo_ps_car_11_cat"])))
-    v["205"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] * (data["loo_ps_ind_08_bin"] - ((data["loo_ps_ind_18_bin"] * data["ps_reg_01"]) * data["ps_reg_01"]))))
-    v["206"] = 0.019980*np.tanh((data["loo_ps_ind_04_cat"] * ((data["loo_ps_car_01_cat"] - (data["loo_ps_ind_17_bin"] * data["loo_ps_car_01_cat"])) * data["ps_reg_02"])))
-    v["207"] = 0.020000*np.tanh((((data["loo_ps_ind_08_bin"] * (data["ps_ind_15"] + data["loo_ps_car_01_cat"])) - data["loo_ps_car_10_cat"]) - data["loo_ps_car_10_cat"]))
-    v["208"] = 0.020000*np.tanh((0.148148 * (data["loo_ps_ind_02_cat"] * (-((np.tanh(data["loo_ps_ind_18_bin"]) * data["loo_ps_ind_16_bin"]))))))
-    v["209"] = 0.020000*np.tanh((((data["ps_car_15"] + data["loo_ps_ind_04_cat"])/2.0) * (data["ps_car_12"] * ((data["loo_ps_ind_16_bin"] + data["ps_car_12"])/2.0))))
-    v["210"] = 0.020000*np.tanh((data["loo_ps_car_11_cat"] * (data["loo_ps_ind_17_bin"] * ((data["loo_ps_ind_02_cat"] + (-(data["loo_ps_car_07_cat"])))/2.0))))
-    v["211"] = 0.020000*np.tanh(((data["ps_ind_03"] * ((data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_02_cat"] * data["ps_ind_03"]))/2.0)) - data["loo_ps_ind_02_cat"]))
-    v["212"] = 0.019711*np.tanh(((((data["loo_ps_ind_09_bin"] * data["loo_ps_car_03_cat"]) + (data["loo_ps_ind_09_bin"] * data["loo_ps_car_07_cat"]))/2.0) - 0.232323))
-    v["213"] = 0.020000*np.tanh((data["ps_ind_03"] * (0.633333 - ((data["ps_ind_01"] + data["loo_ps_ind_02_cat"]) * data["ps_ind_01"]))))
-    v["214"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] * (data["loo_ps_ind_11_bin"] + ((data["ps_ind_15"] + data["ps_reg_03"]) + data["ps_reg_03"]))))
-    v["215"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * ((data["loo_ps_car_08_cat"] * (-(data["loo_ps_ind_02_cat"]))) - data["loo_ps_car_07_cat"])))
-    v["216"] = 0.020000*np.tanh(((((data["loo_ps_ind_17_bin"] + data["loo_ps_car_09_cat"])/2.0) * data["loo_ps_ind_05_cat"]) * data["ps_reg_02"]))
-    v["217"] = 0.019984*np.tanh((data["ps_car_14"] * (data["loo_ps_car_07_cat"] * ((data["ps_ind_15"] + data["loo_ps_ind_09_bin"])/2.0))))
-    v["218"] = 0.020000*np.tanh((((data["loo_ps_ind_09_bin"] + ((data["loo_ps_ind_02_cat"] + data["ps_reg_02"])/2.0))/2.0) * ((data["missing"] + data["ps_reg_02"])/2.0)))
-    v["219"] = 0.019984*np.tanh((data["ps_car_14"] * ((data["loo_ps_car_08_cat"] * (-(data["loo_ps_ind_04_cat"]))) + (-(data["loo_ps_car_07_cat"])))))
-    v["220"] = 0.020000*np.tanh((((data["ps_ind_03"] * ((data["loo_ps_ind_02_cat"] * data["ps_ind_03"]) * 2.0)) + data["ps_ind_03"])/2.0))
-    v["221"] = 0.019949*np.tanh((data["loo_ps_ind_06_bin"] * (data["loo_ps_ind_16_bin"] * ((data["loo_ps_car_07_cat"] + ((data["ps_reg_02"] + data["loo_ps_ind_08_bin"])/2.0))/2.0))))
-    v["222"] = 0.019984*np.tanh(((data["loo_ps_ind_17_bin"] * data["ps_reg_03"]) * (-(((data["loo_ps_ind_12_bin"] + data["loo_ps_car_04_cat"])/2.0)))))
-    v["223"] = 0.019848*np.tanh(((data["ps_ind_01"] * (data["loo_ps_ind_18_bin"] * data["loo_ps_car_01_cat"])) - (data["loo_ps_car_10_cat"] * data["ps_ind_03"])))
-    v["224"] = 0.019973*np.tanh((((data["ps_ind_03"] * 1.480000) * data["ps_reg_03"]) * ((data["ps_car_12"] + data["loo_ps_ind_17_bin"])/2.0)))
-    v["225"] = 0.020000*np.tanh((-((data["loo_ps_ind_17_bin"] * (data["ps_car_15"] - (data["loo_ps_ind_04_cat"] * data["loo_ps_car_10_cat"]))))))
-    v["226"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] + data["loo_ps_ind_04_cat"]) * (data["ps_ind_01"] * (-(data["ps_ind_03"])))))
-    v["227"] = 0.020000*np.tanh((-((((data["loo_ps_ind_06_bin"] + (data["loo_ps_car_08_cat"] + data["loo_ps_ind_02_cat"]))/2.0) * np.tanh(data["loo_ps_ind_18_bin"])))))
-    v["228"] = 0.019988*np.tanh((data["loo_ps_ind_07_bin"] * (data["loo_ps_ind_17_bin"] * (((data["loo_ps_car_08_cat"] + data["ps_reg_02"]) + data["loo_ps_ind_05_cat"])/2.0))))
-    v["229"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * (data["ps_ind_15"] * (data["ps_car_12"] - np.tanh(0.753247)))))
-    v["230"] = 0.014245*np.tanh((((data["ps_reg_02"] + data["loo_ps_car_08_cat"])/2.0) * (data["ps_reg_02"] * (data["ps_reg_02"] - 3.0))))
-    v["231"] = 0.020000*np.tanh(((0.232323 + (data["loo_ps_car_11_cat"] * (data["ps_ind_01"] * (data["ps_reg_03"] * data["ps_reg_02"]))))/2.0))
-    v["232"] = 0.019984*np.tanh((data["loo_ps_ind_08_bin"] * (-(((((data["ps_reg_03"] + data["loo_ps_car_11_cat"])/2.0) + data["loo_ps_ind_12_bin"])/2.0)))))
-    v["233"] = 0.019969*np.tanh((-(np.tanh((data["ps_reg_02"] * (data["loo_ps_car_06_cat"] - (data["ps_ind_03"] * data["loo_ps_ind_18_bin"])))))))
-    v["234"] = 0.019996*np.tanh((-(((data["ps_car_15"] + ((data["ps_car_14"] * data["loo_ps_car_02_cat"]) - 0.753247))/2.0))))
-    v["235"] = 0.020000*np.tanh(((data["loo_ps_car_07_cat"] * (-(data["loo_ps_ind_17_bin"]))) * (data["loo_ps_car_02_cat"] + data["loo_ps_car_06_cat"])))
-    v["236"] = 0.019984*np.tanh((data["loo_ps_car_11_cat"] * (data["loo_ps_car_01_cat"] * (data["ps_reg_01"] * ((0.791667 + data["loo_ps_car_07_cat"])/2.0)))))
-    v["237"] = 0.020000*np.tanh((data["loo_ps_car_08_cat"] * (((-((data["loo_ps_car_03_cat"] * data["ps_ind_01"]))) + data["ps_ind_01"])/2.0)))
-    v["238"] = 0.019973*np.tanh((data["ps_car_11"] * ((data["loo_ps_car_06_cat"] + (data["ps_ind_03"] * np.tanh((-(data["ps_car_11"])))))/2.0)))
-    v["239"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] * (data["loo_ps_car_06_cat"] * (((-(data["loo_ps_car_07_cat"])) + data["loo_ps_car_05_cat"])/2.0))))
-    v["240"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] * (data["ps_ind_01"] * (data["loo_ps_car_09_cat"] - (0.945455 - data["ps_ind_01"])))))
-    v["241"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] * (data["ps_ind_15"] - data["loo_ps_ind_02_cat"])) * data["ps_ind_15"]) - data["loo_ps_ind_02_cat"]))
-    v["242"] = 0.019687*np.tanh(((-3.0 * ((data["ps_ind_15"] + 1.0) + data["ps_ind_03"])) * data["loo_ps_car_09_cat"]))
-    v["243"] = 0.020000*np.tanh((((0.633333 * data["ps_car_14"]) * data["loo_ps_ind_17_bin"]) * (data["loo_ps_ind_04_cat"] - data["ps_car_12"])))
-    v["244"] = 0.019930*np.tanh((data["loo_ps_ind_08_bin"] * ((data["ps_ind_03"] + ((data["missing"] + (data["loo_ps_ind_04_cat"] - 1.0))/2.0))/2.0)))
-    v["245"] = 0.019293*np.tanh((data["loo_ps_ind_04_cat"] * (np.tanh(data["ps_car_12"]) + (-(data["loo_ps_car_06_cat"])))))
-    v["246"] = 0.020000*np.tanh((data["loo_ps_ind_08_bin"] * ((data["loo_ps_ind_08_bin"] * data["loo_ps_ind_08_bin"]) * (data["ps_ind_01"] - data["loo_ps_car_05_cat"]))))
-    v["247"] = 0.020000*np.tanh((np.tanh((data["ps_ind_15"] * (data["loo_ps_ind_07_bin"] + data["ps_ind_15"]))) * data["loo_ps_ind_07_bin"]))
-    v["248"] = 0.019254*np.tanh(((((data["loo_ps_ind_08_bin"] + (data["ps_car_12"] * data["ps_ind_14"]))/2.0) + (data["loo_ps_ind_08_bin"] * data["loo_ps_car_03_cat"]))/2.0))
-    v["249"] = 0.019992*np.tanh(((data["loo_ps_ind_13_bin"] + (-((data["ps_ind_03"] * (data["ps_car_14"] + data["loo_ps_ind_02_cat"])))))/2.0))
-    v["250"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] * data["loo_ps_car_08_cat"]) * (data["loo_ps_car_03_cat"] - (data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]))))
-    v["251"] = 0.020000*np.tanh(((np.tanh(data["ps_car_12"]) * data["loo_ps_ind_02_cat"]) - ((data["loo_ps_ind_02_cat"] + np.tanh(data["loo_ps_ind_05_cat"]))/2.0)))
-    v["252"] = 0.020000*np.tanh(((data["ps_ind_15"] * data["ps_ind_15"]) * (data["loo_ps_ind_12_bin"] * (data["ps_ind_15"] * data["loo_ps_car_11_cat"]))))
-    v["253"] = 0.019801*np.tanh(((data["loo_ps_ind_05_cat"] - 0.232323) * ((data["loo_ps_ind_04_cat"] - data["ps_car_11"]) * data["loo_ps_ind_17_bin"])))
-    v["254"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * (data["ps_ind_14"] * (-((data["loo_ps_car_03_cat"] + data["loo_ps_ind_04_cat"]))))))
-    v["255"] = 0.019711*np.tanh((((data["ps_car_11"] + data["ps_ind_01"])/2.0) * (-((data["loo_ps_car_04_cat"] * np.tanh(data["ps_ind_01"]))))))
-    v["256"] = 0.019996*np.tanh((data["loo_ps_ind_02_cat"] * ((data["ps_car_15"] * data["loo_ps_ind_17_bin"]) * (data["missing"] - 0.945455))))
-    v["257"] = 0.020000*np.tanh((((-((data["missing"] * data["loo_ps_car_07_cat"]))) + (data["loo_ps_car_07_cat"] * (-(data["loo_ps_ind_12_bin"]))))/2.0))
-    v["258"] = 0.019844*np.tanh(((data["loo_ps_ind_05_cat"] + data["ps_car_14"]) * (-((data["ps_ind_01"] * data["loo_ps_ind_17_bin"])))))
-    v["259"] = 0.020000*np.tanh((data["loo_ps_ind_08_bin"] * (((data["missing"] + np.tanh(data["loo_ps_ind_02_cat"]))/2.0) * data["ps_car_14"])))
-    v["260"] = 0.019945*np.tanh(((data["loo_ps_ind_04_cat"] * (data["loo_ps_ind_04_cat"] + (-(data["loo_ps_ind_09_bin"])))) - data["loo_ps_car_10_cat"]))
-    v["261"] = 0.020000*np.tanh((((data["ps_ind_03"] + data["loo_ps_ind_12_bin"])/2.0) * (data["ps_ind_03"] + np.tanh((-(data["ps_ind_03"]))))))
-    v["262"] = 0.019992*np.tanh((data["loo_ps_car_10_cat"] * (((data["loo_ps_ind_04_cat"] * data["loo_ps_ind_05_cat"]) * data["ps_ind_01"]) - data["ps_ind_01"])))
-    v["263"] = 0.020000*np.tanh((data["ps_reg_02"] * ((data["ps_car_13"] - data["loo_ps_car_07_cat"]) * (data["ps_car_12"] - 0.633333))))
-    v["264"] = 0.019973*np.tanh((data["ps_ind_14"] * (((8.428570 * (data["loo_ps_ind_07_bin"] * data["ps_car_15"])) + data["loo_ps_ind_13_bin"])/2.0)))
-    v["265"] = 0.020000*np.tanh(((data["loo_ps_car_03_cat"] * (data["loo_ps_ind_05_cat"] - data["loo_ps_car_10_cat"])) * np.tanh(data["ps_reg_02"])))
-    v["266"] = 0.020000*np.tanh((((data["ps_car_13"] + np.tanh(data["loo_ps_ind_17_bin"]))/2.0) * (((-(data["loo_ps_car_10_cat"])) + data["loo_ps_ind_04_cat"])/2.0)))
-    v["267"] = 0.020000*np.tanh(((data["ps_ind_03"] * data["loo_ps_ind_17_bin"]) * ((-1.0 + (data["loo_ps_car_03_cat"] * data["ps_car_13"]))/2.0)))
-    v["268"] = 0.019977*np.tanh(((((data["loo_ps_ind_11_bin"] + (data["ps_car_11"] + 1.480000))/2.0) + data["ps_ind_15"]) * data["loo_ps_ind_12_bin"]))
-    v["269"] = 0.020000*np.tanh((np.tanh(np.tanh(data["ps_reg_03"])) * (data["ps_car_11"] * (data["ps_ind_14"] + data["ps_ind_15"]))))
-    v["270"] = 0.018535*np.tanh((((data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_18_bin"] - (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_18_bin"])))/2.0) * data["loo_ps_ind_09_bin"]))
-    v["271"] = 0.020000*np.tanh((data["ps_car_15"] * (data["ps_car_12"] * (np.tanh(data["ps_car_15"]) - data["ps_car_11"]))))
-    v["272"] = 0.019957*np.tanh((data["ps_reg_02"] * (data["ps_reg_03"] * (-3.0 + data["ps_reg_02"]))))
-    v["273"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] - data["loo_ps_ind_12_bin"]) * ((data["ps_car_15"] + ((data["loo_ps_ind_02_cat"] + data["loo_ps_ind_02_cat"])/2.0))/2.0)))
-    v["274"] = 0.020000*np.tanh((data["loo_ps_car_10_cat"] * ((data["loo_ps_ind_17_bin"] * data["loo_ps_ind_02_cat"]) - data["loo_ps_ind_16_bin"])))
-    v["275"] = 0.020000*np.tanh((((data["ps_ind_03"] + (-((data["loo_ps_ind_09_bin"] * data["ps_ind_15"]))))/2.0) * data["loo_ps_ind_05_cat"]))
-    v["276"] = 0.019512*np.tanh(np.tanh((data["ps_ind_03"] * ((data["ps_reg_03"] * data["ps_reg_03"]) - 0.791667))))
-    v["277"] = 0.018703*np.tanh((-(((0.633333 * data["loo_ps_ind_05_cat"]) * (data["loo_ps_ind_16_bin"] * data["loo_ps_car_08_cat"])))))
-    v["278"] = 0.019988*np.tanh(((data["loo_ps_ind_02_cat"] * data["ps_ind_03"]) * (data["ps_ind_03"] * data["loo_ps_ind_06_bin"])))
-    v["279"] = 0.019723*np.tanh((((data["loo_ps_ind_09_bin"] * data["loo_ps_car_04_cat"]) + (data["ps_ind_03"] * data["ps_car_13"])) * data["ps_car_15"]))
-    v["280"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] + (data["loo_ps_ind_02_cat"] + data["ps_ind_03"])) * (data["loo_ps_ind_13_bin"] - data["loo_ps_ind_02_cat"])))
-    v["281"] = 0.019992*np.tanh((data["loo_ps_ind_04_cat"] * (data["loo_ps_ind_05_cat"] * (data["ps_ind_01"] - ((0.432099 + data["loo_ps_car_06_cat"])/2.0)))))
-    v["282"] = 0.020000*np.tanh((data["ps_reg_01"] * (((data["loo_ps_ind_05_cat"] * (-(data["ps_car_12"]))) + data["loo_ps_ind_11_bin"])/2.0)))
-    v["283"] = 0.020000*np.tanh((((-(data["ps_ind_03"])) * data["loo_ps_ind_05_cat"]) * np.tanh(np.tanh(data["ps_ind_01"]))))
-    v["284"] = 0.018035*np.tanh((data["ps_ind_03"] * np.tanh((data["loo_ps_car_05_cat"] * (data["loo_ps_ind_16_bin"] - data["ps_ind_01"])))))
-    v["285"] = 0.017937*np.tanh((data["loo_ps_ind_04_cat"] * ((data["ps_car_11"] + (data["loo_ps_ind_04_cat"] - data["loo_ps_ind_16_bin"])) + data["ps_ind_03"])))
-    v["286"] = 0.020000*np.tanh((data["ps_car_13"] * (data["loo_ps_car_03_cat"] * ((data["loo_ps_ind_13_bin"] * data["ps_car_13"]) * data["ps_car_13"]))))
-    v["287"] = 0.019140*np.tanh((data["loo_ps_car_03_cat"] * ((data["loo_ps_car_02_cat"] * (data["ps_reg_02"] - data["ps_reg_01"])) * data["loo_ps_ind_04_cat"])))
-    v["288"] = 0.019984*np.tanh((data["loo_ps_car_06_cat"] * (data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_02_cat"] * (-(data["loo_ps_ind_16_bin"]))))))
-    v["289"] = 0.017492*np.tanh((((data["ps_car_11"] * data["loo_ps_car_06_cat"]) + ((-(data["ps_car_11"])) * data["loo_ps_ind_17_bin"]))/2.0))
-    v["290"] = 0.019707*np.tanh((data["loo_ps_ind_04_cat"] * (((data["loo_ps_ind_11_bin"] + (data["missing"] * data["loo_ps_car_07_cat"])) + data["missing"])/2.0)))
-    v["291"] = 0.019598*np.tanh(((data["ps_reg_01"] * data["loo_ps_car_04_cat"]) * (data["loo_ps_car_07_cat"] + data["loo_ps_ind_12_bin"])))
-    v["292"] = 0.019855*np.tanh(((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_16_bin"]) * (data["loo_ps_ind_07_bin"] * (data["loo_ps_ind_18_bin"] + 0.232323))))
-    v["293"] = 0.020000*np.tanh(((data["loo_ps_car_04_cat"] * data["ps_reg_01"]) * np.tanh(((-(data["loo_ps_car_08_cat"])) - data["loo_ps_car_09_cat"]))))
-    v["294"] = 0.019992*np.tanh((data["ps_reg_02"] * (data["ps_car_13"] * (data["ps_car_15"] + (data["loo_ps_car_05_cat"] * data["ps_reg_03"])))))
-    v["295"] = 0.020000*np.tanh(((data["loo_ps_ind_12_bin"] * (data["loo_ps_car_01_cat"] - data["loo_ps_car_07_cat"])) * data["ps_reg_02"]))
-    v["296"] = 0.020000*np.tanh((-((data["loo_ps_car_10_cat"] * ((data["ps_car_15"] + data["loo_ps_car_11_cat"]) + data["ps_ind_14"])))))
-    v["297"] = 0.019977*np.tanh((((data["loo_ps_car_07_cat"] + (0.435484 - data["loo_ps_ind_06_bin"]))/2.0) * (data["loo_ps_ind_08_bin"] * data["loo_ps_car_08_cat"])))
-    v["298"] = 0.019941*np.tanh((data["ps_car_14"] * (data["loo_ps_ind_04_cat"] + (np.tanh(data["loo_ps_ind_04_cat"]) * (-(data["loo_ps_ind_07_bin"]))))))
-    v["299"] = 0.019117*np.tanh((data["loo_ps_ind_06_bin"] * ((data["ps_ind_03"] + data["loo_ps_ind_04_cat"]) * data["loo_ps_ind_17_bin"])))
-    v["300"] = 0.020000*np.tanh(((data["loo_ps_ind_16_bin"] * (data["loo_ps_ind_04_cat"] * (data["ps_reg_01"] * data["loo_ps_car_07_cat"]))) * data["loo_ps_ind_18_bin"]))
-    v["301"] = 0.019973*np.tanh((-((data["ps_car_11"] * (((data["loo_ps_ind_04_cat"] + data["loo_ps_car_02_cat"])/2.0) * data["loo_ps_ind_05_cat"])))))
-    v["302"] = 0.020000*np.tanh((data["ps_car_12"] * ((data["loo_ps_ind_12_bin"] * data["ps_car_12"]) * (data["ps_car_11"] - data["loo_ps_car_08_cat"]))))
-    v["303"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * (data["loo_ps_car_10_cat"] * (data["loo_ps_ind_04_cat"] - (data["ps_ind_03"] * data["loo_ps_ind_17_bin"])))))
-    v["304"] = 0.017566*np.tanh(((data["ps_reg_03"] - data["loo_ps_car_03_cat"]) * (data["ps_reg_01"] * data["loo_ps_ind_08_bin"])))
-    v["305"] = 0.019973*np.tanh((8.428570 * (0.666667 - (data["loo_ps_car_10_cat"] * (8.428570 - 0.432099)))))
-    v["306"] = 0.020000*np.tanh(np.tanh(np.tanh((-3.0 * (((data["ps_reg_01"] - data["loo_ps_car_02_cat"]) + 2.0)/2.0)))))
-    v["307"] = 0.020000*np.tanh(((data["ps_ind_01"] - data["ps_reg_01"]) * (data["ps_reg_02"] * data["loo_ps_ind_04_cat"])))
-    v["308"] = 0.020000*np.tanh((((data["ps_car_12"] + data["ps_ind_14"])/2.0) * (data["loo_ps_ind_02_cat"] * (data["ps_car_12"] * data["loo_ps_ind_17_bin"]))))
-    v["309"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] * data["loo_ps_car_04_cat"]) * ((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]) - data["loo_ps_ind_02_cat"])))
-    v["310"] = 0.020000*np.tanh((((data["ps_ind_14"] * data["ps_car_12"]) + (data["loo_ps_ind_04_cat"] * (data["loo_ps_ind_04_cat"] + data["ps_ind_14"])))/2.0))
-    v["311"] = 0.017878*np.tanh((data["ps_reg_03"] * (-(((data["ps_car_12"] + (data["loo_ps_car_09_cat"] * data["loo_ps_ind_08_bin"]))/2.0)))))
-    v["312"] = 0.019973*np.tanh((data["loo_ps_car_01_cat"] * (((data["loo_ps_car_01_cat"] + data["ps_reg_01"])/2.0) * data["ps_car_12"])))
-    v["313"] = 0.018691*np.tanh(((data["ps_car_14"] * data["loo_ps_car_11_cat"]) * (-((data["ps_ind_14"] + data["loo_ps_ind_08_bin"])))))
-    v["314"] = 0.019566*np.tanh(((1.0 - data["loo_ps_car_11_cat"]) * (((data["missing"] * data["loo_ps_car_11_cat"]) + data["ps_car_14"])/2.0)))
-    v["315"] = 0.015312*np.tanh(((data["missing"] + (((data["missing"] - data["loo_ps_ind_02_cat"]) - data["loo_ps_ind_09_bin"]) * data["ps_reg_01"]))/2.0))
-    v["316"] = 0.019980*np.tanh((data["loo_ps_car_03_cat"] * ((data["loo_ps_car_11_cat"] * data["loo_ps_ind_04_cat"]) * data["loo_ps_ind_05_cat"])))
-    v["317"] = 0.016890*np.tanh((data["loo_ps_car_07_cat"] * ((data["loo_ps_car_11_cat"] - data["ps_car_13"]) - data["loo_ps_ind_06_bin"])))
-    v["318"] = 0.020000*np.tanh((data["ps_car_12"] * ((data["ps_reg_02"] * data["loo_ps_car_04_cat"]) * ((data["ps_reg_02"] + data["ps_ind_03"])/2.0))))
-    v["319"] = 0.016683*np.tanh(np.tanh((data["loo_ps_ind_16_bin"] * (data["loo_ps_ind_12_bin"] - (data["loo_ps_ind_17_bin"] * data["ps_ind_01"])))))
-    v["320"] = 0.018222*np.tanh(((data["loo_ps_ind_13_bin"] * data["ps_car_12"]) - np.tanh((data["loo_ps_ind_02_cat"] + data["ps_car_14"]))))
-    v["321"] = 0.020000*np.tanh(((data["ps_ind_14"] * data["ps_car_11"]) * (data["ps_reg_02"] - ((data["ps_car_11"] + data["ps_car_15"])/2.0))))
-    v["322"] = 0.019703*np.tanh((((data["ps_ind_01"] + (-(data["loo_ps_car_08_cat"])))/2.0) * (data["loo_ps_ind_17_bin"] * data["ps_ind_01"])))
-    v["323"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * (data["ps_reg_01"] - 0.753247)) * (data["loo_ps_car_02_cat"] * data["loo_ps_car_02_cat"])))
-    v["324"] = 0.020000*np.tanh((data["ps_reg_01"] * ((data["loo_ps_car_11_cat"] + ((data["ps_reg_01"] + (-(data["loo_ps_car_04_cat"])))/2.0))/2.0)))
-    v["325"] = 0.019898*np.tanh((-(((((data["loo_ps_ind_17_bin"] + (-(data["ps_car_12"])))/2.0) + np.tanh(data["ps_car_12"]))/2.0))))
-    v["326"] = 0.019980*np.tanh(((data["loo_ps_ind_12_bin"] + (data["loo_ps_car_04_cat"] * (data["loo_ps_car_09_cat"] + 2.352940))) * data["loo_ps_ind_13_bin"]))
-    v["327"] = 0.019996*np.tanh(((((data["loo_ps_ind_08_bin"] * data["loo_ps_car_09_cat"]) + (data["ps_reg_03"] * data["loo_ps_ind_08_bin"]))/2.0) * data["ps_car_15"]))
-    v["328"] = 0.020000*np.tanh((data["ps_reg_03"] * (((np.tanh(data["ps_car_11"]) + data["loo_ps_car_09_cat"])/2.0) * np.tanh(data["loo_ps_ind_07_bin"]))))
-    v["329"] = 0.019996*np.tanh((((((data["loo_ps_ind_02_cat"] + data["loo_ps_car_10_cat"])/2.0) + data["ps_car_14"])/2.0) * (data["loo_ps_car_08_cat"] * data["ps_reg_02"])))
-    v["330"] = 0.020000*np.tanh(((data["loo_ps_car_10_cat"] * data["ps_reg_02"]) * (data["loo_ps_ind_18_bin"] - (data["ps_ind_14"] * data["loo_ps_ind_02_cat"]))))
-    v["331"] = 0.020000*np.tanh((((data["ps_ind_14"] + np.tanh(data["ps_ind_01"]))/2.0) * (data["loo_ps_ind_17_bin"] * data["loo_ps_car_06_cat"])))
-    v["332"] = 0.020000*np.tanh((((data["ps_ind_15"] + data["loo_ps_ind_05_cat"])/2.0) * np.tanh((data["loo_ps_ind_17_bin"] * (-(data["loo_ps_car_06_cat"]))))))
-    v["333"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * (data["ps_car_15"] * np.tanh((data["ps_ind_03"] + data["loo_ps_car_11_cat"])))))
-    v["334"] = 0.020000*np.tanh((data["ps_car_11"] * (((data["loo_ps_ind_11_bin"] + data["loo_ps_ind_10_bin"])/2.0) - (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_04_cat"]))))
-    v["335"] = 0.019996*np.tanh((data["ps_car_11"] * ((data["loo_ps_car_10_cat"] + ((data["ps_reg_02"] * data["ps_car_11"]) * data["loo_ps_ind_18_bin"]))/2.0)))
-    v["336"] = 0.020000*np.tanh(((data["ps_ind_03"] * data["loo_ps_ind_02_cat"]) * (data["ps_ind_03"] - data["ps_ind_15"])))
-    v["337"] = 0.019996*np.tanh((((data["loo_ps_car_07_cat"] * (data["loo_ps_ind_13_bin"] - data["loo_ps_ind_11_bin"])) * data["loo_ps_car_07_cat"]) * data["loo_ps_car_07_cat"]))
-    v["338"] = 0.019219*np.tanh(((data["loo_ps_ind_02_cat"] * ((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_18_bin"]) - data["loo_ps_ind_02_cat"])) - data["loo_ps_ind_02_cat"]))
-    v["339"] = 0.020000*np.tanh((data["loo_ps_car_07_cat"] * (np.tanh(0.232323) - (np.tanh(data["loo_ps_car_01_cat"]) + data["loo_ps_ind_12_bin"]))))
-    v["340"] = 0.019047*np.tanh(((data["ps_ind_01"] * (data["ps_reg_01"] * data["loo_ps_car_06_cat"])) - (data["ps_ind_14"] * data["ps_reg_01"])))
-    v["341"] = 0.019996*np.tanh((data["loo_ps_car_10_cat"] * ((np.tanh(np.tanh(data["ps_car_12"])) - data["ps_car_13"]) - data["loo_ps_ind_12_bin"])))
-    v["342"] = 0.019996*np.tanh((data["ps_car_14"] * (data["loo_ps_car_05_cat"] * (((data["loo_ps_car_05_cat"] + data["ps_car_15"]) + data["ps_reg_01"])/2.0))))
-    v["343"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (np.tanh(((-(data["loo_ps_car_07_cat"])) + data["ps_reg_02"])) + data["loo_ps_ind_10_bin"])))
-    v["344"] = 0.019902*np.tanh((data["ps_car_14"] * ((np.tanh(data["loo_ps_ind_05_cat"]) * data["ps_ind_15"]) - np.tanh(data["ps_reg_03"]))))
-    v["345"] = 0.019937*np.tanh(((data["ps_car_11"] * (data["ps_car_12"] * data["loo_ps_ind_09_bin"])) * (data["loo_ps_ind_11_bin"] - data["loo_ps_ind_18_bin"])))
-    v["346"] = 0.019984*np.tanh(((data["loo_ps_car_06_cat"] * (0.232323 - (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_05_cat"]))) * data["loo_ps_ind_04_cat"]))
-    v["347"] = 0.020000*np.tanh(((data["loo_ps_ind_11_bin"] * data["ps_ind_03"]) * ((data["loo_ps_ind_05_cat"] * data["ps_ind_03"]) * data["ps_ind_03"])))
-    v["348"] = 0.019934*np.tanh((data["loo_ps_ind_16_bin"] * (data["loo_ps_ind_12_bin"] * (data["ps_car_13"] * (data["loo_ps_car_10_cat"] + data["loo_ps_car_03_cat"])))))
-    v["349"] = 0.020000*np.tanh(((((data["ps_car_15"] + data["ps_ind_14"])/2.0) * data["loo_ps_ind_06_bin"]) * data["ps_reg_02"]))
-    v["350"] = 0.019769*np.tanh(((((data["ps_ind_03"] - data["ps_reg_02"]) * 0.117647) - data["loo_ps_car_10_cat"]) * data["ps_ind_03"]))
-    v["351"] = 0.019992*np.tanh((-(((0.232323 + ((data["loo_ps_car_03_cat"] * data["ps_ind_03"]) * data["loo_ps_car_08_cat"]))/2.0))))
-    v["352"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["ps_ind_03"] * (0.232323 - data["loo_ps_car_11_cat"])) * data["ps_ind_15"])))
-    v["353"] = 0.019980*np.tanh((np.tanh(data["ps_ind_03"]) * ((data["ps_car_11"] + (data["ps_reg_03"] + np.tanh(data["missing"])))/2.0)))
-    v["354"] = 0.019988*np.tanh((data["ps_car_14"] * (((data["loo_ps_ind_12_bin"] + data["ps_car_12"])/2.0) * data["ps_reg_01"])))
-    v["355"] = 0.019957*np.tanh(np.tanh((data["loo_ps_car_07_cat"] * (0.633333 - (data["ps_reg_02"] * data["ps_reg_02"])))))
-    v["356"] = 0.019977*np.tanh((data["loo_ps_car_09_cat"] * (data["loo_ps_car_09_cat"] * (data["loo_ps_ind_16_bin"] * (data["ps_reg_01"] * data["ps_ind_15"])))))
-    v["357"] = 0.019887*np.tanh(((-((((data["ps_car_14"] * data["loo_ps_ind_12_bin"]) + data["ps_reg_03"])/2.0))) * np.tanh(data["loo_ps_car_06_cat"])))
-    v["358"] = 0.019965*np.tanh((data["loo_ps_ind_05_cat"] * (data["ps_reg_02"] * ((np.tanh((-(data["ps_ind_15"]))) + data["loo_ps_car_09_cat"])/2.0))))
-    v["359"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] * ((data["loo_ps_ind_11_bin"] + (data["loo_ps_car_11_cat"] + data["ps_ind_15"])) - data["loo_ps_ind_02_cat"])))
-    v["360"] = 0.020000*np.tanh((((data["ps_reg_01"] + data["ps_car_13"])/2.0) * (data["ps_ind_01"] * data["loo_ps_ind_05_cat"])))
-    v["361"] = 0.020000*np.tanh((data["loo_ps_ind_08_bin"] * (-((data["loo_ps_ind_05_cat"] * (data["ps_car_11"] - (-(data["ps_ind_03"]))))))))
-    v["362"] = 0.018640*np.tanh(((((-(((data["ps_car_15"] + data["ps_car_11"])/2.0))) + data["loo_ps_car_05_cat"])/2.0) * data["loo_ps_ind_06_bin"]))
-    v["363"] = 0.019480*np.tanh((((np.tanh(data["ps_reg_02"]) * ((data["loo_ps_car_07_cat"] + data["loo_ps_ind_11_bin"])/2.0)) + np.tanh(data["loo_ps_car_07_cat"]))/2.0))
-    v["364"] = 0.020000*np.tanh((data["ps_ind_14"] * (-((0.753247 - ((data["ps_ind_03"] + data["ps_ind_03"])/2.0))))))
-    v["365"] = 0.020000*np.tanh((((data["ps_reg_02"] * (-(data["loo_ps_ind_05_cat"]))) * data["ps_car_15"]) * data["loo_ps_ind_05_cat"]))
-    v["366"] = 0.019992*np.tanh((data["ps_ind_15"] * (data["loo_ps_ind_02_cat"] * ((data["loo_ps_ind_02_cat"] * data["ps_reg_01"]) - data["ps_ind_03"]))))
-    v["367"] = 0.020000*np.tanh((data["ps_car_15"] * ((0.232323 + ((-(data["ps_ind_15"])) * data["ps_car_15"]))/2.0)))
-    v["368"] = 0.019992*np.tanh((((data["loo_ps_car_02_cat"] + data["loo_ps_car_02_cat"]) - data["ps_car_11"]) * (data["loo_ps_ind_02_cat"] * data["loo_ps_ind_04_cat"])))
-    v["369"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (data["ps_ind_15"] * ((data["ps_ind_15"] + (data["ps_reg_01"] * data["ps_car_13"]))/2.0))))
-    v["370"] = 0.019840*np.tanh((data["ps_car_12"] * ((data["ps_car_11"] + data["loo_ps_ind_12_bin"]) * (-(np.tanh(data["ps_ind_01"]))))))
-    v["371"] = 0.020000*np.tanh((data["loo_ps_ind_06_bin"] * (data["loo_ps_ind_12_bin"] * (data["ps_car_12"] + (data["ps_ind_03"] * data["loo_ps_ind_04_cat"])))))
-    v["372"] = 0.017296*np.tanh((data["ps_car_11"] * ((data["ps_reg_03"] + np.tanh((data["loo_ps_car_04_cat"] - data["ps_car_11"])))/2.0)))
-    v["373"] = 0.019992*np.tanh((((data["loo_ps_ind_04_cat"] * data["ps_car_11"]) + np.tanh((-((data["ps_car_11"] * data["loo_ps_ind_05_cat"])))))/2.0))
-    v["374"] = 0.017175*np.tanh((data["loo_ps_car_09_cat"] * np.tanh(((data["loo_ps_ind_16_bin"] + data["ps_reg_02"]) + data["loo_ps_ind_16_bin"]))))
-    v["375"] = 0.020000*np.tanh((np.tanh((0.618557 - data["loo_ps_ind_06_bin"])) * (data["loo_ps_car_08_cat"] * data["loo_ps_ind_02_cat"])))
-    v["376"] = 0.019992*np.tanh((np.tanh(data["loo_ps_ind_05_cat"]) * (((-(data["loo_ps_car_02_cat"])) + (data["loo_ps_car_02_cat"] * data["ps_reg_03"]))/2.0)))
-    v["377"] = 0.019965*np.tanh(((-(data["loo_ps_car_04_cat"])) * (((data["ps_ind_03"] * data["ps_ind_03"]) + (-(data["ps_car_15"])))/2.0)))
-    v["378"] = 0.019777*np.tanh((data["loo_ps_ind_17_bin"] * (data["loo_ps_ind_17_bin"] * (((data["loo_ps_ind_08_bin"] + data["loo_ps_ind_13_bin"])/2.0) * data["loo_ps_car_04_cat"]))))
-    v["379"] = 0.019996*np.tanh((data["loo_ps_car_02_cat"] * (((data["loo_ps_car_01_cat"] + data["ps_car_11"])/2.0) * ((data["loo_ps_car_01_cat"] + data["ps_ind_15"])/2.0))))
-    v["380"] = 0.019988*np.tanh((data["loo_ps_ind_02_cat"] * (data["ps_car_15"] * (data["ps_car_11"] + (data["ps_ind_15"] * data["ps_reg_01"])))))
-    v["381"] = 0.020000*np.tanh(((0.0 + (data["loo_ps_ind_04_cat"] * (data["ps_reg_03"] * (data["loo_ps_car_04_cat"] * data["loo_ps_car_08_cat"]))))/2.0))
-    v["382"] = 0.019953*np.tanh(((data["loo_ps_car_01_cat"] * data["loo_ps_car_01_cat"]) * ((data["ps_reg_01"] + (-(data["loo_ps_car_10_cat"])))/2.0)))
-    v["383"] = 0.020000*np.tanh((-((data["ps_reg_03"] * (data["ps_ind_14"] * (data["loo_ps_car_04_cat"] * data["ps_reg_03"]))))))
-    v["384"] = 0.019078*np.tanh(np.tanh(((data["loo_ps_ind_06_bin"] * data["loo_ps_ind_05_cat"]) * ((-(0.432099)) - data["ps_reg_01"]))))
-    v["385"] = 0.019934*np.tanh((data["loo_ps_car_03_cat"] * ((-(data["ps_car_13"])) * (data["loo_ps_car_10_cat"] * data["ps_car_13"]))))
-    v["386"] = 0.019945*np.tanh(np.tanh(((data["ps_ind_03"] * ((-(data["loo_ps_ind_04_cat"])) - data["missing"])) * data["loo_ps_ind_07_bin"])))
-    v["387"] = 0.019680*np.tanh((data["loo_ps_car_01_cat"] * (((data["loo_ps_car_01_cat"] + (-(data["loo_ps_car_09_cat"])))/2.0) * np.tanh(data["loo_ps_ind_16_bin"]))))
-    v["388"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] * ((-(data["ps_ind_01"])) * (data["loo_ps_ind_08_bin"] * data["loo_ps_ind_17_bin"]))))
-    v["389"] = 0.020000*np.tanh((((data["ps_ind_03"] * 0.232323) + np.tanh((data["ps_reg_03"] * np.tanh(data["loo_ps_car_04_cat"]))))/2.0))
-    v["390"] = 0.019988*np.tanh((data["loo_ps_car_08_cat"] * ((data["loo_ps_car_01_cat"] + (data["loo_ps_car_09_cat"] * (data["loo_ps_ind_04_cat"] * data["loo_ps_car_06_cat"])))/2.0)))
-    v["391"] = 0.019988*np.tanh(((data["loo_ps_ind_11_bin"] * data["ps_reg_03"]) - ((data["loo_ps_ind_11_bin"] + ((data["loo_ps_ind_16_bin"] + data["loo_ps_ind_10_bin"])/2.0))/2.0)))
-    v["392"] = 0.020000*np.tanh(((data["loo_ps_ind_11_bin"] - data["loo_ps_car_10_cat"]) * (data["loo_ps_car_08_cat"] + data["ps_car_13"])))
-    v["393"] = 0.019992*np.tanh(((data["loo_ps_ind_05_cat"] * ((data["ps_ind_14"] + (data["ps_car_14"] * data["ps_reg_03"]))/2.0)) * data["loo_ps_car_01_cat"]))
-    v["394"] = 0.019238*np.tanh(((np.tanh((-(data["missing"]))) * data["loo_ps_ind_07_bin"]) * (-(data["ps_reg_01"]))))
-    v["395"] = 0.019906*np.tanh((-((np.tanh((data["ps_ind_14"] * data["loo_ps_ind_17_bin"])) * (data["loo_ps_ind_07_bin"] + data["loo_ps_ind_07_bin"])))))
-    v["396"] = 0.019789*np.tanh(np.tanh((-((data["loo_ps_car_03_cat"] * (data["ps_ind_01"] * (2.0 - data["ps_ind_01"])))))))
-    v["397"] = 0.019949*np.tanh(((data["ps_car_13"] * (0.148148 * (-(np.tanh(data["ps_ind_15"]))))) * data["ps_car_13"]))
-    v["398"] = 0.019137*np.tanh((data["loo_ps_ind_02_cat"] * (((-(data["ps_ind_03"])) * (-(data["ps_ind_03"]))) - 1.0)))
-    v["399"] = 0.019895*np.tanh(np.tanh(np.tanh(((data["loo_ps_car_05_cat"] * data["ps_ind_01"]) + ((data["ps_ind_03"] + data["loo_ps_ind_18_bin"])/2.0)))))
-    v["400"] = 0.015581*np.tanh((-((0.232323 * (data["loo_ps_ind_07_bin"] * (data["loo_ps_ind_16_bin"] + data["loo_ps_car_02_cat"]))))))
-    return Outputs(v.sum(axis=1))
-
-
-def GPII(data):
-    v = pd.DataFrame()
-    v["0"] = -3.274750
-    v["1"] = 0.020000*np.tanh((3.642860 * ((data["loo_ps_car_01_cat"] + data["loo_ps_ind_16_bin"]) + (data["ps_reg_03"] + data["loo_ps_ind_06_bin"]))))
-    v["2"] = 0.020000*np.tanh((19.500000 * (((data["ps_car_15"] + data["loo_ps_ind_06_bin"]) + data["loo_ps_car_06_cat"]) + data["loo_ps_car_07_cat"])))
-    v["3"] = 0.019996*np.tanh((19.500000 * ((data["ps_car_13"] + (data["loo_ps_car_11_cat"] + data["loo_ps_ind_05_cat"])) + data["ps_reg_02"])))
-    v["4"] = 0.020000*np.tanh((((data["ps_reg_03"] + (data["loo_ps_ind_05_cat"] + data["loo_ps_car_07_cat"])) + data["ps_car_12"]) * 19.500000))
-    v["5"] = 0.020000*np.tanh((data["loo_ps_ind_06_bin"] + (data["loo_ps_car_04_cat"] - (data["ps_ind_15"] - (data["loo_ps_ind_17_bin"] + data["loo_ps_car_01_cat"])))))
-    v["6"] = 0.020000*np.tanh(((11.51410007476806641) * (data["loo_ps_car_11_cat"] + (((data["loo_ps_car_09_cat"] + data["ps_reg_03"])/2.0) + data["loo_ps_ind_06_bin"]))))
-    v["7"] = 0.020000*np.tanh((19.500000 * ((data["ps_car_13"] + ((data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_17_bin"] + data["loo_ps_car_01_cat"]))/2.0))/2.0)))
-    v["8"] = 0.020000*np.tanh((19.500000 * (((data["ps_reg_02"] + data["loo_ps_ind_09_bin"]) + 0.760563) + data["loo_ps_car_05_cat"])))
-    v["9"] = 0.020000*np.tanh((19.500000 * ((data["loo_ps_car_11_cat"] + (((data["loo_ps_ind_17_bin"] + data["loo_ps_ind_06_bin"]) + data["loo_ps_car_03_cat"])/2.0))/2.0)))
-    v["10"] = 0.020000*np.tanh((6.846150 * (data["loo_ps_ind_06_bin"] + (data["loo_ps_car_11_cat"] + (data["loo_ps_ind_17_bin"] + data["loo_ps_car_09_cat"])))))
-    v["11"] = 0.020000*np.tanh(((9.75283908843994141) * ((data["ps_reg_03"] + (data["loo_ps_car_11_cat"] - data["ps_ind_15"])) + data["loo_ps_ind_04_cat"])))
-    v["12"] = 0.020000*np.tanh(((data["ps_reg_02"] + data["loo_ps_car_03_cat"]) + ((data["ps_car_13"] - data["ps_ind_15"]) + data["loo_ps_ind_05_cat"])))
-    v["13"] = 0.020000*np.tanh(((8.49180412292480469) * ((data["loo_ps_ind_09_bin"] + data["loo_ps_car_07_cat"]) + (data["loo_ps_car_09_cat"] + data["loo_ps_ind_06_bin"]))))
-    v["14"] = 0.020000*np.tanh(((6.0) * ((((data["loo_ps_ind_16_bin"] + data["loo_ps_ind_05_cat"]) + data["ps_reg_01"])/2.0) + data["ps_car_13"])))
-    v["15"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] + (((data["ps_reg_01"] + data["ps_car_12"]) + data["loo_ps_car_03_cat"]) - data["ps_ind_15"])))
-    v["16"] = 0.020000*np.tanh(((data["loo_ps_car_08_cat"] + (data["loo_ps_car_04_cat"] + (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_17_bin"]))) * 3.642860))
-    v["17"] = 0.020000*np.tanh((19.500000 * ((0.760563 + (data["ps_reg_02"] + data["ps_car_13"])) + data["ps_reg_03"])))
-    v["18"] = 0.020000*np.tanh((data["loo_ps_ind_07_bin"] + ((9.29609489440917969) * (((data["loo_ps_car_03_cat"] + data["ps_reg_03"]) + data["ps_car_15"])/2.0))))
-    v["19"] = 0.020000*np.tanh((6.846150 * ((data["loo_ps_ind_05_cat"] + data["ps_car_13"]) + (data["loo_ps_ind_17_bin"] + data["loo_ps_car_07_cat"]))))
-    v["20"] = 0.020000*np.tanh((data["loo_ps_car_04_cat"] + (data["ps_car_15"] + (data["ps_reg_03"] + (data["loo_ps_car_03_cat"] - data["ps_ind_15"])))))
-    v["21"] = 0.020000*np.tanh((6.846150 * (data["loo_ps_ind_05_cat"] + ((data["ps_car_13"] + (data["ps_ind_03"] + data["loo_ps_ind_17_bin"]))/2.0))))
-    v["22"] = 0.020000*np.tanh((19.500000 * ((data["loo_ps_ind_16_bin"] - data["ps_ind_15"]) + (data["ps_reg_03"] + 0.600000))))
-    v["23"] = 0.020000*np.tanh((3.0 * (data["loo_ps_car_03_cat"] + (data["loo_ps_car_04_cat"] + (data["loo_ps_ind_05_cat"] + data["loo_ps_car_01_cat"])))))
-    v["24"] = 0.020000*np.tanh((6.846150 * (((data["loo_ps_car_01_cat"] + data["ps_ind_03"]) + (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_17_bin"]))/2.0)))
-    v["25"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] + (((data["loo_ps_ind_17_bin"] + data["ps_car_13"]) + data["ps_reg_01"]) + data["loo_ps_ind_09_bin"])))
-    v["26"] = 0.020000*np.tanh(((data["loo_ps_ind_09_bin"] + (data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_06_bin"] + data["loo_ps_ind_05_cat"]))) * 19.500000))
-    v["27"] = 0.020000*np.tanh(((data["ps_reg_03"] + (data["loo_ps_ind_06_bin"] + (data["loo_ps_car_01_cat"] + 1.871790))) * (13.13490962982177734)))
-    v["28"] = 0.020000*np.tanh((6.846150 * (data["loo_ps_ind_05_cat"] + ((data["loo_ps_ind_05_cat"] + (data["ps_car_13"] + data["loo_ps_ind_16_bin"]))/2.0))))
-    v["29"] = 0.020000*np.tanh(((data["ps_reg_02"] + (data["loo_ps_ind_17_bin"] + (data["loo_ps_car_11_cat"] + data["ps_car_15"]))) - data["ps_ind_15"]))
-    v["30"] = 0.020000*np.tanh(((3.0 * (data["loo_ps_ind_05_cat"] + (data["loo_ps_car_09_cat"] + data["ps_ind_03"]))) + data["ps_car_13"]))
-    v["31"] = 0.020000*np.tanh(((8.0) * ((data["loo_ps_ind_09_bin"] + data["loo_ps_ind_05_cat"]) + (data["ps_ind_03"] + data["loo_ps_car_07_cat"]))))
-    v["32"] = 0.020000*np.tanh((data["ps_reg_02"] + ((data["ps_car_13"] + data["loo_ps_car_01_cat"]) + ((1.11309552192687988) + data["loo_ps_car_07_cat"]))))
-    v["33"] = 0.020000*np.tanh((6.846150 * (((data["loo_ps_ind_05_cat"] - data["ps_ind_15"]) + ((data["loo_ps_ind_16_bin"] + data["loo_ps_car_09_cat"])/2.0))/2.0)))
-    v["34"] = 0.020000*np.tanh((19.500000 * ((data["loo_ps_car_07_cat"] + (((data["ps_ind_03"] + data["loo_ps_ind_05_cat"]) + data["loo_ps_ind_06_bin"])/2.0))/2.0)))
-    v["35"] = 0.020000*np.tanh(((((data["loo_ps_ind_05_cat"] + data["loo_ps_car_07_cat"]) + (data["loo_ps_ind_07_bin"] + data["loo_ps_car_11_cat"]))/2.0) * 19.500000))
-    v["36"] = 0.020000*np.tanh((((data["loo_ps_ind_06_bin"] + (data["loo_ps_car_09_cat"] + data["loo_ps_ind_05_cat"])) + data["loo_ps_ind_16_bin"]) * 19.500000))
-    v["37"] = 0.020000*np.tanh((((6.0) * (data["loo_ps_car_05_cat"] + (data["loo_ps_car_11_cat"] + data["loo_ps_ind_05_cat"]))) + data["ps_reg_02"]))
-    v["38"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + (data["loo_ps_car_01_cat"] - data["ps_ind_15"])) + ((data["loo_ps_ind_17_bin"] + data["loo_ps_ind_09_bin"])/2.0)))
-    v["39"] = 0.020000*np.tanh(((data["ps_reg_03"] + (data["ps_reg_02"] + (data["loo_ps_ind_06_bin"] - -2.0))) + data["ps_ind_01"]))
-    v["40"] = 0.020000*np.tanh((data["ps_car_13"] - (data["ps_ind_15"] - ((5.0) * (data["loo_ps_car_09_cat"] + data["loo_ps_ind_09_bin"])))))
-    v["41"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] + (data["ps_ind_03"] * data["ps_ind_03"])) + data["ps_ind_03"]) * (8.21348762512207031)))
-    v["42"] = 0.020000*np.tanh(((11.08931350708007812) * (((data["loo_ps_ind_05_cat"] + data["ps_car_15"]) + data["ps_ind_01"]) + data["loo_ps_car_09_cat"])))
-    v["43"] = 0.020000*np.tanh((19.500000 * (data["loo_ps_car_09_cat"] + ((data["loo_ps_ind_04_cat"] - data["ps_ind_15"]) + data["loo_ps_car_05_cat"]))))
-    v["44"] = 0.020000*np.tanh((19.500000 * ((data["loo_ps_ind_17_bin"] + data["ps_reg_03"]) + (data["loo_ps_car_07_cat"] * data["loo_ps_car_07_cat"]))))
-    v["45"] = 0.020000*np.tanh((data["ps_car_13"] - (data["ps_ind_15"] - ((data["loo_ps_ind_05_cat"] * (10.0)) - data["ps_car_11"]))))
-    v["46"] = 0.020000*np.tanh(((2.0 * ((data["loo_ps_car_07_cat"] + data["ps_ind_01"]) + data["loo_ps_ind_09_bin"])) + data["loo_ps_ind_17_bin"]))
-    v["47"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] + (data["loo_ps_ind_16_bin"] + data["loo_ps_ind_02_cat"])) - data["loo_ps_ind_18_bin"]) * (10.0)))
-    v["48"] = 0.020000*np.tanh((((data["ps_ind_03"] + (data["ps_ind_03"] * data["ps_ind_03"])) * (14.62119007110595703)) * (14.62119007110595703)))
-    v["49"] = 0.020000*np.tanh(((6.846150 * (data["loo_ps_car_01_cat"] + data["loo_ps_car_09_cat"])) + (data["ps_car_13"] + 1.135800)))
-    v["50"] = 0.020000*np.tanh(((7.46593427658081055) * ((7.46593427658081055) * ((data["ps_ind_03"] * data["ps_ind_03"]) + data["ps_ind_03"]))))
-    v["51"] = 0.020000*np.tanh(((data["loo_ps_ind_07_bin"] + (0.965909 - data["ps_ind_15"])) * (3.642860 - data["loo_ps_ind_06_bin"])))
-    v["52"] = 0.020000*np.tanh((data["loo_ps_ind_07_bin"] + ((7.95933532714843750) * (data["loo_ps_car_07_cat"] - (data["ps_ind_03"] * data["loo_ps_ind_02_cat"])))))
-    v["53"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + (data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_06_bin"] + -2.0))) * 6.846150))
-    v["54"] = 0.020000*np.tanh(((data["loo_ps_ind_09_bin"] + (data["loo_ps_car_07_cat"] + ((data["ps_reg_03"] + data["ps_car_13"])/2.0))) * (8.96369743347167969)))
-    v["55"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] + (data["ps_ind_03"] - (data["ps_ind_03"] * ((7.0) * data["loo_ps_ind_02_cat"])))))
-    v["56"] = 0.020000*np.tanh(((4.0) * (data["ps_reg_02"] + (data["ps_reg_03"] + ((data["loo_ps_ind_02_cat"] + data["ps_car_15"])/2.0)))))
-    v["57"] = 0.020000*np.tanh(((data["loo_ps_car_09_cat"] + (data["loo_ps_car_09_cat"] + (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_06_bin"]))) * 19.500000))
-    v["58"] = 0.020000*np.tanh((3.642860 * (data["loo_ps_ind_05_cat"] + ((data["loo_ps_car_05_cat"] * data["ps_ind_03"]) - data["ps_car_11"]))))
-    v["59"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] + (data["loo_ps_car_07_cat"] + ((data["ps_ind_15"] * data["loo_ps_ind_18_bin"]) * 6.846150))))
-    v["60"] = 0.020000*np.tanh((((6.846150 * data["loo_ps_ind_02_cat"]) + (data["ps_ind_01"] + data["loo_ps_ind_07_bin"])) + data["loo_ps_car_01_cat"]))
-    v["61"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] + (data["loo_ps_ind_05_cat"] * data["ps_car_13"])) + (data["loo_ps_ind_17_bin"] - data["ps_ind_03"])))
-    v["62"] = 0.020000*np.tanh((((data["loo_ps_car_03_cat"] + data["ps_car_13"]) + data["loo_ps_car_04_cat"]) * (data["loo_ps_ind_05_cat"] + data["loo_ps_ind_16_bin"])))
-    v["63"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] * data["loo_ps_ind_09_bin"]) + (data["loo_ps_ind_16_bin"] * (data["ps_ind_01"] + data["loo_ps_car_01_cat"]))))
-    v["64"] = 0.020000*np.tanh((data["loo_ps_car_03_cat"] * (data["missing"] + (data["loo_ps_ind_17_bin"] + (data["ps_ind_01"] + data["loo_ps_car_11_cat"])))))
-    v["65"] = 0.020000*np.tanh((((data["ps_reg_02"] + data["loo_ps_ind_06_bin"]) + data["loo_ps_car_11_cat"]) * (data["loo_ps_ind_05_cat"] - data["ps_car_11"])))
-    v["66"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] - data["ps_reg_01"]) * (data["ps_car_12"] + (data["loo_ps_car_11_cat"] + data["loo_ps_ind_17_bin"]))))
-    v["67"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] * data["loo_ps_ind_06_bin"]) + (data["loo_ps_ind_04_cat"] + ((data["loo_ps_ind_08_bin"] + data["ps_car_13"])/2.0))))
-    v["68"] = 0.020000*np.tanh(((data["ps_car_13"] * (data["loo_ps_ind_05_cat"] - data["ps_car_11"])) + (data["loo_ps_ind_16_bin"] * data["loo_ps_ind_05_cat"])))
-    v["69"] = 0.020000*np.tanh(((data["ps_ind_01"] * (data["loo_ps_car_05_cat"] - data["ps_ind_15"])) + ((data["loo_ps_car_07_cat"] + data["ps_car_13"])/2.0)))
-    v["70"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * 19.500000) * (data["loo_ps_ind_17_bin"] + data["ps_reg_02"])))
-    v["71"] = 0.020000*np.tanh((-1.0 + (data["loo_ps_ind_05_cat"] + (data["ps_ind_03"] * (data["ps_ind_03"] - data["loo_ps_ind_02_cat"])))))
-    v["72"] = 0.020000*np.tanh((((data["loo_ps_ind_06_bin"] + data["ps_car_13"]) * (data["ps_ind_03"] + data["loo_ps_ind_05_cat"])) - data["ps_ind_03"]))
-    v["73"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] + (data["loo_ps_ind_16_bin"] * (data["loo_ps_car_09_cat"] + (data["ps_reg_02"] * data["ps_reg_02"])))))
-    v["74"] = 0.020000*np.tanh((((data["loo_ps_car_03_cat"] * 3.0) * 3.0) * (data["ps_ind_15"] + data["loo_ps_ind_17_bin"])))
-    v["75"] = 0.020000*np.tanh((((data["ps_ind_01"] + data["loo_ps_ind_17_bin"])/2.0) * ((data["loo_ps_car_07_cat"] - data["ps_car_11"]) - data["ps_ind_15"])))
-    v["76"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] - (data["loo_ps_car_04_cat"] * data["ps_car_11"])) + data["ps_reg_02"]) - data["loo_ps_car_04_cat"]))
-    v["77"] = 0.019992*np.tanh(((((data["ps_ind_03"] - data["ps_ind_15"]) * data["ps_car_12"]) + data["loo_ps_car_07_cat"]) + data["loo_ps_ind_04_cat"]))
-    v["78"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_car_09_cat"] + data["ps_ind_01"]) + (data["loo_ps_car_03_cat"] + data["ps_ind_01"]))))
-    v["79"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + data["loo_ps_car_09_cat"]) * ((data["loo_ps_ind_07_bin"] + data["loo_ps_ind_16_bin"]) + data["loo_ps_car_04_cat"])))
-    v["80"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] + data["loo_ps_car_07_cat"]) * ((data["loo_ps_car_09_cat"] + data["loo_ps_ind_09_bin"]) + data["ps_reg_02"])))
-    v["81"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] + (data["loo_ps_car_03_cat"] * data["loo_ps_ind_09_bin"])) + (data["ps_ind_01"] * data["loo_ps_car_04_cat"])))
-    v["82"] = 0.020000*np.tanh(((data["loo_ps_car_01_cat"] * data["loo_ps_car_05_cat"]) - (data["ps_ind_15"] * (data["ps_car_13"] - data["loo_ps_ind_06_bin"]))))
-    v["83"] = 0.019996*np.tanh(((data["ps_ind_03"] * ((data["loo_ps_ind_09_bin"] - data["ps_reg_01"]) - data["missing"])) - data["ps_car_11"]))
-    v["84"] = 0.020000*np.tanh((data["loo_ps_car_02_cat"] + (((data["ps_car_13"] + data["loo_ps_car_09_cat"])/2.0) + (data["loo_ps_car_02_cat"] - data["ps_ind_03"]))))
-    v["85"] = 0.020000*np.tanh((data["ps_ind_01"] + (data["ps_reg_01"] * ((data["missing"] - data["ps_ind_01"]) - data["loo_ps_car_01_cat"]))))
-    v["86"] = 0.020000*np.tanh(((data["loo_ps_ind_17_bin"] - ((data["ps_reg_03"] + data["loo_ps_ind_09_bin"])/2.0)) * (data["loo_ps_car_01_cat"] - data["ps_ind_15"])))
-    v["87"] = 0.020000*np.tanh(((data["loo_ps_ind_07_bin"] + data["loo_ps_ind_04_cat"]) * (data["ps_ind_03"] + ((data["loo_ps_car_05_cat"] + data["loo_ps_car_09_cat"])/2.0))))
-    v["88"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] - data["loo_ps_car_04_cat"]) + ((data["loo_ps_car_07_cat"] + data["loo_ps_ind_07_bin"]) * data["loo_ps_ind_17_bin"])))
-    v["89"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_17_bin"]) + ((data["loo_ps_ind_05_cat"] - data["loo_ps_ind_02_cat"]) * data["ps_ind_03"])))
-    v["90"] = 0.020000*np.tanh((data["ps_ind_03"] - (((data["ps_ind_03"] * data["loo_ps_ind_02_cat"]) + data["loo_ps_ind_02_cat"]) * 6.846150)))
-    v["91"] = 0.019980*np.tanh((np.tanh((-(data["loo_ps_car_11_cat"]))) + (data["loo_ps_car_07_cat"] - (data["ps_ind_15"] * data["loo_ps_car_11_cat"]))))
-    v["92"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] + ((data["loo_ps_ind_05_cat"] * (data["ps_reg_02"] + data["loo_ps_ind_17_bin"])) - data["loo_ps_ind_05_cat"])))
-    v["93"] = 0.019996*np.tanh(((data["loo_ps_ind_02_cat"] + data["loo_ps_ind_02_cat"]) * ((data["loo_ps_car_08_cat"] - data["ps_ind_03"]) + data["loo_ps_car_08_cat"])))
-    v["94"] = 0.020000*np.tanh((((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_07_bin"] + data["ps_reg_02"])) + (data["loo_ps_ind_02_cat"] - data["ps_ind_03"]))/2.0))
-    v["95"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] + data["ps_reg_01"])/2.0) - (data["loo_ps_ind_06_bin"] * (data["ps_car_15"] + data["ps_reg_01"]))))
-    v["96"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] + (((data["loo_ps_car_09_cat"] + data["loo_ps_ind_18_bin"])/2.0) * data["loo_ps_ind_17_bin"])) * data["loo_ps_car_09_cat"]))
-    v["97"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_07_bin"] + data["ps_ind_15"]) + (data["ps_ind_01"] + data["loo_ps_car_09_cat"]))))
-    v["98"] = 0.020000*np.tanh((data["ps_reg_02"] + (((data["loo_ps_ind_02_cat"] - data["ps_ind_03"]) * data["loo_ps_ind_02_cat"]) + -1.0)))
-    v["99"] = 0.020000*np.tanh((((data["ps_ind_03"] - data["ps_car_15"]) - data["ps_ind_15"]) * ((data["ps_car_15"] + data["ps_ind_03"])/2.0)))
-    v["100"] = 0.020000*np.tanh(((((data["ps_reg_03"] + data["loo_ps_car_09_cat"])/2.0) + data["loo_ps_ind_05_cat"]) * (-2.0 + data["loo_ps_ind_05_cat"])))
-    v["101"] = 0.020000*np.tanh((((data["ps_car_15"] + data["loo_ps_car_09_cat"])/2.0) - (data["loo_ps_car_03_cat"] * (data["ps_car_15"] - data["loo_ps_ind_09_bin"]))))
-    v["102"] = 0.020000*np.tanh((data["ps_ind_01"] + (data["loo_ps_ind_04_cat"] - ((data["ps_car_11"] + data["ps_ind_01"]) * data["ps_ind_01"]))))
-    v["103"] = 0.019988*np.tanh((((data["ps_reg_03"] * (data["loo_ps_ind_05_cat"] - data["ps_ind_01"])) + ((data["ps_car_13"] + data["loo_ps_ind_04_cat"])/2.0))/2.0))
-    v["104"] = 0.020000*np.tanh((data["loo_ps_car_08_cat"] + (data["loo_ps_car_03_cat"] * ((data["loo_ps_ind_04_cat"] + data["ps_reg_03"]) + data["ps_reg_03"]))))
-    v["105"] = 0.020000*np.tanh(((((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_17_bin"]) - data["loo_ps_car_07_cat"]) + data["loo_ps_ind_02_cat"]) - data["loo_ps_ind_05_cat"]))
-    v["106"] = 0.019996*np.tanh(((data["ps_ind_01"] - (data["ps_car_15"] * data["loo_ps_ind_17_bin"])) + ((data["ps_ind_01"] + data["loo_ps_car_01_cat"])/2.0)))
-    v["107"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + (data["ps_ind_01"] + data["loo_ps_car_09_cat"])) * (data["loo_ps_ind_17_bin"] - data["ps_reg_01"])))
-    v["108"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * (data["ps_car_11"] + ((data["loo_ps_car_09_cat"] + data["ps_ind_03"]) - data["loo_ps_ind_06_bin"]))))
-    v["109"] = 0.020000*np.tanh(((data["missing"] + ((data["loo_ps_ind_05_cat"] + data["ps_reg_02"]) * (data["loo_ps_car_11_cat"] * data["loo_ps_car_05_cat"])))/2.0))
-    v["110"] = 0.019996*np.tanh((data["ps_reg_03"] * (((data["ps_car_11"] + data["loo_ps_car_09_cat"])/2.0) - ((data["loo_ps_ind_02_cat"] + data["ps_reg_01"])/2.0))))
-    v["111"] = 0.019988*np.tanh(((-1.0 + (data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"])) * (data["loo_ps_ind_02_cat"] + data["loo_ps_ind_02_cat"])))
-    v["112"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_05_cat"] - (1.526320 - np.tanh((-(data["loo_ps_ind_05_cat"])))))))
-    v["113"] = 0.020000*np.tanh((((((data["loo_ps_ind_16_bin"] + data["loo_ps_car_01_cat"])/2.0) + data["ps_ind_03"])/2.0) * (data["missing"] - data["ps_car_11"])))
-    v["114"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] - data["ps_reg_01"]) * (data["loo_ps_ind_08_bin"] + (data["ps_ind_01"] + data["loo_ps_car_04_cat"]))))
-    v["115"] = 0.020000*np.tanh((-((data["ps_reg_02"] * (data["loo_ps_ind_04_cat"] + (data["ps_reg_02"] * data["loo_ps_car_07_cat"]))))))
-    v["116"] = 0.020000*np.tanh(((data["ps_ind_03"] + (data["ps_ind_03"] + 3.0)) * (data["ps_ind_03"] + -2.0)))
-    v["117"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] - (data["loo_ps_car_04_cat"] * ((data["ps_car_11"] + data["ps_ind_15"]) + 1.871790))))
-    v["118"] = 0.020000*np.tanh((data["ps_reg_03"] * (data["ps_reg_03"] - ((0.513158 - data["loo_ps_ind_07_bin"]) * data["loo_ps_ind_16_bin"]))))
-    v["119"] = 0.020000*np.tanh(((((data["ps_reg_03"] + data["loo_ps_car_09_cat"]) * (data["loo_ps_ind_05_cat"] - data["ps_reg_01"])) + data["ps_reg_01"])/2.0))
-    v["120"] = 0.020000*np.tanh((((((data["missing"] + data["loo_ps_car_04_cat"])/2.0) + data["loo_ps_car_03_cat"])/2.0) * (data["loo_ps_ind_02_cat"] + data["loo_ps_car_11_cat"])))
-    v["121"] = 0.019988*np.tanh(((data["ps_ind_03"] * (data["ps_ind_03"] - data["ps_ind_01"])) + (data["ps_ind_03"] - data["ps_ind_01"])))
-    v["122"] = 0.020000*np.tanh(((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_04_cat"] * (data["loo_ps_ind_02_cat"] - 2.800000))) - data["loo_ps_car_10_cat"]))
-    v["123"] = 0.020000*np.tanh((data["loo_ps_car_05_cat"] * (data["ps_ind_01"] + ((data["loo_ps_ind_07_bin"] + ((data["loo_ps_ind_04_cat"] + data["ps_ind_03"])/2.0))/2.0))))
-    v["124"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * (data["ps_reg_02"] * data["ps_reg_01"])) - (0.452381 + data["loo_ps_ind_05_cat"])))
-    v["125"] = 0.020000*np.tanh((data["loo_ps_car_01_cat"] * ((data["loo_ps_car_01_cat"] + ((-3.0 * data["ps_car_13"]) - data["loo_ps_ind_06_bin"]))/2.0)))
-    v["126"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_02_cat"] + (data["ps_reg_03"] + (data["loo_ps_ind_09_bin"] - 0.965909)))/2.0)))
-    v["127"] = 0.019988*np.tanh(((((data["loo_ps_ind_02_cat"] - data["loo_ps_car_07_cat"]) + (data["loo_ps_car_04_cat"] * data["ps_car_12"]))/2.0) * 0.485294))
-    v["128"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] * data["loo_ps_car_09_cat"]) - data["ps_reg_02"]) * ((data["ps_reg_03"] + data["loo_ps_ind_04_cat"])/2.0)))
-    v["129"] = 0.020000*np.tanh((((data["ps_reg_03"] + data["ps_reg_03"]) * np.tanh(data["ps_ind_03"])) - data["ps_ind_03"]))
-    v["130"] = 0.020000*np.tanh(((data["ps_reg_03"] * data["ps_reg_03"]) * ((data["loo_ps_ind_17_bin"] + data["ps_car_13"])/2.0)))
-    v["131"] = 0.020000*np.tanh((data["ps_reg_01"] * (0.273684 - ((data["loo_ps_car_09_cat"] + (data["ps_reg_03"] - data["ps_reg_01"]))/2.0))))
-    v["132"] = 0.020000*np.tanh((((data["loo_ps_ind_05_cat"] + data["loo_ps_car_05_cat"])/2.0) * ((data["ps_reg_03"] * data["ps_reg_03"]) - 0.760563)))
-    v["133"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] * (-(data["ps_ind_03"]))) * (-(data["ps_ind_03"]))) - data["loo_ps_ind_02_cat"]))
-    v["134"] = 0.020000*np.tanh((((data["loo_ps_car_09_cat"] + -3.0)/2.0) * ((((data["ps_car_11"] + 1.135800)/2.0) + data["loo_ps_ind_02_cat"])/2.0)))
-    v["135"] = 0.020000*np.tanh((data["loo_ps_car_07_cat"] * (((2.0 + (data["loo_ps_ind_04_cat"] - data["loo_ps_car_07_cat"]))/2.0) - data["ps_car_13"])))
-    v["136"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((((data["loo_ps_ind_04_cat"] + data["ps_reg_03"])/2.0) + np.tanh(data["ps_ind_03"]))/2.0)))
-    v["137"] = 0.020000*np.tanh((((data["ps_reg_01"] * (data["ps_reg_01"] - data["loo_ps_ind_18_bin"])) + (data["ps_car_11"] * data["loo_ps_car_06_cat"]))/2.0))
-    v["138"] = 0.019996*np.tanh((data["loo_ps_ind_02_cat"] * (-3.0 + (data["ps_ind_03"] * (data["ps_ind_03"] + data["ps_ind_03"])))))
-    v["139"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((data["loo_ps_car_09_cat"] * data["loo_ps_car_09_cat"]) + (data["ps_car_13"] * data["loo_ps_car_07_cat"]))))
-    v["140"] = 0.020000*np.tanh(((-((data["ps_ind_03"] * data["loo_ps_ind_02_cat"]))) - np.tanh((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_05_cat"]))))
-    v["141"] = 0.020000*np.tanh((data["ps_car_13"] - (data["loo_ps_car_04_cat"] - (data["loo_ps_car_07_cat"] + ((data["loo_ps_ind_18_bin"] + data["loo_ps_car_07_cat"])/2.0)))))
-    v["142"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] - data["loo_ps_car_07_cat"]) + (data["loo_ps_ind_17_bin"] * (data["ps_ind_03"] - data["ps_car_15"])))/2.0))
-    v["143"] = 0.020000*np.tanh(((((data["loo_ps_ind_02_cat"] + data["ps_car_13"])/2.0) - 1.135800) * (data["loo_ps_ind_02_cat"] + data["ps_car_13"])))
-    v["144"] = 0.020000*np.tanh(((data["loo_ps_car_09_cat"] - data["ps_car_14"]) * (data["loo_ps_car_02_cat"] + (data["loo_ps_car_05_cat"] * data["loo_ps_car_07_cat"]))))
-    v["145"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] - data["ps_ind_01"]) * (data["loo_ps_ind_04_cat"] + (data["loo_ps_ind_04_cat"] - data["loo_ps_car_07_cat"]))))
-    v["146"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_05_cat"] + (-2.0 - 0.452381))/2.0))))
-    v["147"] = 0.020000*np.tanh((-((((data["loo_ps_ind_04_cat"] + data["loo_ps_ind_04_cat"]) + data["ps_car_15"]) * data["ps_reg_02"]))))
-    v["148"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * ((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_02_cat"] + data["loo_ps_car_08_cat"])) + data["loo_ps_car_08_cat"])))
-    v["149"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] * (data["loo_ps_car_03_cat"] * (data["loo_ps_ind_04_cat"] + data["loo_ps_car_04_cat"]))) - data["loo_ps_car_10_cat"]))
-    v["150"] = 0.020000*np.tanh(((data["missing"] * ((data["ps_ind_01"] + ((data["loo_ps_ind_02_cat"] + data["ps_ind_01"])/2.0))/2.0)) - data["loo_ps_car_10_cat"]))
-    v["151"] = 0.020000*np.tanh((((data["ps_ind_01"] * (data["ps_ind_01"] * data["loo_ps_car_03_cat"])) + ((data["ps_ind_03"] + data["loo_ps_ind_04_cat"])/2.0))/2.0))
-    v["152"] = 0.019965*np.tanh((data["ps_reg_01"] - ((data["ps_reg_01"] + data["loo_ps_ind_02_cat"]) * data["ps_ind_03"])))
-    v["153"] = 0.020000*np.tanh(((data["ps_ind_03"] * data["loo_ps_ind_05_cat"]) * (-((data["ps_ind_01"] - data["ps_reg_01"])))))
-    v["154"] = 0.019988*np.tanh((((((data["loo_ps_ind_04_cat"] + -1.0)/2.0) + data["ps_ind_01"])/2.0) - (data["ps_car_11"] * data["ps_ind_01"])))
-    v["155"] = 0.020000*np.tanh((((data["loo_ps_car_07_cat"] + ((data["loo_ps_car_09_cat"] + data["ps_car_12"])/2.0))/2.0) * (data["loo_ps_ind_06_bin"] * data["loo_ps_ind_16_bin"])))
-    v["156"] = 0.020000*np.tanh(((data["loo_ps_car_01_cat"] - data["loo_ps_car_06_cat"]) * (data["missing"] + data["loo_ps_ind_08_bin"])))
-    v["157"] = 0.020000*np.tanh(((data["loo_ps_car_07_cat"] + (data["ps_car_12"] * ((data["loo_ps_car_01_cat"] - data["loo_ps_car_07_cat"]) - data["loo_ps_car_07_cat"])))/2.0))
-    v["158"] = 0.020000*np.tanh((((data["loo_ps_car_01_cat"] * (data["loo_ps_car_01_cat"] * 0.020833)) + (data["ps_car_15"] * data["missing"]))/2.0))
-    v["159"] = 0.020000*np.tanh(((0.093750 - data["ps_reg_01"]) * (data["loo_ps_car_09_cat"] * (data["ps_car_12"] + data["loo_ps_car_09_cat"]))))
-    v["160"] = 0.020000*np.tanh((((data["loo_ps_ind_09_bin"] + (data["loo_ps_car_09_cat"] * (data["loo_ps_car_05_cat"] * data["loo_ps_car_04_cat"])))/2.0) * data["loo_ps_car_09_cat"]))
-    v["161"] = 0.019977*np.tanh((((-((data["loo_ps_car_01_cat"] * data["ps_reg_03"]))) - data["ps_car_12"]) - data["ps_ind_14"]))
-    v["162"] = 0.020000*np.tanh(((((data["loo_ps_car_01_cat"] * data["loo_ps_car_01_cat"]) * (data["loo_ps_car_01_cat"] - data["loo_ps_car_07_cat"])) + 0.760563)/2.0))
-    v["163"] = 0.019988*np.tanh((((data["loo_ps_ind_02_cat"] + ((data["ps_car_12"] - 0.513158) - data["loo_ps_ind_06_bin"]))/2.0) - data["loo_ps_car_10_cat"]))
-    v["164"] = 0.020000*np.tanh((data["ps_car_15"] + (data["loo_ps_ind_02_cat"] * ((data["loo_ps_car_07_cat"] * data["loo_ps_car_07_cat"]) * data["loo_ps_car_01_cat"]))))
-    v["165"] = 0.019988*np.tanh((((data["loo_ps_ind_04_cat"] + (data["loo_ps_car_07_cat"] - data["ps_car_15"]))/2.0) + (data["loo_ps_ind_09_bin"] * data["loo_ps_car_07_cat"])))
-    v["166"] = 0.020000*np.tanh((((data["loo_ps_car_10_cat"] + data["loo_ps_car_01_cat"]) * data["loo_ps_ind_17_bin"]) * (data["loo_ps_car_09_cat"] + data["loo_ps_ind_04_cat"])))
-    v["167"] = 0.018984*np.tanh((((10.63927078247070312) * (-(data["loo_ps_ind_05_cat"]))) * ((data["ps_reg_01"] + np.tanh(data["loo_ps_ind_16_bin"]))/2.0)))
-    v["168"] = 0.020000*np.tanh((((data["loo_ps_car_07_cat"] + data["ps_ind_03"])/2.0) * (((data["loo_ps_ind_17_bin"] * data["loo_ps_ind_04_cat"]) + data["ps_ind_03"])/2.0)))
-    v["169"] = 0.020000*np.tanh(((((-1.0 + (data["loo_ps_ind_05_cat"] - 0.347826))/2.0) + (data["ps_ind_15"] * data["ps_reg_01"]))/2.0))
-    v["170"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * ((0.100000 * data["loo_ps_car_01_cat"]) - ((data["loo_ps_car_10_cat"] + 0.166667)/2.0))))
-    v["171"] = 0.020000*np.tanh(((data["loo_ps_car_05_cat"] * data["loo_ps_ind_17_bin"]) * ((data["loo_ps_ind_04_cat"] * data["loo_ps_ind_04_cat"]) - data["ps_car_11"])))
-    v["172"] = 0.019992*np.tanh((data["loo_ps_ind_07_bin"] * (data["ps_reg_03"] + (-(((data["loo_ps_car_01_cat"] + np.tanh(data["loo_ps_car_02_cat"]))/2.0))))))
-    v["173"] = 0.020000*np.tanh((((((data["loo_ps_ind_04_cat"] + data["loo_ps_ind_05_cat"])/2.0) + data["loo_ps_ind_08_bin"])/2.0) * (data["loo_ps_car_09_cat"] + data["ps_ind_03"])))
-    v["174"] = 0.019988*np.tanh(((((data["loo_ps_ind_04_cat"] + data["ps_ind_14"])/2.0) - ((data["loo_ps_car_03_cat"] + 1.526320)/2.0)) * data["loo_ps_ind_04_cat"]))
-    v["175"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * ((((data["loo_ps_ind_02_cat"] + (-(data["loo_ps_ind_12_bin"])))/2.0) + data["loo_ps_car_05_cat"])/2.0)))
-    v["176"] = 0.019902*np.tanh(((data["ps_reg_03"] + (data["ps_reg_03"] + np.tanh(data["loo_ps_ind_05_cat"]))) * (-(data["loo_ps_car_11_cat"]))))
-    v["177"] = 0.019996*np.tanh((((data["ps_reg_02"] + data["loo_ps_ind_02_cat"])/2.0) * (data["ps_car_12"] + (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_16_bin"]))))
-    v["178"] = 0.020000*np.tanh((data["ps_ind_15"] * (data["ps_ind_03"] * (-(((data["ps_reg_01"] + data["ps_ind_01"])/2.0))))))
-    v["179"] = 0.020000*np.tanh(((data["loo_ps_car_01_cat"] * data["loo_ps_car_11_cat"]) * (data["ps_ind_03"] + ((data["ps_reg_01"] + data["loo_ps_car_01_cat"])/2.0))))
-    v["180"] = 0.020000*np.tanh((((data["loo_ps_ind_04_cat"] + (-(data["loo_ps_ind_16_bin"])))/2.0) - (data["ps_reg_03"] * data["ps_reg_01"])))
-    v["181"] = 0.020000*np.tanh(((data["loo_ps_ind_04_cat"] + (data["loo_ps_car_04_cat"] * (0.583333 - (data["ps_ind_03"] * data["ps_ind_03"]))))/2.0))
-    v["182"] = 0.019992*np.tanh(((data["ps_reg_03"] * data["ps_reg_03"]) + np.tanh((data["ps_ind_03"] * data["loo_ps_ind_04_cat"]))))
-    v["183"] = 0.019961*np.tanh(((data["ps_ind_15"] * (np.tanh((-(data["loo_ps_car_11_cat"]))) - data["loo_ps_car_09_cat"])) * data["loo_ps_car_11_cat"]))
-    v["184"] = 0.020000*np.tanh((((data["loo_ps_ind_16_bin"] + data["loo_ps_ind_07_bin"])/2.0) * ((data["missing"] + (-(data["ps_reg_01"])))/2.0)))
-    v["185"] = 0.019949*np.tanh((data["loo_ps_car_04_cat"] * ((data["ps_reg_03"] + (data["loo_ps_ind_02_cat"] - data["loo_ps_car_04_cat"]))/2.0)))
-    v["186"] = 0.020000*np.tanh((((data["ps_car_12"] + data["loo_ps_car_03_cat"])/2.0) * (((data["ps_car_12"] + data["loo_ps_ind_05_cat"])/2.0) * data["loo_ps_car_04_cat"])))
-    v["187"] = 0.020000*np.tanh((np.tanh(data["loo_ps_ind_17_bin"]) * (data["loo_ps_ind_05_cat"] * ((data["loo_ps_ind_04_cat"] + (-(data["ps_ind_15"])))/2.0))))
-    v["188"] = 0.020000*np.tanh((((data["ps_ind_03"] + data["loo_ps_ind_12_bin"])/2.0) * (data["ps_ind_03"] - np.tanh(data["ps_ind_03"]))))
-    v["189"] = 0.020000*np.tanh(((((data["loo_ps_car_11_cat"] + data["loo_ps_ind_04_cat"])/2.0) * data["loo_ps_ind_17_bin"]) * (data["loo_ps_ind_02_cat"] - data["loo_ps_car_07_cat"])))
-    v["190"] = 0.020000*np.tanh(((data["ps_ind_01"] * data["ps_ind_01"]) * (((data["loo_ps_car_01_cat"] + data["ps_ind_03"])/2.0) * data["loo_ps_ind_17_bin"])))
-    v["191"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] + (-(data["ps_car_15"])))/2.0) * data["ps_car_15"]))
-    v["192"] = 0.020000*np.tanh(((0.166667 + (((data["ps_car_12"] + data["loo_ps_ind_17_bin"])/2.0) * (data["loo_ps_ind_04_cat"] * data["loo_ps_ind_04_cat"])))/2.0))
-    v["193"] = 0.019980*np.tanh((data["loo_ps_car_02_cat"] * (((data["loo_ps_ind_13_bin"] + data["loo_ps_car_02_cat"])/2.0) - (data["ps_reg_02"] + data["loo_ps_car_06_cat"]))))
-    v["194"] = 0.019895*np.tanh(((data["ps_reg_03"] * (-((data["ps_ind_03"] * data["ps_ind_15"])))) * data["loo_ps_car_01_cat"]))
-    v["195"] = 0.020000*np.tanh((-(((((data["loo_ps_ind_04_cat"] + data["ps_ind_01"])/2.0) * data["ps_ind_01"]) * data["ps_ind_03"]))))
-    v["196"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * (-(data["ps_car_11"]))) * (data["loo_ps_car_02_cat"] + data["loo_ps_car_01_cat"])))
-    v["197"] = 0.020000*np.tanh((np.tanh(data["loo_ps_car_01_cat"]) * (data["ps_ind_14"] + (-((data["loo_ps_ind_18_bin"] * data["loo_ps_car_09_cat"]))))))
-    v["198"] = 0.018046*np.tanh((19.500000 * (0.583333 - (6.846150 * data["loo_ps_car_10_cat"]))))
-    v["199"] = 0.019988*np.tanh((-2.0 + (((data["loo_ps_car_10_cat"] + 0.965909) + data["ps_car_11"]) * data["ps_car_11"])))
-    v["200"] = 0.020000*np.tanh(((data["ps_ind_03"] + ((data["ps_ind_03"] * data["ps_ind_01"]) * (data["ps_car_13"] - data["ps_ind_01"])))/2.0))
-    v["201"] = 0.019984*np.tanh((data["ps_reg_02"] * ((((-(data["loo_ps_car_01_cat"])) + data["loo_ps_ind_05_cat"])/2.0) * data["loo_ps_ind_17_bin"])))
-    v["202"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * ((((0.965909 - data["loo_ps_car_01_cat"]) + data["loo_ps_ind_02_cat"])/2.0) * data["ps_ind_01"])))
-    v["203"] = 0.020000*np.tanh((data["ps_reg_03"] * ((data["ps_ind_15"] * (data["ps_ind_15"] + data["loo_ps_ind_09_bin"])) + data["ps_ind_15"])))
-    v["204"] = 0.020000*np.tanh((((data["loo_ps_car_10_cat"] + data["loo_ps_car_03_cat"])/2.0) * (-(((data["loo_ps_ind_18_bin"] + data["ps_car_15"])/2.0)))))
-    v["205"] = 0.020000*np.tanh((((-(np.tanh(data["loo_ps_ind_02_cat"]))) + (((data["ps_ind_03"] + data["loo_ps_ind_02_cat"])/2.0) * data["loo_ps_ind_16_bin"]))/2.0))
-    v["206"] = 0.020000*np.tanh(np.tanh((19.500000 * np.tanh((data["ps_ind_14"] + (0.965909 - data["ps_car_15"]))))))
-    v["207"] = 0.019945*np.tanh(((19.500000 - (data["loo_ps_ind_02_cat"] * 19.500000)) * (data["ps_reg_02"] - 2.800000)))
-    v["208"] = 0.019969*np.tanh((((data["ps_reg_02"] * (data["loo_ps_car_01_cat"] * data["loo_ps_ind_12_bin"])) + (data["loo_ps_car_11_cat"] * data["loo_ps_car_08_cat"]))/2.0))
-    v["209"] = 0.019996*np.tanh((((data["ps_ind_03"] + data["loo_ps_ind_12_bin"])/2.0) * ((data["ps_ind_03"] + (data["missing"] - data["loo_ps_ind_02_cat"]))/2.0)))
-    v["210"] = 0.020000*np.tanh((data["loo_ps_ind_17_bin"] * (data["loo_ps_ind_04_cat"] * (data["ps_reg_03"] * (-(data["loo_ps_car_07_cat"]))))))
-    v["211"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["ps_reg_03"] + ((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_09_bin"]) - 0.600000))))
-    v["212"] = 0.017421*np.tanh(np.tanh(((-((data["ps_car_11"] + data["loo_ps_ind_08_bin"]))) * data["loo_ps_ind_05_cat"])))
-    v["213"] = 0.019305*np.tanh((((data["loo_ps_ind_02_cat"] * data["loo_ps_car_04_cat"]) - ((data["missing"] + data["loo_ps_car_04_cat"])/2.0)) - data["loo_ps_ind_02_cat"]))
-    v["214"] = 0.019992*np.tanh((data["ps_car_12"] * (((-(data["ps_car_11"])) + (data["ps_reg_01"] + data["loo_ps_ind_04_cat"]))/2.0)))
-    v["215"] = 0.019879*np.tanh((data["loo_ps_ind_05_cat"] * (data["ps_car_13"] * ((data["ps_car_14"] * data["ps_ind_15"]) + data["loo_ps_ind_05_cat"]))))
-    v["216"] = 0.019984*np.tanh(((data["loo_ps_car_01_cat"] * data["loo_ps_ind_17_bin"]) * (data["loo_ps_ind_02_cat"] - data["loo_ps_ind_17_bin"])))
-    v["217"] = 0.020000*np.tanh((((data["ps_reg_03"] * data["loo_ps_car_08_cat"]) - np.tanh(np.tanh(data["loo_ps_car_11_cat"]))) * data["loo_ps_ind_05_cat"]))
-    v["218"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + (0.273684 - data["loo_ps_ind_12_bin"])) * (data["ps_reg_02"] * data["loo_ps_car_07_cat"])))
-    v["219"] = 0.020000*np.tanh(((((data["loo_ps_ind_16_bin"] + (data["loo_ps_ind_06_bin"] * 0.166667))/2.0) * data["loo_ps_ind_06_bin"]) * data["loo_ps_ind_05_cat"]))
-    v["220"] = 0.020000*np.tanh(((data["ps_ind_15"] * data["ps_car_15"]) * (-(data["loo_ps_ind_17_bin"]))))
-    v["221"] = 0.020000*np.tanh(((((data["loo_ps_car_02_cat"] * data["ps_ind_03"]) + (data["loo_ps_car_02_cat"] * data["ps_reg_01"]))/2.0) * data["ps_ind_01"]))
-    v["222"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_18_bin"] * (data["loo_ps_ind_07_bin"] - (data["loo_ps_ind_04_cat"] * data["loo_ps_ind_16_bin"])))))
-    v["223"] = 0.020000*np.tanh(((data["loo_ps_ind_12_bin"] * data["ps_car_11"]) + (data["loo_ps_ind_04_cat"] * (data["ps_reg_01"] * data["loo_ps_car_08_cat"]))))
-    v["224"] = 0.019988*np.tanh((data["ps_car_14"] * ((data["ps_car_14"] + ((data["loo_ps_ind_05_cat"] * data["loo_ps_ind_05_cat"]) * data["loo_ps_car_01_cat"]))/2.0)))
-    v["225"] = 0.019090*np.tanh((data["ps_ind_15"] * (data["loo_ps_ind_07_bin"] - (-((data["loo_ps_car_06_cat"] * data["ps_ind_15"]))))))
-    v["226"] = 0.015734*np.tanh((data["ps_ind_15"] - (6.846150 * ((data["loo_ps_car_11_cat"] + data["loo_ps_car_06_cat"]) + data["loo_ps_car_06_cat"]))))
-    v["227"] = 0.020000*np.tanh(((data["ps_car_12"] - data["loo_ps_car_06_cat"]) * (data["loo_ps_ind_02_cat"] * (-(data["loo_ps_car_08_cat"])))))
-    v["228"] = 0.019996*np.tanh(((data["loo_ps_ind_09_bin"] * data["ps_car_12"]) - np.tanh(((data["ps_reg_02"] + data["ps_car_12"])/2.0))))
-    v["229"] = 0.019219*np.tanh((data["ps_ind_01"] * ((data["loo_ps_ind_17_bin"] * data["loo_ps_car_06_cat"]) - np.tanh(data["loo_ps_ind_17_bin"]))))
-    v["230"] = 0.019996*np.tanh((data["loo_ps_ind_07_bin"] * (data["ps_car_13"] * (data["loo_ps_car_11_cat"] - np.tanh(2.0)))))
-    v["231"] = 0.020000*np.tanh((data["loo_ps_car_11_cat"] * ((data["ps_ind_14"] * data["ps_ind_15"]) * data["ps_car_12"])))
-    v["232"] = 0.019816*np.tanh(((np.tanh(data["loo_ps_ind_17_bin"]) * data["missing"]) * (np.tanh(data["ps_car_15"]) - data["loo_ps_car_02_cat"])))
-    v["233"] = 0.020000*np.tanh((((data["loo_ps_car_01_cat"] - data["ps_reg_01"]) * data["loo_ps_car_10_cat"]) * (data["ps_ind_03"] + data["loo_ps_ind_17_bin"])))
-    v["234"] = 0.017378*np.tanh(((data["ps_ind_01"] * data["loo_ps_car_04_cat"]) * (data["loo_ps_car_01_cat"] + (data["ps_car_12"] * data["loo_ps_car_04_cat"]))))
-    v["235"] = 0.020000*np.tanh((data["ps_reg_03"] * ((((data["ps_reg_03"] + data["loo_ps_ind_05_cat"])/2.0) - data["loo_ps_ind_02_cat"]) - data["ps_reg_01"])))
-    v["236"] = 0.020000*np.tanh((data["ps_ind_01"] * (((data["loo_ps_car_09_cat"] + data["loo_ps_ind_04_cat"])/2.0) * ((data["loo_ps_ind_05_cat"] + data["loo_ps_ind_05_cat"])/2.0))))
-    v["237"] = 0.019996*np.tanh((data["ps_ind_01"] * ((data["loo_ps_ind_02_cat"] + (data["ps_reg_01"] + (-(data["loo_ps_car_11_cat"]))))/2.0)))
-    v["238"] = 0.019941*np.tanh((-((data["loo_ps_car_08_cat"] * (data["loo_ps_car_02_cat"] - ((data["loo_ps_car_04_cat"] + (-(data["loo_ps_ind_18_bin"])))/2.0))))))
-    v["239"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (((data["loo_ps_ind_17_bin"] * (-(np.tanh(data["loo_ps_car_08_cat"])))) + data["ps_reg_02"])/2.0)))
-    v["240"] = 0.020000*np.tanh(((np.tanh((-(data["loo_ps_ind_08_bin"]))) + (data["ps_reg_03"] * (data["loo_ps_ind_08_bin"] * data["ps_reg_01"])))/2.0))
-    v["241"] = 0.019969*np.tanh((((data["loo_ps_car_02_cat"] + data["ps_car_15"])/2.0) * ((-(data["loo_ps_ind_17_bin"])) - data["loo_ps_car_10_cat"])))
-    v["242"] = 0.019371*np.tanh(((data["loo_ps_car_03_cat"] * (data["ps_ind_14"] - data["loo_ps_ind_05_cat"])) * (data["ps_car_11"] + data["ps_car_11"])))
-    v["243"] = 0.020000*np.tanh((((data["loo_ps_car_10_cat"] * (data["loo_ps_ind_17_bin"] * data["loo_ps_ind_04_cat"])) + (-(np.tanh(data["loo_ps_ind_04_cat"]))))/2.0))
-    v["244"] = 0.020000*np.tanh((np.tanh((19.500000 * ((0.452381 + data["loo_ps_ind_18_bin"])/2.0))) * data["loo_ps_ind_05_cat"]))
-    v["245"] = 0.019996*np.tanh((((data["loo_ps_car_01_cat"] * data["loo_ps_ind_02_cat"]) * (data["loo_ps_car_08_cat"] * data["ps_reg_01"])) * (4.34056949615478516)))
-    v["246"] = 0.019988*np.tanh(((data["loo_ps_car_01_cat"] + data["loo_ps_ind_16_bin"]) * (data["loo_ps_ind_02_cat"] - data["loo_ps_ind_05_cat"])))
-    v["247"] = 0.020000*np.tanh((data["ps_car_14"] * (((data["loo_ps_car_07_cat"] * data["ps_ind_15"]) + ((data["ps_car_13"] + data["loo_ps_ind_13_bin"])/2.0))/2.0)))
-    v["248"] = 0.019969*np.tanh((data["ps_reg_02"] * ((data["ps_ind_15"] + data["ps_ind_14"]) * (data["loo_ps_ind_08_bin"] * data["loo_ps_car_08_cat"]))))
-    v["249"] = 0.019984*np.tanh((data["loo_ps_ind_02_cat"] * (data["missing"] - ((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]) * data["loo_ps_car_08_cat"]))))
-    v["250"] = 0.020000*np.tanh((((((data["loo_ps_car_03_cat"] + data["ps_car_15"])/2.0) + data["loo_ps_ind_06_bin"])/2.0) * (data["ps_reg_02"] * data["ps_car_15"])))
-    v["251"] = 0.020000*np.tanh(((data["ps_car_11"] * ((data["loo_ps_car_06_cat"] + (data["ps_reg_02"] * data["loo_ps_ind_12_bin"]))/2.0)) - data["loo_ps_car_10_cat"]))
-    v["252"] = 0.019453*np.tanh((data["ps_ind_03"] * ((0.273684 * data["loo_ps_ind_05_cat"]) + (0.020833 - data["ps_car_14"]))))
-    v["253"] = 0.020000*np.tanh((data["ps_car_13"] * ((data["ps_car_13"] * (data["loo_ps_ind_12_bin"] * data["ps_ind_15"])) + data["ps_ind_14"])))
-    v["254"] = 0.020000*np.tanh((-((((data["loo_ps_car_10_cat"] * (data["ps_car_13"] + data["ps_car_13"])) + np.tanh(data["loo_ps_ind_05_cat"]))/2.0))))
-    v["255"] = 0.019961*np.tanh(((((data["ps_ind_03"] + data["loo_ps_ind_07_bin"])/2.0) * data["ps_ind_14"]) - (data["ps_reg_02"] * data["loo_ps_car_10_cat"])))
-    v["256"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * ((data["loo_ps_car_11_cat"] * (data["loo_ps_ind_04_cat"] - 0.583333)) - data["loo_ps_ind_08_bin"])))
-    v["257"] = 0.019664*np.tanh((data["loo_ps_car_07_cat"] * (data["loo_ps_ind_09_bin"] - data["loo_ps_car_01_cat"])))
-    v["258"] = 0.020000*np.tanh(((-(data["loo_ps_ind_17_bin"])) * np.tanh((data["loo_ps_car_11_cat"] * (data["loo_ps_car_08_cat"] + data["ps_ind_15"])))))
-    v["259"] = 0.019644*np.tanh(((data["ps_ind_01"] * (-(data["ps_ind_03"]))) * (data["loo_ps_ind_04_cat"] + data["loo_ps_ind_04_cat"])))
-    v["260"] = 0.020000*np.tanh((data["ps_reg_03"] * (-((data["ps_car_15"] * (data["loo_ps_car_07_cat"] * data["loo_ps_ind_17_bin"]))))))
-    v["261"] = 0.020000*np.tanh((data["ps_car_12"] * ((data["ps_car_12"] * (data["ps_ind_15"] * data["loo_ps_ind_04_cat"])) + data["ps_ind_15"])))
-    v["262"] = 0.018953*np.tanh(((data["ps_ind_15"] + (data["ps_ind_15"] * ((data["loo_ps_ind_08_bin"] - data["loo_ps_car_04_cat"]) - data["loo_ps_car_03_cat"])))/2.0))
-    v["263"] = 0.020000*np.tanh((0.166667 * (((data["ps_car_13"] + data["loo_ps_ind_04_cat"])/2.0) - (data["ps_car_13"] * data["loo_ps_car_03_cat"]))))
-    v["264"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * ((data["loo_ps_ind_09_bin"] + ((data["loo_ps_ind_02_cat"] * data["loo_ps_ind_02_cat"]) + data["loo_ps_ind_10_bin"]))/2.0)))
-    v["265"] = 0.019992*np.tanh((data["ps_ind_14"] * ((data["loo_ps_car_03_cat"] * (data["loo_ps_ind_07_bin"] + data["ps_ind_15"])) * data["loo_ps_car_11_cat"])))
-    v["266"] = 0.019988*np.tanh((np.tanh(np.tanh(data["loo_ps_car_07_cat"])) + (np.tanh(data["ps_ind_01"]) * (-(data["ps_ind_14"])))))
-    v["267"] = 0.020000*np.tanh((np.tanh(np.tanh(data["ps_ind_01"])) * ((data["ps_car_14"] + (data["loo_ps_ind_04_cat"] - data["loo_ps_car_01_cat"]))/2.0)))
-    v["268"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] * (data["ps_ind_03"] * data["ps_ind_03"])) - data["loo_ps_ind_02_cat"]) - data["loo_ps_ind_02_cat"]))
-    v["269"] = 0.018969*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_car_07_cat"] * (data["ps_reg_02"] + data["ps_car_12"]))))
-    v["270"] = 0.019996*np.tanh((data["ps_car_13"] * (data["loo_ps_ind_12_bin"] * (1.135800 + (data["ps_ind_15"] + data["loo_ps_ind_11_bin"])))))
-    v["271"] = 0.019996*np.tanh((-((data["loo_ps_ind_05_cat"] * ((data["loo_ps_car_07_cat"] * (-(data["loo_ps_car_09_cat"]))) + data["loo_ps_car_07_cat"])))))
-    v["272"] = 0.020000*np.tanh((data["ps_car_11"] * ((-(data["ps_reg_03"])) * (data["loo_ps_ind_05_cat"] * np.tanh(-1.0)))))
-    v["273"] = 0.020000*np.tanh((((data["loo_ps_ind_09_bin"] + data["loo_ps_ind_17_bin"])/2.0) * ((data["loo_ps_ind_18_bin"] + (data["ps_reg_02"] - data["ps_ind_14"]))/2.0)))
-    v["274"] = 0.020000*np.tanh((data["ps_ind_01"] * (((data["ps_ind_01"] * data["loo_ps_car_03_cat"]) + data["loo_ps_ind_02_cat"])/2.0)))
-    v["275"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * (data["ps_ind_01"] * (data["loo_ps_ind_06_bin"] * (-(data["ps_ind_03"]))))))
-    v["276"] = 0.019949*np.tanh(((np.tanh((((data["loo_ps_ind_12_bin"] + data["ps_reg_03"])/2.0) * 19.500000)) + (-(data["ps_reg_03"])))/2.0))
-    v["277"] = 0.016070*np.tanh(((data["ps_car_15"] + data["loo_ps_car_03_cat"]) * (-((data["ps_reg_03"] + data["loo_ps_ind_05_cat"])))))
-    v["278"] = 0.019930*np.tanh(((data["loo_ps_ind_02_cat"] + ((data["loo_ps_car_05_cat"] * data["loo_ps_ind_05_cat"]) - data["loo_ps_ind_05_cat"]))/2.0))
-    v["279"] = 0.017035*np.tanh((((data["loo_ps_car_09_cat"] * data["ps_reg_03"]) + data["loo_ps_ind_02_cat"]) * data["loo_ps_ind_05_cat"]))
-    v["280"] = 0.019965*np.tanh(((data["ps_reg_01"] + data["loo_ps_ind_07_bin"]) * ((data["loo_ps_ind_05_cat"] + ((data["loo_ps_car_11_cat"] + data["loo_ps_car_08_cat"])/2.0))/2.0)))
-    v["281"] = 0.020000*np.tanh((-(((np.tanh(((data["loo_ps_car_01_cat"] + data["loo_ps_car_05_cat"])/2.0)) + (data["loo_ps_car_10_cat"] * data["ps_car_15"]))/2.0))))
-    v["282"] = 0.019992*np.tanh(((data["ps_ind_03"] - data["loo_ps_ind_18_bin"]) * (((data["ps_ind_03"] + data["ps_car_12"])/2.0) * data["loo_ps_car_02_cat"])))
-    v["283"] = 0.019945*np.tanh((data["loo_ps_ind_04_cat"] * (-((data["ps_reg_02"] * (data["loo_ps_car_07_cat"] * data["loo_ps_ind_17_bin"]))))))
-    v["284"] = 0.020000*np.tanh(((-((3.642860 + (-(data["loo_ps_car_09_cat"]))))) * (data["ps_ind_01"] * data["loo_ps_car_09_cat"])))
-    v["285"] = 0.018918*np.tanh((data["ps_ind_01"] * (data["ps_ind_01"] - (data["ps_ind_01"] * data["ps_ind_01"]))))
-    v["286"] = 0.018738*np.tanh((((data["ps_ind_03"] + data["ps_ind_15"])/2.0) - (data["ps_ind_15"] * (data["ps_ind_15"] * data["ps_ind_03"]))))
-    v["287"] = 0.019957*np.tanh(((data["loo_ps_car_08_cat"] * data["loo_ps_ind_08_bin"]) * ((data["loo_ps_car_07_cat"] + data["missing"])/2.0)))
-    v["288"] = 0.019598*np.tanh(((data["loo_ps_ind_09_bin"] * ((data["ps_ind_01"] + (-(data["loo_ps_car_05_cat"])))/2.0)) + data["loo_ps_ind_13_bin"]))
-    v["289"] = 0.020000*np.tanh((((data["loo_ps_car_01_cat"] * data["ps_ind_15"]) + data["ps_car_11"]) * data["loo_ps_ind_12_bin"]))
-    v["290"] = 0.020000*np.tanh((((data["loo_ps_ind_02_cat"] - (data["ps_car_11"] * data["loo_ps_car_09_cat"])) * data["loo_ps_ind_17_bin"]) * data["loo_ps_car_10_cat"]))
-    v["291"] = 0.019301*np.tanh((data["loo_ps_car_04_cat"] * ((np.tanh(data["loo_ps_car_04_cat"]) - data["ps_ind_03"]) * data["ps_ind_03"])))
-    v["292"] = 0.020000*np.tanh(((data["ps_reg_03"] - data["ps_car_11"]) * ((np.tanh(data["loo_ps_car_04_cat"]) + (-(data["ps_car_14"])))/2.0)))
-    v["293"] = 0.019086*np.tanh((((data["ps_ind_03"] * data["loo_ps_ind_12_bin"]) + ((data["loo_ps_ind_12_bin"] - data["loo_ps_car_06_cat"]) * data["ps_reg_03"]))/2.0))
-    v["294"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] - (data["loo_ps_ind_18_bin"] * (data["loo_ps_ind_04_cat"] * (-(data["ps_reg_03"]))))))
-    v["295"] = 0.019988*np.tanh(((((data["ps_reg_03"] * data["ps_car_12"]) + data["loo_ps_ind_02_cat"])/2.0) * np.tanh(data["loo_ps_car_04_cat"])))
-    v["296"] = 0.019898*np.tanh((data["loo_ps_car_07_cat"] * (-((((data["ps_car_11"] * (-(data["loo_ps_car_08_cat"]))) + data["loo_ps_car_09_cat"])/2.0)))))
-    v["297"] = 0.019973*np.tanh(((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_16_bin"] + (-(data["loo_ps_car_05_cat"])))) * (-(data["loo_ps_car_08_cat"]))))
-    v["298"] = 0.019980*np.tanh((((data["loo_ps_ind_18_bin"] * (data["loo_ps_ind_04_cat"] * data["loo_ps_ind_16_bin"])) - data["ps_car_14"]) * data["ps_ind_14"]))
-    v["299"] = 0.016964*np.tanh((((-(0.347826)) + np.tanh((data["loo_ps_car_06_cat"] - data["ps_reg_01"])))/2.0))
-    v["300"] = 0.020000*np.tanh(((data["ps_ind_15"] * data["ps_car_15"]) * ((data["loo_ps_ind_12_bin"] + (-(data["ps_car_15"])))/2.0)))
-    v["301"] = 0.019957*np.tanh(((data["ps_car_14"] * data["loo_ps_ind_04_cat"]) * (data["ps_ind_01"] + (data["ps_car_14"] * data["loo_ps_car_08_cat"]))))
-    v["302"] = 0.020000*np.tanh((data["ps_ind_14"] * (data["ps_car_11"] * (data["ps_car_12"] + (data["ps_ind_03"] * data["ps_car_12"])))))
-    v["303"] = 0.020000*np.tanh((data["ps_reg_01"] * (data["loo_ps_car_01_cat"] * ((data["loo_ps_car_01_cat"] + (data["ps_ind_03"] * data["ps_reg_02"]))/2.0))))
-    v["304"] = 0.019594*np.tanh(((data["loo_ps_ind_04_cat"] * data["loo_ps_ind_02_cat"]) * (data["loo_ps_car_06_cat"] * (0.347826 + 2.800000))))
-    v["305"] = 0.019992*np.tanh((data["ps_reg_01"] * ((data["loo_ps_car_02_cat"] - data["loo_ps_car_04_cat"]) * data["loo_ps_ind_05_cat"])))
-    v["306"] = 0.020000*np.tanh(np.tanh(((((data["loo_ps_ind_09_bin"] * data["loo_ps_ind_05_cat"]) + data["ps_ind_03"])/2.0) * (-(data["ps_reg_01"])))))
-    v["307"] = 0.018308*np.tanh((-((19.500000 * np.tanh((-1.0 - (data["loo_ps_ind_11_bin"] * 19.500000)))))))
-    v["308"] = 0.019754*np.tanh(((1.0 + data["ps_reg_02"]) * ((data["ps_reg_02"] - 3.0) * 3.0)))
-    v["309"] = 0.019265*np.tanh((data["loo_ps_ind_04_cat"] * ((data["ps_ind_01"] * (data["ps_reg_01"] * data["ps_ind_01"])) * data["ps_ind_01"])))
-    v["310"] = 0.019879*np.tanh((((data["ps_reg_03"] + data["ps_ind_03"])/2.0) * np.tanh((data["ps_reg_03"] * data["ps_ind_03"]))))
-    v["311"] = 0.020000*np.tanh(((data["ps_reg_02"] * (data["loo_ps_ind_11_bin"] - (data["ps_car_14"] * data["loo_ps_car_04_cat"]))) * data["ps_reg_01"]))
-    v["312"] = 0.019965*np.tanh((data["ps_reg_03"] * ((data["ps_ind_15"] + ((data["ps_ind_15"] * data["loo_ps_ind_09_bin"]) - data["loo_ps_ind_08_bin"]))/2.0)))
-    v["313"] = 0.020000*np.tanh((data["loo_ps_ind_06_bin"] * ((data["loo_ps_ind_02_cat"] + (data["ps_car_11"] * data["loo_ps_car_06_cat"]))/2.0)))
-    v["314"] = 0.020000*np.tanh((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_11_bin"] - (data["loo_ps_ind_04_cat"] * data["ps_car_11"]))))
-    v["315"] = 0.019461*np.tanh((data["loo_ps_car_03_cat"] * (data["loo_ps_ind_05_cat"] * (data["loo_ps_car_02_cat"] + data["loo_ps_ind_04_cat"]))))
-    v["316"] = 0.014366*np.tanh(np.tanh(np.tanh((data["ps_reg_01"] - ((data["ps_ind_03"] + ((data["ps_ind_14"] + data["loo_ps_car_10_cat"])/2.0))/2.0)))))
-    v["317"] = 0.019996*np.tanh((data["ps_car_12"] * ((data["loo_ps_ind_12_bin"] + (data["ps_car_11"] * (data["ps_ind_15"] + data["ps_car_11"])))/2.0)))
-    v["318"] = 0.020000*np.tanh(np.tanh((data["ps_car_14"] * ((-(np.tanh(data["ps_car_14"]))) + (-(data["ps_reg_03"]))))))
-    v["319"] = 0.015050*np.tanh((-((np.tanh(data["loo_ps_car_04_cat"]) * (data["ps_car_15"] * (data["loo_ps_ind_18_bin"] - data["loo_ps_ind_06_bin"]))))))
-    v["320"] = 0.020000*np.tanh((data["ps_car_13"] * (((data["loo_ps_car_04_cat"] * (data["ps_car_14"] - data["ps_ind_03"])) + data["ps_ind_03"])/2.0)))
-    v["321"] = 0.020000*np.tanh((-((data["ps_car_14"] + ((0.347826 - data["ps_car_14"]) * data["ps_car_15"])))))
-    v["322"] = 0.019977*np.tanh(((0.166667 + (data["ps_ind_14"] * ((data["ps_reg_03"] - data["loo_ps_ind_08_bin"]) - data["loo_ps_ind_17_bin"])))/2.0))
-    v["323"] = 0.020000*np.tanh((data["missing"] * (-((data["loo_ps_car_09_cat"] * ((data["ps_car_12"] + data["loo_ps_ind_18_bin"])/2.0))))))
-    v["324"] = 0.018195*np.tanh((((data["loo_ps_ind_09_bin"] + (-(np.tanh(data["loo_ps_ind_05_cat"]))))/2.0) * (data["loo_ps_ind_18_bin"] + data["loo_ps_car_07_cat"])))
-    v["325"] = 0.019359*np.tanh((-((19.500000 * ((0.485294 + np.tanh((data["loo_ps_ind_11_bin"] * 19.500000)))/2.0)))))
-    v["326"] = 0.019992*np.tanh((-3.0 - ((-((data["ps_ind_03"] * data["ps_ind_03"]))) + data["ps_ind_03"])))
-    v["327"] = 0.020000*np.tanh((np.tanh((data["ps_reg_01"] * (data["ps_car_14"] * (-(data["loo_ps_ind_02_cat"]))))) - data["loo_ps_ind_02_cat"]))
-    v["328"] = 0.019992*np.tanh((data["loo_ps_ind_04_cat"] * ((data["ps_ind_03"] + data["loo_ps_ind_04_cat"]) * (-(data["loo_ps_car_08_cat"])))))
-    v["329"] = 0.020000*np.tanh((data["ps_car_11"] * ((data["loo_ps_ind_02_cat"] + ((data["loo_ps_ind_07_bin"] + (data["loo_ps_car_07_cat"] * data["missing"]))/2.0))/2.0)))
-    v["330"] = 0.019996*np.tanh((((data["loo_ps_car_02_cat"] - (data["loo_ps_ind_06_bin"] - data["loo_ps_car_02_cat"])) * data["loo_ps_car_09_cat"]) * data["loo_ps_ind_02_cat"]))
-    v["331"] = 0.018343*np.tanh((((data["loo_ps_car_07_cat"] + (data["ps_reg_03"] + np.tanh(data["loo_ps_car_07_cat"])))/2.0) * (-(data["missing"]))))
-    v["332"] = 0.019750*np.tanh((-((data["loo_ps_ind_02_cat"] * (data["loo_ps_ind_18_bin"] * (data["ps_car_14"] * data["loo_ps_car_04_cat"]))))))
-    v["333"] = 0.019949*np.tanh(((data["loo_ps_ind_05_cat"] * (-(data["loo_ps_car_06_cat"]))) * (data["loo_ps_ind_05_cat"] * data["loo_ps_ind_04_cat"])))
-    v["334"] = 0.020000*np.tanh((data["loo_ps_car_06_cat"] * ((2.800000 + data["ps_car_14"]) * (data["loo_ps_ind_13_bin"] * data["loo_ps_car_04_cat"]))))
-    v["335"] = 0.020000*np.tanh(np.tanh((data["ps_ind_03"] * np.tanh(np.tanh((data["ps_reg_02"] * (-(data["ps_ind_15"]))))))))
-    v["336"] = 0.020000*np.tanh((data["loo_ps_car_10_cat"] * ((data["loo_ps_ind_11_bin"] + data["loo_ps_ind_18_bin"]) * (data["ps_reg_02"] + data["ps_reg_02"]))))
-    v["337"] = 0.020000*np.tanh(np.tanh(np.tanh((data["ps_ind_03"] * ((data["ps_ind_03"] + data["ps_car_11"]) + data["ps_car_11"])))))
-    v["338"] = 0.019984*np.tanh(((data["loo_ps_ind_05_cat"] * (data["loo_ps_ind_11_bin"] - (data["ps_car_11"] * data["loo_ps_ind_06_bin"]))) * data["loo_ps_car_01_cat"]))
-    v["339"] = 0.020000*np.tanh((data["ps_car_15"] * (data["loo_ps_ind_12_bin"] * (data["loo_ps_car_08_cat"] + data["loo_ps_ind_07_bin"]))))
-    v["340"] = 0.019953*np.tanh((data["ps_ind_15"] * (data["loo_ps_ind_02_cat"] * (0.600000 - (data["loo_ps_ind_10_bin"] - data["ps_reg_03"])))))
-    v["341"] = 0.017914*np.tanh(((data["loo_ps_car_03_cat"] - (data["ps_car_13"] + data["loo_ps_ind_18_bin"])) * (data["loo_ps_car_03_cat"] * 0.273684)))
-    v["342"] = 0.020000*np.tanh((data["loo_ps_car_10_cat"] * (-3.0 + (data["ps_car_14"] * (data["ps_car_15"] - data["loo_ps_car_04_cat"])))))
-    v["343"] = 0.020000*np.tanh((data["loo_ps_car_09_cat"] * (((data["ps_car_11"] * data["loo_ps_car_09_cat"]) + (data["loo_ps_car_02_cat"] - data["loo_ps_ind_04_cat"]))/2.0)))
-    v["344"] = 0.019973*np.tanh(((data["ps_car_13"] * (data["ps_ind_14"] - data["ps_reg_02"])) * data["ps_ind_15"]))
-    v["345"] = 0.020000*np.tanh(((data["loo_ps_car_09_cat"] * ((0.965909 - data["ps_reg_03"]) - data["ps_reg_03"])) * data["loo_ps_ind_08_bin"]))
-    v["346"] = 0.019973*np.tanh(((data["ps_ind_01"] * (np.tanh(data["loo_ps_car_02_cat"]) + data["loo_ps_ind_11_bin"])) * (-(data["ps_car_15"]))))
-    v["347"] = 0.020000*np.tanh((data["loo_ps_ind_09_bin"] * (((-(data["loo_ps_car_08_cat"])) * data["loo_ps_car_03_cat"]) * data["ps_ind_03"])))
-    v["348"] = 0.018535*np.tanh((data["loo_ps_ind_04_cat"] * (data["loo_ps_car_04_cat"] * (data["ps_ind_15"] - (-(data["loo_ps_car_01_cat"]))))))
-    v["349"] = 0.020000*np.tanh((data["loo_ps_car_07_cat"] * ((((data["loo_ps_ind_10_bin"] + data["loo_ps_car_08_cat"])/2.0) + (-(data["loo_ps_ind_12_bin"])))/2.0)))
-    v["350"] = 0.019996*np.tanh(((data["loo_ps_car_10_cat"] * (data["loo_ps_ind_13_bin"] - data["ps_reg_02"])) * (data["loo_ps_ind_17_bin"] + data["ps_ind_03"])))
-    v["351"] = 0.020000*np.tanh((data["loo_ps_ind_06_bin"] * (data["ps_reg_01"] * ((data["missing"] + (data["loo_ps_car_07_cat"] - data["loo_ps_ind_05_cat"]))/2.0))))
-    v["352"] = 0.020000*np.tanh((data["ps_car_12"] * (data["ps_car_12"] * ((-(np.tanh(data["loo_ps_car_07_cat"]))) * data["ps_reg_02"]))))
-    v["353"] = 0.020000*np.tanh((((-((data["ps_ind_01"] * (data["ps_ind_03"] * data["loo_ps_ind_02_cat"])))) + np.tanh(data["loo_ps_car_08_cat"]))/2.0))
-    v["354"] = 0.016128*np.tanh((data["ps_ind_15"] * (data["loo_ps_car_11_cat"] * (((data["ps_ind_15"] * data["loo_ps_car_11_cat"]) + 1.871790)/2.0))))
-    v["355"] = 0.019961*np.tanh((data["loo_ps_ind_06_bin"] * (data["loo_ps_ind_12_bin"] * (data["loo_ps_ind_11_bin"] + ((data["ps_ind_15"] + data["loo_ps_car_11_cat"])/2.0)))))
-    v["356"] = 0.019836*np.tanh(((np.tanh(data["ps_ind_15"]) + (data["loo_ps_ind_02_cat"] * (data["ps_ind_15"] * (-(data["loo_ps_ind_02_cat"])))))/2.0))
-    v["357"] = 0.019840*np.tanh(((data["ps_car_15"] * (data["loo_ps_ind_17_bin"] - 0.093750)) * data["ps_car_15"]))
-    v["358"] = 0.020000*np.tanh((-((data["loo_ps_car_09_cat"] * ((data["loo_ps_car_01_cat"] + (data["ps_reg_02"] * data["loo_ps_car_09_cat"]))/2.0)))))
-    v["359"] = 0.020000*np.tanh((-(((data["loo_ps_ind_17_bin"] + data["loo_ps_ind_17_bin"]) * ((np.tanh(data["ps_ind_01"]) + 0.452381)/2.0)))))
-    v["360"] = 0.020000*np.tanh((data["loo_ps_ind_08_bin"] * (data["ps_car_14"] * (data["loo_ps_ind_02_cat"] - np.tanh(data["loo_ps_car_04_cat"])))))
-    v["361"] = 0.019996*np.tanh((((data["loo_ps_ind_11_bin"] + (data["loo_ps_ind_08_bin"] * (data["ps_ind_01"] * data["ps_car_11"])))/2.0) * data["ps_car_11"]))
-    v["362"] = 0.020000*np.tanh(((8.47791767120361328) * (data["loo_ps_ind_10_bin"] * (data["ps_car_11"] + (data["ps_car_14"] * data["loo_ps_car_08_cat"])))))
-    v["363"] = 0.019152*np.tanh((((data["loo_ps_car_08_cat"] + (data["loo_ps_car_08_cat"] * (-(data["ps_ind_03"]))))/2.0) * data["ps_ind_03"]))
-    v["364"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * (data["ps_ind_14"] * ((data["ps_car_12"] + (data["ps_reg_03"] * data["loo_ps_car_01_cat"]))/2.0))))
-    v["365"] = 0.019996*np.tanh((((data["ps_car_15"] * (data["ps_ind_01"] * data["ps_reg_02"])) + (data["loo_ps_ind_02_cat"] * data["ps_reg_02"]))/2.0))
-    v["366"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] * ((data["loo_ps_ind_11_bin"] - data["loo_ps_car_10_cat"]) - (data["loo_ps_ind_17_bin"] * data["loo_ps_ind_07_bin"]))))
-    v["367"] = 0.019996*np.tanh((-(((data["loo_ps_ind_17_bin"] * data["loo_ps_car_02_cat"]) * (0.347826 - data["ps_car_15"])))))
-    v["368"] = 0.020000*np.tanh((data["loo_ps_ind_02_cat"] * ((data["ps_reg_03"] * (data["loo_ps_car_04_cat"] * data["loo_ps_car_01_cat"])) * data["loo_ps_car_08_cat"])))
-    v["369"] = 0.020000*np.tanh((((data["ps_reg_02"] + data["ps_ind_15"]) * data["loo_ps_ind_12_bin"]) * (data["ps_ind_03"] + data["ps_ind_03"])))
-    v["370"] = 0.020000*np.tanh((data["loo_ps_ind_16_bin"] * (data["ps_car_12"] * (data["loo_ps_ind_02_cat"] * (0.485294 - data["loo_ps_car_08_cat"])))))
-    v["371"] = 0.020000*np.tanh(((data["loo_ps_ind_12_bin"] * (-(data["ps_reg_01"]))) - (data["loo_ps_ind_04_cat"] * np.tanh(data["ps_ind_15"]))))
-    v["372"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] * (((data["loo_ps_car_02_cat"] * data["loo_ps_ind_04_cat"]) + data["loo_ps_ind_10_bin"])/2.0)) * data["loo_ps_car_03_cat"]))
-    v["373"] = 0.020000*np.tanh(((data["ps_ind_14"] * data["loo_ps_car_11_cat"]) * np.tanh((data["ps_ind_03"] + data["ps_ind_15"]))))
-    v["374"] = 0.019984*np.tanh((data["ps_car_12"] * ((data["loo_ps_ind_12_bin"] * (1.526320 - data["ps_car_13"])) + data["loo_ps_ind_12_bin"])))
-    v["375"] = 0.019684*np.tanh((data["loo_ps_ind_08_bin"] * ((((data["loo_ps_ind_16_bin"] + np.tanh(data["ps_reg_02"]))/2.0) + 0.100000)/2.0)))
-    v["376"] = 0.018172*np.tanh((((data["ps_car_11"] + 1.135800)/2.0) * (data["ps_reg_03"] * (data["ps_ind_03"] + data["loo_ps_ind_12_bin"]))))
-    v["377"] = 0.020000*np.tanh(((data["ps_car_11"] * ((data["loo_ps_ind_10_bin"] + data["ps_car_11"]) + 1.526320)) * data["loo_ps_car_10_cat"]))
-    v["378"] = 0.020000*np.tanh((data["loo_ps_ind_12_bin"] * ((data["ps_ind_03"] + ((data["ps_ind_15"] + (-(data["ps_car_14"])))/2.0))/2.0)))
-    v["379"] = 0.020000*np.tanh((data["ps_car_11"] * (((data["loo_ps_car_09_cat"] + (data["ps_ind_01"] * data["loo_ps_ind_11_bin"]))/2.0) * data["ps_ind_01"])))
-    v["380"] = 0.019898*np.tanh((data["loo_ps_ind_12_bin"] * (data["ps_ind_03"] - (data["ps_car_11"] + ((-2.0 + data["loo_ps_car_08_cat"])/2.0)))))
-    v["381"] = 0.020000*np.tanh((((data["ps_car_11"] * data["loo_ps_ind_18_bin"]) * data["ps_car_11"]) * data["ps_ind_14"]))
-    v["382"] = 0.020000*np.tanh((data["loo_ps_ind_04_cat"] * (data["ps_ind_03"] * ((data["ps_ind_03"] * data["ps_car_12"]) - data["ps_ind_03"]))))
-    v["383"] = 0.019980*np.tanh((data["loo_ps_ind_02_cat"] * (((data["ps_car_11"] + data["ps_car_15"])/2.0) + (data["ps_car_15"] * data["ps_car_11"]))))
-    v["384"] = 0.019836*np.tanh(((data["loo_ps_car_06_cat"] * data["loo_ps_ind_04_cat"]) * ((data["loo_ps_ind_04_cat"] * data["ps_ind_14"]) + data["loo_ps_car_08_cat"])))
-    v["385"] = 0.019965*np.tanh(((data["ps_car_13"] + data["ps_ind_15"]) * (data["ps_ind_03"] * (data["ps_reg_02"] + data["ps_car_15"]))))
-    v["386"] = 0.019508*np.tanh((data["ps_ind_15"] * (data["ps_reg_01"] * ((data["loo_ps_car_06_cat"] * data["loo_ps_car_04_cat"]) + data["loo_ps_ind_13_bin"]))))
-    v["387"] = 0.015862*np.tanh((((data["ps_reg_02"] + data["loo_ps_car_08_cat"])/2.0) * (data["ps_car_13"] * (data["ps_car_12"] - 2.0))))
-    v["388"] = 0.020000*np.tanh((data["ps_car_13"] * (0.100000 - ((data["loo_ps_car_10_cat"] * data["ps_ind_01"]) * data["ps_ind_01"]))))
-    v["389"] = 0.019992*np.tanh((data["ps_car_13"] * (data["loo_ps_ind_12_bin"] * (data["ps_reg_01"] + data["ps_ind_15"]))))
-    v["390"] = 0.015315*np.tanh(((np.tanh(np.tanh((data["loo_ps_ind_07_bin"] + data["loo_ps_car_06_cat"]))) + np.tanh(data["loo_ps_car_08_cat"]))/2.0))
-    v["391"] = 0.020000*np.tanh((data["ps_car_15"] * (0.452381 - (data["loo_ps_car_08_cat"] * ((data["loo_ps_ind_11_bin"] + data["ps_car_15"])/2.0)))))
-    v["392"] = 0.020000*np.tanh(((data["loo_ps_ind_05_cat"] + data["loo_ps_ind_06_bin"]) * ((data["loo_ps_car_10_cat"] - data["loo_ps_car_02_cat"]) * data["loo_ps_car_10_cat"])))
-    v["393"] = 0.015452*np.tanh((data["loo_ps_ind_06_bin"] * ((data["loo_ps_car_08_cat"] + (data["loo_ps_ind_09_bin"] * data["loo_ps_car_09_cat"]))/2.0)))
-    v["394"] = 0.019977*np.tanh((data["loo_ps_ind_17_bin"] * ((data["loo_ps_ind_08_bin"] * data["ps_car_15"]) * (0.485294 - data["loo_ps_ind_02_cat"]))))
-    v["395"] = 0.019977*np.tanh((data["loo_ps_ind_04_cat"] * ((data["ps_reg_02"] + ((data["loo_ps_ind_04_cat"] - data["ps_ind_01"]) - data["loo_ps_car_09_cat"]))/2.0)))
-    v["396"] = 0.019980*np.tanh((data["ps_reg_01"] * (data["loo_ps_car_10_cat"] * (-((data["loo_ps_ind_12_bin"] + data["ps_reg_02"]))))))
-    v["397"] = 0.020000*np.tanh(((data["ps_car_15"] * ((data["loo_ps_ind_16_bin"] + data["loo_ps_car_10_cat"])/2.0)) * (data["ps_car_15"] - data["loo_ps_ind_16_bin"])))
-    v["398"] = 0.020000*np.tanh((((-((data["loo_ps_ind_02_cat"] * (data["ps_car_14"] * data["loo_ps_ind_07_bin"])))) + np.tanh(data["ps_car_15"]))/2.0))
-    v["399"] = 0.014948*np.tanh((data["ps_reg_02"] * (data["loo_ps_car_08_cat"] * (-(data["ps_ind_03"])))))
-    v["400"] = 0.016214*np.tanh((data["loo_ps_car_04_cat"] * np.tanh((data["loo_ps_car_11_cat"] - (data["loo_ps_ind_07_bin"] + 1.526320)))))
-    return Outputs(v.sum(axis=1))
-
-
-def GPAri(data):
-    return (GPI(data)+GPII(data))/2.
-
-
-def ProjectOnMean(data1, data2, columnName):
-    grpOutcomes = data1.groupby(list([columnName]))['target'].mean().reset_index()
-    grpCount = data1.groupby(list([columnName]))['target'].count().reset_index()
-    grpOutcomes['cnt'] = grpCount.target
-    grpOutcomes.drop('cnt', inplace=True, axis=1)
-    outcomes = data2['target'].values
-    x = pd.merge(data2[[columnName, 'target']], grpOutcomes,
-                 suffixes=('x_', ''),
-                 how='left',
-                 on=list([columnName]),
-                 left_index=True)['target']
-
-    
-    return x.values
-
-
-def GetData(strdirectory):
-    # Project Categorical inputs to Target
-    highcardinality = ['ps_car_02_cat',
-                       'ps_car_09_cat',
-                       'ps_ind_04_cat',
-                       'ps_ind_05_cat',
-                       'ps_car_03_cat',
-                       'ps_ind_08_bin',
-                       'ps_car_05_cat',
-                       'ps_car_08_cat',
-                       'ps_ind_06_bin',
-                       'ps_ind_07_bin',
-                       'ps_ind_12_bin',
-                       'ps_ind_18_bin',
-                       'ps_ind_17_bin',
-                       'ps_car_07_cat',
-                       'ps_car_11_cat',
-                       'ps_ind_09_bin',
-                       'ps_car_10_cat',
-                       'ps_car_04_cat',
-                       'ps_car_01_cat',
-                       'ps_ind_02_cat',
-                       'ps_ind_10_bin',
-                       'ps_ind_11_bin',
-                       'ps_car_06_cat',
-                       'ps_ind_13_bin',
-                       'ps_ind_16_bin']
-
-    train = pd.read_csv(strdirectory+'train.csv')
-    test = pd.read_csv(strdirectory+'test.csv')
-
-    train['missing'] = (train==-1).sum(axis=1).astype(float)
-    test['missing'] = (test==-1).sum(axis=1).astype(float)
-
-    unwanted = train.columns[train.columns.str.startswith('ps_calc_')]
-    train.drop(unwanted,inplace=True,axis=1)
-    test.drop(unwanted,inplace=True,axis=1)
-
-    test['target'] = np.nan
-    feats = list(set(train.columns).difference(set(['id','target'])))
-    feats = list(['id'])+feats +list(['target'])
-    train = train[feats]
-    test = test[feats]
-    
-    blindloodata = None
-    folds = 5
-    kf = StratifiedKFold(n_splits=folds,shuffle=True,random_state=42)
-    for i, (train_index, test_index) in enumerate(kf.split(range(train.shape[0]),train.target)):
-        print('Fold:',i)
-        blindtrain = train.loc[test_index].copy() 
-        vistrain = train.loc[train_index].copy()
-
-        for c in highcardinality:
-            blindtrain.insert(1,'loo_'+c, ProjectOnMean(vistrain,
-                                                       blindtrain,c))
-        if(blindloodata is None):
-            blindloodata = blindtrain.copy()
-        else:
-            blindloodata = pd.concat([blindloodata,blindtrain])
-
-    for c in highcardinality:
-        test.insert(1,'loo_'+c, ProjectOnMean(train,
-                                             test,c))
-    test.drop(highcardinality,inplace=True,axis=1)
-
-    train = blindloodata
-    train.drop(highcardinality,inplace=True,axis=1)
-    train = train.fillna(train.mean())
-    test = test.fillna(train.mean())
-
-    print('Scale values')
-    ss = StandardScaler()
-    features = train.columns[1:-1]
-    ss.fit(pd.concat([train[features],test[features]]))
-    train[features] = ss.transform(train[features] )
-    test[features] = ss.transform(test[features] )
-    train[features] = np.round(train[features], 6)
-    test[features] = np.round(test[features], 6)
-    return train, test
-    
-
-def main():
-    print('Started')
-    strdirectory = 'D:/Downloads/porto_seguro/my_model/'
-    gptrain, gptest = GetData(strdirectory)
-    print('GPAri Gini Score:', GiniScore(gptrain.target,GPAri(gptrain)))
-    basic = pd.read_csv(strdirectory+'sample_submission.csv')
-    basic.target = GPAri(gptest).ravel()
-    basic.to_csv(strdirectory+'test_gpari.csv',index=None,float_format='%.6f')
-    
-    basic = pd.read_csv(strdirectory+'train.csv')
-    basic.target = GPAri(gptrain).ravel()
-    basic[['target']].to_csv(strdirectory+'train_gpari.csv',index=None,float_format='%.6f')
-    print('Finished')
-
-
-if __name__ == "__main__":
-    main()
-
-
-# # tensoflow  https://www.kaggle.com/camnugent/deep-neural-network-insurance-claims-0-268
+# The first step is to check for missing values in the data set. That's import so that we can put the summary statistics in context. Missing data can lead to a false impression of the data distribution and we need to be aware of that.
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import tensorflow as tf
-from sklearn.preprocessing import StandardScaler
-
-test_dat = pd.read_csv(base_path + 'test.csv')
-train_dat = pd.read_csv(base_path + 'train.csv')
-submission = pd.read_csv(base_path + 'sample_submission.csv')
-
-train_y = train_dat['target']
-train_x = train_dat.drop(['target', 'id'], axis = 1)
-test_dat = test_dat.drop(['id'], axis = 1)
-
-merged_dat = pd.concat([train_x, test_dat],axis=0)
-
-#change data to float32
-for c, dtype in zip(merged_dat.columns, merged_dat.dtypes): 
-    if dtype == np.float64:     
-        merged_dat[c] = merged_dat[c].astype(np.float32)
-
-#one hot encode the categoricals
-cat_features = [col for col in merged_dat.columns if col.endswith('cat')]
-for column in cat_features:
-    temp=pd.get_dummies(pd.Series(merged_dat[column]))
-    merged_dat=pd.concat([merged_dat,temp],axis=1)
-    merged_dat=merged_dat.drop([column],axis=1)
-
-#standardize the scale of the numericals
-numeric_features = [col for col in merged_dat.columns if '_calc_' in  str(col)]
-numeric_features = [col for col in numeric_features if '_bin' not in str(col)]
-
-scaler = StandardScaler()
-scaled_numerics = scaler.fit_transform(merged_dat[numeric_features])
-scaled_num_df = pd.DataFrame(scaled_numerics, columns =numeric_features )
+print(data.isnull().sum())
 
 
-merged_dat = merged_dat.drop(numeric_features, axis=1)
+# We got lucky and there are no missing data, which is usually not the case.
 
-merged_dat = np.concatenate((merged_dat.values,scaled_num_df), axis = 1)
-
-train_x = merged_dat[:train_x.shape[0]]
-test_dat = merged_dat[train_x.shape[0]:]
-
-
-config = tf.contrib.learn.RunConfig(tf_random_seed=42)
-
-feature_cols = tf.contrib.learn.infer_real_valued_columns_from_input(train_x)
-
-dnn_clf = tf.contrib.learn.DNNClassifier(hidden_units=[150,150,150], n_classes=2,
-                                         feature_columns=feature_cols, config=config)
-
-dnn_clf.fit(train_x, train_y, batch_size=50, steps=40000)
-
-dnn_y_pred = dnn_clf.predict_proba(test_dat)
-dnn_y_pred_train = dnn_clf.predict_proba(train_x)
-
-
-dnn_out = list(dnn_y_pred)
-
-dnn_output = submission
-dnn_output['target'] = [x[1] for x in dnn_out]
-
-
-dnn_output.to_csv(base_path + 'test_dnn_predictions.csv', index=False, float_format='%.4f')
-
-train = pd.read_csv(base_path + 'train.csv')
-sub = pd.DataFrame()
-sub['id'] = train['id']
-sub['target'] = [x[1] for x in list(dnn_y_pred_train)]
-sub.to_csv(base_path + 'train_dnn_predictions.csv', index=False, float_format='%.4f')
-
-
-# # kinetics https://www.kaggle.com/alexandrudaia/kinetic-and-transforms-0-482-up-the-board
+# Next, let's check with what kind of variables we are dealing with, i.e. are the variables categorical, numerical etc.? 
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+data.dtypes
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
+# So, **satisfaction_level** and **last_evaluation** are continuous numerical data but we need to confirm that. They could be misclassified and should really be integers. 
 # 
-train=pd.read_csv(base_path + 'train_p.csv')
-test=pd.read_csv(base_path + 'test_p.csv')
-#more about kinetic features  developed  by Daia Alexandru    here  on the next  blog  please  read  last article :
-#https://alexandrudaia.quora.com/
+# **sales** and **salary** are strings and probably categorical.
+# 
+# The other variables are integers but it is not quite clear whether they are numerical or really categorical data.
+# 
+# Let's look at the first few lines of the dataset to get a fell for what the data looks like.
 
-##############################################creatinng   kinetic features for  train #####################################################
-def  kinetic(row):
-    probs=np.unique(row,return_counts=True)[1]/len(row)
-    kinetic=np.sum(probs**2)
-    return kinetic
-    
-
-first_kin_names=[col for  col in train.columns  if '_ind_' in col]
-subset_ind=train[first_kin_names]
-kinetic_1=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_1.append(k)
-second_kin_names= [col for  col in train.columns  if '_car_' in col and col.endswith('cat')]
-subset_ind=train[second_kin_names]
-kinetic_2=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_2.append(k)
-third_kin_names= [col for  col in train.columns  if '_calc_' in col and  not col.endswith('bin')]
-subset_ind=train[second_kin_names]
-kinetic_3=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_3.append(k)
-fd_kin_names= [col for  col in train.columns  if '_calc_' in col and  col.endswith('bin')]
-subset_ind=train[fd_kin_names]
-kinetic_4=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_4.append(k)
-train['kinetic_1']=np.array(kinetic_1)
-train['kinetic_2']=np.array(kinetic_2)
-train['kinetic_3']=np.array(kinetic_3)
-train['kinetic_4']=np.array(kinetic_4)
-
-############################################reatinng   kinetic features for  test###############################################################
-
-first_kin_names=[col for  col in test.columns  if '_ind_' in col]
-subset_ind=test[first_kin_names]
-kinetic_1=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_1.append(k)
-second_kin_names= [col for  col in test.columns  if '_car_' in col and col.endswith('cat')]
-subset_ind=test[second_kin_names]
-kinetic_2=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_2.append(k)
-third_kin_names= [col for  col in test.columns  if '_calc_' in col and  not col.endswith('bin')]
-subset_ind=test[second_kin_names]
-kinetic_3=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_3.append(k)
-fd_kin_names= [col for  col in test.columns  if '_calc_' in col and  col.endswith('bin')]
-subset_ind=test[fd_kin_names]
-kinetic_4=[]
-for row in range(subset_ind.shape[0]):
-    row=subset_ind.iloc[row]
-    k=kinetic(row)
-    kinetic_4.append(k)
-test['kinetic_1']=np.array(kinetic_1)
-test['kinetic_2']=np.array(kinetic_2)
-test['kinetic_3']=np.array(kinetic_3)
-test['kinetic_4']=np.array(kinetic_4)
-
-##################################################################end  of kinetics ############################################################################
-from sklearn import *
-import xgboost as xgb
-from multiprocessing import *
-import numpy as np
-import pandas as pd
-from sklearn import *
-import xgboost as xgb
-import lightgbm as lgb
-from multiprocessing import *
+# In[ ]:
 
 
-d_median = train.median(axis=0)
-d_mean = train.mean(axis=0)
+data.head()
 
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c:
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(int)
-    return df
 
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
+# And now let's look at a brief summary of the data. The describe function only works on numerical data unfortunately. We will get to a summary of categorical variables shortly though.
 
-def gini(y, pred):
-    g = np.asarray(np.c_[y, pred, np.arange(len(y)) ], dtype=np.float)
-    g = g[np.lexsort((g[:,2], -1*g[:,1]))]
-    gs = g[:,0].cumsum().sum() / g[:,0].sum()
-    gs -= (len(y) + 1) / 2.
-    return gs / len(y)
+# In[ ]:
 
-def gini_xgb(pred, y):
-    #y = y.get_label()
-    return 'gini', gini(y, pred) / gini(y, y)
 
-params = {'eta': 0.02, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 'objective': 'binary:logistic', 'eval_metric': 'auc', 'seed': 99, 'silent': True}
-x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
+data.describe()
 
+
+# Let's look at this visually.
+
+# In[ ]:
+
+
+#histograms
+warnings.filterwarnings('ignore')
+plt.figure(figsize=[12,10])
+
+plt.subplot(331)
+plt.xlabel('satisfaction_level', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['satisfaction_level'], kde=False)
+
+plt.subplot(332)
+plt.xlabel('last_evaluation', fontsize=12)
+#plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['last_evaluation'], kde=False)
+
+plt.subplot(333)
+plt.xlabel('number_project', fontsize=12)
+#plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['number_project'], kde=False)
+
+plt.subplot(334)
+plt.xlabel('average_montly_hours', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['average_montly_hours'], kde=False)
+
+plt.subplot(335)
+plt.xlabel('time_spend_company', fontsize=12)
+#plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['time_spend_company'], kde=False)
+
+plt.subplot(336)
+plt.xlabel('Work_accident', fontsize=12)
+#plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['Work_accident'], kde=False)
+
+plt.subplot(337)
+plt.xlabel('left', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['left'], kde=False)
+
+plt.subplot(338)
+plt.xlabel('promotion_last_5years', fontsize=12)
+#plt.ylabel('distribution', fontsize=12)
+sns.distplot(data['promotion_last_5years'], kde=False)
+
+
+# Now, we have a good idea of the distributions and what kind of data they are. 
+# **satisfaction_level**, **last_evaluation**, **number_project**, **average_montly_hours**, and **time_spend_company** are numerical variables.
+# **Work_accident**, **promotion_last_5_years**, and **left** are categorical data where 1 means *yes* and 0 means *no*.
+# We can also see some interesting bi-modal distribtuion and a very high number satisfaction levels of 0 but more of that in the next section.
+
+# Let's move on to the categorical variables we have not looked at yet.
+
+# In[ ]:
+
+
+data['sales'].value_counts()
 
 
 # In[ ]:
 
 
-#keep dist
-x1 = transform_df(x1)
-y1 = x1['target']
-x2 = transform_df(x2)
-y2 = x2['target']
-test = transform_df(test)
+count = data.groupby(data['sales']).count()
+count = pd.DataFrame(count.to_records())
+count = count.sort_values(by= 'left', ascending = False)
+count = count['sales']
 
-col = [c for c in x1.columns if c not in ['id','target']]
-x1 = x1[col]
-x2 = x2[col]
-
-watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-model = xgb.train(params, xgb.DMatrix(x1, y1), 5000,  watchlist, verbose_eval=50, early_stopping_rounds=100)
-print(gini_xgb(model.predict(xgb.DMatrix(x2), ntree_limit=model.best_ntree_limit), y2))
-test['target'] = model.predict(xgb.DMatrix(test[col]), ntree_limit=model.best_ntree_limit)
+sns.countplot(y='sales', data=data, order=count)
 
 
 # In[ ]:
 
 
-test[['id','target']].to_csv(base_path + 'test_uberKinetics.csv', index=False, float_format='%.5f')
+data['salary'].value_counts()
 
 
 # In[ ]:
 
 
-train = transform_df(train)
+count = data.groupby(data['salary']).count()
+count = pd.DataFrame(count.to_records())
+count = count.sort_values(by= 'left', ascending = False)
+count = count['salary']
+
+sns.countplot(y='salary', data=data, order=count)
+
+
+# # Data Analysis
+
+# Let's first start off with calculating the baseline prediction, which is the proportion of leavers out of all employees. We will use this in the next section to compare against the predictive models. For now, it will be useful to check whether there are any types of jobs that are more risk of employees leaving etc. 
+
+# In[ ]:
+
+
+#Calculate the baseline prediction accuracy
+#colour code left
+left = data[data['left']==1]
+stayed = data[data['left']==0]
+left_col = 'blue'
+stayed_col = 'red'
+
+print('Left: %i (%.1f percent), Stayed: %i (%.1f percent), Total: %i'     %(len(left), 1.*len(left)/len(data)*100.0,      len(stayed), 1.*len(stayed)/len(data)*100.0, len(data)))
+
+
+# Let's compare leavers and stayers and plot them against each other.
+
+# In[ ]:
+
+
+#plot the variables against their survival rates
+warnings.filterwarnings('ignore')
+plt.figure(figsize=[12,10])
+
+plt.subplot(331)
+plt.xlabel('satisfaction_level', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.kdeplot(left['satisfaction_level'].dropna().values, color=left_col)
+sns.kdeplot(stayed['satisfaction_level'].dropna().values, color=stayed_col)
+plt.plot([0.5, 0.5], [3, 0], linewidth=2, color='black')
+
+plt.subplot(332)
+plt.xlabel('last_evaluation', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.kdeplot(left['last_evaluation'].dropna().values, color=left_col)
+sns.kdeplot(stayed['last_evaluation'].dropna().values, color=stayed_col)
+plt.plot([0.57, 0.57], [3, 0], linewidth=2, color='black')
+plt.plot([0.82, 0.82], [3, 0], linewidth=2, color='black')
+
+plt.subplot(333)
+sns.barplot('number_project', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+
+plt.subplot(334)
+plt.xlabel('average_montly_hours', fontsize=12)
+plt.ylabel('distribution', fontsize=12)
+sns.kdeplot(left['average_montly_hours'].dropna().values, color=left_col)
+sns.kdeplot(stayed['average_montly_hours'].dropna().values, color=stayed_col)
+plt.plot([160, 160], [0.012, 0], linewidth=2, color='black')
+plt.plot([240, 240], [0.012, 0], linewidth=2, color='black')
+
+plt.subplot(335)
+sns.barplot('time_spend_company', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+
+plt.subplot(336)
+sns.barplot('Work_accident', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+
+plt.subplot(337)
+sns.barplot('promotion_last_5years', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+
+plt.subplot(338)
+sns.barplot('sales', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+plt.xticks(rotation=90)
+
+plt.subplot(339)
+sns.barplot('salary', 'left', data=data)
+plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+
+plt.subplots_adjust(top=0.92, bottom=0.08, left=0.10, right=0.95, hspace=0.25, wspace=0.35)
+
+
+# To summarise:
+# 
+# **satisfaction_level**: If the satisfaction level is smaller than 0.5 employees almost without exception more likely to leave than to stay. There is an uptick in leavers at levl of around 0.8. These must the top performers who most likely have been poached by a competitor.
+# 
+# **last_evaluation**: Employees who have been evaluated recently or a long time ago are more likely to leave. Perhaps the recent evaluation made the employee realise that it's not the right job for them or they received poor feedback. An evaluation that happened long time ago could indicate that these employees have received any feedback or could make their voice heard in a long time and have become 'estranged' from the company.
+# 
+# **number_project**: Employees with few projections or very many are more likely to leave.
+# 
+# **average_montly_hours**: This is a similar story to number_projects. These two variables are probably correlated with each other.
+# 
+# **time_spend_company**: Once an employee has worked longer than 3 years, they are more likely to leave.
+# 
+# **Work_accident**: Interestingly, there is a higher proportion of employees to leave that had an accident than those who did not. This might be due to a very smaller number of accidents and thus a statistical fluke. 
+# 
+# **promotion_last_5_years**: It's not surprising to see that employees who have been promoted are more likely to stay.
+# 
+# **sales**: Management and R&D are more likely to stay than other job categories. On the other hand HR and Accounting are more likely to leave compared to the average.
+# 
+# **salary**: Not surprisingly employees with higher pay are more likely to stay.
+
+# Let's check the accidents quickly. 
+
+# In[ ]:
+
+
+accident = data[data['Work_accident']==1]
+no_accident = data[data['Work_accident']==0]
+
+print('Accident: %i (%.1f percent), No accident: %i (%.1f percent), Total: %i'     %(len(accident), 1.*len(accident)/len(data)*100.0,      len(no_accident), 1.*len(no_accident)/len(data)*100.0, len(data)))
+
+
+# Turns out there are actually quite a few accidents. It is an interesting observation but let's see if it really matters.
+
+# Next, let's find out if any of the variables are correlated with each other.
+
+# In[ ]:
+
+
+data.head()
 
 
 # In[ ]:
 
 
-train['target'] = model.predict(xgb.DMatrix(train[col]), ntree_limit=model.best_ntree_limit)
+#I need to drop the categorical varaibles as calculating their correlations doesn't make any sense.
+datacor = data.drop(['Work_accident', 'promotion_last_5years', 'sales', 'salary', 'left'], axis=1)
 
-train[['id','target']].to_csv(base_path + 'train_uberKinetics.csv', index=False, float_format='%.5f')
+plt.figure(figsize=(14,12))
+sns.heatmap(datacor.corr(), vmax=0.6, square=True, annot=True)
 
 
-# # MY PART (STACKING)
+# After we have looked at the variables individually, let's look at them in the context of other variables. First I want to find out whether salaries have anything to do with job categories having different probabilities of leaving. 
+# 
+# What really stands out is that there are proportionally a lot more highly paid positions in management. That could help explain the lower probability in leaving. The other job categories all look fairly similar.
 
 # In[ ]:
 
 
-
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# test files
-
-test_xgb = pd.read_csv(base_path + 'test_sub_xgb.csv')
-test_lgb = pd.read_csv(base_path + 'test_sub_lgb.csv')
-test_dnn = pd.read_csv(base_path + 'test_dnn_predictions.csv')
-test_up = pd.read_csv(base_path + 'test_submission.csv')
-test_cat = pd.read_csv(base_path + 'test_catboost_submission.csv')
-test_kin = pd.read_csv(base_path + 'test_uberKinetics.csv')
-test_gp = pd.read_csv(base_path + 'test_gpari.csv')
-
-test=pd.read_csv(base_path + 'test.csv')
-
-
-test = pd.concat([test, 
-                   test_xgb[['target']].rename(columns = {'target' : 'xgb'}),
-                   test_lgb[['target']].rename(columns = {'target' : 'lgb'}),
-                   test_dnn[['target']].rename(columns = {'target' : 'dnn'}),
-                   test_up[['target']].rename(columns = {'target' : 'up'}),
-                   test_cat[['target']].rename(columns = {'target' : 'cat'}),
-                   test_kin[['target']].rename(columns = {'target' : 'kin'}),
-                   test_gp[['target']].rename(columns = {'target' : 'gp'})                   
-                  ], axis = 1)
-
-
-train_cols = ['xgb', 'lgb', 'dnn', 'up', 'cat', 'kin', 'gp']
+#How do the salaries amongst different job categories look like?
+sns.factorplot("salary", col="sales", col_wrap=5,
+                   data=data,
+                    kind="count", size=2.5, aspect=.8, sharey = False)
 
 
 # In[ ]:
 
 
-### preprocess
+#Where do accidents occur?
+sns.factorplot("Work_accident", col="sales", col_wrap=5,
+                   data=data,
+                    kind="count", size=2.5, aspect=.8, sharey = False)
+
+
+# This equally distributed across all job categories
+
+# In[ ]:
+
+
+#Who got the promotions?
+sns.factorplot("promotion_last_5years", col="sales", col_wrap=5,
+                   data=data,
+                    kind="count", size=2.5, aspect=.8, sharey = False)
+
+
+# Management (and Marketing + RandD) seem to have more promotions 
+
+# In[ ]:
+
+
+#Who is the most satisfied
+median = data.groupby(['sales']).median()
+median = pd.DataFrame(median.to_records())
+median = median.sort_values(by='satisfaction_level', ascending = False)
+median = median['sales']
+
+sns.boxplot('sales', 'satisfaction_level',order=median, data=data)
+
+
+# Satisfaction levels medians are almost the same across all job categories with the exception of accounting and HR.
+# 
+
+# In[ ]:
+
+
+#Who works the longest hours?
+
+
+median = data.groupby(['sales']).median()
+median = pd.DataFrame(median.to_records())
+median = median.sort_values(by='average_montly_hours', ascending = False)
+median = median['sales']
+
+sns.boxplot('sales', 'average_montly_hours',order=median, data=data)
 
 
 # In[ ]:
 
 
-for t in train_cols:
-    test[t + '_rank'] = test[t].rank()
+#Is satisfaction level correlated with working hours?
 
+sns.jointplot(x='satisfaction_level', y='average_montly_hours', data=data, alpha=0.1)
 
-test['target'] = (test['xgb_rank'] + test['lgb_rank'] + test['dnn_rank'] + test['up_rank'] +                  test['cat_rank'] + test['kin_rank'] + test['gp_rank']) / (7 * test.shape[0])
-
-
-# # The final submission
 
 # In[ ]:
 
 
-test[['id', 'target']].to_csv(base_path + 'rank_avg.csv.gz', index = False, compression = 'gzip') 
+#Satisfaction vs salary
+
+median = data.groupby(['salary']).median()
+median = pd.DataFrame(median.to_records())
+median = median.sort_values(by='satisfaction_level', ascending = False)
+median = median['salary']
+
+sns.violinplot('salary', 'satisfaction_level',order=median, data=data)
+
+
+# Satisfaction levels seem fairly equally distributed across the three salary categories but the mean of *low* is slightly lower than for the other two categories.
+
+# # Data Preprocessing
+
+# In this section I will one-hot encode **salary** and **sales** and create a training and testing set. 
+# 
+# One-hot encoding means that we create a new column for each type of **sales** - HR, accounting etc. will all have their own column with each cell containing either 1 or 0. Each column is now effectively a dummy variable. If an employee works in HR the corresponding cell will be filled with 1 and otherwise with 0.
+# 
+# One-hot encoding is important for categorical variables that contain values other than 1 and 0. If this isn't done, Python will convert Accounting, HR, Marketing et.c to the numbers 0, 1, 2... which will lead to misleading results.
+# 
+# Splitting the data into training and testing sets allows us to check how well the model performs on unseen data, the testing set.
+
+# In[ ]:
+
+
+#Select the variables to be one-hot encoded
+one_hot_features = ['salary', 'sales']
+
+# For each categorical column, find the unique number of categories. This tells us how many columns we are adding to the dataset.
+longest_str = max(one_hot_features, key=len)
+total_num_unique_categorical = 0
+for feature in one_hot_features:
+    num_unique = len(data[feature].unique())
+    print('{col:<{fill_col}} : {num:d} unique categorical values.'.format(col=feature, 
+                                                                          fill_col=len(longest_str),
+                                                                          num=num_unique))
+    total_num_unique_categorical += num_unique
+print('{total:d} columns will be added during one-hot encoding.'.format(total=total_num_unique_categorical))
+
+
+# In[ ]:
+
+
+# Convert categorical variables into dummy/indicator variables (i.e. one-hot encoding).
+one_hot_encoded = pd.get_dummies(data[one_hot_features])
+one_hot_encoded.info(verbose=True, memory_usage=True, null_counts=True)
+
+
+# In[ ]:
+
+
+#Let's check everything looks like as we were expecting
+one_hot_encoded.head()
+
+
+# In[ ]:
+
+
+#Delete the columns salary and sales...
+data = data.drop(['salary', 'sales'], 1)
+
+#...and add the new one-hot encoded variables
+data = pd.concat([data, one_hot_encoded], axis=1)
+data.head()
+
+
+# In[ ]:
+
+
+#Split data into training and testing set with 80% of the data going into training
+training, testing = train_test_split(data, test_size=0.2, random_state=0)
+print("Total sample size = %i; training sample size = %i, testing sample size = %i"     %(data.shape[0],training.shape[0],testing.shape[0]))
+
+
+# In[ ]:
+
+
+#This creates a list with all column names, which will be used to subset the tables 
+cols = ['satisfaction_level', 'last_evaluation', 'number_project', 'average_montly_hours', 'time_spend_company', 'Work_accident',
+'promotion_last_5years', 'salary_high', 'salary_low', 'salary_medium', 'sales_IT', 'sales_RandD', 'sales_accounting',
+'sales_hr', 'sales_management', 'sales_marketing', 'sales_product_mng', 'sales_sales', 'sales_support', 'sales_technical']
+tcols = np.append(['left'],cols)
+
+#X are the variables/features that help predict y, which tells us whether an employee left or stayed. This is done for both 
+#training and testing
+df = training.loc[:,tcols]
+X = df.loc[:,cols]
+y = np.ravel(df.loc[:,['left']])
+
+df_test = testing.loc[:,tcols]
+X_test = df_test.loc[:,cols]
+y_test = np.ravel(df_test.loc[:,['left']])
+
+
+# # Data Models
+
+# In this section I will first calculate the baseline, which is the accuracy of predicting the most frequent class, which is 76.2% for *stayed*.
+# 
+# I then run several models, which have to beat an accuracy of 76.2 in order to be an improvement to prediction. After I ran all models I collate the accuracy score and present my findings.
+
+# In[ ]:
+
+
+#Baseline
+print('Left: %i (%.1f percent), Stayed: %i (%.1f percent), Total: %i'     %(len(left), 1.*len(left)/len(data)*100.0,      len(stayed), 1.*len(stayed)/len(data)*100.0, len(data)))
+base_score = len(stayed)/len(data)
+print('This is the score to beat:', base_score)
+
+
+# In[ ]:
+
+
+#Logistic Regression
+clf_log = LogisticRegression()
+clf_log = clf_log.fit(X,y)
+score_log = cross_val_score(clf_log, X, y, cv=5).mean()
+print(score_log)
+
+
+# In[ ]:
+
+
+# Perceptron
+
+clf_pctr = Perceptron(
+    class_weight='balanced'
+    )
+clf_pctr = clf_pctr.fit(X,y)
+score_pctr = cross_val_score(clf_pctr, X, y, cv=5).mean()
+print(score_pctr)
+
+
+# In[ ]:
+
+
+k_range = range(1,26)
+scores=[]
+for k in k_range:
+    knn=KNeighborsClassifier(n_neighbors=k)
+    knn.fit(X,y)
+    y_pred=knn.predict(X_test)
+    scores.append(accuracy_score(y_test,y_pred))
+
+plt.plot(k_range,scores)
+plt.xlabel('Value of k for KNN')
+plt.ylabel('Testing accuracy')
+
+
+# In[ ]:
+
+
+# KNN - based on the graph n_neighbors should be 1 or 2 but 10 seems to give a better result
+
+clf_knn = KNeighborsClassifier(
+    n_neighbors=10,
+    weights='distance'
+    )
+clf_knn = clf_knn.fit(X,y)
+score_knn = cross_val_score(clf_knn, X, y, cv=5).mean()
+print(score_knn)
+
+
+# In[ ]:
+
+
+#SVM
+
+clf_svm = svm.SVC(
+    class_weight='balanced'
+    )
+clf_svm.fit(X, y)
+score_svm = cross_val_score(clf_svm, X, y, cv=5).mean()
+print(score_svm)
+
+
+# In[ ]:
+
+
+# Bagging
+
+bagging = BaggingClassifier(
+    KNeighborsClassifier(
+        n_neighbors=10,
+        weights='distance'
+        ),
+    oob_score=True,
+    max_samples=0.5,
+    max_features=1.0
+    )
+clf_bag = bagging.fit(X,y)
+score_bag = clf_bag.oob_score_
+print(score_bag)
+
+
+# In[ ]:
+
+
+# Decision Tree
+
+clf_tree = tree.DecisionTreeClassifier(
+    #max_depth=3,
+    class_weight="balanced",
+    min_weight_fraction_leaf=0.01
+    )
+clf_tree = clf_tree.fit(X,y)
+score_tree = cross_val_score(clf_tree, X, y, cv=5).mean()
+print(score_tree)
+
+
+# In[ ]:
+
+
+# Random Forest
+
+clf_rf = RandomForestClassifier(
+    n_estimators=1000, 
+    max_depth=None, 
+    min_samples_split=10 
+    #class_weight="balanced", 
+    #min_weight_fraction_leaf=0.02 
+    )
+clf_rf = clf_rf.fit(X,y)
+score_rf = cross_val_score(clf_rf, X, y, cv=5).mean()
+print(score_rf)
+
+
+# In[ ]:
+
+
+# Extremely Randomised Trees
+
+clf_ext = ExtraTreesClassifier(
+    max_features='auto',
+    bootstrap=True,
+    oob_score=True,
+    n_estimators=1000,
+    max_depth=None,
+    min_samples_split=10
+    #class_weight="balanced",
+    #min_weight_fraction_leaf=0.02
+    )
+clf_ext = clf_ext.fit(X,y)
+score_ext = cross_val_score(clf_ext, X, y, cv=5).mean()
+print(score_ext)
+
+
+# In[ ]:
+
+
+# Gradient Boosting
+
+clf_gb = GradientBoostingClassifier(
+            #loss='exponential',
+            n_estimators=1000,
+            learning_rate=0.1,
+            max_depth=3,
+            subsample=0.5,
+            random_state=0).fit(X, y)
+clf_gb.fit(X,y)
+score_gb = cross_val_score(clf_gb, X, y, cv=5).mean()
+print(score_gb)
+
+
+# In[ ]:
+
+
+# Ada Boost
+
+clf_ada = AdaBoostClassifier(n_estimators=400, learning_rate=0.1)
+clf_ada.fit(X,y)
+score_ada = cross_val_score(clf_ada, X, y, cv=5).mean()
+print(score_ada)
+
+
+# In[ ]:
+
+
+#eXtreme Gradient Boosting
+
+clf_xgb = xgb.XGBClassifier(
+    max_depth=2,
+    n_estimators=500,
+    subsample=0.5,
+    learning_rate=0.1
+    )
+clf_xgb.fit(X,y)
+score_xgb = cross_val_score(clf_xgb, X, y, cv=5).mean()
+print(score_xgb)
+
+
+# The results are in and tabulated below and shown graphically. We can boost prediction accuracy from 76.2% to 98% using Gradient Boosting or Random Forest, which is a significant increase. This is the cross-validation score using the training set only. In the next section I will test accuracy using the trained models on the unseen testing set.
+
+# In[ ]:
+
+
+models = pd.DataFrame({
+        'Model' : ['Baseline', 'Logistic Regression', 'Perceptron', 'KNN', 'SVM', 'Bagging', 'Decision Tree',
+                   'Random Forest', 'Extra Tree', 'Gradient Boosting', 'ADA Boosting', 'XGBoost'],
+        'Score' : [base_score, score_log, score_pctr, score_knn, score_svm, score_bag, score_tree, score_rf, score_ext, score_gb, 
+                    score_ada, score_xgb]  
+})
+
+models = models.sort_values(by='Score', axis=0, ascending=False, inplace=False, kind='quicksort', na_position='last')
+
+models
+
+
+# In[ ]:
+
+
+sns.barplot(y=models.Model, x=models.Score)
+
+
+# # Model Validation on test set
+
+# We get similar scores using the test set
+
+# In[ ]:
+
+
+score_log_test = clf_log.score(X_test, y_test)
+score_pctr_test = clf_pctr.score(X_test, y_test)
+score_knn_test = clf_knn.score(X_test, y_test)
+score_svm_test = clf_svm.score(X_test, y_test)
+score_bag_test = clf_bag.score(X_test, y_test)
+score_tree_test = clf_tree.score(X_test, y_test)
+score_rf_test = clf_rf.score(X_test, y_test)
+score_ext_test = clf_ext.score(X_test, y_test)
+score_gb_test = clf_gb.score(X_test, y_test)
+score_ada_test = clf_ada.score(X_test, y_test)
+score_xgb_test = clf_xgb.score(X_test, y_test)
+
+
+# In[ ]:
+
+
+models_test = pd.DataFrame({
+        'Model' : ['Baseline', 'Logistic Regression', 'Perceptron', 'KNN', 'SVM', 'Bagging', 'Decision Tree',
+                   'Random Forest', 'Extra Tree', 'Gradient Boosting', 'ADA Boosting', 'XGBoost'],
+        'Score' : [base_score, score_log_test, score_pctr_test, score_knn_test, score_svm_test, score_bag_test, score_tree_test,
+                   score_rf_test, score_ext_test, score_gb_test, 
+                    score_ada_test, score_xgb_test]  
+})
+
+models_test = models_test.sort_values(by='Score', axis=0, ascending=False, inplace=False, kind='quicksort', na_position='last')
+
+models_test
+
+
+# In[ ]:
+
+
+sns.barplot(y=models_test.Model, x=models_test.Score)
+
+
+# # Feature Importance using Random Forest as Example
+
+# The models are doing a great job at predicting who is going to leave or stay but they are a bit of a black box. So, what factors are influencing the decision of an employee to leave. This is useful information for the company so that they can tackle their turn-over and focus on the right factors.
+# 
+# As an example, I will investigate what factors were the most important in predicting the outcome in Random Forest.  
+
+# In[ ]:
+
+
+importance = pd.DataFrame(list(zip(X.columns, np.transpose(clf_rf.feature_importances_)))             ).sort_values(1, ascending=False)
+importance
+
+
+# In[ ]:
+
+
+importances = clf_rf.feature_importances_
+
+std = np.std([tree.feature_importances_ for tree in clf_rf.estimators_], axis=0)
+indices = np.argsort(importances)[::-1]
+
+# Plot the feature importances of the forest
+plt.figure()
+plt.title("Feature importances")
+plt.bar(range(X.shape[1]), importances[indices],  
+       color="r", yerr=std[indices], align="center")
+plt.xticks(range(X.shape[1]),X.columns[indices], rotation=90)
+plt.xlim([-1, X.shape[1]])
+plt.show()
 

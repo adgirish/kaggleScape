@@ -1,122 +1,185 @@
 
 # coding: utf-8
 
+# # Global Terrorism (1970 - 2015)
+
 # In[ ]:
 
 
-import os 
-from scipy import ndimage
-from subprocess import check_output
-
-import cv2
+import pandas as pd
 import numpy as np
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
+from mpl_toolkits.basemap import Basemap
+import matplotlib.animation as animation
+from IPython.display import HTML
+import warnings
+warnings.filterwarnings('ignore')
+
+try:
+    t_file = pd.read_csv('../input/globalterrorismdb_0616dist.csv', encoding='ISO-8859-1')
+    print('File load: Success')
+except:
+    print('File load: Failed')
 
 
 # In[ ]:
 
 
-img_rows, img_cols= 350, 425
-im_array = cv2.imread('../input/train/LAG/img_00091.jpg',0)
-template = np.zeros([ img_rows, img_cols], dtype='uint8') # initialisation of the template
-template[:, :] = im_array[100:450,525:950] # I try multiple times to find the correct rectangle. 
-#template /= 255.
-plt.subplots(figsize=(10, 7))
-plt.subplot(121),plt.imshow(template, cmap='gray') 
-plt.subplot(122), plt.imshow(im_array, cmap='gray')
+t_file = t_file[np.isfinite(t_file.latitude)]
 
 
 # In[ ]:
 
 
-
-file_name = '../input/train/LAG/img_01512.jpg' # img_00176,img_02758, img_01512
-img = cv2.imread(file_name,0) 
-img2 = img
-w, h = template.shape[::-1]
-
-# All the 6 methods for comparison in a list
-methods = ['cv2.TM_CCOEFF', 'cv2.TM_CCOEFF_NORMED', 'cv2.TM_CCORR',
-            'cv2.TM_CCORR_NORMED', 'cv2.TM_SQDIFF', 'cv2.TM_SQDIFF_NORMED']
-
-for meth in methods:
-     img = img2
-     method = eval(meth)
- 
-     # Apply template Matching
-     res = cv2.matchTemplate(img,template,method)
-     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
- 
-     # If the method is TM_SQDIFF or TM_SQDIFF_NORMED, take minimum
-     if method in [cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED]:
-         top_left = min_loc
-     else:
-         top_left = max_loc
-     bottom_right = (top_left[0] + w, top_left[1] + h)
- 
-     cv2.rectangle(img,top_left, bottom_right, 255, 2)
-     fig, ax = plt.subplots(figsize=(12, 7))
-     plt.subplot(121),plt.imshow(res,cmap = 'gray')
-     plt.title('Matching Result'), plt.xticks([]), plt.yticks([])
-     plt.subplot(122),plt.imshow(img,cmap = 'gray') #,aspect='auto'
-     plt.title('Detected Point'), plt.xticks([]), plt.yticks([])
-     plt.suptitle(meth)
- 
-     plt.show()
+t_file.head()
 
 
 # In[ ]:
 
 
-
-method = eval('cv2.TM_CCOEFF')
-indexes=[1,30,40,5]
-
-train_path = "../input/train/"
-sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-for sub_folder in sub_folders:
-    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-    k=0
-    _, ax = plt.subplots(2,2,figsize=(10, 7))
-    for file_name in [file_names[x] for x in indexes]: # I take only 4 images of each group. 
-        img = cv2.imread(train_path+sub_folder+"/"+file_name,0)
-        img2 = img
-        w, h = template.shape[::-1]
-        # Apply template Matching
-        res = cv2.matchTemplate(img,template,method)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-        top_left = max_loc
-        bottom_right = (top_left[0] + w, top_left[1] + h)
- 
-        cv2.rectangle(img,top_left, bottom_right, 255, 2)
-        if k==0 : 
-            ax[0,0].imshow(img,cmap = 'gray')
-            plt.xticks([]), plt.yticks([])
-        if k==1 : 
-            ax[0,1].imshow(img,cmap = 'gray')
-            plt.xticks([]), plt.yticks([])
-        if k==2 : 
-            ax[1,0].imshow(img,cmap = 'gray')
-            plt.xticks([]), plt.yticks([])
-        if k==3 : 
-            ax[1,1].imshow(img,cmap = 'gray')
-            plt.xticks([]), plt.yticks([])
-        k=k+1
-    plt.suptitle(sub_folder)
-    plt.show()
+regions = list(set(t_file.region_txt))
+colors = ['yellow', 'red', 'lightblue', 'purple', 'green', 'orange', 'brown',          'aqua', 'lightpink', 'lightsage', 'lightgray', 'navy']
 
 
-# ### Remark :
-# As we can see, with a LAG template, we almost find all the LAG fish. This is good point. 
-# The other good point is that we don't find in our rectangle the other fish. Now the idea is to create the other template and do it for all the images. 
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
+m.drawcoastlines()
+m.drawcountries()
+m.fillcontinents(color='burlywood',lake_color='lightblue', zorder = 1)
+m.drawmapboundary(fill_color='lightblue')
+
+def pltpoints(region, color = None, label = None):
+    x, y = m(list(t_file.longitude[t_file.region_txt == region].astype("float")),            (list(t_file.latitude[t_file.region_txt == region].astype("float"))))
+    points = m.plot(x, y, "o", markersize = 4, color = color, label = label, alpha = .5)
+    return(points)
+
+for i, region in enumerate(regions):
+    pltpoints(region, color = colors[i], label = region)  
+    
+plt.title("Global Terrorism (1970 - 2015)")
+plt.legend(loc ='lower left', prop= {'size':11})
+plt.show()    
+
+
+# **From the graph above, we can see, that terrorism is widespread, but judging by where the points are located, and quite obviously, it mostly affects areas that are more densley populated.**
+
+# In[ ]:
+
+
+count_year = t_file.groupby(['iyear']).count()
+mean_year = t_file.groupby(['iyear']).mean()
+
+fig = plt.figure(figsize = (10,8))
+ax1 = fig.add_subplot(1,2,1)
+ax2 = fig.add_subplot(1,2,2)
+ax1.set(title = 'Total acts of terrorism', ylabel = 'Act Count', xlabel = 'Year')
+ax1.plot(count_year.index, count_year.eventid)
+ax2.set(title = 'Average Number of Deaths per Act', ylabel = 'Death Count', xlabel = 'Year')
+ax2.plot(mean_year.index, mean_year.nkill)
+fig.autofmt_xdate()
+
+
+# **As we can see from the above graphs, not only has the number of terroristic acts increased, but also the number of deaths per act hs been on the rise. This could possible be due to there being more densely populated areas over time.**
+
+# In[ ]:
+
+
+region_mean_kills = []
+for region in regions:
+    region_mean_kills.append(t_file.nkill[t_file.region_txt == region].mean())
+
+print('Average number of people killed per attack by Region\n')
+for i, region in enumerate(regions):
+    print('{}:{}'.format(region, round(region_mean_kills[i],2)))
+
+
+# **We can also note, that on average, every terror attack in Sub-Saharan Africa claims over 5 lives.**
 # 
 
-# # Part 2
-# 
-# ### Soon.... 
+# In[ ]:
 
+
+def mapmean(row):
+    for i, region in enumerate(regions):
+        return region_mean_kills[i]
+
+
+# In[ ]:
+
+
+t_file['region_mean'] = t_file.apply(mapmean, axis = 1)
+t_file['nkill-mean'] = t_file['nkill'] - t_file['region_mean']
+t_file['absnkill-mean'] = abs(t_file['nkill-mean'])
+
+
+# In[ ]:
+
+
+def get_points(year, region = regions):
+    points = t_file[['iyear', 'latitude', 'longitude', 'nkill', 'region_mean', 'nkill-mean', 'absnkill-mean']][t_file.iyear == year]
+    return(points)
+
+
+# # Lastly:
+#     
+# **Here is an animation of how terrorism has progressed from 1970 through 2015**
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(10, 10))
+fig.text(.8, .3, 'R. Troncoso', ha='right')
+fig.suptitle('Global Terrorism (1970 - 2015)')
+cmap = plt.get_cmap('coolwarm')
+
+m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
+m.drawcoastlines()
+m.drawcountries()
+m.fillcontinents(color='burlywood',lake_color='lightblue', zorder = 1)
+m.drawmapboundary(fill_color='lightblue')
+
+START_YEAR = 1970
+LAST_YEAR = 2015
+
+points = get_points(START_YEAR)
+x, y= m(list(points['longitude']), list(points['latitude']))
+scat = m.scatter(x, y, s = points['absnkill-mean']*2, marker='o', alpha=0.3, zorder=10, c = points['nkill-mean'], cmap = cmap)
+year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
+plt.close()
+
+def update(frame_number):
+    current_year = START_YEAR + (frame_number % (LAST_YEAR - START_YEAR + 1))
+    points = get_points(current_year)
+    color = list(points['nkill-mean'])
+    x, y = m(list(points['longitude']), list(points['latitude']))
+    scat.set_offsets(np.dstack((x, y)))
+    scat.set_color(cmap(points['nkill-mean']))
+    scat.set_sizes(points['absnkill-mean']*1.5)
+    year_text.set_text(str(current_year))
+    
+ani = animation.FuncAnimation(fig, update, interval=750, frames=LAST_YEAR - START_YEAR + 1)
+ani.save('animation.gif', writer='imagemagick', fps=2)
+
+
+# In[ ]:
+
+
+import io
+import base64
+
+filename = 'animation.gif'
+
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+
+
+# **The points above represent the all terrorist attacks.**
 # 
-# On the same way, the goal is to detect the fish in an image. 
+# **The color and size represent the number of people killed during that particular attack.**
 # 
-# There exist a method to find Shapes in an image. ([*tutorial*](http://www.pyimagesearch.com/2014/10/20/finding-shapes-images-using-python-opencv/))
+# **As you can see, there has been an increase in attacks, as well as the number of deaths per attack has increased, particularly in Sub-Sahararan Africa and the Middle East.**

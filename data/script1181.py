@@ -1,438 +1,192 @@
 
 # coding: utf-8
 
-# <h1>Welcome to my new Kernel</h1>
-# 
-# The Kernel objective is to analyse and try to understand some Indians Startup Patterns.<br>
-# 
-# Some informations about dataset below
-# 
-
-# <h2>Context</h2><br>
-# Interested in the Indian startup ecosystem just like me? Wanted to know what type of startups are getting funded in the last few years? Wanted to know who are the important investors? Wanted to know the hot fields that get a lot of funding these days? This dataset is a chance to explore the Indian start up scene. Deep dive into funding data and derive insights into the future!<br>
-# 
-# <h2>Content</h2><br>
-# This dataset has funding information of the Indian startups from January 2015 to August 2017. It includes columns with the date funded, the city the startup is based out of, the names of the funders, and the amount invested (in USD).<br>
-# 
-# 
-# <h2>Inspiration</h2>
-# Possible questions which could be answered are:<br>
-# - How does the funding ecosystem change with time?<br>
-# - Do cities play a major role in funding?<br>
-# - Which industries are favored by investors for funding?<br>
-# - Who are the important investors in the Indian Ecosystem?<br>
-# - How much funds does startups generally get in India?<br>
-
-# Do you wanna see anothers interesting dataset analysis? <a href="https://www.kaggle.com/kabure/kernels">Click here</a> <br>
-# Please, give your feedback and if you like this Kernel <b>votes up </b> =) 
-
-# <h2>Importing the librarys</h2>
-
-# In[1]:
+# In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import keras
+from keras.applications.vgg19 import VGG19
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten
+
 import os
+from tqdm import tqdm
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
+import cv2
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
 from subprocess import check_output
-from wordcloud import WordCloud, STOPWORDS
+print(check_output(["ls", "../input"]).decode("utf8"))
 
+# Any results you write to the current directory are saved as output.
 
-# <h2>Importing the data</h2>
 
-# In[2]:
+# First we will read in the csv's so we can see some more information on the filenames and breeds
 
+# In[ ]:
 
-df_startups = pd.read_csv("../input/startup_funding.csv",index_col=0)
 
+df_train = pd.read_csv('../input/labels.csv')
+df_test = pd.read_csv('../input/sample_submission.csv')
 
-# <h2>Knowning our data</h2>
 
-# In[3]:
+# In[ ]:
 
 
-print(df_startups.shape)
-print(df_startups.nunique())
-print(df_startups.info())
+df_train.head(10)
 
 
-# <h2>Looking the NaN's</h2>
+# We can see that the breed needs to be one-hot encoded for the final submission, so we will now do this.
 
-# In[4]:
+# In[ ]:
 
 
-print("NaN's description")
-print(df_startups.isnull().sum())
+targets_series = pd.Series(df_train['breed'])
+one_hot = pd.get_dummies(targets_series, sparse = True)
 
 
-# <h2>Looking the data</h2>
+# In[ ]:
 
-# In[5]:
 
+one_hot_labels = np.asarray(one_hot)
 
-df_startups.head()
 
+# Next we will read in all of the images for test and train, using a for loop through the values of the csv files. I have also set an im_size variable which sets the size for the image to be re-sized to,  90x90 px, you should play with this number to see how it affects accuracy.
 
-# <h2>Starting the exploration looking the  Amount distribuitions </h2>
+# In[ ]:
 
-# In[6]:
 
+im_size = 90
 
-df_startups["AmountInUSD"] = df_startups["AmountInUSD"].apply(lambda x: float(str(x).replace(",","")))
 
+# In[ ]:
 
-# In[7]:
 
+x_train = []
+y_train = []
+x_test = []
 
-print("Min Amount")
-print(df_startups["AmountInUSD"].min())
-print("Mean Amount")
-print(round(df_startups["AmountInUSD"].mean(),2))
-print("Median Amount")
-print(df_startups["AmountInUSD"].median())
-print("Max Amount")
-print(df_startups["AmountInUSD"].max())
-print("Standard Deviation Amount")
-print(round(df_startups["AmountInUSD"].std(),2))
 
+# In[ ]:
 
-# <h2> Amount in USD distribuition </h2>
 
-# In[8]:
+i = 0 
+for f, breed in tqdm(df_train.values):
+    img = cv2.imread('../input/train/{}.jpg'.format(f))
+    label = one_hot_labels[i]
+    x_train.append(cv2.resize(img, (im_size, im_size)))
+    y_train.append(label)
+    i += 1
 
 
-#Let's create a new feature that is a Amount with log to better see the values distribuitions
-df_startups['AmountInUSD_log'] = np.log(df_startups["AmountInUSD"] + 1)
+# In[ ]:
 
-plt.figure(figsize=(8,5))
-sns.distplot(df_startups['AmountInUSD_log'].dropna())
-plt.xlabel('log of Amount in USD', fontsize=12)
-plt.title("Log Hist of investment in USD", fontsize=16)
-plt.show()
 
+for f in tqdm(df_test['id'].values):
+    img = cv2.imread('../input/test/{}.jpg'.format(f))
+    x_test.append(cv2.resize(img, (im_size, im_size)))
 
-# <h2> Knowing the Investment Types </h2>
 
-# In[9]:
+# In[ ]:
 
 
-InvestmentTypeVC = df_startups.InvestmentType.value_counts()
-print("Description of Investiment Types: ")
-print(InvestmentTypeVC)
+y_train_raw = np.array(y_train, np.uint8)
+x_train_raw = np.array(x_train, np.float32) / 255.
+x_test  = np.array(x_test, np.float32) / 255.
 
-plt.figure(figsize = (15,12))
-plt.subplot(221)
 
-g = sns.countplot(x="InvestmentType", data=df_startups)
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-g.set_title("Investiment Type count", fontsize=15)
-g.set_xlabel("investment Types", fontsize=12)
-g.set_ylabel("Count", fontsize=12)
+# We check the shape of the outputs to make sure everyting went as expected.
 
-plt.subplot(222)
-g1 = sns.boxplot(x="InvestmentType", y="AmountInUSD_log", 
-            data=df_startups)
-g1.set_xticklabels(g.get_xticklabels(),rotation=45)
-g1.set_title("Investment Types less than 1 bi", fontsize=15)
-g1.set_xlabel("Investment Types", fontsize=12)
-g1.set_ylabel("Amount(USD)", fontsize=12)
+# In[ ]:
 
-plt.show()
 
+print(x_train_raw.shape)
+print(y_train_raw.shape)
+print(x_test.shape)
 
-# <h2>Looking through the principal Investors</h2>
 
-# In[10]:
+# 
+# We can see above that there are 120 different breeds. We can put this in a num_class variable below that can then be used when creating the CNN model.
 
+# In[ ]:
 
-Investors = df_startups.InvestorsName.value_counts()
 
-print("Description count of Investors")
-print(Investors[:15])
+num_class = y_train_raw.shape[1]
 
-plt.figure(figsize = (12,5))
-g = sns.barplot(x=Investors.index[:20],y=Investors.values[:20])
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-g.set_title("Investors Name Count", fontsize=15)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Count", fontsize=12)
 
-plt.show()
+# It is important to create a validation set so that you can gauge the performance of your model on independent data, unseen to the model in training. We do this by splitting the current training set (x_train_raw) and the corresponding labels (y_train_raw) so that we set aside 30 % of the data at random and put these in validation sets (X_valid and Y_valid).
+# 
+# * This split needs to be improved so that it contains images from every class, with 120 separate classes some can not be represented and so the validation score is not informative. 
 
+# In[ ]:
 
-# <h2>City Location Column</h2>
 
-# In[11]:
+X_train, X_valid, Y_train, Y_valid = train_test_split(x_train_raw, y_train_raw, test_size=0.3, random_state=1)
 
 
-location = df_startups['CityLocation'].value_counts()
-print("Description count of Location")
-print(location[:15])
+# Now we build the CNN architecture. Here we are using a pre-trained model VGG19 which has already been trained to identify many different dog breeds (as well as a lot of other objects from the imagenet dataset see here for more information: http://image-net.org/about-overview). Unfortunately it doesn't seem possible to downlod the weights from within this kernel so make sure you set the weights argument to 'imagenet' and not None, as it currently is below.
+# 
+# We then remove the final layer and instead replace it with a single dense layer with the number of nodes corresponding to the number of breed classes we have (120).
 
-plt.figure(figsize=(12,6))
-sns.barplot(x=location.index[:20], y=location.values[:20])
-plt.xticks(rotation=45)
-plt.xlabel('Industry Name', fontsize=12)
-plt.ylabel('Industry counting', fontsize=12)
-plt.title("Count frequency of Industry ", fontsize=16)
-plt.show()
+# In[ ]:
 
 
-# <h2>Industry Vertical </h2>
+# Create the base pre-trained model
+# Can't download weights in the kernel
+base_model = VGG19(#weights='imagenet',
+    weights = None, include_top=False, input_shape=(im_size, im_size, 3))
 
-# In[12]:
+# Add a new top layer
+x = base_model.output
+x = Flatten()(x)
+predictions = Dense(num_class, activation='softmax')(x)
 
+# This is the model we will train
+model = Model(inputs=base_model.input, outputs=predictions)
 
-industry = df_startups['IndustryVertical'].value_counts()[:20]
+# First: train only the top layers (which were randomly initialized)
+for layer in base_model.layers:
+    layer.trainable = False
 
-plt.figure(figsize=(12,6))
-sns.barplot(x=industry.index, y=industry.values)
-plt.xticks(rotation=45)
-plt.xlabel("Industry's Name", fontsize=12)
-plt.ylabel('Industry counting', fontsize=12)
-plt.title("Count frequency of Industry Verical", fontsize=16)
-plt.show()
+model.compile(loss='categorical_crossentropy', 
+              optimizer='adam', 
+              metrics=['accuracy'])
 
+callbacks_list = [keras.callbacks.EarlyStopping(monitor='val_acc', patience=3, verbose=1)]
+model.summary()
 
-# <h2>Let's explore furthur this Industry's</h2><br>
-# What's the most frequent in the first 3 ? 
-# - Consumer Internet
-# - Technology
-# - eCommerce
 
-# We have some NaN's on this column, so I will be careful 
+# In[ ]:
 
-# <h2> Consumer Internet Suvertical</h2>
 
-# In[13]:
+model.fit(X_train, Y_train, epochs=1, validation_data=(X_valid, Y_valid), verbose=1)
 
 
-cons_sub = df_startups[df_startups['IndustryVertical'] == 'Consumer Internet']['SubVertical'].value_counts()
+# Remember, accuracy is low here because we are not taking advantage of the pre-trained weights as they cannot be downloaded in the kernel. This means we are training the wights from scratch and I we have only run 1 epoch due to the hardware constraints in the kernel.
+# 
+# Next we will make our predictions.
 
-plt.figure(figsize = (10,5))
-g = sns.barplot(x=cons_sub.index[:20],y=cons_sub.values[:20])
-g.set_xticklabels(g.get_xticklabels(),rotation=90)
-g.set_title("Sub Category's by Consumer Internet", fontsize=15)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Count", fontsize=12)
-plt.show()
+# In[ ]:
 
 
-# <h2> Technology Subvertical </h2>
+preds = model.predict(x_test, verbose=1)
 
-# In[14]:
 
+# In[ ]:
 
-tech_sub = df_startups[df_startups['IndustryVertical'] == 'Technology']['SubVertical'].value_counts()
 
-plt.figure(figsize = (10,6))
-g = sns.barplot(x=tech_sub.index[:20],y=tech_sub.values[:20])
-g.set_xticklabels(g.get_xticklabels(),rotation=90)
-g.set_title("Sub Category's by Technology", fontsize=15)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Count", fontsize=12)
-plt.show()
+sub = pd.DataFrame(preds)
+# Set column names to those generated by the one-hot encoding earlier
+col_names = one_hot.columns.values
+sub.columns = col_names
+# Insert the column id from the sample_submission at the start of the data frame
+sub.insert(0, 'id', df_test['id'])
+sub.head(5)
 
-
-# Data Analytics platform ?!?! WoW Very Interesting information
-
-# <h2>Ecommerce Subvertical </h2>
-
-# In[15]:
-
-
-tech_sub = df_startups[df_startups['IndustryVertical'] == 'Ecommerce']['SubVertical'].value_counts()
-
-plt.figure(figsize = (10,6))
-g = sns.barplot(x=tech_sub.index[:20],y=tech_sub.values[:20])
-g.set_xticklabels(g.get_xticklabels(),rotation=25)
-g.set_title("Sub Category's by Ecommerce", fontsize=15)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Count", fontsize=12)
-plt.show()
-
-
-# Ecommerce have each name unique so it's hardest to know, might testing with worcloud?
-
-# <h2>Let's take a look on Wordcloud's</h2>
-# -First lookng the Subvertical most frequent words
-
-# In[16]:
-
-
-plt.figure(figsize = (15,15))
-
-stopwords = set(STOPWORDS)
-wordcloud = WordCloud(
-                          background_color='black',
-                          stopwords=stopwords,
-                          max_words=20,
-                          max_font_size=40, 
-                          random_state=42
-                         ).generate(str(df_startups[df_startups['IndustryVertical'] == 'Ecommerce']['SubVertical']))
-
-print(wordcloud)
-fig = plt.figure(1)
-plt.imshow(wordcloud)
-plt.title("WORD CLOUD - TITLES")
-plt.axis('off')
-plt.show()
-
-
-# <h2>Some explorations on Time variables</h2>
-
-# In[17]:
-
-
-df_startups.Date.replace((['12/05.2015', '13/04.2015','15/01.2015','22/01//2015']),                          ('12/05/2015','13/04/2015','15/01/2015','22/01/2015'), inplace=True)
-
-
-# In[18]:
-
-
-df_startups['Date'] = pd.to_datetime(df_startups['Date'])
-
-df_startups['Date_month_year'] = df_startups['Date'].dt.to_period("M")
-df_startups['Date_year'] = df_startups['Date'].dt.to_period("A")
-
-
-# <h2>Exploring the Date time colum</h2>
-
-# In[19]:
-
-
-plt.figure(figsize=(14,10))
-plt.subplot(211)
-sns.countplot(x='Date_month_year', data=df_startups)
-plt.xticks(rotation=90)
-plt.xlabel('', fontsize=12)
-plt.ylabel('Date Counting', fontsize=12)
-plt.title("Count frequency Investiments Date ", fontsize=16)
-
-plt.subplot(212)
-sns.pointplot(x='Date_month_year', y='AmountInUSD_log', data=df_startups)
-plt.xticks(rotation=90)
-plt.xlabel('Dates', fontsize=12)
-plt.ylabel('Amount Distribuition Log', fontsize=12)
-plt.title("Money Distribuition by Month-Year", fontsize=16)
-
-plt.subplots_adjust(wspace = 0.2, hspace = 0.4,top = 0.9)
-
-plt.show()
-
-
-# <h2>Exploring the Remarks variable.</h2>
-
-# In[25]:
-
-
-Remarks = df_startups.Remarks.value_counts()
-
-print("Remarks description")
-print(Remarks[:10])
-
-plt.figure(figsize=(10,5))
-
-sns.barplot(x=Remarks.index[:10], y=Remarks.values[:10])
-plt.xticks(rotation=45)
-plt.xlabel('', fontsize=12)
-plt.ylabel('Remarks Counting', fontsize=12)
-plt.title("Count frequency Remarks ", fontsize=16)
-plt.show()
-
-
-# <h2>Let's see the Word cloud of Investors in Consumer Internet</h2>
-
-# In[21]:
-
-
-plt.figure(figsize = (15,15))
-
-stopwords = set(STOPWORDS)
-wordcloud = WordCloud(
-                          background_color='black',
-                          stopwords=stopwords,
-                          max_words=20,
-                          max_font_size=40, 
-                          random_state=42
-                         ).generate(str(df_startups[df_startups['IndustryVertical'] == 'Ecommerce']['SubVertical']))
-
-print(wordcloud)
-fig = plt.figure(1)
-plt.imshow(wordcloud)
-plt.title("WORD CLOUD - TITLES")
-plt.axis('off')
-plt.show()
-
-
-# In[22]:
-
-
-plt.figure(figsize = (15,15))
-
-stopwords = set(STOPWORDS)
-wordcloud = WordCloud(
-                          background_color='black',
-                          stopwords=stopwords,
-                          max_words=150,
-                          max_font_size=40, 
-                          random_state=42
-                         ).generate(str(df_startups[df_startups['IndustryVertical'] == 'Consumer Internet']['InvestorsName']))
-
-print(wordcloud)
-fig = plt.figure(1)
-plt.imshow(wordcloud)
-plt.title("WORD CLOUD - TITLES")
-plt.axis('off')
-plt.show()
-
-
-# <h2>Let's look the Technology Investors wordcloud</h2>
-
-# In[23]:
-
-
-plt.figure(figsize = (15,15))
-
-stopwords = set(STOPWORDS)
-wordcloud = WordCloud(
-                          background_color='black',
-                          stopwords=stopwords,
-                          max_words=150,
-                          max_font_size=40, 
-                          random_state=42
-                         ).generate(str(df_startups[df_startups['IndustryVertical'] == 'Technology']['InvestorsName']))
-
-print(wordcloud)
-fig = plt.figure(1)
-plt.imshow(wordcloud)
-plt.title("WORD CLOUD - INVESTORS TECHNOLOGY")
-plt.axis('off')
-plt.show()
-
-
-# In[24]:
-
-
-plt.figure(figsize = (15,15))
-
-stopwords = set(STOPWORDS)
-wordcloud = WordCloud(
-                          background_color='black',
-                          stopwords=stopwords,
-                          max_words=150,
-                          max_font_size=40, 
-                          random_state=42
-                         ).generate(str(df_startups[df_startups['IndustryVertical'] == 'Ecommerce']['InvestorsName']))
-
-print(wordcloud)
-fig = plt.figure(1)
-plt.imshow(wordcloud)
-plt.title("WORD CLOUD - INVESTORS ECOMMERCE")
-plt.axis('off')
-plt.show()
-
-
-# I will continue this Analyse

@@ -1,331 +1,249 @@
-# imports 
-import numpy as np
-import pandas as pd
-import xgboost as xgb
-from sklearn.preprocessing import LabelEncoder
-import lightgbm as lgb
-import gc
-from sklearn.linear_model import LinearRegression
-import random
-import datetime as dt
+######################################80#######################################################################
+## Logistic Regression using Stochastic Gradient Descent with adapted learning rate ##
+## Currently regularization is not used
+## Leaderboard score = 0.77355
+## Takes 2-3 minutes to run on my laptop
+#modified by kartik mehta
+## https://www.kaggle.com/kartikmehtaiitd
+
+# Giving due credit 
+#classic tinrtgu's code
+# https://www.kaggle.com/c/avazu-ctr-prediction/forums/t/10927/beat-the-benchmark-with-less-than-1mb-of-memory
+#modified by rcarson available as FTRL starter on kaggle code 
+#https://www.kaggle.com/jiweiliu/springleaf-marketing-response/ftrl-starter-code
+#############################################################################################################
 
-################
-################
-##  LightGBM changes ##
-# V42 - sub_feature: 0.3 -> 0.35 : LB = 0.0643759
-# V34 - sub_feature: 0.5 -> 0.42
-# V33 - sub_feature: 0.5 -> 0.45 : LB = 0.0643866
-# - sub_feature: 0.45 -> 0.3 : LB = 0.0643811 / 0.0643814 
-################
-################ 
 
-# Parameters
-XGB_WEIGHT = 0.6415
-BASELINE_WEIGHT = 0.0056
-OLS_WEIGHT = 0.0828
-
-XGB1_WEIGHT = 0.8083  # Weight of first in combination of two XGB models
-
-BASELINE_PRED = 0.0115   # Baseline based on mean of training data, per Oleg
-
-##### READ IN RAW DATA
-print( "\nReading data from disk ...")
-prop = pd.read_csv('../input/properties_2016.csv')
-train = pd.read_csv("../input/train_2016_v2.csv")
-
-
-################
-################
-##  LightGBM  ##
-################
-################
-
-##### PROCESS DATA FOR LIGHTGBM
-print( "\nProcessing data for LightGBM ..." )
-for c, dtype in zip(prop.columns, prop.dtypes):	
-    if dtype == np.float64:		
-        prop[c] = prop[c].astype(np.float32)
-
-df_train = train.merge(prop, how='left', on='parcelid')
-df_train.fillna(df_train.median(),inplace = True)
-
-x_train = df_train.drop(['parcelid', 'logerror', 'transactiondate', 'propertyzoningdesc', 
-                         'propertycountylandusecode', 'fireplacecnt', 'fireplaceflag'], axis=1)
-#x_train['Ratio_1'] = x_train['taxvaluedollarcnt']/x_train['taxamount']
-y_train = df_train['logerror'].values
-print(x_train.shape, y_train.shape)
-
-
-train_columns = x_train.columns
-
-for c in x_train.dtypes[x_train.dtypes == object].index.values:
-    x_train[c] = (x_train[c] == True)
-
-del df_train; gc.collect()
-
-x_train = x_train.values.astype(np.float32, copy=False)
-d_train = lgb.Dataset(x_train, label=y_train)
-
-
-
-##### RUN LIGHTGBM
-params = {}
-params['max_bin'] = 10
-params['learning_rate'] = 0.0021 # shrinkage_rate
-params['boosting_type'] = 'gbdt'
-params['objective'] = 'regression'
-params['metric'] = 'l1'          # or 'mae'
-params['sub_feature'] = 0.345    
-params['bagging_fraction'] = 0.85 # sub_row
-params['bagging_freq'] = 40
-params['num_leaves'] = 512        # num_leaf
-params['min_data'] = 500         # min_data_in_leaf
-params['min_hessian'] = 0.05     # min_sum_hessian_in_leaf
-params['verbose'] = 0
-params['feature_fraction_seed'] = 2
-params['bagging_seed'] = 3
-
-print("\nFitting LightGBM model ...")
-clf = lgb.train(params, d_train, 430)
-
-del d_train; gc.collect()
-del x_train; gc.collect()
-
-print("\nPrepare for LightGBM prediction ...")
-print("   Read sample file ...")
-sample = pd.read_csv('../input/sample_submission.csv')
-print("   ...")
-sample['parcelid'] = sample['ParcelId']
-print("   Merge with property data ...")
-df_test = sample.merge(prop, on='parcelid', how='left')
-print("   ...")
-del sample, prop; gc.collect()
-print("   ...")
-#df_test['Ratio_1'] = df_test['taxvaluedollarcnt']/df_test['taxamount']
-x_test = df_test[train_columns]
-print("   ...")
-del df_test; gc.collect()
-print("   Preparing x_test...")
-for c in x_test.dtypes[x_test.dtypes == object].index.values:
-    x_test[c] = (x_test[c] == True)
-print("   ...")
-x_test = x_test.values.astype(np.float32, copy=False)
-print("Test shape :", x_test.shape)
-
-print("\nStart LightGBM prediction ...")
-p_test = clf.predict(x_test)
-
-del x_test; gc.collect()
-
-print( "\nUnadjusted LightGBM predictions:" )
-print( pd.DataFrame(p_test).head() )
-
-
-
-
-################
-################
-##  XGBoost   ##
-################
-################
-
-##### RE-READ PROPERTIES FILE
-##### (I tried keeping a copy, but the program crashed.)
-
-print( "\nRe-reading properties file ...")
-properties = pd.read_csv('../input/properties_2016.csv')
-
-##### PROCESS DATA FOR XGBOOST
-print( "\nProcessing data for XGBoost ...")
-for c in properties.columns:
-    properties[c]=properties[c].fillna(-1)
-    if properties[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(properties[c].values))
-        properties[c] = lbl.transform(list(properties[c].values))
-
-train_df = train.merge(properties, how='left', on='parcelid')
-x_train = train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-x_test = properties.drop(['parcelid'], axis=1)
-# shape        
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
-
-# drop out ouliers
-train_df=train_df[ train_df.logerror > -0.4 ]
-train_df=train_df[ train_df.logerror < 0.419 ]
-x_train=train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-y_train = train_df["logerror"].values.astype(np.float32)
-y_mean = np.mean(y_train)
-
-print('After removing outliers:')     
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
-
-
-
-
-##### RUN XGBOOST
-print("\nSetting up data for XGBoost ...")
-# xgboost params
-xgb_params = {
-    'eta': 0.037,
-    'max_depth': 5,
-    'subsample': 0.80,
-    'objective': 'reg:linear',
-    'eval_metric': 'mae',
-    'lambda': 0.8,   
-    'alpha': 0.4, 
-    'base_score': y_mean,
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
-
-num_boost_rounds = 250
-print("num_boost_rounds="+str(num_boost_rounds))
-
-# train model
-print( "\nTraining XGBoost ...")
-model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
-
-print( "\nPredicting with XGBoost ...")
-xgb_pred1 = model.predict(dtest)
-
-print( "\nFirst XGBoost predictions:" )
-print( pd.DataFrame(xgb_pred1).head() )
-
-
-
-##### RUN XGBOOST AGAIN
-print("\nSetting up data for XGBoost ...")
-# xgboost params
-xgb_params = {
-    'eta': 0.033,
-    'max_depth': 6,
-    'subsample': 0.80,
-    'objective': 'reg:linear',
-    'eval_metric': 'mae',
-    'base_score': y_mean,
-    'silent': 1
-}
-
-num_boost_rounds = 150
-print("num_boost_rounds="+str(num_boost_rounds))
-
-print( "\nTraining XGBoost again ...")
-model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
-
-print( "\nPredicting with XGBoost again ...")
-xgb_pred2 = model.predict(dtest)
-
-print( "\nSecond XGBoost predictions:" )
-print( pd.DataFrame(xgb_pred2).head() )
-
-
-
-##### COMBINE XGBOOST RESULTS
-
-xgb_pred = XGB1_WEIGHT*xgb_pred1 + (1-XGB1_WEIGHT)*xgb_pred2
-#xgb_pred = xgb_pred1
-
-print( "\nCombined XGBoost predictions:" )
-print( pd.DataFrame(xgb_pred).head() )
-
-del train_df
-del x_train
-del x_test
-del properties
-del dtest
-del dtrain
-del xgb_pred1
-del xgb_pred2 
-gc.collect()
-
-
-
-################
-################
-##    OLS     ##
-################
-################
-
-# This section is derived from the1owl's notebook:
-#    https://www.kaggle.com/the1owl/primer-for-the-zillow-pred-approach
-# which I (Andy Harless) updated and made into a script:
-#    https://www.kaggle.com/aharless/updated-script-version-of-the1owl-s-basic-ols
-np.random.seed(17)
-random.seed(17)
-
-train = pd.read_csv("../input/train_2016_v2.csv", parse_dates=["transactiondate"])
-properties = pd.read_csv("../input/properties_2016.csv")
-submission = pd.read_csv("../input/sample_submission.csv")
-print(len(train),len(properties),len(submission))
-
-def get_features(df):
-    df["transactiondate"] = pd.to_datetime(df["transactiondate"])
-    df["transactiondate_year"] = df["transactiondate"].dt.year
-    df["transactiondate_month"] = df["transactiondate"].dt.month
-    df['transactiondate'] = df['transactiondate'].dt.quarter
-    df = df.fillna(-1.0)
-    return df
-
-def MAE(y, ypred):
-    #logerror=log(Zestimate)−log(SalePrice)
-    return np.sum([abs(y[i]-ypred[i]) for i in range(len(y))]) / len(y)
-
-train = pd.merge(train, properties, how='left', on='parcelid')
-y = train['logerror'].values
-test = pd.merge(submission, properties, how='left', left_on='ParcelId', right_on='parcelid')
-properties = [] #memory
-
-exc = [train.columns[c] for c in range(len(train.columns)) if train.dtypes[c] == 'O'] + ['logerror','parcelid']
-col = [c for c in train.columns if c not in exc]
-
-train = get_features(train[col])
-test['transactiondate'] = '2016-01-01' #should use the most common training date
-test = get_features(test[col])
-
-reg = LinearRegression(n_jobs=-1)
-reg.fit(train, y); print('fit...')
-print(MAE(y, reg.predict(train)))
-train = [];  y = [] #memory
-
-test_dates = ['2016-10-01','2016-11-01','2016-12-01','2017-10-01','2017-11-01','2017-12-01']
-test_columns = ['201610','201611','201612','201710','201711','201712']
-
-
-
-
-########################
-########################
-##  Combine and Save  ##
-########################
-########################
-
-##### COMBINE PREDICTIONS
-print( "\nCombining XGBoost, LightGBM, and baseline predicitons ..." )
-lgb_weight = (1 - XGB_WEIGHT - BASELINE_WEIGHT) / (1 - OLS_WEIGHT)
-xgb_weight0 = XGB_WEIGHT / (1 - OLS_WEIGHT)
-baseline_weight0 =  BASELINE_WEIGHT / (1 - OLS_WEIGHT)
-pred0 = xgb_weight0*xgb_pred + baseline_weight0*BASELINE_PRED + lgb_weight*p_test
-
-print( "\nCombined XGB/LGB/baseline predictions:" )
-print( pd.DataFrame(pred0).head() )
-
-print( "\nPredicting with OLS and combining with XGB/LGB/baseline predicitons: ..." )
-for i in range(len(test_dates)):
-    test['transactiondate'] = test_dates[i]
-    pred = OLS_WEIGHT*reg.predict(get_features(test)) + (1-OLS_WEIGHT)*pred0
-    submission[test_columns[i]] = [float(format(x, '.4f')) for x in pred]
-    print('predict...', i)
-
-print( "\nCombined XGB/LGB/baseline/OLS predictions:" )
-print( submission.head() )
-
-
-
-##### WRITE THE RESULTS
 from datetime import datetime
-print( "\nWriting results to disk ..." )
-submission.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
-print( "\nFinished ...")
+from csv import DictReader
+from math import exp, log, sqrt
+from random import random
+import pickle
+
+
+##############################################################################
+# parameters #################################################################
+##############################################################################
+
+# A, paths
+train='../input/train.csv'
+test='../input/test.csv'
+submission = 'sgd_subm.csv'  # path of to be outputted submission file
+
+# B, model
+alpha = .005  	# learning rate
+beta = 1		
+L1 = 0.     	# L1 regularization, larger value means more regularized
+L2 = 0.     	# L2 regularization, larger value means more regularized
+
+# C, feature/hash trick
+D = 2 ** 24             # number of weights to use
+interaction = False     # whether to enable poly2 feature interactions
+
+# D, training/validation
+epoch = 1       # learn training data for N passes
+holdafter = None   # data after date N (exclusive) are used as validation
+holdout = 100  # use every N training instance for holdout validation
+
+
+##############################################################################
+# class, function, generator definitions #####################################
+##############################################################################
+
+class gradient_descent(object):
+
+    def __init__(self, alpha, beta, L1, L2, D, interaction):
+        # parameters
+        self.alpha = alpha
+        self.beta = beta
+        self.L1 = L1
+        self.L2 = L2
+
+        # feature related parameters
+        self.D = D
+        self.interaction = interaction
+
+        # model
+        # G: squared sum of past gradients
+        # w: weights
+        self.w = [0.] * D  
+        self.G = [0.] * D 
+
+    def _indices(self, x):
+        ''' A helper generator that yields the indices in x
+
+            The purpose of this generator is to make the following
+            code a bit cleaner when doing feature interaction.
+        '''
+
+        # first yield index of the bias term
+        yield 0
+
+        # then yield the normal indices
+        for index in x:
+            yield index
+
+        # now yield interactions (if applicable)
+        if self.interaction:
+            D = self.D
+            L = len(x)
+
+            x = sorted(x)
+            for i in xrange(L):
+                for j in xrange(i+1, L):
+                    # one-hot encode interactions with hash trick
+                    yield abs(hash(str(x[i]) + '_' + str(x[j]))) % D
+
+    def predict(self, x):
+        ''' Get probability estimation on x
+
+            INPUT:
+                x: features
+
+            OUTPUT:
+                probability of p(y = 1 | x; w)
+        '''
+
+        # model
+        w = self.w	
+
+        # wTx is the inner product of w and x
+        wTx = 0.
+        for i in self._indices(x):
+            wTx += w[i]
+
+        # bounded sigmoid function, this is the probability estimation
+        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
+
+    def update(self, x, p, y):
+        ''' Update model using x, p, y
+
+            INPUT:
+                x: feature, a list of indices
+                p: click probability prediction of our model
+                y: answer
+
+            MODIFIES:
+                self.G: increase by squared gradient
+                self.w: weights
+        '''
+        # parameters
+        alpha = self.alpha
+        L1 = self.L1
+        L2 = self.L2
+
+        # model
+        w = self.w
+        G = self.G
+
+        # gradient under logloss
+        g = p - y
+        # update z and n
+        for i in self._indices(x):
+            G[i] += g*g
+#            w[i] -= alpha*1/sqrt(n[i]) * (g) ## Learning rate reducing as 1/sqrt(n_i) : ALso gives good performance but below code gives better results
+            w[i] -= alpha/(beta+sqrt(G[i])) * (g) ## Learning rate reducing as alpha/(beta + sqrt of sum of g_i)
+
+        self.w = w
+        self.G = G
+
+def logloss(p, y):
+    ''' FUNCTION: Bounded logloss
+
+        INPUT:
+            p: our prediction
+            y: real answer
+
+        OUTPUT:
+            logarithmic loss of p given y
+    '''
+
+    p = max(min(p, 1. - 10e-15), 10e-15)
+    return -log(p) if y == 1. else -log(1. - p)
+
+
+def data(path, D):
+    ''' GENERATOR: Apply hash-trick to the original csv row
+                   and for simplicity, we one-hot-encode everything
+
+        INPUT:
+            path: path to training or testing file
+            D: the max index that we can hash to
+
+        YIELDS:
+            ID: id of the instance, mainly useless
+            x: a list of hashed and one-hot-encoded 'indices'
+               we only need the index since all values are either 0 or 1
+            y: y = 1 if we have a click, else we have y = 0
+    '''
+
+    for t, row in enumerate(DictReader(open(path), delimiter=',')):
+      
+        try:
+            ID=row['ID']
+            del row['ID']
+        except:
+            pass
+        # process clicks
+        y = 0.
+        target='target'#'IsClick' 
+        if target in row:
+            if row[target] == '1':
+                y = 1.
+            del row[target]
+
+        # extract date
+
+        # turn hour really into hour, it was originally YYMMDDHH
+
+        # build x
+        x = []
+        for key in row:
+            value = row[key]
+
+            # one-hot encode everything with hash trick
+            index = abs(hash(key + '_' + value)) % D
+            x.append(index)
+
+        yield ID,  x, y
+
+
+##############################################################################
+# start training #############################################################
+##############################################################################
+
+start = datetime.now()
+
+# initialize ourselves a learner
+learner = gradient_descent(alpha, beta, L1, L2, D, interaction)
+
+# start training
+print('Training Learning started; total 150k training samples')
+for e in range(epoch):
+    loss = 0.
+    count = 0
+    for t,  x, y in data(train, D):  # data is a generator
+
+        p = learner.predict(x)
+        loss += logloss(p, y)
+        learner.update(x, p, y)
+        count+=1
+        if count%15000==0:
+            print('%s\tencountered: %d\tcurrent logloss: %f' % (datetime.now(), count, loss/count))
+
+#import pickle
+#pickle.dump(learner,open('sgd_adapted_learning.p','w'))
+
+##############################################################################
+# start testing, and build Kaggle's submission file ##########################
+##############################################################################
+count=0
+print('Testing started; total 150k test samples')
+with open(submission, 'w') as outfile:
+    outfile.write('ID,target\n')
+    for  ID, x, y in data(test, D):
+        count+=1
+        if count%15000==0:
+            print('%s\tencountered: %d' % (datetime.now(), count))
+        p = learner.predict(x)
+        outfile.write('%s,%s\n' % (ID, str(p)))

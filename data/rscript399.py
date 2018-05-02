@@ -1,33 +1,42 @@
-#!/usr/bin/env python
-
-"Predict sales as a historical mean for a given store, day of week and promo"
-
+import numpy as np
 import pandas as pd
 
-train_file = '../input/train.csv'
-test_file = '../input/test.csv'
-output_file = 'predictions.csv'
+wish = pd.read_csv('../input/santa-gift-matching/child_wishlist.csv', header=None).as_matrix()[:, 1:]
+gift = pd.read_csv('../input/santa-gift-matching/gift_goodkids.csv', header=None).as_matrix()[:, 1:]
+df = pd.read_csv('../input/c-submission/cpp_sub.csv') #all night optimization on C++
 
-train = pd.read_csv( train_file )
-test = pd.read_csv( test_file )
+preds = df['GiftId'].values
+scores = np.zeros((len(gift), len(wish)), dtype='int16') #int16 for minimize used memory
+scores.fill(-101)
+w2g = [[] for i in range(len(gift))]
 
-# remove NaNs from Open
-test.loc[ test.Open.isnull(), 'Open' ] = 1
-# remove rows with 0 sales from train
-train = train.loc[train.Sales > 0]
+for i in range(len(gift)):
+    for j in range(len(gift)):
+        wid = gift[i][j]
+        scores[i][wid] += (len(gift)-j)*2+1; #for minimize used memory
+        w2g[i].append(wid)
 
-print("group by store, day of week and promo and calculate mean sales for each group")
-means = train.groupby([ 'Store', 'DayOfWeek', 'Promo' ])['Sales'].mean()
-print(means.head(6))
+for i in range(len(wish)):
+    for j in range(10):
+        gid = wish[i][j]
+        if scores[gid][i] == -101:
+            w2g[gid].append(i)
+        scores[gid][i] += (10-j)*200+100 #for minimize used memory
 
-print("reset index to get a dataframe with 4 columns")
-means = means.reset_index()
-print(means.head(6))
-
-print("merge with test dataframe to get sales predictions")
-test = pd.merge(test, means, on = ['Store','DayOfWeek','Promo'], how='left')
-test.fillna(train.Sales.mean(), inplace=True)
-print(test.head())
-
-test[[ 'Id', 'Sales' ]].to_csv( output_file, index = False )
-
+def optimization(preds, scores, w2g):
+    for i in range(4000, len(wish)):
+        gid1 = preds[i]
+        for j in w2g[gid1]:
+            if j < 4000:
+                continue
+            gid2 = preds[j]
+            t1 = scores[gid1][i]+scores[gid2][j]
+            t2 = scores[gid2][i]+scores[gid1][j]
+            if t2 > t1:
+                preds[i] = gid2;
+                preds[j] = gid1;
+                return #break - if wanna more
+            
+optimization(preds, scores, w2g)
+df['GiftId'] = preds
+df.to_csv('opt_sub.csv', index=False)

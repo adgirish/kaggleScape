@@ -1,44 +1,100 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+#Enhancing your baseline
 
+__author__ = 'BingQing Wei'
 
-train = pd.read_csv("../input/train_1.csv")
-train = train.fillna(0.)
+import operator
+import os
+import inflect
+import re
 
+INPUT_PATH = r'../input'
+SUBM_PATH = r'.'
 
-# I'm gong to share a solution that I found interesting with you.
-# The idea is to compute the median of the series in different window sizes at the end of the series,
-# and the window sizes are increasing exponentially with the base of golden ratio.
-# Then a median of these medians is taken as the estimate for the next 60 days.
-# This code's result has the score of around 44.9 on public leaderboard, but I could get upto 44.7 by playing with it.
+engine = inflect.engine()
 
-# r = 1.61803398875
-# Windows = np.round(r**np.arange(0,9) * 7)
-Windows = [6, 12, 18, 30, 48, 78, 126, 203, 329]
+NUMBER_TMP = r'^(?!0)[\d]+[\d,]*$'
+DECIMAL_TMP = r'^(?!0)\d*\.\d+$'
+MONEY_TMP = r'^\$([^a-zA-Z]*)\s*([a-zA-Z]*)$'
 
+def inflect_transform(data):
+    data = re.sub(r'-|,|\band\b', ' ', data)
+    data = data.split(' ')
+    data = [x for x in data if x is not '']
+    return  ' '.join(data)
 
-n = train.shape[1] - 1 #  550
-Visits = np.zeros(train.shape[0])
-for i, row in train.iterrows():
-    M = []
-    start = row[1:].nonzero()[0]
-    if len(start) == 0:
-        continue
-    if n - start[0] < Windows[0]:
-        Visits[i] = row.iloc[start[0]+1:].median()
-        continue
-    for W in Windows:
-        if W > n-start[0]:
+def DIGIT_transform(data):
+    neo_data = re.sub(r',|\s*', '', data)
+    if int(neo_data) > 1000 and ',' not in data: return data
+    return inflect_transform(engine.number_to_words(int(neo_data)))
+
+def NUMBER_transform(data):
+    data = re.sub(r',|\s*', '', data)
+    return inflect_transform(engine.number_to_words(int(data)))
+
+def DECIMAL_transform(data):
+    data = re.sub(',|\s*', '', data)
+    data = inflect_transform(engine.number_to_words(float(data)))
+    return re.sub(r'^\bzero\s*', '', data)
+
+def MONEY_transform(data):
+    m = re.match(MONEY_TMP, data)
+    ts = m.group(1)
+    if re.match(NUMBER_TMP, ts):
+        ts = NUMBER_transform(ts)
+    else:
+        ts = DECIMAL_transform(ts)
+    if m.group(2).lower() == 'm':
+        return ' '.join([ts, 'million', 'dollars'])
+    elif m.group(2) is not '':
+        return ' '.join([ts, m.group(2).lower(), 'dollars'])
+    else: return ' '.join([ts, 'dollars'])
+
+def verbose_wrapper(func, data, verbose=False):
+    if verbose: print('Before: ', data)
+    data = func(data)
+    if verbose: print('After: ', data)
+    return data
+
+def solve():
+    print('Train start...')
+    changes = 0
+    total = 0
+    out = open(os.path.join(SUBM_PATH, 'enhanced_sub.csv'), "w", encoding='UTF8')
+    out.write('"id","after"\n')
+    test = open(os.path.join(INPUT_PATH, "baseline.csv"), encoding='UTF8')
+    line = test.readline().strip()
+    while 1:
+        line = test.readline().strip()
+        if line == '':
             break
-        M.append(row.iloc[-W:].median())
-    Visits[i] = np.median(M)
 
-Visits[np.where(Visits < 1)] = 0.
-train['Visits'] = Visits
+        pos = line.find(',')
+        i1 = line[:pos]
+        line = line[pos + 1:]
 
+        line = line[1:-1]
+        out.write(i1 + ',')
 
-test = pd.read_csv("../input/key_1.csv")
-test['Page'] = test.Page.apply(lambda x: x[:-11])
+        try:
+            if re.match(DECIMAL_TMP, line):
+                line = verbose_wrapper(DECIMAL_transform, data=line, verbose=False)
+                changes += 1
+            elif re.match(MONEY_TMP, line):
+                line = verbose_wrapper(MONEY_transform, data=line, verbose=False)
+                changes += 1
+            elif re.match(NUMBER_TMP, line):
+                line = verbose_wrapper(DIGIT_transform, data=line, verbose=False)
+                changes += 1
+        except Exception as ex:
+            print('Exception: ', ex)
+            print('Error in: ', line)
+        out.write('"' + line + '"')
+        out.write('\n')
+        total += 1
 
-test = test.merge(train[['Page','Visits']], on='Page', how='left')
-test[['Id','Visits']].to_csv('sub.csv', index=False)
+    print('Total: {} Changed: {}'.format(total, changes))
+    test.close()
+    out.close()
+
+if __name__ == '__main__':
+    solve()

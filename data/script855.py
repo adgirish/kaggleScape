@@ -1,135 +1,445 @@
 
 # coding: utf-8
 
-# **Microsoft [LightGBM][1]** is a powerful, open-source boosted decision tree library similar to xgboost. In practice, it runs even faster than xgboost and achieves better performance in some cases.
+# # Introduction
+# This Python notebook seeks to explore Mercari's data set, in order to extract "what to do" and "what not to do".
 # 
-# To install LightGBM, follow the [installation guide][2] to get the C++ distribution. The python API can then be easily built with these [instructions][3].
+# The main idea is to contribute to the community with quick, but deep, first view of the data.
 # 
-# Some useful resources for LightGBM python API and parameter tuning:
+# It contains some visualizations and data manipulation, that can be further used to build your own Machine Learning Models.
 # 
-# **[Python API Documentation][4]:** this page includes all the functions and objects
+# Feel free to contribute to this Kernel with your thoughts.
 # 
-# **[List of Parameters][5]:** all possible parameters for LightGBM functions and classes
-# 
-# **[Parameter Tuning Guide][6]:** the advanced parameter tuning guide for LightGBM. Since most parameters in LightGBM are similar to those in XGBoost, it should be intuitive to follow.
-# 
-# 
-#   [1]: https://github.com/Microsoft/LightGBM
-#   [2]: https://github.com/Microsoft/LightGBM/wiki/Installation-Guide
-#   [3]: https://github.com/Microsoft/LightGBM/tree/master/python-package
-#   [4]: https://github.com/Microsoft/LightGBM/blob/master/docs/Python-API.md
-#   [5]: https://github.com/Microsoft/LightGBM/blob/master/docs/Parameters.md
-#   [6]: https://github.com/Microsoft/LightGBM/blob/master/docs/Parameters-tuning.md
-
-# ## Import Libraries, Preprocessing ##
+# Happy Kaggling!
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import json
-from sklearn.preprocessing import LabelEncoder
-from sklearn.feature_extraction.text import CountVectorizer
-import lightgbm as lgbm
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-def preprocess_1(train_df, test_df):
-    """Just a generic preprocessing function, feel free to substitute it with your custom function"""
-    # encode target variable
-    train_df['interest_level'] = train_df['interest_level'].apply(lambda x: {'high': 0, 'medium': 1, 'low': 2}[x])
-    test_df['interest_level'] = -1
-    train_index = train_df.index
-    test_index = test_df.index
-    data_df = pd.concat((train_df, test_df), axis=0)
-    del train_df, test_df
-    
-    # add counting features
-    data_df['num_photos'] = data_df['photos'].apply(len)
-    data_df['num_features'] = data_df['features'].apply(len)
-    data_df['num_description'] = data_df['description'].apply(lambda x: len(x.split(' ')))
-    data_df.drop('photos', axis=1, inplace=True)
-    
-    # naive feature engineering
-    data_df['room_difference'] = data_df['bedrooms'] - data_df['bathrooms']
-    data_df['total_rooms'] = data_df['bedrooms'] + data_df['bathrooms']
-    data_df['price_per_room'] = data_df['price'] / (data_df['total_rooms'] + 1)
-    
-    # add datetime features
-    data_df['created'] = pd.to_datetime(data_df['created'])
-    data_df['c_month'] = data_df['created'].dt.month
-    data_df['c_day'] = data_df['created'].dt.day
-    data_df['c_hour'] = data_df['created'].dt.hour
-    data_df['c_dayofyear'] = data_df['created'].dt.dayofyear
-    data_df.drop('created', axis=1, inplace=True)
-    
-    # encode categorical features
-    for col in ['display_address', 'street_address', 'manager_id', 'building_id']:
-        data_df[col] = LabelEncoder().fit_transform(data_df[col])
-       
-    data_df.drop('description', axis=1, inplace=True)
-    
-    # get text features
-    data_df['features'] = data_df['features'].apply(lambda x: ' '.join(['_'.join(i.split(' ')) for i in x]))
-    textcv = CountVectorizer(stop_words='english', max_features=200)
-    text_features = pd.DataFrame(textcv.fit_transform(data_df['features']).toarray(),
-                                 columns=['f_' + format(x, '03d') for x in range(1, 201)],
-                                 index=data_df.index)
-    data_df = pd.concat(objs=(data_df, text_features), axis=1)
-    data_df.drop('features', axis=1, inplace=True)
-    
-    feature_cols = [x for x in data_df.columns if x not in {'interest_level'}]
-    return data_df.loc[train_index, feature_cols], data_df.loc[train_index, 'interest_level'],        data_df.loc[test_index, feature_cols]
-    
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from sklearn.feature_extraction.text import TfidfVectorizer
+import string
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Load Data ##
+# ## Readindg data sets
 
 # In[ ]:
 
 
-train = pd.read_json(open("../input/train.json", "r"))
-test = pd.read_json(open("../input/test.json", "r"))
+df_train = pd.read_csv('../input/train.tsv', sep='\t')
+df_test = pd.read_csv('../input/test.tsv', sep='\t')
 
 
-# ## Define Hyperparameters for LightGBMClassifier ##
-
-# In[ ]:
-
-
-# the following dictionary contains most of the relavant hyperparameters for our task
-# I haven't tuned them yet, so they are mostly default
-t4_params = {
-    'boosting_type': 'gbdt', 'objective': 'multiclass', 'nthread': -1, 'silent': True,
-    'num_leaves': 2**4, 'learning_rate': 0.05, 'max_depth': -1,
-    'max_bin': 255, 'subsample_for_bin': 50000,
-    'subsample': 0.8, 'subsample_freq': 1, 'colsample_bytree': 0.6, 'reg_alpha': 1, 'reg_lambda': 0,
-    'min_split_gain': 0.5, 'min_child_weight': 1, 'min_child_samples': 10, 'scale_pos_weight': 1}
-
-# they can be used directly to build a LGBMClassifier (which is wrapped in a sklearn fashion)
-t4 = lgbm.sklearn.LGBMClassifier(n_estimators=1000, seed=0, **t4_params)
-
-
-# ## Early Stopping with Cross Validation ##
-# Similar to xgboost, we can use cross validation with early stopping to efficiently determine the optimal "**n_estimators**" value.
+# ### Training set first look
 
 # In[ ]:
 
 
-def cross_validate_lgbm(filename_str, preprocess_func=preprocess_1):
-    lgbm_params = t4_params.copy()
-    lgbm_params['num_class'] = 3
-    train_X, train_y, test_df = preprocess_func(train, test)
-    dset = lgbm.Dataset(train_X, train_y, silent=True)
-    cv_results = lgbm.cv(
-        lgbm_params, dset, num_boost_round=10000, nfold=5, stratified=False, shuffle=True, metrics='multi_logloss',
-        early_stopping_rounds=100, verbose_eval=50, show_stdv=True, seed=0)
-    # note: cv_results will look like: {"multi_logloss-mean": <a list of historical mean>,
-    # "multi_logloss-stdv": <a list of historical standard deviation>}
-    json.dump(cv_results, open(filename_str, 'w'))
-    print(filename_str)
-    print('best n_estimators:', len(cv_results['multi_logloss-mean']))
-    print('best cv score:', cv_results['multi_logloss-mean'][-1])
+df_train.head()
 
-# we simply have to run the following code each time we modify the hyperparameters:
-cross_validate_lgbm('lgbm_1.json')
 
+# In[ ]:
+
+
+print('Train shape:{}\nTest shape:{}'.format(df_train.shape, df_test.shape))
+
+
+# ## Target distribution
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 15))
+plt.hist(df_train['price'], bins=50, range=[0,250], label='price')
+plt.title('Train "price" distribution', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('Samples', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# ### Price distribution
+
+# In[ ]:
+
+
+df_train['price'].describe()
+
+
+# Looks like the target distribution is more concentrated between **0~100**, but there are still values until **2000**.
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 15))
+bins=50
+plt.hist(df_train[df_train['shipping']==1]['price'], bins, normed=True, range=[0,250],
+         alpha=0.6, label='price when shipping==1')
+plt.hist(df_train[df_train['shipping']==0]['price'], bins, normed=True, range=[0,250],
+         alpha=0.6, label='price when shipping==0')
+plt.title('Train price over shipping type distribution', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('Normalized Samples', fontsize=15)
+plt.legend(fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.show()
+
+
+# The comparison of target class when shipping is 1 or 0 do not seems to be REALLY separated. But this does not means that this feature is useless, just that it can be further explored
+
+# In[ ]:
+
+
+df = df_train[df_train['price']<100]
+
+my_plot = []
+for i in df_train['item_condition_id'].unique():
+    my_plot.append(df[df['item_condition_id']==i]['price'])
+
+fig, axes = plt.subplots(figsize=(20, 15))
+bp = axes.boxplot(my_plot,vert=True,patch_artist=True,labels=range(1,6)) 
+
+colors = ['cyan', 'lightblue', 'lightgreen', 'tan', 'pink']
+for patch, color in zip(bp['boxes'], colors):
+    patch.set_facecolor(color)
+
+axes.yaxis.grid(True)
+
+plt.title('BoxPlot price X item_condition_id', fontsize=15)
+plt.xlabel('item_condition_id', fontsize=15)
+plt.ylabel('price', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.show()
+
+del df
+
+
+# The training data was reduced to just have sample with **target < 100**.
+# item_condition_id feature does not seems to vary to much in our data. Their medians do not change as the item_condition_id changes. Maybe it is just an ID and should be discarded or maybe it can help the learning algorithms or Feature Egeneering in some way.
+# 
+# Just to be fair, ID n°5 looks like a little bit different from others. It has a higher 3rd quartile and median.
+
+# # Text exploration
+# Lets take a look into our textual features. I bet we can have a lot of insights from it.
+# ### Most commom letters in Items Descriptions
+
+# In[ ]:
+
+
+cloud = WordCloud(width=1440, height=1080).generate(" ".join(df_train['item_description']
+.astype(str)))
+plt.figure(figsize=(20, 15))
+plt.imshow(cloud)
+plt.axis('off')
+
+
+# ### Verifying if products actually have description
+# The words "description yet" took my attention as they are commom according to the Word Cloud. Lets investigate.
+
+# In[ ]:
+
+
+df_train['has_description'] = 1
+df_train.loc[df_train['item_description']=='No description yet', 'has_description'] = 0
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 15))
+bins=50
+plt.hist(df_train[df_train['has_description']==1]['price'], bins, range=[0,250],
+         alpha=0.6, label='price when has_description==1')
+plt.hist(df_train[df_train['has_description']==0]['price'], bins, range=[0,250],
+         alpha=0.6, label='price when has_description==0')
+plt.title('Train price X has_description type distribution', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('Samples', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# Looking to this histograms, the distribution of prices when an item does not have a description yet is very similar to when they already have a description, considering that the amount of simples in each histogram is very different, of course. To be more clear, there are normed histograms in the next chart.
+# #### Same as above, but normalized
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 15))
+bins=50
+plt.hist(df_train[df_train['has_description']==1]['price'], bins, normed=True,range=[0,250],
+         alpha=0.6, label='price when has_description==1')
+plt.hist(df_train[df_train['has_description']==0]['price'], bins, normed=True,range=[0,250],
+         alpha=0.6, label='price when has_description==0')
+plt.title('Train price X has_description type distribution', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('Samples', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# Explore products without description does not look to be the best initial approach in this competition.
+
+# # TF-IDF
+# Maybe Term Frequency – Inverse Document Frequency (TF-IDF) can be a good approach to deal with items descriptions.
+# 
+# I'll give it a chance here, even as the descriptions are pretty short, as it had given me good results in other contexts.
+
+# In[ ]:
+
+
+def compute_tfidf(description):
+    description = str(description)
+    description.translate(string.punctuation)
+
+    tfidf_sum=0
+    words_count=0
+    for w in description.lower().split():
+        words_count += 1
+        if w in tfidf_dict:
+            tfidf_sum += tfidf_dict[w]
+    
+    if words_count > 0:
+        return tfidf_sum/words_count
+    else:
+        return 0
+
+tfidf = TfidfVectorizer(
+    min_df=5, strip_accents='unicode', lowercase =True,
+    analyzer='word', token_pattern=r'\w+', ngram_range=(1, 3), use_idf=True, 
+    smooth_idf=True, sublinear_tf=True, stop_words='english')
+
+
+# In[ ]:
+
+
+tfidf.fit_transform(df_train['item_description'].apply(str))
+tfidf_dict = dict(zip(tfidf.get_feature_names(), tfidf.idf_))
+df_train['tfidf'] = df_train['item_description'].apply(compute_tfidf)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 15))
+plt.scatter(df_train['tfidf'], df_train['price'])
+plt.title('Train price X item_description TF-IDF', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('TF-IDF', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# Well, looking to this scatter plot is possible to notice that as higher the TF-IDF, lower the 'price' gets. I'll definitely try this feature in my models.
+
+# ## Item Description Lengths
+# ### Characters count
+
+# In[ ]:
+
+
+train_ds = pd.Series(df_train['item_description'].tolist()).astype(str)
+test_ds = pd.Series(df_test['item_description'].tolist()).astype(str)
+
+bins=100
+plt.figure(figsize=(20, 15))
+plt.hist(train_ds.apply(len), bins, range=[0,600], label='train')
+plt.hist(test_ds.apply(len), bins, alpha=0.6,range=[0,600], label='test')
+plt.title('Histogram of character count', fontsize=15)
+plt.xlabel('Characters Number', fontsize=15)
+plt.ylabel('Frequency', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# The histograms seems to have a pretty similar distribution. There is a gap near **20 characters**, maybe because of "no description yet" descriptions.
+
+# ### Word count
+
+# In[ ]:
+
+
+bins=100
+plt.figure(figsize=(20, 15))
+plt.hist(train_ds.apply(lambda x: len(x.split())), bins, range=[0,100], label='train')
+plt.hist(test_ds.apply(lambda x: len(x.split())), bins, alpha=0.6,range=[0,100], label='test')
+plt.title('Histogram of word count', fontsize=15)
+plt.xlabel('Number of words', fontsize=15)
+plt.ylabel('Frequency', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# As well as character count, word count histograms are very similar for train and test. Further exploration will be needed here!
+
+# # Category Name
+# In our data set, each item have fits in a specific category, or a group of categories (mainly 3 for item).
+# 
+# Basically, the categories are arranged as from top to bottom of comprehensiveness. This means that the first category is less specific and the next are more specifics.
+# 
+# Lets investigate the 'main' categories first.
+
+# In[ ]:
+
+
+def transform_category_name(category_name):
+    try:
+        main, sub1, sub2= category_name.split('/')
+        return main, sub1, sub2
+    except:
+        return np.nan, np.nan, np.nan
+
+df_train['category_main'], df_train['category_sub1'], df_train['category_sub2'] = zip(*df_train['category_name'].apply(transform_category_name))
+
+
+# In[ ]:
+
+
+main_categories = [c for c in df_train['category_main'].unique() if type(c)==str]
+categories_sum=0
+for c in main_categories:
+    categories_sum+=100*len(df_train[df_train['category_main']==c])/len(df_train)
+    print('{:25}{:3f}% of training data'.format(c, 100*len(df_train[df_train['category_main']==c])/len(df_train)))
+print('nan\t\t\t {:3f}% of training data'.format(100-categories_sum))
+
+
+# In[ ]:
+
+
+df = df_train[df_train['price']<80]
+
+my_plot = []
+for i in main_categories:
+    my_plot.append(df[df['category_main']==i]['price'])
+    
+fig, axes = plt.subplots(figsize=(20, 15))
+bp = axes.boxplot(my_plot,vert=True,patch_artist=True,labels=main_categories) 
+
+colors = ['cyan', 'lightblue', 'lightgreen', 'tan', 'pink']*2
+for patch, color in zip(bp['boxes'], colors):
+    patch.set_facecolor(color)
+
+axes.yaxis.grid(True)
+
+plt.title('BoxPlot price X Main product category', fontsize=15)
+plt.xlabel('Main Category', fontsize=15)
+plt.ylabel('Price', fontsize=15)
+plt.xticks(fontsize=15)
+plt.yticks(fontsize=15)
+plt.show()
+
+
+# Well, these boxplots are telling us more than the last ones. At least we have some variation when looking to their medians. But I feel like these results can be improved.
+# 
+# "Men" products are showing themselves more expensives than other in a general way.
+
+# ### 3rd level categories
+# As we have investigated main categories, let's take a look into the lowest level categories.
+
+# In[ ]:
+
+
+print('The data has {} unique 3rd level categories'.format(len(df_train['category_sub2'].unique())))
+
+df = df_train.groupby(['category_sub2'])['price'].agg(['size','sum'])
+df['mean_price']=df['sum']/df['size']
+df.sort_values(by=['mean_price'], ascending=False, inplace=True)
+df = df[:20]
+df.sort_values(by=['mean_price'], ascending=True, inplace=True)
+
+plt.figure(figsize=(20, 15))
+plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5)
+plt.yticks(range(0,len(df)), df.index, fontsize=15)
+plt.xticks(fontsize=15)
+plt.title('ASCENDING - 3rd level categories sorted by its mean prices', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('3rd level categorie', fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+########################################################################
+
+df = df_train.groupby(['category_sub2'])['price'].agg(['size','sum'])
+df['mean_price']=df['sum']/df['size']
+df.sort_values(by=['mean_price'], ascending=True, inplace=True)
+df = df[:50]
+df.sort_values(by=['mean_price'], ascending=False, inplace=True)
+
+plt.figure(figsize=(20, 15))
+plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5, color='r')
+plt.yticks(range(0,len(df)), df.index, fontsize=15)
+plt.xticks(fontsize=15)
+plt.title('DESCENDING - 3rd level categories sorted by its mean prices', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('3rd level categorie', fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# ### 2nd level categories (middle level)
+# To finish with categories for now, let's evaluate the middle level categories.
+
+# In[ ]:
+
+
+print('The data has {} unique 2nd level categories'.format(len(df_train['category_sub1'].unique())))
+
+df = df_train.groupby(['category_sub1'])['price'].agg(['size','sum'])
+df['mean_price']=df['sum']/df['size']
+df.sort_values(by=['mean_price'], ascending=False, inplace=True)
+df = df[:20]
+df.sort_values(by=['mean_price'], ascending=True, inplace=True)
+
+plt.figure(figsize=(20, 15))
+plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5, color='green')
+plt.yticks(range(0,len(df)), df.index, fontsize=15)
+plt.xticks(fontsize=15)
+plt.title('ASCENDING - 2nd level categories sorted by its mean prices', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('3rd level categorie', fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+########################################################################
+
+df = df_train.groupby(['category_sub1'])['price'].agg(['size','sum'])
+df['mean_price']=df['sum']/df['size']
+df.sort_values(by=['mean_price'], ascending=True, inplace=True)
+df = df[:50]
+df.sort_values(by=['mean_price'], ascending=False, inplace=True)
+
+plt.figure(figsize=(20, 15))
+plt.barh(range(0,len(df)), df['mean_price'], align='center', color='pink')
+plt.yticks(range(0,len(df)), df.index, fontsize=15)
+plt.xticks(fontsize=15)
+plt.title('DESCENDING - 2nd level categories sorted by its mean prices', fontsize=15)
+plt.xlabel('Price', fontsize=15)
+plt.ylabel('3rd level categorie', fontsize=15)
+plt.legend(fontsize=15)
+plt.show()
+
+
+# * It is interesting to see that we have a huge difference of price looking into items categories (as expected).
+# * Splitting categories into "levels" in our data can make a big difference when training our models.
+
+# # To be continued...

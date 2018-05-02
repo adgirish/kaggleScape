@@ -1,340 +1,204 @@
 
 # coding: utf-8
 
-# # Open Food Facts Visualization
-
-# In[ ]:
-
-
-import pandas as pd
-import numpy as np
-
-
-# In[ ]:
-
-
-from matplotlib import pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn
-
-
-# In[ ]:
-
-
-food = pd.read_csv("../input/FoodFacts.csv")
-
-
-# There are a lot of NaNs in a dataset:
-
-# In[ ]:
-
-
-plt.figure(figsize=(5, 20))
-food.isnull().mean(axis=0).plot.barh()
-plt.title("Proportion of NaNs in each column")
-
-
-# For the majority of products we don't know nutrition columns (with "100g" in the columns name). 
-
-# Function to select rows without NaNs:
-
-# In[ ]:
-
-
-def no_null_objects(data, columns=None):
-    """
-    selects rows with no NaNs
-    """
-    if columns is None:
-        columns = data.columns
-    return data[np.logical_not(np.any(data[columns].isnull().values, axis=1))]
-
-
-# There are a lot of text columns representing comma separated list of smth. We need a function to split rows with multiple values to several rows ([source](http://stackoverflow.com/questions/12680754/split-pandas-dataframe-string-entry-to-separate-rows))
-
-# In[ ]:
-
-
-def splitDataFrameList(df, target_column, separator):
-    ''' df = dataframe to split,
-    target_column = the column containing the values to split
-    separator = the symbol used to perform the split
-
-    returns: a dataframe with each entry for the target column separated, with each element moved into a new row. 
-    The values in the other columns are duplicated across the newly divided rows.
-    '''
-    def splitListToRows(row, row_accumulator, target_column, separator):
-        split_row = row[target_column].split(separator)
-        for s in split_row:
-            new_row = row.to_dict()
-            new_row[target_column] = s
-            row_accumulator.append(new_row)
-    new_rows = []
-    df.apply(splitListToRows,axis=1,args = (new_rows,target_column,separator))
-    new_df = pd.DataFrame(new_rows)
-    return new_df
-
-
-# ### Which countries are represented in a dataset?
-
-# In[ ]:
-
-
-food_countries = splitDataFrameList(no_null_objects(food, ["countries_en"]), "countries_en", ",")
-countries = food_countries["countries_en"].value_counts()
-
-
-# In[ ]:
-
-
-countries[:20][::-1].plot.barh()
-
-
-# There are too small number of products for other countries:
-
-# In[ ]:
-
-
-print(countries[20:].index)
-print("Max count:", countries[20:].max())
-
-
-# ### What are exports and imports between top-20 countries?
-
-# In[ ]:
-
-
-countries_matrix = pd.DataFrame(np.zeros((20, 20)), countries[:20].index, countries[:20].index)
-idxs = ~food.origins.isnull() & ~food.countries_en.isnull()
-for from_, to_ in zip(food["origins"][idxs], food["countries_en"][idxs]):
-    from_list = filter(lambda x: x in countries[:20].index, from_.split(","))
-    to_list = filter(lambda x: x in countries[:20].index, to_.split(","))
-    for from_c in from_list:
-        for to_c in to_list:
-            countries_matrix[from_c][to_c] += 1
-
-
-# In[ ]:
-
-
-# Replace non-ascii country name
-countries_matrix.columns = countries_matrix.columns[:-2].values.tolist() + ["Reunion"] + [countries_matrix.columns[-1]]
-countries_matrix.index = countries_matrix.columns[:-2].values.tolist() + ["Reunion"] + [countries_matrix.columns[-1]]
-
-
-# In[ ]:
-
-
-seaborn.heatmap(countries_matrix)
-
-
-# Without dominating France:
-
-# In[ ]:
-
-
-seaborn.heatmap(countries_matrix.drop(["France"], axis=0)
-                .drop(["France"], axis=1))
-
-
-# Australia (and the UK) are separated from the rest countries. Products come from Australia to China and the Unites States (nearly geographically), from Spain to China.
-
-# ### Do countries differ in the proportion of products containig palm oil?
-
-# In[ ]:
-
-
-df = no_null_objects(food_countries[["countries_en", "ingredients_from_palm_oil_n"]])
-df[df["countries_en"].isin(countries[:20].index)].groupby("countries_en").mean().plot.barh()
-
-
-# Accoridnt to the data, in the majority of European countries the proportion is higher than in the US, the UK, China, Brazil.
+# Hey everyone, this is my first go at Kaggle competitions and Kernels.
 # 
-# Probably it is because of NaNs?
+# In this Kernel, I implemented kNN classifier from scratch.
+# And the results got 97.1% accuracy on public leaderboard.
 
 # In[ ]:
 
 
-df = food_countries[["countries_en", "ingredients_from_palm_oil_n"]]
-df["nan_palm_oil"] = ~ df["ingredients_from_palm_oil_n"].isnull()
-df[df["countries_en"].isin(countries[:20].index)].groupby("countries_en").mean().plot.barh()
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import Counter
+import time
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.rcParams['figure.figsize'] = (10.0, 8.0) # set default size of plots
+plt.rcParams['image.interpolation'] = 'nearest'
+plt.rcParams['image.cmap'] = 'gray'
+
+# load csv files to numpy arrays
+def load_data(data_dir):
+    train_data = open(data_dir + "train.csv").read()
+    train_data = train_data.split("\n")[1:-1]
+    train_data = [i.split(",") for i in train_data]
+    # print(len(train_data))
+    X_train = np.array([[int(i[j]) for j in range(1,len(i))] for i in train_data])
+    y_train = np.array([int(i[0]) for i in train_data])
+
+    # print(X_train.shape, y_train.shape)
+
+    test_data = open(data_dir + "test.csv").read()
+    test_data = test_data.split("\n")[1:-1]
+    test_data = [i.split(",") for i in test_data]
+    # print(len(test_data))
+    X_test = np.array([[int(i[j]) for j in range(0,len(i))] for i in test_data])
+
+    # print(X_test.shape)
+
+    return X_train, y_train, X_test
 
 
-# There is no much correlation between NaNs proportion and products with palm oil proportion.
+class simple_knn():
+    "a simple kNN with L2 distance"
 
-# ### Is there any relationaship between product composition and its name?
+    def __init__(self):
+        pass
 
-# Let's visualize how often different letters occur in products names that have or not have some components.
+    def train(self, X, y):
+        self.X_train = X
+        self.y_train = y
 
-# In[ ]:
+    def predict(self, X, k=1):
+        dists = self.compute_distances(X)
+        # print("computed distances")
 
+        num_test = dists.shape[0]
+        y_pred = np.zeros(num_test)
 
-import string
+        for i in range(num_test):
+            k_closest_y = []
+            labels = self.y_train[np.argsort(dists[i,:])].flatten()
+            # find k nearest lables
+            k_closest_y = labels[:k]
 
+            # out of these k nearest lables which one is most common
+            # for 5NN [1, 1, 1, 2, 3] returns 1
+            # break ties by selecting smaller label
+            # for 5NN [1, 2, 1, 2, 3] return 1 even though 1 and 2 appeared twice.
+            c = Counter(k_closest_y)
+            y_pred[i] = c.most_common(1)[0][0]
 
-# In[ ]:
+        return(y_pred)
 
+    def compute_distances(self, X):
+        num_test = X.shape[0]
+        num_train = self.X_train.shape[0]
 
-def imshow_letters_dist_by_component(df, component_column):
-    products_with_comp = no_null_objects(df[[component_column, "generic_name"]])   
-    numbers = np.zeros((26, 2))
-    for obj in products_with_comp.values:
-        for let in obj[1].lower():
-            if let in string.ascii_letters:
-                numbers[string.ascii_letters.find(let), int(obj[0]>0)] += 1
-    numbers /= numbers.sum(axis=0)[np.newaxis, :]
-    seaborn.heatmap(pd.DataFrame(numbers, list(string.ascii_letters[:26]), 
-                                 ["No "+component_column.replace("_100g", ""), 
-                                  "With "+component_column.replace("_100g", "")]).T, square=True, cbar=False)
+        dot_pro = np.dot(X, self.X_train.T)
+        sum_square_test = np.square(X).sum(axis = 1)
+        sum_square_train = np.square(self.X_train).sum(axis = 1)
+        dists = np.sqrt(-2 * dot_pro + sum_square_train + np.matrix(sum_square_test).T)
 
-
-# In[ ]:
-
-
-imshow_letters_dist_by_component(food, "alcohol_100g")
-# alcohol name often contains "i" and "r"
-
-
-# In[ ]:
-
-
-imshow_letters_dist_by_component(food, "vitamin_c_100g")
-
-
-# In[ ]:
-
-
-imshow_letters_dist_by_component(food, "calcium_100g")
+        return(dists)
 
 
-# In[ ]:
-
-
-imshow_letters_dist_by_component(food, "vitamin_e_100g")
-# products with "p", "o", "r" and "t" almost never have vitamin E
-
-
-# In[ ]:
-
-
-imshow_letters_dist_by_component(food, "ingredients_that_may_be_from_palm_oil_n")
-# no difference
-
-
-# ### Were there any days when many products were added?
-
-# In[ ]:
-
-
-food["datetime"] = food["created_datetime"].apply(str).apply(lambda x: x[:x.find("T")])
-
-
-# In[ ]:
-
-
-from datetime import datetime
-
-
-# In[ ]:
-
-
-min_date = datetime.strptime(food["datetime"].min(), "%Y-%m-%d")
-
+# Let's read `../input/train.csv` and `../input/test.csv` files to numpy arrays.
+# 
+# Print shapes of those arrays as a sanity check.
 
 # In[ ]:
 
 
-products_num_by_day = np.zeros(2000)
-num_er = 0.0
-for obj, country in zip(food["datetime"], food["countries_en"]):
-    try:
-        day = (datetime.strptime(obj, "%Y-%m-%d") - min_date).days
-        products_num_by_day[day] += 1
-    except:
-        num_er += 1
-print(num_er / food.shape[0])
+# runs for 35 seconds
+data_dir = "../input/"
+X_train, y_train, X_test = load_data(data_dir)
 
 
 # In[ ]:
 
 
-plt.plot(np.cumsum(products_num_by_day))
-plt.xlabel("Number of days from start date")
-plt.ylabel("Total num products each day")
+print(X_train.shape, y_train.shape, X_test.shape)
 
 
-# A database was filled gradually.
+# Visualize random samples from training data.
 
 # In[ ]:
 
 
-def apply_func(x):
-    try:
-        return (datetime.strptime(x, "%Y-%m-%d") - min_date).days
-    except:
-        return None
-food["exists_days"] = food["datetime"].apply(apply_func)
+# runs for 10 seconds
+classes = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+num_classes = len(classes)
+samples = 8
 
+for y, cls in enumerate(classes):
+    idxs = np.nonzero([i == y for i in y_train])
+    idxs = np.random.choice(idxs[0], samples, replace=False)
+    for i , idx in enumerate(idxs):
+        plt_idx = i * num_classes + y + 1
+        plt.subplot(samples, num_classes, plt_idx)
+        plt.imshow(X_train[idx].reshape((28, 28)))
+        plt.axis("off")
+        if i == 0:
+            plt.title(cls)
+        
 
-# In[ ]:
-
-
-plt.scatter(food["exists_days"], food["additives_n"])
-plt.xlabel("A number of days from start date")
-plt.ylabel("number of additives")
-
-
-# Over time they use more and more additives...
-
-# ### Is there a difference in nutritions in Vegan / not-Vegan products?
-
-# In[ ]:
-
-
-from pandas.tools.plotting import scatter_matrix
+plt.show()
 
 
 # In[ ]:
 
 
-food_nutrients = no_null_objects(food[["carbohydrates_100g", "fat_100g", "proteins_100g", "labels_en"]])
+# just to visualize ith test image
+plt.imshow(X_test[2311].reshape((28, 28)))
+
+
+# Split testing data into batches as distances of 10,000 test images and
+# 60,000 train images won't fit in memory.
+
+# In[ ]:
+
+
+# predict labels for batch_size number of test images at a time.
+batch_size = 2000
+# k = 3
+k = 1
+classifier = simple_knn()
+classifier.train(X_train, y_train)
+
+
+# As Kaggle kernels have 1200 seconds limit, I have divided the prediction step
+# into two cells each cell running for 13 minutes and saving prediction to `predictions`.
+
+# In[ ]:
+
+
+# runs for 13 minutes
+predictions = []
+
+for i in range(int(len(X_test)/(2*batch_size))):
+    # predicts from i * batch_size to (i+1) * batch_size
+    print("Computing batch " + str(i+1) + "/" + str(int(len(X_test)/batch_size)) + "...")
+    tic = time.time()
+    predts = classifier.predict(X_test[i * batch_size:(i+1) * batch_size], k)
+    toc = time.time()
+    predictions = predictions + list(predts)
+#     print("Len of predictions: " + str(len(predictions)))
+    print("Completed this batch in " + str(toc-tic) + " Secs.")
+
+print("Completed predicting the test data.")
 
 
 # In[ ]:
 
 
-food_nutrients["labels_en"] = food_nutrients["labels_en"].str.contains("Vegan")
+# runs for 13 minutes
+# uncomment predict lines to predict second half of test data
 
+for i in range(int(len(X_test)/(2*batch_size)), int(len(X_test)/batch_size)):
+    # predicts from i * batch_size to (i+1) * batch_size
+    print("Computing batch " + str(i+1) + "/" + str(int(len(X_test)/batch_size)) + "...")
+    tic = time.time()
+    #predts = classifier.predict(X_test[i * batch_size:(i+1) * batch_size], k)
+    toc = time.time()
+    #predictions = predictions + list(predts)
+#     print("Len of predictions: " + str(len(predictions)))
+    print("Completed this batch in " + str(toc-tic) + " Secs.")
+
+print("Completed predicting the test data.")
+
+
+# After predicting and saving results in Python array, we dump our predictions to a csv file
+# named `predictions.csv` which gets an accuracy of 97.114% on public leaderboard.
 
 # In[ ]:
 
 
-plt.figure(figsize=(20, 20))
-seaborn.pairplot(food_nutrients, hue="labels_en", diag_kind="kde")
+out_file = open("predictions.csv", "w")
+out_file.write("ImageId,Label\n")
+for i in range(len(predictions)):
+    out_file.write(str(i+1) + "," + str(int(predictions[i])) + "\n")
+out_file.close()
 
-
-# Kde-diags say that the distributions are quite similar for products with "Vegan" label. But in scatters there are some areas where there are no vegan products.
-
-# In[ ]:
-
-
-food_with_labels = no_null_objects(food, ["labels_en"])
-
-
-# In[ ]:
-
-
-key = "energy_100g"
-seaborn.kdeplot(food[key], label="All")
-seaborn.kdeplot(food_with_labels[food_with_labels["labels_en"].str.contains("Vegan")][key], label="Vegan")
-plt.title("KDE of energy in 100g")
-
-
-# There is a group of products not covered in Vegan products.
-
-# ## Summary
-# * Australia and th eUK are separated from other countires and produce a lot of products themselves
-# * There are less ingredients from palm oil in the US, the UK, China, Brazil products than in France, Switzerland, Belgium, Denmark... (Look strange?)
-# * Products with "p", "o", "r" and "t" almost never have vitamin E, while alcohol often contain letter "r"
-# * The number of addiives in products raises over time
-# * Vegan products do not much differ from other products

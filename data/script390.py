@@ -1,429 +1,316 @@
 
 # coding: utf-8
 
-# Currently we've many models around with different performances. For model without any post-processing we can expect:
-# * LinkNet: Around LB 0.36
-# * UNet: Around LB 0.37 to 0.43
-# * Mask RCNN: Around LB 0.45 to 0.50
+# **In this notebook, we are going to tackle the same toxic classification problem just like my previous notebooks but this time round, we are going deeper with the use of Character-level features and Convolutional Neural Network (CNNs). **
 # 
-# Predictions to deliver for each image for is a list of masks detected (the instances). Now, how can we ensemble models ouputs to get better performances? For models that provide per pixel probabilities (LinkNet, UNet) one can simply do averaging/stacking on the probabilities. But for models that provide instances (with or without scoring), what can be done? This kernel is to try to experiment solutions to ensemble instances.
+# ***Updated with saved model and submission below***
 # 
-# 2018-03-20: First, we apply really basic NMS (Non-Maximum-Suppression) with bounding boxes extracted from predicted masks. 2 predictions provided as a starting point:
-# * Model#0: LB 0.421 (Mask RCNN - Resnet101 backbone, pretrained - Coco, CV fold1)
-# * Model#1: LB 0.413 (Mask RCNN - Resnet101 backbone, pretrained - Coco, CV fold2)
 # 
-# Forks and contributions welcome!
+# ![](https://i.imgur.com/okCCLAU.jpg)
 # 
+# 
+# **Why do we consider the idea of using char-gram features?**
+# 
+# 
+# You might noticed that there are a lot of sparse misspellings due to the nature of the dataset. When we train our model using the word vectors from our training set, we might be missing out some genuine words and mispellings that are not present in the training set but yet present in our prediction set. Sometimes that wouldn't affect the model's capability to make good judgement, but most of the time, it's unable to correctly classify because the misspelt words are not in the model's "dictionary". 
+# 
+# Hence, if we could "go deeper" by splitting the sentence into a list of characters instead of words, the chances that the same characters that are present in both training and prediction set are much higher. You could imagine that this approach introduce another problem: an explosion of dimensions. One of the ways to tackle this problem is to use CNN as it's designed to solve high-dimensional dataset like images. Traditionally, CNN is used to solve computer vision problems but there's an increased trend of using CNN not just in Kaggle competitions but also in papers written by researchers too. Therefore, I believe it deserve a writeup and without much ado, let's see how we can apply CNN to our competition at hand.
+# 
+# I have skipped some elaboration of some concepts like embeddings which I have went through in my previous notebooks, so take a look at these if you are interested in learning more:
+# 
+# * [Do Pretrained Embeddings Give You The Extra Edge?](https://www.kaggle.com/sbongo/do-pretrained-embeddings-give-you-the-extra-edge)
+# * [[For Beginners] Tackling Toxic Using Keras](https://www.kaggle.com/sbongo/for-beginners-tackling-toxic-using-keras)
 
-# In[1]:
+# **A brief glance at Convolutional Neural Network (CNNs)**
+# 
+# CNN is basically a feed-forward neural network that consists of several layers such as the convolution, pooling and some densely connected layers that we are familiar with.
+# 
+# ![](https://i.imgur.com/aa46tRe.png)
+# 
+# Firstly, as seen in the above picture, we feed the data(image in this case) into the convolution layer. The convolution layer works by sliding a window across the input data and as it slides, the window(filter) applies some matrix operations with the underlying data that falls in the window. And when you eventually collect all the result of the matrix operations, you will have a condensed output in another matrix(we call it a feature map).
+# 
+# ![](https://i.imgur.com/wSbiLCi.gif)
+# 
+# With the resulting matrix at hand, you do a max pooling that basically down-samples or in another words decrease the number of dimensions without losing the essence. 
+# 
+# ![](https://i.imgur.com/Cphci9k.png)
+# 
+# Consider this simplified image of max pooling operation above. In the above example, we slide a 2 X 2 filter window across our dataset in strides of 2. As it's sliding, it grabs the maximum value and put it into a smaller-sized matrix.
+# 
+# There are different ways to down-sample the data such as min-pooling, average-pooling and in max-pooling, you simply take the maximum value of the matrix. Imagine that you have a list: [1,4,0,8,5]. When you do max-pooling on this list, you will only retain the value "8". Indirectly, we are only concerned about the existence of 8, and not the location of it. Despite it's simplicity, it's works quite well and it's a pretty niffy way to reduce the data size.
+# 
+# Again, with the down-sized "after-pooled" matrix, you could feed it to a densely connected layer which eventually leads to prediction.
+# 
+# **How does this apply to NLP in our case?**
+# 
+# Now, forget about real pixels about a minute and imagine using each tokenized character as a form of pixel in our input matrix. Just like word vectors, we could also have character vectors that gives a lower-dimension representation. So for a list of 10 sentences that consists of 50 characters each, using a 30-dimensional embedding will allow us to feed in a 10x50x30 matrix into our convolution layer.
+# ![](https://i.imgur.com/g59nKYc.jpg)
+# Looking at the above picture, let's just focus(for now) on 1 sentence instead of a list. Each character is represented in a row (8 characters), and each embedding dimension is represented in a column (5 dimensions) in this starting matrix.
+# 
+# You would begin the convolution process by using filters of different dimensions to "slide" across your initial matrix to get a lower-dimension feature map. There's something I deliberately missed out earlier: filters. 
+# 
+# ![](https://i.imgur.com/Lwa7wBG.gif)
+# The sliding window that I mention earlier are actually filters that are designed to capture different distinctive features in the input data. By defining the dimension of the filter, you can control the window of infomation you want to "summarize". To translate back in the picture, each of the feature maps could contain 1 high level representation of the embeddings for each character.
+# 
+# 
+# Next, we would apply a max pooling to get the maximum value in each feature map. In our context, some characters in each filter would be selected through this max pooling process based on their values. As usual, we would then feed into a normal densely connected layer that outputs to a softmax function which gives the probabilities of each class.
+# 
+# Note that my explanation hides some technical details to facilitate understanding. There's a whole load of things that you could tweak with CNN. For instance, the stride size which determine how often the filter will be applied, narrow VS wide CNN, etc.
+# 
+# **Okay! Let's see how we could implement CNN in our competition.**
+
+# As always, we start off with the importing of relevant libraries and dataset:
+
+# In[ ]:
 
 
-import os
-import numpy as np
-import pandas as pd
-import skimage.io
-import cv2
+import sys, os, re, csv, codecs, numpy as np, pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+get_ipython().run_line_magic('matplotlib', 'inline')
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation, GRU,Conv1D,MaxPooling1D
+from keras.layers import Bidirectional, GlobalMaxPool1D,Bidirectional
+from keras.models import Model
+from keras import initializers, regularizers, constraints, optimizers, layers
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+import gc
+from sklearn.model_selection import train_test_split
+from keras.models import load_model
 
-# from subprocess import check_output
-# print(check_output(["ls", "../input"]).decode("utf8"))
 
-
-# In[2]:
+# In[ ]:
 
 
-STAGE1_TEST = "../input/data-science-bowl-2018/stage1_test"
-STAGE1_TEST_IMAGE_PATTERN = "%s/{}/images/{}.png" % STAGE1_TEST
-SUBMISSION_IMAGEID = "ImageId"
-SUBMISSION_ENCODED = "EncodedPixels"
-models_path = [
-    "../input/lb0421/submission_maskrcnn_0.421.csv",
-    "../input/lb0413/submission_maskrcnn_0.413.csv"
-]
+train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+submit = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+submit_template = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv', header = 0)
 
 
-# In[3]:
+# Split into training and test set:
 
-
-# Image loading
-def image_ids_in(root_dir):
-    ids = []
-    for id in os.listdir(root_dir):
-        ids.append(id)
-    return ids
+# In[ ]:
 
-def read_image(image_id, pattern=STAGE1_TEST_IMAGE_PATTERN):
-    image_file = pattern.format(image_id, image_id)
-    image = skimage.io.imread(image_file)
-    # Drop alpha which is not used
-    image = image[:, :, :3]
-    return image
 
-def image_id_to_index(image_id, images_ids):
-    i = np.argwhere(np.array(images_ids) == image_id)[0][0]
-    return i
-
-
-# In[4]:
-
-
-# RLE decoding functions
-def rle_decode_one_mask(rle_str, mask_shape, mask_dtype):
-    s = rle_str.split()
-    starts, lengths = [np.asarray(x, dtype=int) for x in (s[0:][::2], s[1:][::2])]
-    starts -= 1
-    ends = starts + lengths
-    mask = np.zeros(np.prod(mask_shape), dtype=mask_dtype)
-    for lo, hi in zip(starts, ends):
-        mask[lo:hi] = 1
-    return mask.reshape(mask_shape[::-1]).T
-
-def rle_decode_all_masks(masks_str, mask_shape, mask_dtype):
-    image = None
-    i = 0
-    for mask_str in masks_str:
-        i = i + 1
-        mask = rle_decode_one_mask(mask_str, mask_shape, mask_dtype)
-        mask[mask == 1] = i
-        if image is None:
-            image = mask
-        else:
-            image = image + mask
-    return image
+X_train, X_test, y_train, y_test = train_test_split(train, train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]], test_size = 0.10, random_state = 42)
 
 
-# In[5]:
-
-
-# Test images
-test_image_ids = image_ids_in(STAGE1_TEST)
-
-
-# In[24]:
-
-
-# Convert index image (unique value per mask) to array.
-def img_masks_as_masks_array(train_label):
-    # As (masks, height, width)
-    y_true = []
-    uniques = np.unique(train_label)
-    # Remove zero from index
-    indexes = np.delete(uniques, np.where(uniques == 0))
-    for index in indexes:
-        y_true.append(np.where(train_label == index, 1, 0))
-    y_true = np.array(y_true)
-    return y_true
-
-# Convert back all mask to index image
-def masks_array_to_index_image(masks):
-    mask = np.zeros((masks.shape[1], masks.shape[2]), dtype=np.uint16)
-    for index in range(0, masks.shape[0]):
-        mask[masks[index,:,:] > 0] = index + 1
-    return mask
-
-# Read image and predicted masks
-def read_test_image_mask(submissionPD, test_id):
-    test_image = read_image(test_id)
-    rle_encoded_masks = submissionPD[submissionPD[SUBMISSION_IMAGEID] == test_id][SUBMISSION_ENCODED].values
-    test_masks = rle_decode_all_masks(rle_encoded_masks, test_image.shape[:-1], np.int32)
-    test_masks_array = img_masks_as_masks_array(test_masks)
-    return test_image, test_masks_array
-
-
-# In[7]:
-
-
-# Extract bounding box of mask
-def find_bounding_boxes_on_mask(bin_img, test_id, mask_id, with_ref=None):
-    boxes = []
-    img_bin = np.where(bin_img > 0, 1, 0)
-    img_rgb = (img_bin)*255
-    img_rgb = np.concatenate([img_rgb[:, :, np.newaxis], img_rgb[:, :, np.newaxis], img_rgb[:, :, np.newaxis]], axis=-1)
-    img_rgb = img_rgb.astype(np.uint8)
-    im_bw = cv2.cvtColor(img_rgb,cv2.COLOR_RGB2GRAY)
-    ret, im_bw = cv2.threshold(im_bw, 127, 255, cv2.THRESH_BINARY)
-    pixelpoints = cv2.findNonZero(im_bw)
-    x, y, w, h = cv2.boundingRect(pixelpoints)
-    if with_ref is not None:
-        boxes.append((x, y, w, h, with_ref, test_id, mask_id))
-    else:
-        boxes.append((x,y,w,h))
-    return np.array(boxes)
-
-
-# In[8]:
-
-
-# Extract all bounding boxes
-def find_bounding_boxes_on_masks(test_masks_array, test_id, with_ref=None):
-    test_masks_pass = []
-    boxes_masks = []
-    for mask_id in range(0, len(test_masks_array)):
-        mask = test_masks_array[mask_id]
-        boxes = find_bounding_boxes_on_mask(mask, test_id, mask_id, with_ref=with_ref)
-        boxes_masks.append(boxes)
-        test_masks_pass.append(mask)
-    test_masks_pass = np.array(test_masks_pass)
-    boxes_masks = np.array(boxes_masks)
-    return test_masks_pass, boxes_masks
-
+# Store the comments as seperate variables for further processing.
 
-# In[9]:
+# In[ ]:
 
 
-# Image and array of masks + bounding boxes for each model (for a given image).
-def models_cv_masks_for_image(models_path, test_id, test_image_ids):
-    test_id_ref = image_id_to_index(test_id, test_image_ids)
-    models_cv_masks = []
-    models_cv_masks_boxes = []
-    for i in range(0, len(models_path)):
-        model_path = models_path[i]
-        submission = pd.read_csv(model_path)
-        submission.dropna(subset=[SUBMISSION_ENCODED], inplace=True)
-        test_image, test_masks_array = read_test_image_mask(submission, test_id)
-        test_masks_clean, boxes_masks = find_bounding_boxes_on_masks(test_masks_array, test_id_ref, with_ref=i)
-        models_cv_masks.append(test_masks_clean)
-        models_cv_masks_boxes.append(boxes_masks)
-    return test_image, models_cv_masks, models_cv_masks_boxes
+list_sentences_train = X_train["comment_text"]
+list_sentences_test = X_test["comment_text"]
+list_sentences_submit = submit["comment_text"]
 
 
-# In[10]:
+# In our previous notebook, we have began using Kera's helpful Tokenizer class to help us do the gritty text processing work. We are going to use it again to help us split the text into characters by setting the "char_level" parameter to true.
 
+# In[ ]:
 
-# Basic NMS on boxes, https://www.pyimagesearch.com/2014/11/17/non-maximum-suppression-object-detection-python
-# Malisiewicz et al.
-def non_max_suppression_fast(boxes, overlapThresh):
-    # if there are no boxes, return an empty list
-    if len(boxes) == 0:
-        return []
 
-    # if the bounding boxes integers, convert them to floats --
-    # this is important since we'll be doing a bunch of divisions
-    if boxes.dtype.kind == "i":
-        boxes = boxes.astype("float")
+max_features = 20000
+tokenizer = Tokenizer(num_words=max_features,char_level=True)
 
-    # initialize the list of picked indexes
-    pick = []
 
-    # grab the coordinates of the bounding boxes
-    x1 = boxes[:,0]
-    y1 = boxes[:,1]
-    x2 = boxes[:,0] + boxes[:,2]
-    y2 = boxes[:,1] + boxes[:,3]
-    # compute the area of the bounding boxes and sort the bounding
-    # boxes by the bottom-right y-coordinate of the bounding box
-    area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(y2)
+# This function allows Tokenizer to create an index of the tokenized unique characters. Eg. a=1, b=2, etc
 
-    # keep looping while some indexes still remain in the indexes list
-    while len(idxs) > 0:
-        # grab the last index in the indexes list and add the
-        # index value to the list of picked indexes
-        last = len(idxs) - 1
-        i = idxs[last]
-        pick.append(i)
+# In[ ]:
 
-        # find the largest (x, y) coordinates for the start of the bounding box and the smallest (x, y) coordinates for the end of the bounding box
-        xx1 = np.maximum(x1[i], x1[idxs[:last]])
-        yy1 = np.maximum(y1[i], y1[idxs[:last]])
-        xx2 = np.minimum(x2[i], x2[idxs[:last]])
-        yy2 = np.minimum(y2[i], y2[idxs[:last]])
-        # compute the width and height of the bounding box
-        w = np.maximum(0, xx2 - xx1 + 1)
-        h = np.maximum(0, yy2 - yy1 + 1)
-        # compute the ratio of overlap
-        overlap = (w * h) / area[idxs[:last]]
-        # delete all indexes from the index list that have
-        idxs = np.delete(idxs, np.concatenate(([last],
-            np.where(overlap > overlapThresh)[0])))
-    # return only the bounding boxes that were picked using the integer data type
-    return boxes[pick].astype("int")
 
+tokenizer.fit_on_texts(list(list_sentences_train))
 
-# In[11]:
 
+# Then we get back a list of sentences with the sequence of indexes which represent each character.
 
-# Compute NMS (i.e. select only one box when multiple boxes overlap) for across models.
-def models_cv_masks_boxes_nms(models_cv_masks_boxes, threshold=0.3):
-    boxes = np.concatenate(models_cv_masks_boxes).squeeze()
-    boxes_nms = non_max_suppression_fast(boxes, threshold)
-    return boxes_nms
+# In[ ]:
 
 
-# In[12]:
+list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
+list_sentences_test = tokenizer.texts_to_sequences(list_sentences_test)
+list_tokenized_submit = tokenizer.texts_to_sequences(list_sentences_submit)
 
 
-# Display some result (on the nightmare images)
-# test_id = "0f1f896d9ae5a04752d3239c690402c022db4d72c0d2c087d73380896f72c466"
-test_id = "472b1c5ff988dadc209faea92499bc07f305208dbda29d16262b3d543ac91c71"
+# Since there are sentences with varying length of characters, we have to get them on a constant size. Let's put them to a length of 500 characters for each sentence:
 
+# In[ ]:
 
-# In[13]:
 
+maxlen = 500
+X_t = pad_sequences(list_tokenized_train, maxlen=maxlen)
+X_te = pad_sequences(list_sentences_test, maxlen=maxlen)
+X_sub = pad_sequences(list_tokenized_submit, maxlen=maxlen)
 
-# Get masks and boxes (one per mask) for each model
-test_image, test_masks_cv_array, test_masks_boxes_cv_array = models_cv_masks_for_image(models_path, test_id, test_image_ids)
 
+# Just in case you are wondering, the reason why I used 500 is because most of the number of characters in a sentence falls within 0 to 500:
 
-# In[14]:
+# In[ ]:
 
 
-# Run NMS ensembling
-masks_boxes_nms = models_cv_masks_boxes_nms(test_masks_boxes_cv_array, threshold=0.3)
+totalNumWords = [len(one_comment) for one_comment in list_tokenized_train]
+plt.hist(totalNumWords)
+plt.show()
 
 
-# In[37]:
+# Finally, we can start buliding our model.
 
+# First, we set up our input layer. As mentioned in the Keras documentation, we have to include the shape for the very first layer and Keras will automatically derive the shape for the rest of the layers.
 
-# Plot predictions of each model
-fig, ax = plt.subplots(1, 2, figsize=(18, 8))
-ax[0].axis('off')
-ax[0].imshow(masks_array_to_index_image(test_masks_cv_array[0]), cmap='nipy_spectral')
-ax[0].imshow(test_image, alpha=0.45)
-ax[0].set_title("Model#0: %d predicted instances for %s"%(len(test_masks_cv_array[0]), models_path[0]))
+# In[ ]:
 
-ax[1].axis('off')
-ax[1].imshow(masks_array_to_index_image(test_masks_cv_array[1]), cmap='nipy_spectral')
-ax[1].imshow(test_image, alpha=0.45)
-ax[1].set_title("Model#1: %d predicted instances for %s"%(len(test_masks_cv_array[1]), models_path[1]))
 
-plt.tight_layout()
-
-
-# In[16]:
+inp = Input(shape=(maxlen, ))
 
 
-# Plot boxes for each model (left) and resulting NMS (right)
-fig, ax = plt.subplots(1, 2, figsize=(18, 8))
-ax[0].axis('off')
-ax[0].set_ylim(test_image.shape[0] + 10, -10)
-ax[0].set_xlim(-10, test_image.shape[1] + 10)
-cmap = plt.cm.get_cmap('nipy_spectral')
-# Plot boxes per model
-for box in np.concatenate(test_masks_boxes_cv_array).squeeze():
-    p = patches.Rectangle((box[0]-1, box[1]-1), box[2], box[3], linewidth=1, facecolor='none', edgecolor=cmap(box[4]*60), alpha=0.75, linestyle="dashed")
-    ax[0].add_patch(p)
-    ax[0].text(box[0], box[1] + 8, "%d"%box[4], color=cmap(box[4]*60), size=10, backgroundcolor="none") 
-ax[0].imshow(test_image, alpha=0.6)
-ax[0].set_title("Bounding boxes of predicted instances for model #0 and #1")
-
-# Plot NMS results
-ax[1].set_ylim(test_image.shape[0] + 10, -10)
-ax[1].set_xlim(-10, test_image.shape[1] + 10)
-ax[1].axis('off')
-for box_nms in masks_boxes_nms:
-    p = patches.Rectangle((box_nms[0]-1, box_nms[1]-1), box_nms[2], box_nms[3], linewidth=1, facecolor='yellow', alpha=0.25, linestyle="dashed")
-    ax[1].add_patch(p)
-    ax[1].text(box_nms[0], box_nms[1] + 8, "%d"%box_nms[4], color=cmap(box_nms[4]*60), size=11, backgroundcolor="none")  
-ax[1].imshow(test_image, alpha=0.6)
-ax[1].set_title("Ensemble NMS bounding boxes (%d) of predicted instances with its reference model #0 or #1"%len(masks_boxes_nms))
-plt.tight_layout()
+# We use an embedding size of 240. That also means that we are projecting characters on a 240-dimension vector space. It will output a (num of sentences X 500 X 240) matrix. We have talked about embedding layer in my previous notebooks, so feel free to check them out.
 
+# In[ ]:
 
-# In[22]:
 
+embed_size = 240
+x = Embedding(len(tokenizer.word_index)+1, embed_size)(inp)
 
-# Back to masks from NMS boxes
-def get_masks_from_boxes_nms(masks_boxes_nms, test_masks_cv_array):
-    masks_nms = []
-    for box_nms in masks_boxes_nms:
-        model_id = box_nms[4]
-        mask_id = box_nms[6]
-        mask_nms = test_masks_cv_array[model_id][mask_id]
-        masks_nms.append(mask_nms)
-    masks_nms = np.array(masks_nms)
-    return masks_nms
 
+# Here's the meat of our notebook. With the output of embedding layer, we feed it into a convolution layer. We use a window size of 4 (remember it's 5 in the earlier picture above) and 100 filters (it's 6 in the earlier picture above) to extract the features in our data. That also means we slides a window across the 240 dimensions of embeddings for each of the 500 characters and it will result in a (num of sentences X 500 X 100) matrix. Notice that we have set padding to "same". What does this padding means?
+# ![](https://i.imgur.com/hITQent.png)
+# For simplicity sake, let's imagine we have a 32 x 32 x 3 input matrix and a 5 x 5 x 3 filter, if you apply the filter on the matrix with 1 stride, you will end up with a 28 x 28 x 3 matrix. In the early stages, you would want to preserve as much information as possible, so you will want to have a 32 x 32 x 3 matrix back. If we add(padding) some zeros around the original input matrix, we will be sure that the result output matrix dimension will be the same. But if you really want to have the resulting matrix to be reduced, you can set the padding parameter to "valid".
 
-# In[23]:
+# In[ ]:
 
 
-# NMS instances
-masks_nms = get_masks_from_boxes_nms(masks_boxes_nms, test_masks_cv_array)
+x = Conv1D(filters=100,kernel_size=4,padding='same', activation='relu')(x)
 
 
-# In[38]:
+# Then we pass it to the max pooling layer that applies the max pool operation on a window of every 4 characters. And that is why we get an output of (num of sentences X 125 X 100) matrix.
 
+# In[ ]:
 
-# Plot masks from NMS boxes
-fig, ax = plt.subplots(1, 2, figsize=(18, 8))
-ax[0].axis('off')
-masks_nms_image = masks_array_to_index_image(masks_nms)
-ax[0].imshow(test_image)
-ax[0].set_title("%s"%test_id)
-ax[1].axis('off')
-ax[1].imshow(masks_nms_image, cmap='nipy_spectral')
-ax[1].imshow(test_image, alpha=0.45)
-ax[1].set_title("Ensemble predicted instances (%d)"%len(masks_nms))
-plt.tight_layout()
 
+x=MaxPooling1D(pool_size=4)(x)
 
-# In[42]:
 
+# Next, we pass it to the Bidriectional LSTM that we are famliar with, since the previous notebook. 
 
-# RLE encoder
-def rle_to_string(runs):
-    return ' '.join(str(x) for x in runs)
+# In[ ]:
 
-def rle_encode_one_mask(mask):
-    pixels = mask.T.flatten()
-    use_padding = False
-    if pixels[0] or pixels[-1]:
-        use_padding = True
-        pixel_padded = np.zeros([len(pixels) + 2], dtype=pixels.dtype)
-        pixel_padded[1:-1] = pixels
-        pixels = pixel_padded
-    rle = np.where(pixels[1:] != pixels[:-1])[0] + 2
-    if use_padding:
-        rle = rle - 1
-    rle[1::2] = rle[1::2] - rle[:-1:2]
-    return rle
 
-def rle_encode_all_masks(masks):
-    values=list(np.unique(masks))
-    values.remove(0)
-    RLEs=[]
-    for v in values:
-        mask = np.where(masks == v, 1, 0)
-        rle = rle_encode_one_mask(mask)
-        rle_str = rle_to_string(rle)
-        RLEs.append(rle_str)
-    return RLEs
+x = Bidirectional(GRU(60, return_sequences=True,name='lstm_layer',dropout=0.2,recurrent_dropout=0.2))(x)
 
 
-# In[43]:
+# Afterwhich, we apply a max pooling again but this time round, it's a global max pooling. What's the difference between this and the previous max pooling attempt?
+# 
+# In the previous max pooling attempt, we merely down-sampled a single 2nd dimension, which contains the number of characters. From a matrix of:
+# (num of sentences X 500 X 100)
+# it becomes:
+# (num of sentences X 125 X 100)
+# which is still a 3d matrix.
+# 
+# But in global max pooling, we perform pooling operation across several dimensions(2nd and 3rd dimension) into a single dimension. So it outputs a:
+# (num of sentences X 120) 2D matrix.
 
+# In[ ]:
 
-# Generate submission from NMS
-def generate_test_submission(image_ids, models_path):
-    results = []
-    for image_id in image_ids:
-        test_image, test_masks_cv_array, test_masks_boxes_cv_array = models_cv_masks_for_image(models_path, image_id, image_ids)
-        masks_boxes_nms = models_cv_masks_boxes_nms(test_masks_boxes_cv_array, threshold=0.3)
-        masks_nms = masks_array_to_index_image(get_masks_from_boxes_nms(masks_boxes_nms, test_masks_cv_array))
-        rle_encoded_masks = rle_encode_all_masks(masks_nms)
-        for rle_encoded_mask in rle_encoded_masks:
-            info = (image_id, rle_encoded_mask)
-            results.append(info)
-    df = pd.DataFrame(results, columns=[SUBMISSION_IMAGEID, SUBMISSION_ENCODED])
-    return df
 
+x = GlobalMaxPool1D()(x)
 
-# In[45]:
 
+# Now that we have a 2D matrix, it's convenient to plug it into the densely connected layer, followed by a relu activation function.
 
-submissionPD = generate_test_submission(test_image_ids, models_path)
-submissionPD.head()
+# In[ ]:
 
 
-# In[47]:
+x = Dense(50, activation="relu")(x)
 
 
-submissionPD.to_csv("submission.csv", index=False, sep=",")
+# We'll pass it through a dropout layer and a densely connected layer that eventually passes to a sigmoid function.
 
+# In[ ]:
 
-# New submission from NMS does not improve LB score (0.419). So what could be the next steps?
-# *  Play with overlap threshold
-# * Keep or drop outliers? (single box with no overlap)
-# * ?
+
+x = Dropout(0.2)(x)
+x = Dense(6, activation="sigmoid")(x)
+
+
+# You could experiment with the dropout rate and size of the dense connected layer to see it could decrease overfitting.
+# 
+# Finally, we move on to train the model with 6 epochs and the results seems pretty decent. The training loss decreases steadily along with validation loss until at the 5th or 6th epoch where traces of overfitting starts to emerge.
+
+# In[ ]:
+
+
+model = Model(inputs=inp, outputs=x)
+model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                 metrics=['accuracy'])
+
+
+# In[ ]:
+
+
+model.summary()
+
+
+# Due to Kaggle kernel time limit, I have pasted the training output of these 6 epochs.
+
+# In[ ]:
+
+
+batch_size = 32
+epochs = 6
+#uncomment below to train in your local machine
+#hist = model.fit(X_t,y_train, batch_size=batch_size, epochs=epochs,validation_data=(X_te,y_test),callbacks=callbacks_list)
+
+
+# Train on 143613 samples, validate on 15958 samples
+# 
+# Epoch 1/6
+# 143613/143613 [==============================] - 2580s 18ms/step - loss: 0.0786 - acc: 0.9763 - val_loss: 0.0585 - val_acc: 0.9806
+# 
+# Epoch 2/6
+# 143613/143613 [==============================] - 2426s 17ms/step - loss: 0.0582 - acc: 0.9804 - val_loss: 0.0519 - val_acc: 0.9816
+# 
+# Epoch 3/6
+# 143613/143613 [==============================] - 2471s 17ms/step - loss: 0.0531 - acc: 0.9816 - val_loss: 0.0489 - val_acc: 0.9823
+# 
+# Epoch 4/6
+# 143613/143613 [==============================] - 2991s 21ms/step - loss: 0.0505 - acc: 0.9821 - val_loss: 0.0484 - val_acc: 0.9829
+# 
+# Epoch 5/6
+# 143613/143613 [==============================] - 3023s 21ms/step - loss: 0.0487 - acc: 0.9826 - val_loss: 0.0463 - val_acc: 0.9829
+# 
+# Epoch 6/6
+# 143613/143613 [==============================] - 2961s 21ms/step - loss: 0.0474 - acc: 0.9830 - val_loss: 0.0463 - val_acc: 0.9831
+
+# **UPDATE**
+# 
+# I have uploaded the saved model in this notebook so that you could even continue the training process. To load the model and do a prediction, you could do this:
+
+# In[ ]:
+
+
+model = load_model('../input/epoch-6-model/model-e6.hdf5')
+
+batch_size = 32
+y_submit = model.predict(X_sub,batch_size=batch_size,verbose=1)
+
+
+# Getting the prediction data in a format ready for competition submission:
+
+# In[ ]:
+
+
+y_submit[np.isnan(y_submit)]=0
+sample_submission = submit_template
+sample_submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_submit
+sample_submission.to_csv('submission.csv', index=False)
+
+
+# I hope this notebook serves as a good start for beginners who are interested in tackling NLP problems using the CNN angle. There are some ideas which you could use to push the performance further, such as :
+# 1. Tweak CNN parameters such as number of strides, different padding settings, window size.
+# 2. Hyper-parameter tunings
+# 3. Experiment with different architecture layers
+# 
+# Thank you for your time in reading and if you like what I wrote, support me by upvoting my notebook..
+# 
+# With the toxic competition coming to an end in a month, I wish everyone godspeed!

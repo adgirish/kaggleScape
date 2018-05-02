@@ -1,140 +1,553 @@
-import numpy as np
-import pandas as pd
+# coding: utf-8
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation
-from keras.optimizers import Adadelta
-from keras.layers.normalization import BatchNormalization
+import shutil
+import os
 
-class NN:
-    #I made a small wrapper for the Keras model to make it more scikit-learn like
-    #I think they have something like this built in already, oh well
-    #See http://keras.io/ for parameter options
-    def __init__(self, inputShape, layers, dropout = [], activation = 'relu', init = 'uniform', loss = 'rmse', optimizer = 'adadelta', nb_epochs = 50, batch_size = 32, verbose = 1):
+f = open('improver.c', 'w')
+f.write("""
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include <omp.h>
 
-        model = Sequential()
-        for i in range(len(layers)):
-            if i == 0:
-                print ("Input shape: " + str(inputShape))
-                print ("Adding Layer " + str(i) + ": " + str(layers[i]))
-                model.add(Dense(layers[i], input_dim = inputShape, init = init))
-            else:
-                print ("Adding Layer " + str(i) + ": " + str(layers[i]))
-                model.add(Dense(layers[i], init = init))
-            print ("Adding " + activation + " layer")
-            model.add(Activation(activation))
-            model.add(BatchNormalization())
-            if len(dropout) > i:
-                print ("Adding " + str(dropout[i]) + " dropout")
-                model.add(Dropout(dropout[i]))
-        model.add(Dense(1, init = init)) #End in a single output node for regression style output
-        model.compile(loss=loss, optimizer=optimizer)
-        
-        self.model = model
-        self.nb_epochs = nb_epochs
-        self.batch_size = batch_size
-        self.verbose = verbose
+int preds[1000000];
+int wish[1000000][100];
+int gift[1000][1000];
+int child_gift_matrix[1000][1000];
+int **child_score;
+int **santa_score;
+int numthreads;
 
-    def fit(self, X, y): 
-        self.model.fit(X.values, y.values, nb_epoch=self.nb_epochs, batch_size=self.batch_size, verbose = self.verbose)
-        
-    def predict(self, X, batch_size = 128, verbose = 1):
-        return self.model.predict(X.values, batch_size = batch_size, verbose = verbose)
-
-class pdStandardScaler:
-    #Applies the sklearn StandardScaler to pandas dataframes
-    def __init__(self):
-        from sklearn.preprocessing import StandardScaler
-        self.StandardScaler = StandardScaler()
-    def fit(self, df):
-        self.StandardScaler.fit(df)
-    def transform(self, df):
-        df = pd.DataFrame(self.StandardScaler.transform(df), columns=df.columns)
-        return df
-    def fit_transform(self, df):
-        df = pd.DataFrame(self.StandardScaler.fit_transform(df), columns=df.columns)
-        return df
-        
-def getDummiesInplace(columnList, train, test = None):
-    #Takes in a list of column names and one or two pandas dataframes
-    #One-hot encodes all indicated columns inplace
-    columns = []
-    
-    if test is not None:
-        df = pd.concat([train,test], axis= 0)
-    else:
-        df = train
-        
-    for columnName in df.columns:
-        index = df.columns.get_loc(columnName)
-        if columnName in columnList:
-            dummies = pd.get_dummies(df.ix[:,index], prefix = columnName, prefix_sep = ".")
-            columns.append(dummies)
-        else:
-            columns.append(df.ix[:,index])
-    df = pd.concat(columns, axis = 1)
-    
-    if test is not None:
-        train = df[:train.shape[0]]
-        test = df[train.shape[0]:]
-        return train, test
-    else:
-        train = df
-        return train
-        
-def pdFillNAN(df, strategy = "mean"):
-    #Fills empty values with either the mean value of each feature, or an indicated number
-    if strategy == "mean":
-        return df.fillna(df.mean())
-    elif type(strategy) == int:
-        return df.fillna(strategy)
-        
-def make_dataset(useDummies = True, fillNANStrategy = "mean", useNormalization = True):
-    data_dir = "../input/"
-    train = pd.read_csv(data_dir + 'train.csv')
-    test = pd.read_csv(data_dir + 'test.csv')
-    
-    labels = train["Response"]
-    train.drop(labels = "Id", axis = 1, inplace = True)
-    train.drop(labels = "Response", axis = 1, inplace = True)
-    test.drop(labels = "Id", axis = 1, inplace = True)
-    
-    categoricalVariables = ["Product_Info_1", "Product_Info_2", "Product_Info_3", "Product_Info_5", "Product_Info_6", "Product_Info_7", "Employment_Info_2", "Employment_Info_3", "Employment_Info_5", "InsuredInfo_1", "InsuredInfo_2", "InsuredInfo_3", "InsuredInfo_4", "InsuredInfo_5", "InsuredInfo_6", "InsuredInfo_7", "Insurance_History_1", "Insurance_History_2", "Insurance_History_3", "Insurance_History_4", "Insurance_History_7", "Insurance_History_8", "Insurance_History_9", "Family_Hist_1", "Medical_History_2", "Medical_History_3", "Medical_History_4", "Medical_History_5", "Medical_History_6", "Medical_History_7", "Medical_History_8", "Medical_History_9", "Medical_History_10", "Medical_History_11", "Medical_History_12", "Medical_History_13", "Medical_History_14", "Medical_History_16", "Medical_History_17", "Medical_History_18", "Medical_History_19", "Medical_History_20", "Medical_History_21", "Medical_History_22", "Medical_History_23", "Medical_History_25", "Medical_History_26", "Medical_History_27", "Medical_History_28", "Medical_History_29", "Medical_History_30", "Medical_History_31", "Medical_History_33", "Medical_History_34", "Medical_History_35", "Medical_History_36", "Medical_History_37", "Medical_History_38", "Medical_History_39", "Medical_History_40", "Medical_History_41"]
-
-    if useDummies == True:
-        print ("Generating dummies...")
-        train, test = getDummiesInplace(categoricalVariables, train, test)
-    
-    if fillNANStrategy is not None:
-        print ("Filling in missing values...")
-        train = pdFillNAN(train, fillNANStrategy)
-        test = pdFillNAN(test, fillNANStrategy)
-
-    if useNormalization == True:
-        print ("Scaling...")
-        scaler = pdStandardScaler()
-        train = scaler.fit_transform(train)
-        test = scaler.transform(test)
-    
-    return train, test, labels
-
-print ("Creating dataset...") 
-train, test, labels = make_dataset(useDummies = True, fillNANStrategy = "mean", useNormalization = True)
-    
-clf = NN(inputShape = train.shape[1], layers = [128, 64], dropout = [0.5, 0.5], loss='mae', optimizer = 'adadelta', init = 'glorot_normal', nb_epochs = 5)
-
-print ("Training model...")
-clf.fit(train, labels)
-
-print ("Making predictions...")
-pred = clf.predict(test)
-predClipped = np.clip(np.round(pred), 1, 8).astype(int) #Make the submissions within the accepted range
-
-submission = pd.read_csv('../input/sample_submission.csv')
-submission["Response"] = predClipped
-submission.to_csv('NNSubmission.csv', index=False)
+#define ITERS_PER_UPDATE 15
 
 
+double get_score_from_preds(double *score, int *tch, int *tsh) {
+	int i;
+	int total_child_happiness = 0;
+	int total_santa_happiness = 0;
+	double tc, th;
+	for (i = 0; i < 1000000; i++) {
+		total_child_happiness += child_score[i][preds[i]];
+		total_santa_happiness += santa_score[i][preds[i]];
+	}
+	*tch = total_child_happiness;
+	*tsh = total_santa_happiness;
+	tc = (double)total_child_happiness;
+	th = (double)total_santa_happiness;
+	*score = ((tc - 10000000.0)*(tc - 10000000.0)*(tc - 10000000.0));
+	*score += ((th - 1000000.0)*(th - 1000000.0)*(th - 1000000.0));
+	*score /= (2000000000.0*2000000000.0*2000000000.0);
+}
 
 
+void fill_child_gift_matrix() {
+	int i;
+	int current_position;
+	int counter[1000] = { 0 };
+	
+	for (i = 0; i < 1000000; i++) {
+		current_position = counter[preds[i]];
+		child_gift_matrix[preds[i]][current_position] = i;
+		counter[preds[i]] += 1;
+	}
+	for (i = 0; i < 1000; i++) {
+		if (counter[i] != 1000) {
+			printf("Some problem here!\\n");
+			exit(0);
+		}
+	}
+}
 
+
+double try_update_triplets(int iters, int id, int gift_to_try, int *tch_ret, int *tsh_ret, double *score_ret) {
+	int i, z, c, j;
+	int tr_id1 = id;
+	int tr_id2 = id + 1;
+	int tr_id3 = id + 2;
+	int best_ch1 = -1;
+	int best_ch2 = -1;
+	int best_ch3 = -1;
+	int triplets_gift;
+	int tch_best, tsh_best;
+	int tch = (*tch_ret);
+	int tsh = (*tsh_ret);
+	double best_score = (*score_ret);
+	
+	triplets_gift = preds[id];
+	// printf("Try update triplets: %d Current gift: %d Apply gift: %d\\n", id, triplets_gift, gift_to_try);
+
+	tch -= child_score[tr_id1][triplets_gift];
+	tch -= child_score[tr_id2][triplets_gift];
+	tch -= child_score[tr_id3][triplets_gift];
+	tch += child_score[tr_id1][gift_to_try];
+	tch += child_score[tr_id2][gift_to_try];
+	tch += child_score[tr_id3][gift_to_try];
+
+	tsh -= santa_score[tr_id1][triplets_gift];
+	tsh -= santa_score[tr_id2][triplets_gift];
+	tsh -= santa_score[tr_id3][triplets_gift];
+	tsh += santa_score[tr_id1][gift_to_try];
+	tsh += santa_score[tr_id2][gift_to_try];
+	tsh += santa_score[tr_id3][gift_to_try];
+	
+	#pragma omp parallel for private(j) schedule(dynamic,1) num_threads(numthreads)
+	for (z = 0; z < iters; z++) {
+		double new_score;
+		int r1, r2, r3;
+		int ch1, ch2, ch3;
+		int tch_new, tsh_new;
+
+		r1 = rand() % 1000;
+		ch1 = child_gift_matrix[gift_to_try][r1];
+		if (ch1 < 5001) {
+			// printf("Triplets on triplets\\n");
+			if (ch1 % 3 == 0) {
+				ch2 = ch1 + 1;
+				ch3 = ch1 + 2;
+			}
+			if (ch1 % 3 == 1) {
+				ch2 = ch1 - 1;
+				ch3 = ch1 + 1;
+			}
+			if (ch1 % 3 == 2) {
+				ch2 = ch1 - 2;
+				ch3 = ch1 - 1;
+			}
+		}
+		else if (ch1 < 45001) {
+			// printf("Triplets on twins\\n");
+			if (ch1 % 2 == 0) {
+				ch2 = ch1 - 1;
+			}
+			if (ch1 % 2 == 1) {
+				ch2 = ch1 + 1;
+			}
+			while (1) {
+				r3 = rand() % 1000;
+				ch3 = child_gift_matrix[gift_to_try][r3];
+				if (r3 != r1 && r3 != r2 && ch3 > 45000) {
+					break;
+				}
+			}
+		}
+		else {
+			while (1) {
+				r2 = rand() % 1000;
+				ch2 = child_gift_matrix[gift_to_try][r2];
+				if (r2 != r1 && ch2 > 45000) {
+					break;
+				}
+			}
+			while (1) {
+				r3 = rand() % 1000;
+				ch3 = child_gift_matrix[gift_to_try][r3];
+				if (r3 != r1 && r3 != r2 && ch3 > 45000) {
+					break;
+				}
+			}
+		}		
+
+		tch_new = tch;
+		tch_new -= child_score[ch1][gift_to_try];
+		tch_new -= child_score[ch2][gift_to_try];
+		tch_new -= child_score[ch3][gift_to_try];
+		tch_new += child_score[ch1][triplets_gift];
+		tch_new += child_score[ch2][triplets_gift];
+		tch_new += child_score[ch3][triplets_gift];
+
+		tsh_new = tsh;
+		tsh_new -= santa_score[ch1][gift_to_try];
+		tsh_new -= santa_score[ch2][gift_to_try];
+		tsh_new -= santa_score[ch3][gift_to_try];
+		tsh_new += santa_score[ch1][triplets_gift];
+		tsh_new += santa_score[ch2][triplets_gift];
+		tsh_new += santa_score[ch3][triplets_gift];
+
+		new_score = (tch_new - 10000000.0) * (tch_new - 10000000.0) * (tch_new - 10000000.0);
+		new_score += (tsh_new - 1000000.0) * (tsh_new - 1000000.0) * (tsh_new - 1000000.0);
+		new_score /= (2000000000.0*2000000000.0*2000000000.0);
+		 
+		if (new_score > best_score) {
+			#pragma omp critical
+			{
+				// compare new_score and best_score again because max   
+				// could have been changed by another thread after   
+				// the comparison outside the critical section
+				if (new_score > best_score) {
+					best_score = new_score;
+					tch_best = tch_new;
+					tsh_best = tsh_new;
+					best_ch1 = ch1;
+					best_ch2 = ch2;
+					best_ch3 = ch3;
+					printf("ID: %d Score updated: %.12lf\\n", id, best_score);
+				}
+			}
+		}
+	}
+
+	if (best_ch1 > -1) {
+		preds[tr_id1] = gift_to_try;
+		preds[tr_id2] = gift_to_try;
+		preds[tr_id3] = gift_to_try;
+		preds[best_ch1] = triplets_gift;
+		preds[best_ch2] = triplets_gift;
+		preds[best_ch3] = triplets_gift;
+
+		// Update child_gift_matrix
+		fill_child_gift_matrix();
+
+		// Update variables
+		*tch_ret = tch_best;
+		*tch_ret = tch_best;
+		*score_ret = best_score;
+	}
+	return best_score;
+}
+
+
+double try_update_twins(int iters, int id, int gift_to_try, int *tch_ret, int *tsh_ret, double *score_ret) {
+	int i, z, c, j;
+	int tr_id1 = id;
+	int tr_id2 = id + 1;
+	int best_ch1 = -1;
+	int best_ch2 = -1;
+	int twins_gift;
+	int tch_best, tsh_best;
+	int tch = (*tch_ret);
+	int tsh = (*tsh_ret);
+	double best_score = *score_ret;
+
+	twins_gift = preds[id];
+	// printf("Try update twins: %d Current gift: %d Apply gift: %d\\n", id, triplets_gift, gift_to_try);
+
+	tch -= child_score[tr_id1][twins_gift];
+	tch -= child_score[tr_id2][twins_gift];
+	tch += child_score[tr_id1][gift_to_try];
+	tch += child_score[tr_id2][gift_to_try];
+
+	tsh -= santa_score[tr_id1][twins_gift];
+	tsh -= santa_score[tr_id2][twins_gift];
+	tsh += santa_score[tr_id1][gift_to_try];
+	tsh += santa_score[tr_id2][gift_to_try];
+
+	#pragma omp parallel for private(j) schedule(dynamic,1) num_threads(numthreads)
+	for (z = 0; z < iters; z++) {
+		double new_score;
+		int r1, r2;
+		int ch1, ch2;
+		int tch_new, tsh_new;
+
+		while (1) {
+			r1 = rand() % 1000;
+			ch1 = child_gift_matrix[gift_to_try][r1];
+			if (ch1 > 5000) {
+				break;
+			}
+		}
+		if (ch1 < 45001) {
+			// printf("Twins on twins\\n");
+			if (ch1 % 2 == 0) {
+				ch2 = ch1 - 1;
+			}
+			if (ch1 % 2 == 1) {
+				ch2 = ch1 + 1;
+			}
+		}
+		else {
+			while (1) {
+				r2 = rand() % 1000;
+				ch2 = child_gift_matrix[gift_to_try][r2];
+				if (r2 != r1 && ch2 > 45000) {
+					break;
+				}
+			}
+		}	
+
+		tch_new = tch;
+		tch_new -= child_score[ch1][gift_to_try];
+		tch_new -= child_score[ch2][gift_to_try];
+		tch_new += child_score[ch1][twins_gift];
+		tch_new += child_score[ch2][twins_gift];
+
+		tsh_new = tsh;
+		tsh_new -= santa_score[ch1][gift_to_try];
+		tsh_new -= santa_score[ch2][gift_to_try];
+		tsh_new += santa_score[ch1][twins_gift];
+		tsh_new += santa_score[ch2][twins_gift];
+
+		new_score = (tch_new - 10000000.0) * (tch_new - 10000000.0) * (tch_new - 10000000.0);
+		new_score += (tsh_new - 1000000.0) * (tsh_new - 1000000.0) * (tsh_new - 1000000.0);
+		new_score /= (2000000000.0*2000000000.0*2000000000.0);
+		if (new_score > best_score) {
+			#pragma omp critical
+			{
+				// compare new_score and best_score again because max   
+				// could have been changed by another thread after   
+				// the comparison outside the critical section
+				if (new_score > best_score) {
+					best_score = new_score;
+					tch_best = tch_new;
+					tsh_best = tsh_new;
+					best_ch1 = ch1;
+					best_ch2 = ch2;
+					printf("ID: %d Score updated: %.12lf\\n", id, best_score);
+				}
+			}
+		}
+	}
+
+	if (best_ch1 > -1) {
+		preds[tr_id1] = gift_to_try;
+		preds[tr_id2] = gift_to_try;
+		preds[best_ch1] = twins_gift;
+		preds[best_ch2] = twins_gift;
+
+		// Update child_gift_matrix
+		fill_child_gift_matrix();
+		
+		// Update variables
+		*tch_ret = tch_best;
+		*tch_ret = tch_best;
+		*score_ret = best_score;
+	}
+	return best_score;
+}
+
+
+double try_update_singles(int iters, int id, int gift_to_try, int *tch_ret, int *tsh_ret, double *score_ret) {
+	int i, z, c, j;
+	int tr_id1 = id;
+	int r1;
+	int ch1;
+	int best_ch1 = -1;
+	int single_gift;
+	int tch_best, tsh_best;
+	int tch = (*tch_ret);
+	int tsh = (*tsh_ret);
+	double best_score = *score_ret;
+
+	single_gift = preds[id];
+	// printf("Try update singles: %d Current gift: %d Apply gift: %d\\n", id, triplets_gift, gift_to_try);
+
+	tch -= child_score[tr_id1][single_gift];
+	tch += child_score[tr_id1][gift_to_try];
+
+	tsh -= santa_score[tr_id1][single_gift];
+	tsh += santa_score[tr_id1][gift_to_try];
+
+	#pragma omp parallel for private(j) schedule(dynamic,1) num_threads(numthreads)
+	for (z = 0; z < iters; z++) {
+		double new_score;
+		int r1;
+		int ch1;
+		int tch_new, tsh_new;
+
+		while (1) {
+			r1 = rand() % 1000;
+			ch1 = child_gift_matrix[gift_to_try][r1];
+			if (ch1 > 45000) {
+				break;
+			}
+		}
+
+		tch_new = tch;
+		tch_new -= child_score[ch1][gift_to_try];
+		tch_new += child_score[ch1][single_gift];
+
+		tsh_new = tsh;
+		tsh_new -= santa_score[ch1][gift_to_try];
+		tsh_new += santa_score[ch1][single_gift];
+
+		new_score = (tch_new - 10000000.0) * (tch_new - 10000000.0) * (tch_new - 10000000.0);
+		new_score += (tsh_new - 1000000.0) * (tsh_new - 1000000.0) * (tsh_new - 1000000.0);
+		new_score /= (2000000000.0*2000000000.0*2000000000.0);
+		if (new_score > best_score) {
+			#pragma omp critical
+			{
+				// compare new_score and best_score again because max   
+				// could have been changed by another thread after   
+				// the comparison outside the critical section
+				if (new_score > best_score) {
+					best_score = new_score;
+					tch_best = tch_new;
+					tsh_best = tsh_new;
+					best_ch1 = ch1;
+					printf("ID: %d Score updated: %.12lf\\n", id, best_score);
+				}
+			}
+		}
+	}
+
+	if (best_ch1 > -1) {
+		preds[tr_id1] = gift_to_try;
+		preds[best_ch1] = single_gift;
+
+		// Update child_gift_matrix
+		fill_child_gift_matrix();
+
+		// Update variables
+		*tch_ret = tch_best;
+		*tch_ret = tch_best;
+		*score_ret = best_score;
+	}
+	return best_score;
+}
+
+
+int main()
+{
+	FILE *in, *out;
+	char buf[2048];
+	int i, j, total, res, c;
+	double score, cur_score, new_score, start_score;
+	int tch, tsh;
+	int tch_new, tsh_new;
+	unsigned int checker_sum = 0;
+
+#ifdef _OPENMP
+	numthreads = omp_get_num_procs() - 1;
+#endif
+
+	if (numthreads < 1)
+		numthreads = 1;
+	
+	// numthreads = 2;
+	printf("Using %d threads\\n", numthreads);
+
+	printf("Read submission\\n");
+	in = fopen("subm.csv", "r");
+	fscanf(in, "%s", buf);
+	while (1) {
+		res = fscanf(in, "%d", &i);
+		res = fscanf(in, ",%d", &(preds[i]));
+		if (res == EOF) {
+			break;
+		}
+	}
+	fclose(in);
+
+	child_score = (int **)calloc(1000000, sizeof(int *));
+	for (i = 0; i < 1000000; i++) {
+		child_score[i] = (int *)calloc(1000, sizeof(int));
+	}
+
+	santa_score = (int **)calloc(1000000, sizeof(int *));
+	for (i = 0; i < 1000000; i++) {
+		santa_score[i] = (int *)calloc(1000, sizeof(int));
+	}
+
+	printf("Read wishlist\\n");
+	in = fopen("../input/santa-gift-matching/child_wishlist_v2.csv", "r");
+	for (i = 0; i < 1000000; i++) {
+		fscanf(in, "%d", &res);
+		for (j = 0; j < 100; j++) {
+			res = fscanf(in, ",%d", &(wish[i][j]));
+			child_score[i][wish[i][j]] = 10 * (1 + (100 - j) * 2);
+		}
+	}
+	fclose(in);
+
+	printf("Read giftlist\\n");
+	in = fopen("../input/santa-gift-matching/gift_goodkids_v2.csv", "r");
+	for (i = 0; i < 1000; i++) {
+		fscanf(in, "%d", &res);
+		for (j = 0; j < 1000; j++) {
+			res = fscanf(in, ",%d", &(gift[i][j]));
+			santa_score[gift[i][j]][i] = (1 + (1000 - j) * 2);
+		}
+	}
+	fclose(in);
+
+	fill_child_gift_matrix();
+	get_score_from_preds(&score, &tch, &tsh);
+	printf("Initital score: %lf TCH: %d TSH: %d\\n", score, tch, tsh);
+
+	// Infinite probabilistic improvement
+	while (1) {
+		start_score = score;
+
+		if (1) {
+			// Update triplets with random childs
+			cur_score = score;
+			for (i = 0; i < 5001; i += 3) {
+				// printf("Update triplets: %d %d %d\\n", i, i + 1, i + 2);
+				for (j = 0; j < 1000; j++) {
+					if (preds[i] == j)
+						continue;
+					cur_score = try_update_triplets(10 * ITERS_PER_UPDATE, i, j, &tch, &tsh, &cur_score);
+				}
+			}
+
+			// Checker
+			get_score_from_preds(&score, &tch, &tsh);
+			printf("Updated score: %lf TCH: %d TSH: %d\\n", score, tch, tsh);
+		}
+
+		if (1) {
+			// Update twins with random childs
+			cur_score = score;
+			for (i = 5001; i < 45001; i += 2) {
+				// printf("Update twins: %d %d\\n", i, i + 1);
+				for (j = 0; j < 1000; j++) {
+					if (preds[i] == j)
+						continue;
+					cur_score = try_update_twins(5 * ITERS_PER_UPDATE, i, j, &tch, &tsh, &cur_score);
+				}
+			}
+
+			// Checker
+			get_score_from_preds(&score, &tch, &tsh);
+			printf("Updated score: %lf TCH: %d TSH: %d\\n", score, tch, tsh);
+		}
+
+		if (1) {
+			// Update singles with random childs
+			cur_score = score;
+			for (i = 45001; i < 1000000; i++) {
+				// printf("Update single: %d\\n", i);
+				for (j = 0; j < 1000; j++) {
+					if (preds[i] == j)
+						continue;
+					// Check if we get any gain from this
+					checker_sum = child_score[i][j] + santa_score[i][j];
+					if (checker_sum == 0) {
+						// printf("No gain for child %d and gift %d\\n", i, j);
+						continue;
+					}
+					cur_score = try_update_singles(ITERS_PER_UPDATE, i, j, &tch, &tsh, &cur_score);
+				}
+			}
+
+			// Checker
+			get_score_from_preds(&score, &tch, &tsh);
+			printf("Updated score: %lf TCH: %d TSH: %d\\n", score, tch, tsh);
+		}
+
+		sprintf(buf, "subm_%.12f.csv", score);
+		out = fopen(buf, "w");
+		fprintf(out, "ChildId,GiftId\\n");
+		for (i = 0; i < 1000000; i++) {
+			fprintf(out, "%d,%d\\n", i, preds[i]);
+		}
+		fclose(out);
+
+		// No improvements were made
+		if (fabs(start_score - score) < 0.000000000001) {
+			break;
+		}
+		break;
+	}
+	return 0;
+}
+""")
+f.close()
+
+
+if __name__ == '__main__':
+    initial_sub = '../input/baseline-python-ortools-algo-0-933795/submit_verGS.csv'
+    shutil.copy(initial_sub, 'subm.csv')
+    # os.system('g++ -fopenmp -O3 improver.c -o improver')
+    os.system('g++ -O3 improver.c -o improver')
+    os.system('./improver')

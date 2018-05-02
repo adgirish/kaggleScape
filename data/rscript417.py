@@ -1,212 +1,349 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+		Author: Triskelion, HJ van Veen, info@mlwave.com
+		
+		Description
+		
+		1) MinMaxScaler on the train set
+		
+		2) t-SNE on first 5k images from train set to 2 components.
+		
+		3) Create overlapping intervals on first 2 dimensions and cluster points inside this overlap.
+		
+		4) The clusters then become nodes in a graph.
+		
+		5) When different clusters have one or more non-unique members we draw an edge.
+		
+		6) Size the nodes by the number of points in that cluster. 
+		
+		7) Color the nodes by the distance to min of first dimension
+		
+		8) Show the images for every cluster member inside a tooltip.
+		
+		Uses KeplerMapper pre-alpha release: https://github.com/MLWave/kepler-mapper with some slight modifications for Kaggle Scripts.
+		
+		ref: www.ayasdi.com/_downloads/Topological_Methods_for_the_Analysis_of_High_Dimensional_Data_Sets_and_3D_Object_Recognition.pdf
+"""
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from __future__ import division
+import numpy as np
+from collections import defaultdict
+import json
+import itertools
+from sklearn import cluster, preprocessing, manifold
+from datetime import datetime
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+class KeplerMapper(object):
+	def __init__(self, cluster_algorithm=cluster.DBSCAN(eps=0.5,min_samples=3), nr_cubes=10, 
+				 overlap_perc=0.1, scaler=preprocessing.MinMaxScaler(), reducer=None, color_function="distance_origin", 
+				 link_local=False, verbose=1):
+		self.clf = cluster_algorithm
+		self.nr_cubes = nr_cubes
+		self.overlap_perc = overlap_perc
+		self.scaler = scaler
+		self.color_function = color_function
+		self.verbose = verbose
+		self.link_local = link_local
+		self.reducer = reducer
+		
+		self.chunk_dist = []
+		self.overlap_dist = []
+		self.d = []
+		
+		if self.verbose > 0:
+			print("\nnr_cubes = %s \n\noverlap_perc = %s\n\nlink_local = %s\n\nClusterer = %s\n\nScaler = %s\n\n"%(self.nr_cubes, overlap_perc, self.link_local, str(self.clf),str(self.scaler)))
+	
+	def fit_transform(self, X):
+		# Dimensionality Reduction
+		if self.reducer != None:
+			if self.verbose > 0:
+				self.reducer.set_params(**{"verbose":self.verbose})
+				print("\n..Reducing Dimensionality using: \n\t%s\n"%str(self.reducer))
+				
+			reducer = self.reducer
+			X = reducer.fit_transform(X)
+			
+		# Scaling
+		if self.scaler != None:
+			if self.verbose > 0:
+				print("\n..Scaling\n")
+			scaler = self.scaler
+			X = scaler.fit_transform(X)
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+		# We chop up the min-max column ranges into 'nr_cubes' parts
+		self.chunk_dist = (np.max(X, axis=0) - np.min(X, axis=0))/self.nr_cubes
 
-# Any results you write to the current directory are saved as output.
-import matplotlib.pyplot as plt
-import random
-rnd=57
-maxCategories=20
+		# We calculate the overlapping windows distance 
+		self.overlap_dist = self.overlap_perc * self.chunk_dist
 
-train=pd.read_csv('../input/train.csv')
-test=pd.read_csv('../input/test.csv')
-random.seed(rnd)
-train.index=train.ID
-test.index=test.ID
-del train['ID'], test['ID']
-target=train.target
-del train['target']
+		# We find our starting point
+		self.d = np.min(X, axis=0)
+		
+		return X
+
+	def map(self, X, dimension_index=[0], dimension_name=""):
+		# This maps the data to a simplicial complex. Returns a dictionary with nodes and links.
+		
+		start = datetime.now()
+		
+		def cube_coordinates_all(nr_cubes, nr_dimensions):
+			# if there are 4 cubes per dimension and 3 dimensions 
+			# return the bottom left (origin) coordinates of 64 hypercubes, in a sorted list of Numpy arrays
+			l = []
+			for x in range(nr_cubes):
+				l += [x] * nr_dimensions
+			return [np.array(list(f)) for f in sorted(set(itertools.permutations(l,nr_dimensions)))]
+		
+		nodes = defaultdict(list)
+		links = defaultdict(list)
+		complex = {}
+		
+		if self.verbose > 0:
+			print("Mapping on data shaped %s using dimensions %s\n"%(str(X.shape),str(dimension_index)))
+		
+		# Scaling
+		if self.scaler != None:
+			scaler = self.scaler
+			X = scaler.fit_transform(X)
+		
+		# Initialize Cluster Algorithm
+		clf = self.clf
+		
+		# Prefix'ing the data with ID's
+		ids = np.array([x for x in range(X.shape[0])])
+		X = np.c_[ids,X]
+
+		# Subdivide the data X in intervals/hypercubes with overlap
+		if self.verbose > 0:
+			total_cubes = len(cube_coordinates_all(self.nr_cubes,len(dimension_index)))
+			print("Creating %s hypercubes."%total_cubes)
+		di = np.array(dimension_index)	
+		for i, coor in enumerate(cube_coordinates_all(self.nr_cubes,di.shape[0])): 
+			# Slice the hypercube
+			hypercube = X[ np.invert(np.any((X[:,di+1] >= self.d[di] + (coor * self.chunk_dist[di])) & 
+					(X[:,di+1] < self.d[di] + (coor * self.chunk_dist[di]) + self.chunk_dist[di] + self.overlap_dist[di]) == False, axis=1 )) ]
+			
+			if self.verbose > 1:
+				print("There are %s points in cube_%s / %s with starting range %s"%
+							(hypercube.shape[0],i,total_cubes,self.d[di] + (coor * self.chunk_dist[di])))
+			
+			# If at least one sample inside the hypercube
+			if hypercube.shape[0] > 0:
+				# Cluster the data point(s) inside the cube, skipping the id-column
+				clf.fit(hypercube[:,1:])
+				
+				if self.verbose > 1:
+					print("Found %s clusters in cube_%s\n"%(np.unique(clf.labels_[clf.labels_ > -1]).shape[0],i))
+				
+				#Now for every (sample id in cube, predicted cluster label)
+				for a in np.c_[hypercube[:,0],clf.labels_]:
+					if a[1] != -1: #if not predicted as noise
+						cluster_id = str(coor[0])+"_"+str(i)+"_"+str(a[1])+"_"+str(coor)+"_"+str(self.d[di] + (coor * self.chunk_dist[di])) # Rudimentary cluster id
+						nodes[cluster_id].append( int(a[0]) ) # Append the member id's as integers
+			else:
+				if self.verbose > 1:
+					print("Cube_%s is empty.\n"%(i))
+
+		# Create links when clusters from different hypercubes have members with the same sample id.
+		for k in nodes:
+			for kn in nodes:
+				if k != kn:
+					if len(nodes[k] + nodes[kn]) != len(set(nodes[kn] + nodes[k])): # there are non-unique id's in the union
+						links[k].append( kn )
+					
+					# Create links between local hypercube clusters if setting link_local = True
+					if self.link_local:
+						if k.split("_")[0] == kn.split("_")[0]:
+							links[k].append( kn )
+		# Reporting
+		if self.verbose > 0:
+			nr_links = 0
+			for k in links:
+				nr_links += len(links[k])
+			print("\ncreated %s edges and %s nodes in %s."%(nr_links,len(nodes),str(datetime.now()-start)))
+		
+		complex["nodes"] = nodes
+		complex["links"] = links
+		complex["meta"] = dimension_name
+
+		return complex
+
+	def visualize(self, complex, path_html="mapper_visualization_output.html", title="My Data", graph_link_distance=30, graph_gravity=0.1, graph_charge=-120, custom_tooltips=None):
+		# Turns the dictionary 'complex' in a html file with d3.js
+		
+		# Format JSON
+		json_s = {}
+		json_s["nodes"] = []
+		json_s["links"] = []
+		k2e = {} # a key to incremental int dict, used for id's when linking
+
+		for e, k in enumerate(complex["nodes"]):
+			# Tooltip formatting
+			if custom_tooltips != None:
+				tooltip_s = "<h2>Cluster %s</h2>"%k + " ".join([str(f) for f in custom_tooltips[complex["nodes"][k]]])
+				if self.color_function == "average_signal_cluster":
+					tooltip_i = int(((sum([f for f in custom_tooltips[complex["nodes"][k]]]) / len(custom_tooltips[complex["nodes"][k]])) * 30) )
+					json_s["nodes"].append({"name": str(k), "tooltip": tooltip_s, "group": 2 * int(np.log(len(complex["nodes"][k]))), "color": str(tooltip_i)})
+				else:
+					json_s["nodes"].append({"name": str(k), "tooltip": tooltip_s, "group": 2 * int(np.log(len(complex["nodes"][k]))), "color": str(k.split("_")[0])})
+			else:
+				tooltip_s = "<h2>Cluster %s</h2>Contains %s members."%(k,len(complex["nodes"][k]))
+				json_s["nodes"].append({"name": str(k), "tooltip": tooltip_s, "group": 2 * int(np.log(len(complex["nodes"][k]))), "color": str(k.split("_")[0])})
+				#json_s["nodes"].append({"name": str(k), "tooltip": tooltip_s, "group": 2 * int(np.log(len(complex["nodes"][k]))), "color": str(tooltip_i)})
+			k2e[k] = e
+		for k in complex["links"]:
+			for link in complex["links"][k]:
+				json_s["links"].append({"source": k2e[k], "target":k2e[link],"value":1})
+
+		with open(path_html,"wb") as outfile:
+			html = """<!DOCTYPE html>
+		<meta charset="utf-8">
+		<meta name="generator" content="KeplerMapper">
+		<title>%s | KeplerMapper</title>
+		<link href='https://fonts.googleapis.com/css?family=Roboto:700,300' rel='stylesheet' type='text/css'>
+		<style>
+		* {margin: 0; padding: 0;}
+		html { height: 100%%;}
+		body {background: #111; height: 100%%; font: 100 16px Roboto, Sans-serif;}
+		.link { stroke: #999; stroke-opacity: .333;	}
+		.divs div { border-radius: 50%%; background: red; position: absolute; }
+		.divs { position: absolute; top: 0; left: 0; }
+		#holder { position: relative; width: 1300px; height: 900px; background: #111; display: block;}
+		h1 { padding: 20px; color: #fafafa; text-shadow: 0px 1px #000,0px -1px #000; position: absolute; font: 300 30px Roboto, Sans-serif;}
+		h2 { text-shadow: 0px 1px #000,0px -1px #000; font: 700 16px Roboto, Sans-serif;}
+		p { position: absolute; opacity: 0.9; width: 220px; top: 80px; left: 20px; display: block; background: #000; line-height: 25px; color: #fafafa; border: 20px solid #000; font: 100 16px Roboto, Sans-serif;}
+		div.tooltip { position: absolute; width: 380px; display: block; padding: 20px; background: #000; border: 0px; border-radius: 3px; pointer-events: none; z-index: 999; color: #FAFAFA;}
+		}
+		</style>
+		<body>
+		<div id="holder">
+			<h1>%s</h1>
+			<p>
+			<b>Lens</b><br>%s<br><br>
+			<b>Cubes per dimension</b><br>%s<br><br>
+			<b>Overlap percentage</b><br>%s%%<br><br>
+			<b>Linking locally</b><br>%s<br><br>
+			<b>Color Function</b><br>%s( %s )<br><br>
+			<b>Clusterer</b><br>%s<br><br>
+			<b>Scaler</b><br>%s
+			</p>
+		</div>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.5/d3.min.js"></script>
+		<script>
+		var width = 1300,
+			height = 900;
+
+		var color = d3.scale.ordinal()
+			.domain(["0","1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30"])
+			.range(["#FF0000","#FF1400","#FF2800","#FF3c00","#FF5000","#FF6400","#FF7800","#FF8c00","#FFa000","#FFb400","#FFc800","#FFdc00","#FFf000","#fdff00","#b0ff00","#65ff00","#17ff00","#00ff36","#00ff83","#00ffd0","#00e4ff","#00c4ff","#00a4ff","#00a4ff","#0084ff","#0064ff","#0044ff","#0022ff","#0002ff","#0100ff","#0300ff","#0500ff"]);
+
+		var force = d3.layout.force()
+			.charge(%s)
+			.linkDistance(%s)
+			.gravity(%s)
+			.size([width, height]);
+
+		var svg = d3.select("#holder").append("svg")
+			.attr("width", width)
+			.attr("height", height);
+		
+		var div = d3.select("#holder").append("div")	 
+			.attr("class", "tooltip")							 
+			.style("opacity", 0.0);
+		
+		var divs = d3.select('#holder').append('div')
+			.attr('class', 'divs')
+			.attr('style', function(d) { return 'overflow: hidden; width: ' + width + 'px; height: ' + height + 'px;'; });	
+		
+			graph = %s;
+
+			force
+				.nodes(graph.nodes)
+				.links(graph.links)
+				.start();
+
+			var link = svg.selectAll(".link")
+				.data(graph.links)
+				.enter().append("line")
+				.attr("class", "link")
+				.style("stroke-width", function(d) { return Math.sqrt(d.value); });
+
+			var node = divs.selectAll('div')
+			.data(graph.nodes)
+				.enter().append('div')
+				.on("mouseover", function(d) {			
+					div.transition()				
+						.duration(200)			
+						.style("opacity", .9);
+					div .html(d.tooltip + "<br/>")	
+						.style("left", (d3.event.pageX + 100) + "px")		 
+						.style("top", (d3.event.pageY - 28) + "px");		
+					})									
+				.on("mouseout", function(d) {			 
+					div.transition()				
+						.duration(500)			
+						.style("opacity", 0);	 
+				})
+				.call(force.drag);
+			
+			node.append("title")
+				.text(function(d) { return d.name; });
+
+			force.on("tick", function() {
+			link.attr("x1", function(d) { return d.source.x; })
+				.attr("y1", function(d) { return d.source.y; })
+				.attr("x2", function(d) { return d.target.x; })
+				.attr("y2", function(d) { return d.target.y; });
+
+			node.attr("cx", function(d) { return d.x; })
+				.attr("cy", function(d) { return d.y; })
+				.attr('style', function(d) { return 'width: ' + (d.group * 2) + 'px; height: ' + (d.group * 2) + 'px; ' + 'left: '+(d.x-(d.group))+'px; ' + 'top: '+(d.y-(d.group))+'px; background: '+color(d.color)+'; box-shadow: 0px 0px 3px #111; box-shadow: 0px 0px 33px '+color(d.color)+', inset 0px 0px 5px rgba(0, 0, 0, 0.2);'})
+				;
+			});
+		</script>"""%(title,title,complex["meta"],self.nr_cubes,self.overlap_perc*100,self.link_local,self.color_function,complex["meta"],str(self.clf),str(self.scaler),graph_charge,graph_link_distance,graph_gravity,json.dumps(json_s))
+			outfile.write(html.encode("utf-8"))
+		if self.verbose > 0:
+			print("\nWrote d3.js graph to '%s'"%path_html)
 
 
-#prepare data
-traindummies=pd.DataFrame()
-testdummies=pd.DataFrame()
-
-for elt in train.columns:
-    vector=pd.concat([train[elt],test[elt]], axis=0)
-
-    #count as categorial if number of unique values is less than maxCategories
-    if len(vector.unique())<maxCategories:
-        traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
-        testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
-        del train[elt], test[elt]
-    else:
-        typ=str(train[elt].dtype)[:3]
-        if (typ=='flo') or (typ=='int'):
-            minimum=vector.min()
-            maximum=vector.max()
-            train[elt]=train[elt].fillna(int(minimum)-2)
-            test[elt]=test[elt].fillna(int(minimum)-2)
-            minimum=int(minimum)-2
-            traindummies[elt+'_na']=train[elt].apply(lambda x: 1 if x==minimum else 0)
-            testdummies[elt+'_na']=test[elt].apply(lambda x: 1 if x==minimum else 0)
-            
-
-            #resize between 0 and 1 linearly ax+b
-            a=1/(maximum-minimum)
-            b=-a*minimum
-            train[elt]=a*train[elt]+b
-            test[elt]=a*test[elt]+b
-        else:
-            if (typ=='obj'):
-                list2keep=vector.value_counts()[:maxCategories].index
-                train[elt]=train[elt].apply(lambda x: x if x in list2keep else np.nan)
-                test[elt]=test[elt].apply(lambda x: x if x in list2keep else np.nan)                
-                traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
-                testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
-                
-                #Replace categories by their weights
-                tempTable=pd.concat([train[elt], target], axis=1)
-                tempTable=tempTable.groupby(by=elt, axis=0).agg(['sum','count']).target
-                tempTable['weight']=tempTable.apply(lambda x: .5+.5*x['sum']/x['count'] if (x['sum']>x['count']-x['sum']) else .5+.5*(x['sum']-x['count'])/x['count'], axis=1)
-                tempTable.reset_index(inplace=True)
-                train[elt+'weight']=pd.merge(train, tempTable, how='left', on=elt)['weight']
-                test[elt+'weight']=pd.merge(test, tempTable, how='left', on=elt)['weight']
-                train[elt+'weight']=train[elt+'weight'].fillna(.5)
-                test[elt+'weight']=test[elt+'weight'].fillna(.5)
-                del train[elt], test[elt]
-            else:
-                print('error', typ)
-
-#remove na values too similar to v2_na
-from sklearn import metrics
-for elt in train.columns:
-    if (elt[-2:]=='na') & (elt!='v2_na'):
-        dist=metrics.pairwise_distances(train.v2_na.reshape(1, -1),train[elt].reshape(1, -1))
-        if dist<8:
-            del train[elt],test[elt]
-        else:
-            print(elt, dist)
-            
-            
-train=pd.concat([train,traindummies, target], axis=1)
-test=pd.concat([test,testdummies], axis=1)
-del traindummies,testdummies
-
-
-#remove features only present in train or test
-for elt in list(set(train.columns)-set(test.columns)):
-    del train[elt]
-for elt in list(set(test.columns)-set(train.columns)):
-    del test[elt]
+if __name__ == "__main__":
+	# Get data
+	import pandas as pd
+	train = pd.read_csv("../input/train.csv")
+	features = [c for c in train.columns if c not in "label"]
+	data = np.array(train[features])[:4000]
+	y = np.array(train["label"])[:4000]
+	
+	# Create images for a custom tooltip array
+	from io import BytesIO
+	from scipy.misc import imsave, toimage
+	import base64
+	tooltip_s = []
+	
+	for image_data in data:
+		output = BytesIO()
+		img = toimage(image_data.reshape((28,28))) # Data was a flat row of 64 "pixels".
+		img.save(output, format="PNG")
+		contents = "<img src='data:image/png;base64,"+base64.encodebytes(output.getvalue()).decode()+"'>"
+		tooltip_s.append( contents )
+		output.close()
     
-#run cross validation
-from sklearn import cross_validation
-X, Y, Xtarget, Ytarget=cross_validation.train_test_split(train, target, test_size=0.2)
-del train
+	tooltip_s = np.array(tooltip_s) # need to make sure to feed it as a NumPy array, not a list
 
-from sklearn import ensemble
+	# Initialize to use t-SNE with 2 components (reduces data to 2 dimensions). Also note high overlap_percentage.
+	mapper = KeplerMapper(cluster_algorithm=cluster.DBSCAN(eps=0.3, min_samples=15), 
+							 reducer = manifold.TSNE(), nr_cubes=35, overlap_perc=0.5, 
+							 link_local=False, verbose=1)
 
-clfs=[
-    ensemble.RandomForestClassifier(bootstrap=False, class_weight='auto', criterion='entropy',
-            max_depth=None, max_features='sqrt', max_leaf_nodes=None,
-            min_samples_leaf=1, min_samples_split=4,
-            min_weight_fraction_leaf=0.0, n_estimators=500, n_jobs=-1,
-            oob_score=False, random_state=rnd, verbose=0,
-            warm_start=False),
-    ensemble.ExtraTreesClassifier(bootstrap=False, class_weight=None, criterion='entropy',
-           max_depth=None, max_features='sqrt', max_leaf_nodes=None,
-           min_samples_leaf=1, min_samples_split=3,
-           min_weight_fraction_leaf=1e-5, n_estimators=500, n_jobs=-1,
-           oob_score=False, random_state=rnd, verbose=0, warm_start=False),
-    ensemble.GradientBoostingClassifier(init=None, learning_rate=0.1, loss='deviance',
-              max_depth=2, max_features=None, max_leaf_nodes=None,
-              min_samples_leaf=1, min_samples_split=3,
-              min_weight_fraction_leaf=0.0, n_estimators=50,
-              presort='auto', random_state=rnd, subsample=1.0, verbose=0,
-              warm_start=False)
-]
+	# Fit and transform data
+	data = mapper.fit_transform(data)
 
-indice=0
-preds=[]
-predstest=[]
+	# Create the graph
+	complex = mapper.map(data, dimension_index=[0,1], dimension_name="t-SNE(2) 2D")
 
-#run models
-for model in clfs:
+	# Create the visualizations (increased the graph_gravity for a tighter graph-look.)
+
+	# Tooltips with image data for every cluster member
+	mapper.visualize(complex, "results.html", "t-SNE on first 4k images", graph_charge=-50, graph_gravity=0.15, custom_tooltips=tooltip_s)
     
-    model.fit(X, Xtarget)
-
-    preds.append(model.predict_proba(Y)[:,1])
-    print('model ',indice,': loss=',metrics.log_loss(Ytarget,preds[indice]))
-
-    noms=pd.DataFrame(test.columns[abs(model.feature_importances_)>1e-10][:30])
-    noms.columns=['noms']
-    coefs=pd.DataFrame(model.feature_importances_[abs(model.feature_importances_)>1e-10][:30])
-    coefs.columns=['coefs']
-    df=pd.concat([noms, coefs], axis=1).sort_values(by=['coefs'])
-
-    plt.figure(indice)
-    df.plot(kind='barh', x='noms', y='coefs', legend=True, figsize=(6, 10))
-    plt.savefig('clf'+str(indice)+'_ft_importances.jpg')
-
-    predstest.append(model.predict_proba(test)[:,1])
-    indice+=1
-
-#find best weights
-step=0.1 * (1./len(preds))
-print("step:", step)
-poidsref=np.zeros(len(preds))
-poids=np.zeros(len(preds))
-poidsreftemp=np.zeros(len(preds))
-poidsref=poidsref+1./len(preds)
-
-bestpoids=poidsref.copy()
-blend_cv=np.zeros(len(preds[0]))
-
-for k in range(0,len(preds),1):
-    blend_cv=blend_cv+bestpoids[k]*preds[k]
-bestscore=metrics.log_loss(Ytarget.values,blend_cv)
-
-getting_better_score=True
-while getting_better_score:
-    getting_better_score=False
-    for i in range(0,len(preds),1):
-        poids=poidsref
-        if poids[i]-step>-step:
-            #decrease weight in position i
-            poids[i]-=step
-            for j in range(0,len(preds),1):
-                if j!=i:
-                    if poids[j]+step<=1:
-                        #try an increase in position j
-                        poids[j]+=step
-                        #score new weights
-                        blend_cv=np.zeros(len(preds[0]))
-                        for k in range(0,len(preds),1):
-                            blend_cv=blend_cv+poids[k]*preds[k]
-                        actualscore=metrics.log_loss(Ytarget.values,blend_cv)
-                        #if better, keep it
-                        if actualscore<bestscore:
-                            bestscore=actualscore
-                            bestpoids=poids.copy()
-                            getting_better_score=True
-                        poids[j]-=step
-            poids[i]+=step
-    poidsref=bestpoids.copy()
-
-print("weights: ", bestpoids)
-print("optimal blend loss: ", bestscore)
-
-
-blend_to_submit=np.zeros(len(predstest[0]))
-
-for i in range(0,len(preds),1):
-    blend_to_submit=blend_to_submit+bestpoids[i]*predstest[i]
-
-#submit
-submission=pd.read_csv('../input/sample_submission.csv')
-submission.PredictedProb=blend_to_submit
-submission.to_csv('simpleblend.csv', index=False)
-
-plt.figure(indice)
-submission.PredictedProb.hist(bins=30)
-plt.savefig('distribution.jpg')

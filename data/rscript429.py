@@ -1,99 +1,72 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# coding: utf-8
+# Based on notebook by https://www.kaggle.com/shubh24 
+# https://www.kaggle.com/shubh24/pagerank-on-quora-a-basic-implementation
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import pandas as pd
+import hashlib
+import gc 
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+df_train = pd.read_csv('../input/train.csv').fillna("")
+df_test = pd.read_csv('../input/test.csv').fillna("")
 
 
-class Data(object):
-    def __init__(self, data_folder, test_the_script = False):
-        self.DATA_FOLDER = data_folder
-        self.test_the_script = test_the_script
-        self.read_data()
-        # self.process_data()
+# Generating a graph of Questions and their neighbors
+def generate_qid_graph_table(row):
+    hash_key1 = hashlib.md5(row["question1"].encode('utf-8')).hexdigest()
+    hash_key2 = hashlib.md5(row["question2"].encode('utf-8')).hexdigest()
 
-        print('Train shape: ', self.train.shape)
+    qid_graph.setdefault(hash_key1, []).append(hash_key2)
+    qid_graph.setdefault(hash_key2, []).append(hash_key1)
 
-    def read_data(self):
-        self.nrows = None
-        if self.test_the_script:
-            self.nrows = 1000
 
-        self.train = self.read_train_test_low_memory(train_flag = True)
-        self.test = self.read_train_test_low_memory(train_flag = False)
-        self.stores = self.read_stores_low_memory()
-        self.items = self.read_items_low_memory()
-        self.oil = self.read_oil_low_memory()
-        self.transactions = self.read_transactions_low_memory()
+qid_graph = {}
+print('Apply to train...')
+df_train.apply(generate_qid_graph_table, axis=1)
+print('Apply to test...')
+df_test.apply(generate_qid_graph_table, axis=1)
 
-        # if not self.test_the_script:
-        #     self.train = self.train[self.train['date'] >= '2017-03-01']
-            
-    def read_train_test_low_memory(self, train_flag = True):
-        filename = 'train'
-        if not train_flag: filename = 'test'
 
-        types = {'id': 'int64',
-                'item_nbr': 'int32',
-                'store_nbr': 'int8',
-                'unit_sales': 'float32',
-                'onpromotion': bool,
-            }
-        data = pd.read_csv(self.DATA_FOLDER + filename + '.csv', parse_dates = ['date'], dtype = types, 
-                        nrows = self.nrows, infer_datetime_format = True)
-        
-        data['onpromotion'].fillna(False, inplace = True)
-        data['onpromotion'] = data['onpromotion'].map({False : 0, True : 1})
-        data['onpromotion'] = data['onpromotion'].astype('int8')
-        
-        return data
+def pagerank():
+    MAX_ITER = 20
+    d = 0.85
 
-    def read_stores_low_memory(self):
-        types = {'cluster': 'int32',
-                'store_nbr': 'int8',
-                }
-        data = pd.read_csv(self.DATA_FOLDER + 'stores.csv', dtype = types)
-        return data
+    # Initializing -- every node gets a uniform value!
+    pagerank_dict = {i: 1 / len(qid_graph) for i in qid_graph}
+    num_nodes = len(pagerank_dict)
 
-    def read_items_low_memory(self):
-        types = {'item_nbr': 'int32',
-                'perishable': 'int8',
-                'class' : 'int16'
-                }
-        data = pd.read_csv(self.DATA_FOLDER + 'items.csv', dtype = types)
-        return data
+    for iter in range(0, MAX_ITER):
 
-    def read_oil_low_memory(self):
-        types = {'dcoilwtico': 'float32',
-                }
-        data = pd.read_csv(self.DATA_FOLDER + 'oil.csv', parse_dates = ['date'], dtype = types, 
-                                infer_datetime_format = True)
-        return data
-    
-    def read_transactions_low_memory(self):
-        types = {'transactions': 'int16',
-                'store_nbr' : 'int8'
-                }
-        data = pd.read_csv(self.DATA_FOLDER + 'transactions.csv', parse_dates = ['date'], dtype = types, 
-                                infer_datetime_format = True)
-        return data
+        for node in qid_graph:
+            local_pr = 0
 
-if __name__ == '__main__':
-    
-    data = Data(data_folder = '../input/', test_the_script = True)
-    print(data.train.info())
-    print(data.test.info())
-    print(data.items.info())
-    print(data.stores.info())
-    print(data.transactions.info())
-    print(data.oil.info())
-        
+            for neighbor in qid_graph[node]:
+                local_pr += pagerank_dict[neighbor] / len(qid_graph[neighbor])
+
+            pagerank_dict[node] = (1 - d) / num_nodes + d * local_pr
+
+    return pagerank_dict
+
+print('Main PR generator...')
+pagerank_dict = pagerank()
+
+def get_pagerank_value(row):
+    q1 = hashlib.md5(row["question1"].encode('utf-8')).hexdigest()
+    q2 = hashlib.md5(row["question2"].encode('utf-8')).hexdigest()
+    s = pd.Series({
+        "q1_pr": pagerank_dict[q1],
+        "q2_pr": pagerank_dict[q2]
+    })
+    return s
+
+print('Apply to train...')
+pagerank_feats_train = df_train.apply(get_pagerank_value, axis=1)
+print('Writing train...')
+pagerank_feats_train.to_csv("pagerank_train.csv", index=False)
+del df_train
+gc.collect()
+print('Apply to test...')
+pagerank_feats_test = df_test.apply(get_pagerank_value, axis=1)
+print('Writing test...')
+pagerank_feats_test.to_csv("pagerank_test.csv", index=False)
+

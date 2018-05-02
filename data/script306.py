@@ -1,248 +1,225 @@
 
 # coding: utf-8
 
-# # Bitcoin Price. Prediction by ARIMA
+# ![](https://img-aws.ehowcdn.com/560x560/photos.demandstudios.com/getty/article/151/36/87689206.jpg)
 
-# In[ ]:
+# # More To Come. Stay Tuned. !!
+# In this Notrebook, I did  Google Landmark Retrieval Exploratory Analysis.
+# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
+# 
+# This notebook will always be a work in progress. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!.
+# ** If you like it or it helps you , you can upvote and/or leave a comment :).**
+# 
+
+# In[1]:
 
 
-# Import libraries
-import numpy as np
-import pandas as pd
-import seaborn as sns
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra 
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from scipy import stats
-import statsmodels.api as sm
-import warnings
-from itertools import product
-from datetime import datetime
-warnings.filterwarnings('ignore')
-plt.style.use('seaborn-poster')
+import seaborn as sns
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Data Exploration
-
-# In[ ]:
+# In[2]:
 
 
-# Load data
-df = pd.read_csv('../input/btceUSD_1-min_data_2012-01-01_to_2017-05-31.csv')
-df.head()
+train_data = pd.read_csv('../input/index.csv')
+test_data = pd.read_csv('../input/test.csv')
+submission = pd.read_csv("../input/sample_submission.csv")
 
 
-# In[ ]:
+# In[3]:
 
 
-# Unix-time to 
-df.Timestamp = pd.to_datetime(df.Timestamp, unit='s')
-
-# Resampling to daily frequency
-df.index = df.Timestamp
-df = df.resample('D').mean()
-
-# Resampling to monthly frequency
-df_month = df.resample('M').mean()
-
-# Resampling to annual frequency
-df_year = df.resample('A-DEC').mean()
-
-# Resampling to quarterly frequency
-df_Q = df.resample('Q-DEC').mean()
+print("Training data size",train_data.shape)
+print("test data size",test_data.shape)
 
 
-# In[ ]:
+# In[4]:
 
 
-# PLOTS
-fig = plt.figure(figsize=[15, 7])
-plt.suptitle('Bitcoin exchanges, mean USD', fontsize=22)
+train_data.head()
 
-plt.subplot(221)
-plt.plot(df.Weighted_Price, '-', label='By Days')
-plt.legend()
 
-plt.subplot(222)
-plt.plot(df_month.Weighted_Price, '-', label='By Months')
-plt.legend()
+# In[5]:
 
-plt.subplot(223)
-plt.plot(df_Q.Weighted_Price, '-', label='By Quarters')
-plt.legend()
 
-plt.subplot(224)
-plt.plot(df_year.Weighted_Price, '-', label='By Years')
-plt.legend()
+test_data.head()
 
-# plt.tight_layout()
+
+# In[6]:
+
+
+submission.head()
+
+
+# In[7]:
+
+
+# now open the URL
+temp = 4444
+print('id', train_data['id'][temp])
+print('url:', train_data['url'][temp])
+
+
+# In[8]:
+
+
+# missing data in training data 
+total = train_data.isnull().sum().sort_values(ascending = False)
+percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
+missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_train_data.head()
+
+
+# In[9]:
+
+
+# missing data in test data 
+total = test_data.isnull().sum().sort_values(ascending = False)
+percent = (test_data.isnull().sum()/test_data.isnull().count()).sort_values(ascending = False)
+missing_test_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_test_data.head()
+
+
+# ## Lets display some images from URLs
+
+# In[26]:
+
+
+from IPython.display import Image
+from IPython.core.display import HTML 
+
+def display_category(urls, category_name):
+    img_style = "width: 180px; margin: 0px; float: left; border: 1px solid black;"
+    images_list = ''.join([f"<img style='{img_style}' src='{u}' />" for _, u in urls.head(20).iteritems()])
+
+    display(HTML(images_list))
+
+
+# In[27]:
+
+
+urls = train_data['url']
+display_category(urls, "")
+
+
+# In[29]:
+
+
+urls = train_data['url']
+display_category(urls, "")
+
+
+# ## Lets see unique URL
+
+# In[30]:
+
+
+# Unique URL's
+train_data.nunique()
+
+
+# ## All URLs are unique.
+
+# ## Now Lets extract the website names and see their occurances
+
+# In[14]:
+
+
+# Extract site_names for train data
+temp_list = list()
+for path in train_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+train_data['site_name'] = temp_list
+# Extract site_names for test data
+temp_list = list()
+for path in test_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+test_data['site_name'] = temp_list
+
+
+# ### We have added one new column "site_name". lets see
+
+# In[15]:
+
+
+print("Training data size",train_data.shape)
+print("test data size",test_data.shape)
+
+
+# In[16]:
+
+
+train_data.head(8)
+
+
+# In[17]:
+
+
+test_data.head()
+
+
+# ### occurances of sites in train_data
+
+# In[18]:
+
+
+# Occurance of site in decreasing order(Top categories)
+temp = pd.DataFrame(train_data.site_name.value_counts())
+temp.reset_index(inplace=True)
+temp.columns = ['site_name','count']
+temp
+
+
+# ### As we can see there are total 17 unique sites.
+
+# In[19]:
+
+
+# Plot the Sites with their count
+plt.figure(figsize = (9, 8))
+plt.title('Sites with their count')
+sns.set_color_codes("pastel")
+sns.barplot(x="site_name", y="count", data=temp,
+            label="Count")
+locs, labels = plt.xticks()
+plt.setp(labels, rotation=90)
 plt.show()
 
 
-# I will predict bitcoin prices by months.
+# ### occurances of sites in test_data
 
-# ## Stationarity check and STL-decomposition of the series
+# In[20]:
+
+
+# Occurance of site in decreasing order(Top categories)
+temp = pd.DataFrame(test_data.site_name.value_counts())
+temp.reset_index(inplace=True)
+temp.columns = ['site_name','count']
+temp
+
+
+# ### Total unique sites are 25 in test data and some are different from train_data
 
 # In[ ]:
 
 
-plt.figure(figsize=[15,7])
-sm.tsa.seasonal_decompose(df_month.Weighted_Price).plot()
-print("Dickey–Fuller test: p=%f" % sm.tsa.stattools.adfuller(df_month.Weighted_Price)[1])
+# Plot the Sites with their count
+plt.figure(figsize = (9, 8))
+plt.title('Sites with their count')
+sns.set_color_codes("pastel")
+sns.barplot(x="site_name", y="count", data=temp,
+            label="Count")
+locs, labels = plt.xticks()
+plt.setp(labels, rotation=90)
 plt.show()
 
 
-# The series are not stationary.
-
-# ## Box-Cox Transformations
-
-# In[ ]:
-
-
-# Box-Cox Transformations
-df_month['Weighted_Price_box'], lmbda = stats.boxcox(df_month.Weighted_Price)
-print("Dickey–Fuller test: p=%f" % sm.tsa.stattools.adfuller(df_month.Weighted_Price)[1])
-
-
-# The series are not stationary.
-
-# ## Seasonal differentiation
-
-# In[ ]:
-
-
-# Seasonal differentiation
-df_month['prices_box_diff'] = df_month.Weighted_Price_box - df_month.Weighted_Price_box.shift(12)
-print("Dickey–Fuller test: p=%f" % sm.tsa.stattools.adfuller(df_month.prices_box_diff[12:])[1])
-
-
-# The series are not stationary.
-
-# ## Regular differentiation
-
-# In[ ]:
-
-
-# Regular differentiation
-df_month['prices_box_diff2'] = df_month.prices_box_diff - df_month.prices_box_diff.shift(1)
-plt.figure(figsize=(15,7))
-
-# STL-decomposition
-sm.tsa.seasonal_decompose(df_month.prices_box_diff2[13:]).plot()   
-print("Dickey–Fuller test: p=%f" % sm.tsa.stattools.adfuller(df_month.prices_box_diff2[13:])[1])
-
-plt.show()
-
-
-# The series are stationary.
-
-# ## Model Selection
-
-# In[ ]:
-
-
-# Initial approximation of parameters using Autocorrelation and Partial Autocorrelation Plots
-plt.figure(figsize=(15,7))
-ax = plt.subplot(211)
-sm.graphics.tsa.plot_acf(df_month.prices_box_diff2[13:].values.squeeze(), lags=48, ax=ax)
-ax = plt.subplot(212)
-sm.graphics.tsa.plot_pacf(df_month.prices_box_diff2[13:].values.squeeze(), lags=48, ax=ax)
-plt.tight_layout()
-plt.show()
-
-
-# In[ ]:
-
-
-# Initial approximation of parameters
-Qs = range(0, 2)
-qs = range(0, 3)
-Ps = range(0, 3)
-ps = range(0, 3)
-D=1
-d=1
-parameters = product(ps, qs, Ps, Qs)
-parameters_list = list(parameters)
-len(parameters_list)
-
-# Model Selection
-results = []
-best_aic = float("inf")
-warnings.filterwarnings('ignore')
-for param in parameters_list:
-    try:
-        model=sm.tsa.statespace.SARIMAX(df_month.Weighted_Price_box, order=(param[0], d, param[1]), 
-                                        seasonal_order=(param[2], D, param[3], 12)).fit(disp=-1)
-    except ValueError:
-        print('wrong parameters:', param)
-        continue
-    aic = model.aic
-    if aic < best_aic:
-        best_model = model
-        best_aic = aic
-        best_param = param
-    results.append([param, model.aic])
-
-
-# In[ ]:
-
-
-# Best Models
-result_table = pd.DataFrame(results)
-result_table.columns = ['parameters', 'aic']
-print(result_table.sort_values(by = 'aic', ascending=True).head())
-print(best_model.summary())
-
-
-# ## Analysis of residues
-
-# In[ ]:
-
-
-# STL-decomposition
-plt.figure(figsize=(15,7))
-plt.subplot(211)
-best_model.resid[13:].plot()
-plt.ylabel(u'Residuals')
-ax = plt.subplot(212)
-sm.graphics.tsa.plot_acf(best_model.resid[13:].values.squeeze(), lags=48, ax=ax)
-
-print("Dickey–Fuller test:: p=%f" % sm.tsa.stattools.adfuller(best_model.resid[13:])[1])
-
-plt.tight_layout()
-plt.show()
-
-
-# It`s OK.
-
-# ## Prediction
-
-# In[ ]:
-
-
-# Inverse Box-Cox Transformation Function
-def invboxcox(y,lmbda):
-   if lmbda == 0:
-      return(np.exp(y))
-   else:
-      return(np.exp(np.log(lmbda*y+1)/lmbda))
-
-
-# In[ ]:
-
-
-# Prediction
-df_month2 = df_month[['Weighted_Price']]
-date_list = [datetime(2017, 6, 30), datetime(2017, 7, 31), datetime(2017, 8, 31), datetime(2017, 9, 30), 
-             datetime(2017, 10, 31), datetime(2017, 11, 30), datetime(2017, 12, 31), datetime(2018, 1, 31),
-             datetime(2018, 1, 28)]
-future = pd.DataFrame(index=date_list, columns= df_month.columns)
-df_month2 = pd.concat([df_month2, future])
-df_month2['forecast'] = invboxcox(best_model.predict(start=0, end=75), lmbda)
-plt.figure(figsize=(15,7))
-df_month2.Weighted_Price.plot()
-df_month2.forecast.plot(color='r', ls='--', label='Predicted Weighted_Price')
-plt.legend()
-plt.title('Bitcoin exchanges, by months')
-plt.ylabel('mean USD')
-plt.show()
-
+# ### As we can see that most of the images are taken from one site only.

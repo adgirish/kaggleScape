@@ -1,9 +1,7 @@
 
 # coding: utf-8
 
-# An interesting look at metal bands generated per country and popular genres.
-
-# In[ ]:
+# In[149]:
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
@@ -12,9 +10,6 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
@@ -23,140 +18,257 @@ from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
 # Any results you write to the current directory are saved as output.
-world = pd.read_csv('../input/world_population_1960_2015.csv', encoding='latin-1')
-bands = pd.read_csv('../input/metal_bands_2017.csv', encoding='latin-1')
 
 
-# The first question I had is which country produces more metal bands?  This has actually been answered on Kaggle already, but it leads into some slightly different questions.
-
-# In[ ]:
-
-
-bands_country = bands['origin'].value_counts()
-plt.title('Counts of bands per country')
-sns.barplot(x=bands_country[:10].keys(), y=bands_country[:10].values)
-
-
-# Unsurprisingly this yields the same results as other analysis, however I thought it was unfair that the large population of the U.S. would probably mean we generate more of everything.  So to try and see how many bands a country generates per capital I had to pull in the world population information.
-
-# In[ ]:
-
-
-# probably a better way to do this but I couldn't figure it out
-band_count = [0 for i in range(len(world))]
-for index, country in world.iterrows():
-    if country['Country Name'] in bands_country:
-        band_count[index] = bands_country[country['Country Name']]
-
-# per capital = number of bands / population * arbitrary scalar
-world['metal_pc'] = (pd.Series(band_count) / world['2015']) * 10000
-world = world.sort_values(by = 'metal_pc', ascending=False)
-plt.title('Bands created per capita')
-sns.barplot(x=world[:10]['Country Name'], y=world[:10]['metal_pc'])
-
-
-# Ah the Faroe Islands, not exactly the first place I think of when listening to metal, though it is off the coast of Denmark so it is in the right area. 
+# # Brief Info
 # 
-# Next I was curious about which types of metal were more popular.  After I started digging into this I realized that many bands have multiple genres, due to this I wanted to see the popularity of pure single genre bands vs those of multiple types.  To do this I keep track of of three different values:  any reference to a genre, when a genre is the only type for a band, when a genre is not the only one listed for a band.
-
-# In[ ]:
-
-
-mixed_type = {}
-pure_type = {}
-all_type = {}
-# count how many occurences of each genre we find
-# make a special note if that band has only a single genre
-for entry in list(bands['style'].to_dict().values()):
-    subs = entry.split(',')
-    for indv in subs:
-        all_type[indv] = all_type.get(indv, 0) + 1
-    if (len(subs) == 1):
-        pure_type[subs[0]] = pure_type.get(subs[0], 0) + 1
-    else:
-        for indv in subs:
-            mixed_type[indv] = mixed_type.get(indv, 0) + 1
-
-# constructe a new df based on counts
-type_df = pd.DataFrame()
-type_df['mixed_counts'] = pd.Series(mixed_type)
-type_df['pure_counts'] = pd.Series(pure_type)
-type_df['all_type'] = pd.Series(all_type)
-type_df = type_df.sort_values(by='mixed_counts', ascending=False)[:10]
-
-# let seaborn handle the rest
-sns.barplot(x=type_df.index, y=type_df['all_type'], color='#D17260')
-sns.barplot(x=type_df.index, y=type_df['pure_counts'], color='#7FB7E0')
-sns.plt.title('Counts of the top Metal Genres')
-mixed_legend = mpatches.Patch(color='#D17260', label='All')
-pure_legend = mpatches.Patch(color='#7FB7E0', label='Pure')
-plt.legend(handles=[mixed_legend, pure_legend])
-
-
-# I didn't have a supposition about what would be highest on the list so I can't say that I was surprised by the results (though I was hoping that melodic death or symphonic would be higher).  I thought it was interesting that 'hard rock' is rarely the only genre listed for a band while most of the others were just under half.
+# In this work, we will train a CNN classifier using Keras with the guidelines described in [Deep Learning with Python](https://www.manning.com/books/deep-learning-with-python).
 # 
-# As suggested by user wuyanan, another way to look at this information would be to examine the bands that are pure against the ones that are only mixed, in the above graph I drew this slightly different so I could stack the bars instead of group them, here is what the data would look like done slightly different.
+# Our strategy will be using 20% of the train data (12000 data rows) as a validation set to optimize the classifier, while keeping test data to finally evaluate the accuracy of the model on the data it has never seen.
+# 
+# #### Note
+# Since I was not sure if the data was already shuffled, I didn't pass `validation_split=0.2` to _fit()_ and instead explicitly shuffled and split the validation data, as `validation_split` [would](https://keras.io/getting-started/faq/#how-is-the-validation-split-computed) use last 20% of the data in that case.
 
-# In[ ]:
-
-
-type_df[['pure_counts', 'mixed_counts']].plot(kind='bar', color=['#D17260', '#7FB7E0'])
-sns.plt.title('Counts of the top Metal Genres')
-mixed_legend = mpatches.Patch(color='#D17260', label='Pure')
-pure_legend = mpatches.Patch(color='#7FB7E0', label='Mixed')
-plt.legend(handles=[mixed_legend, pure_legend])
+# In[150]:
 
 
-# The final question I had was about where the metal genre is in its life cycle, is it becoming more popular or is it dying out?  I only started listening to metal a few years ago so was I late to the party or not?
+from keras.utils import to_categorical
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
-# In[ ]:
+data_train = pd.read_csv('../input/fashion-mnist_train.csv')
+data_test = pd.read_csv('../input/fashion-mnist_test.csv')
+
+img_rows, img_cols = 28, 28
+input_shape = (img_rows, img_cols, 1)
+
+X = np.array(data_train.iloc[:, 1:])
+y = to_categorical(np.array(data_train.iloc[:, 0]))
+
+#Here we split validation data to optimiza classifier during training
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=13)
+
+#Test data
+X_test = np.array(data_test.iloc[:, 1:])
+y_test = to_categorical(np.array(data_test.iloc[:, 0]))
 
 
-# find occurences of year start times
-a = list(bands['formed'].to_dict().values())
-b = list(bands['split'].to_dict().values())
-year_counts = {i:a.count(i) for i in a if '-' not in i}
-split_counts = {i:b.count(i) for i in b if '-' not in i}
-year_df = pd.DataFrame()
-year_df['band_counts'] = pd.Series(year_counts)
-year_df['split_count'] = pd.Series(split_counts)
 
-# seaborn
-sns.plt.title('Bands Started Per Year 1979-2016')
-ax = sns.barplot(x=year_df.index, y = year_df['band_counts'])
-ax.set(xlabel='year', ylabel='band_count', xticklabels=[])
+X_train = X_train.reshape(X_train.shape[0], img_rows, img_cols, 1)
+X_test = X_test.reshape(X_test.shape[0], img_rows, img_cols, 1)
+X_val = X_val.reshape(X_val.shape[0], img_rows, img_cols, 1)
+
+X_train = X_train.astype('float32')
+X_test = X_test.astype('float32')
+X_val = X_val.astype('float32')
+X_train /= 255
+X_test /= 255
+X_val /= 255
+
+
+# In[151]:
+
+
+import keras
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Flatten
+from keras.layers import Conv2D, MaxPooling2D
+from keras.layers.normalization import BatchNormalization
+
+batch_size = 256
+num_classes = 10
+epochs = 50
+
+#input image dimensions
+img_rows, img_cols = 28, 28
+
+model = Sequential()
+model.add(Conv2D(32, kernel_size=(3, 3),
+                 activation='relu',
+                 kernel_initializer='he_normal',
+                 input_shape=input_shape))
+model.add(MaxPooling2D((2, 2)))
+model.add(Dropout(0.25))
+model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+model.add(Conv2D(128, (3, 3), activation='relu'))
+model.add(Dropout(0.4))
+model.add(Flatten())
+model.add(Dense(128, activation='relu'))
+model.add(Dropout(0.3))
+model.add(Dense(num_classes, activation='softmax'))
+
+model.compile(loss=keras.losses.categorical_crossentropy,
+              optimizer=keras.optimizers.Adam(),
+              metrics=['accuracy'])
+
+
+# In[152]:
+
+
+model.summary()
+
+
+# ### Training
+# Let's `fit()`! Note that `fit()` will return a _History_ object which we can use to plot training vs. validation accuracy and loss.
+
+# In[153]:
+
+
+history = model.fit(X_train, y_train,
+          batch_size=batch_size,
+          epochs=epochs,
+          verbose=1,
+          validation_data=(X_val, y_val))
+score = model.evaluate(X_test, y_test, verbose=0)
+
+
+# In[154]:
+
+
+print('Test loss:', score[0])
+print('Test accuracy:', score[1])
+
+
+# ### Results
+# It turns out our classifier does better then the best baseline reported [here](http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/), which is an SVM classifier with mean accuracy of 0.897.
+# 
+
+# 
+# Let's plot training and validation accuracy as well as loss.
+
+# In[155]:
+
+
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+accuracy = history.history['acc']
+val_accuracy = history.history['val_acc']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(len(accuracy))
+plt.plot(epochs, accuracy, 'bo', label='Training accuracy')
+plt.plot(epochs, val_accuracy, 'b', label='Validation accuracy')
+plt.title('Training and validation accuracy')
+plt.legend()
+plt.figure()
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.legend()
 plt.show()
 
 
-# When I first saw this I thought it was pretty depressing, looks like metal music is dead, there are hardly any new bands coming out... but then I realized that there are a lot of bands sticking around as well.  So lets take a look at bands starting vs bands quitting.
+# ### Classification Report
+# We can summarize the performance of our classifier as follows
 
-# In[ ]:
-
-
-bands['formed'] = pd.to_numeric(bands['formed'], errors='coerce')
-bands['split'] = pd.to_numeric(bands['split'], errors='coerce')
-sns.violinplot(data=bands[['formed', 'split']], inner='quartile')
+# In[156]:
 
 
-# Great!  At least the rate of bands breaking up has dramatically decreased too.  This might mean the eventual heat death of the metal genre however...though maybe a resurgence could inject some new life into the genre (as was encountered in the early 2000s).  So until the eventual heat occurs I wanted to at least see how many bands are currently active, this might give us a better indication of life.
+#get the predictions for the test data
+predicted_classes = model.predict_classes(X_test)
 
-# In[ ]:
-
-
-year_df.fillna(0, inplace=True)
-bands_alive = {}
-prev_value = 0
-for index, row in year_df.iterrows():
-    new_total = prev_value + row['band_counts'] - row['split_count']
-    bands_alive[index] = new_total
-    prev_value = new_total
-year_df['active_count'] = pd.Series(bands_alive)
-
-plt.title('Active Bands Per Year 1970-2016')
-ax = sns.barplot(x=year_df.index, y = year_df['active_count'])
-ax.set(xlabel='year', ylabel='active_count', xticklabels=[])
+#get the indices to be plotted
+y_true = data_test.iloc[:, 0]
+correct = np.nonzero(predicted_classes==y_true)[0]
+incorrect = np.nonzero(predicted_classes!=y_true)[0]
 
 
-# So for now at least the amount of metal bands is hitting a plateau a little over 2500 with a slight decline showing.
+# In[157]:
+
+
+from sklearn.metrics import classification_report
+target_names = ["Class {}".format(i) for i in range(num_classes)]
+print(classification_report(y_true, predicted_classes, target_names=target_names))
+
+
+# It's apparent that our classifier is underperforming for class 6 in terms of both precision and recall. For class 2, classifier is slightly lacking precision whereas it is slightly lacking recall (i.e. missed) for class 4.
 # 
-# So this was a pretty fun exercise.  I think I could have used a few dataframe tricks to make the data modeling code smaller, but I just used the first method that came to mind and happened to work.
+# Perhaps we would gain more insight after visualizing the correct and incorrect predictions.
+
+# Here is a subset of correctly predicted classes.
+
+# In[158]:
+
+
+for i, correct in enumerate(correct[:9]):
+    plt.subplot(3,3,i+1)
+    plt.imshow(X_test[correct].reshape(28,28), cmap='gray', interpolation='none')
+    plt.title("Predicted {}, Class {}".format(predicted_classes[correct], y_true[correct]))
+    plt.tight_layout()
+
+
+# And here is a subset of incorrectly predicted classes.
+
+# In[159]:
+
+
+for i, incorrect in enumerate(incorrect[0:9]):
+    plt.subplot(3,3,i+1)
+    plt.imshow(X_test[incorrect].reshape(28,28), cmap='gray', interpolation='none')
+    plt.title("Predicted {}, Class {}".format(predicted_classes[incorrect], y_true[incorrect]))
+    plt.tight_layout()
+
+
+# It looks like diversity of the similar patterns present on multiple classes effect the performance of the classifier although CNN is a robust architechture. A jacket, a shirt, and a long-sleeve blouse has similar patterns: long sleeves (or not!), buttons (or not!), and so on.
+
+# #### What do the activations look like?
+# 
+# The snippets are taken from _Chollet, F (2017)_. The idea is the give an input data and visualize the activations of the conv layers.
+
+# In[163]:
+
+
+test_im = X_train[154]
+plt.imshow(test_im.reshape(28,28), cmap='viridis', interpolation='none')
+plt.show()
+
+
+# Let's see the activation of the 2nd channel of the first layer:
+
+# In[164]:
+
+
+from keras import models
+layer_outputs = [layer.output for layer in model.layers[:8]]
+activation_model = models.Model(input=model.input, output=layer_outputs)
+activations = activation_model.predict(test_im.reshape(1,28,28,1))
+
+first_layer_activation = activations[0]
+plt.matshow(first_layer_activation[0, :, :, 4], cmap='viridis')
+
+
+# Let's plot the activations of the other conv layers as well.
+
+# In[165]:
+
+
+layer_names = []
+for layer in model.layers[:-1]:
+    layer_names.append(layer.name) 
+images_per_row = 16
+for layer_name, layer_activation in zip(layer_names, activations):
+    if layer_name.startswith('conv'):
+        n_features = layer_activation.shape[-1]
+        size = layer_activation.shape[1]
+        n_cols = n_features // images_per_row
+        display_grid = np.zeros((size * n_cols, images_per_row * size))
+        for col in range(n_cols):
+            for row in range(images_per_row):
+                channel_image = layer_activation[0,:, :, col * images_per_row + row]
+                channel_image -= channel_image.mean()
+                channel_image /= channel_image.std()
+                channel_image *= 64
+                channel_image += 128
+                channel_image = np.clip(channel_image, 0, 255).astype('uint8')
+                display_grid[col * size : (col + 1) * size,
+                             row * size : (row + 1) * size] = channel_image
+        scale = 1. / size
+        plt.figure(figsize=(scale * display_grid.shape[1],
+                            scale * display_grid.shape[0]))
+        plt.title(layer_name)
+        plt.grid(False)
+        plt.imshow(display_grid, aspect='auto', cmap='viridis')
+

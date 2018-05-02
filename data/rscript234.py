@@ -1,214 +1,173 @@
-####The entire data manipulation was stolen from the script from Dune_dweller
-##https://www.kaggle.com/dvasyukova/talkingdata-mobile-user-demographics/a-linear-model-on-apps-and-labels
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import numpy as np
-import pandas as pd
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
-from keras.wrappers.scikit_learn import KerasClassifier
-from keras.utils import np_utils
-from keras.optimizers import SGD
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import lightgbm as lgb
+import gc
+import datetime as dt
+from sklearn.model_selection import KFold
 
-from sklearn.cross_validation import cross_val_score
-from sklearn.cross_validation import KFold
+
+## Version 8 - LB 0.0643367
+# Let's use model averaging on 4 folds of data and voilà!
+
+## Version 5 - LB 0.0643922
+# I didn't replace all leaked information with NaNs in previous version, so the score was probably
+# better due to overfitting. Now everything should be fine. 
+# This kernel is optimized for 2016 predictions, so you have to change a few lines
+# of code to have it optimized for final submission.
+
+## Version 4 - LB 0.0643788
+# I've updated the kernel with 2017 data. To avoid data leakage I replaced
+# tax information from 2017 with NaN values, like it's been suggested by the organizers.
+
+## Version 3 - LB 0.0644042
+# Train month averages for test predictions seem work better than their linear fit,
+# so I changed it (overfitting test data as hell... but who doesn't here? ;))
+
+## Version 2 - LB 0.0644120
+# LGBM performs much better, so I left him alone
+
+## Version 1 - LB 0.0644711
+# Both models have the same weight, which is based on cross-validation results, but
+# XGB model seems to be worse on public LB, 'cause alone gets score 0.0646474,
+# which is much worse than score of the combination. I reached the limit of submissions,
+# so I will check how LGBM alone performs tomorrow. Check it out for your own ;)
+
+
+print('Loading data...')
+properties2016 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
+properties2017 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
+train2016 = pd.read_csv('../input/train_2016_v2.csv')
+train2017 = pd.read_csv('../input/train_2017.csv')
+
+sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
+train2016 = pd.merge(train2016, properties2016, how = 'left', on = 'parcelid')
+train2017 = pd.merge(train2017, properties2017, how = 'left', on = 'parcelid')
+train2017[['structuretaxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxvaluedollarcnt', 'taxamount']] = np.nan
+train = pd.concat([train2016, train2017], axis = 0)
+test = pd.merge(sample_submission[['ParcelId']], properties2016.rename(columns = {'parcelid': 'ParcelId'}), 
+                how = 'left', on = 'ParcelId')
+del properties2016, properties2017, train2016, train2017
+gc.collect();
+
+
+print('Memory usage reduction...')
+train[['latitude', 'longitude']] /= 1e6
+test[['latitude', 'longitude']] /= 1e6
+
+train['censustractandblock'] /= 1e12
+test['censustractandblock'] /= 1e12
+
+for column in test.columns:
+    if test[column].dtype == int:
+        test[column] = test[column].astype(np.int32)
+    if test[column].dtype == float:
+        test[column] = test[column].astype(np.float32)
+      
+        
+print('Feature engineering...')
+train['month'] = (pd.to_datetime(train['transactiondate']).dt.year - 2016)*12 + pd.to_datetime(train['transactiondate']).dt.month
+train = train.drop('transactiondate', axis = 1)
 from sklearn.preprocessing import LabelEncoder
-from sklearn.pipeline import Pipeline
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import log_loss
+non_number_columns = train.dtypes[train.dtypes == object].index.values
 
-import os
-from scipy.sparse import csr_matrix, hstack
+for column in non_number_columns:
+    train_test = pd.concat([train[column], test[column]], axis = 0)
+    encoder = LabelEncoder().fit(train_test.astype(str))
+    train[column] = encoder.transform(train[column].astype(str)).astype(np.int32)
+    test[column] = encoder.transform(test[column].astype(str)).astype(np.int32)
+    
+feature_names = [feature for feature in train.columns[2:] if feature != 'month']
 
+month_avgs = train.groupby('month').agg('mean')['logerror'].values - train['logerror'].mean()
+                             
+print('Preparing arrays and throwing out outliers...')
+X_train = train[feature_names].values
+y_train = train['logerror'].values
+X_test = test[feature_names].values
 
-# fix random seed for reproducibility
-seed = 7
-np.random.seed(seed)
+del test
+gc.collect();
 
-# load dataset
-#dataframe = pandas.read_csv("/home/username/projects/PracticeNN/iris.data", header=None)
+month_values = train['month'].values
+month_avg_values = np.array([month_avgs[month - 1] for month in month_values]).reshape(-1, 1)
+X_train = np.hstack([X_train, month_avg_values])
 
-datadir = '../input'
-#datadir = '/home/username/projects/talkingData/input'
-gatrain = pd.read_csv(os.path.join(datadir,'gender_age_train.csv'), index_col='device_id')
-gatest = pd.read_csv(os.path.join(datadir,'gender_age_test.csv'), index_col = 'device_id')
-phone = pd.read_csv(os.path.join(datadir,'phone_brand_device_model.csv'))
-# Get rid of duplicate device ids in phone
-phone = phone.drop_duplicates('device_id',keep='first').set_index('device_id')
-events = pd.read_csv(os.path.join(datadir,'events.csv'),  parse_dates=['timestamp'], index_col='event_id')
-appevents = pd.read_csv(os.path.join(datadir,'app_events.csv'), usecols=['event_id','app_id','is_active'], dtype={'is_active':bool})
-applabels = pd.read_csv(os.path.join(datadir,'app_labels.csv'))
+X_train = X_train[np.abs(y_train) < 0.4, :]
+y_train = y_train[np.abs(y_train) < 0.4]
 
+kfolds = 4
 
-####Phone brand
-#As preparation I create two columns that show which train or test set row a particular device_id belongs to.
+models = []
+kfold = KFold(n_splits = kfolds, shuffle = True)
+for i, (train_index, test_index) in enumerate(kfold.split(X_train, y_train)):
+    
+    print('Training LGBM model with fold {}...'.format(i + 1))
+    X_train_, y_train_ = X_train[train_index], y_train[train_index]
+    X_valid_, y_valid_ = X_train[test_index], y_train[test_index]
+    
+    ltrain = lgb.Dataset(X_train_, label = y_train_, free_raw_data = False)
+    lvalid = lgb.Dataset(X_valid_, label = y_valid_, free_raw_data = False)
+    
+    params = {}
+    params['metric'] = 'mae'
+    params['max_depth'] = 100
+    params['num_leaves'] = 32
+    params['feature_fraction'] = .85
+    params['bagging_fraction'] = .95
+    params['bagging_freq'] = 8
+    params['learning_rate'] = 0.01
+    params['verbosity'] = 0
+    
+    models.append(lgb.train(params, ltrain, valid_sets = [ltrain, lvalid], 
+            verbose_eval=200, num_boost_round=1000))
+                  
+                  
+print('Making predictions and praying for good results...')
+X_test = np.hstack([X_test, np.zeros((X_test.shape[0], 1))])
+folds = 10
+n = int(X_test.shape[0] / folds)
 
-gatrain['trainrow'] = np.arange(gatrain.shape[0])
-gatest['testrow'] = np.arange(gatest.shape[0])
-
-# A sparse matrix of features can be constructed in various ways. I use this constructor:
-# csr_matrix((data, (row_ind, col_ind)), [shape=(M, N)])
-# where ``data``, ``row_ind`` and ``col_ind`` satisfy the
-# relationship ``a[row_ind[k], col_ind[k]] = data[k]``
-#
-# It lets me specify which values to put into which places in a sparse matrix. For phone brand data the data array will be all ones, row_ind will be the row number of a device and col_ind will be the number of brand.
-
-brandencoder = LabelEncoder().fit(phone.phone_brand)
-phone['brand'] = brandencoder.transform(phone['phone_brand'])
-gatrain['brand'] = phone['brand']
-gatest['brand'] = phone['brand']
-Xtr_brand = csr_matrix((np.ones(gatrain.shape[0]),
-                       (gatrain.trainrow, gatrain.brand)))
-Xte_brand = csr_matrix((np.ones(gatest.shape[0]),
-                       (gatest.testrow, gatest.brand)))
-print('Brand features: train shape {}, test shape {}'.format(Xtr_brand.shape, Xte_brand.shape))
-
-
-# Device model
-# In [5]:
-m = phone.phone_brand.str.cat(phone.device_model)
-
-modelencoder = LabelEncoder().fit(m)
-phone['model'] = modelencoder.transform(m)
-gatrain['model'] = phone['model']
-gatest['model'] = phone['model']
-Xtr_model = csr_matrix((np.ones(gatrain.shape[0]),
-                       (gatrain.trainrow, gatrain.model)))
-Xte_model = csr_matrix((np.ones(gatest.shape[0]),
-                       (gatest.testrow, gatest.model)))
-print('Model features: train shape {}, test shape {}'.format(Xtr_model.shape, Xte_model.shape))
-
-# Installed apps features
-# For each device I want to mark which apps it has installed. So I'll have as many feature columns as there are distinct apps.
-# Apps are linked to devices through events. So I do the following:
-# merge device_id column from events table to app_events
-# group the resulting dataframe by device_id and app and aggregate
-# merge in trainrow and testrow columns to know at which row to put each device in the features matrix
-
-appencoder = LabelEncoder().fit(appevents.app_id)
-appevents['app'] = appencoder.transform(appevents.app_id)
-napps = len(appencoder.classes_)
-deviceapps = (appevents.merge(events[['device_id']], how='left',left_on='event_id',right_index=True)
-                       .groupby(['device_id','app'])['app'].agg(['size'])
-                       .merge(gatrain[['trainrow']], how='left', left_index=True, right_index=True)
-                       .merge(gatest[['testrow']], how='left', left_index=True, right_index=True)
-                       .reset_index())
-deviceapps.head()
-
-d = deviceapps.dropna(subset=['trainrow'])
-Xtr_app = csr_matrix((np.ones(d.shape[0]), (d.trainrow, d.app)),
-                      shape=(gatrain.shape[0],napps))
-d = deviceapps.dropna(subset=['testrow'])
-Xte_app = csr_matrix((np.ones(d.shape[0]), (d.testrow, d.app)),
-                      shape=(gatest.shape[0],napps))
-print('Apps data: train shape {}, test shape {}'.format(Xtr_app.shape, Xte_app.shape))
-
-# App labels features
-# These are constructed in a way similar to apps features by merging app_labels with the deviceapps dataframe we created above.
-applabels = applabels.loc[applabels.app_id.isin(appevents.app_id.unique())]
-applabels['app'] = appencoder.transform(applabels.app_id)
-labelencoder = LabelEncoder().fit(applabels.label_id)
-applabels['label'] = labelencoder.transform(applabels.label_id)
-nlabels = len(labelencoder.classes_)
-
-devicelabels = (deviceapps[['device_id','app']]
-                .merge(applabels[['app','label']])
-                .groupby(['device_id','label'])['app'].agg(['size'])
-                .merge(gatrain[['trainrow']], how='left', left_index=True, right_index=True)
-                .merge(gatest[['testrow']], how='left', left_index=True, right_index=True)
-                .reset_index())
-devicelabels.head()
-
-d = devicelabels.dropna(subset=['trainrow'])
-Xtr_label = csr_matrix((np.ones(d.shape[0]), (d.trainrow, d.label)),
-                      shape=(gatrain.shape[0],nlabels))
-d = devicelabels.dropna(subset=['testrow'])
-Xte_label = csr_matrix((np.ones(d.shape[0]), (d.testrow, d.label)),
-                      shape=(gatest.shape[0],nlabels))
-print('Labels data: train shape {}, test shape {}'.format(Xtr_label.shape, Xte_label.shape))
-
-
-# Concatenate all features
-
-Xtrain = hstack((Xtr_brand, Xtr_model, Xtr_app, Xtr_label), format='csr')
-Xtest =  hstack((Xte_brand, Xte_model, Xte_app, Xte_label), format='csr')
-print('All features: train shape {}, test shape {}'.format(Xtrain.shape, Xtest.shape))
-
-#################
-# Start modeling
-#################
-
-targetencoder = LabelEncoder().fit(gatrain.group)
-y = targetencoder.transform(gatrain.group)
-nclasses = len(targetencoder.classes_)
-dummy_y = np_utils.to_categorical(y) ## Funcion de Keras!
-
-
-def batch_generator(X, y, batch_size, shuffle):
-    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
-    number_of_batches = np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    if shuffle:
-        np.random.shuffle(sample_index)
-    while True:
-        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
-        X_batch = X[batch_index,:].toarray()
-        y_batch = y[batch_index]
-        counter += 1
-        yield X_batch, y_batch
-        if (counter == number_of_batches):
-            if shuffle:
-                np.random.shuffle(sample_index)
-            counter = 0
-
-def batch_generatorp(X, batch_size, shuffle):
-    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    while True:
-        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
-        X_batch = X[batch_index, :].toarray()
-        counter += 1
-        yield X_batch
-        if (counter == number_of_batches):
-            counter = 0
-
-# define baseline model
-def baseline_model():
-    # create model
-    model = Sequential()
-    #model.add(Dense(10, input_dim=Xtrain.shape[1], init='normal', activation='relu'))
-    #model.add(Dropout(0.2))
-    model.add(Dense(50, input_dim=Xtrain.shape[1], init='normal', activation='tanh'))
-    model.add(Dropout(0.5))
-    model.add(Dense(12, init='normal', activation='sigmoid'))
-    # Compile model
-    model.compile(loss='categorical_crossentropy', optimizer='adadelta', metrics=['accuracy'])  #logloss
-    return model
-
-model=baseline_model()
-
-X_train, X_val, y_train, y_val = train_test_split(Xtrain, dummy_y, test_size=0.002, random_state=42)
-
-fit= model.fit_generator(generator=batch_generator(X_train, y_train, 32, True),
-                         nb_epoch=15,
-                         samples_per_epoch=70496,
-                         validation_data=(X_val.todense(), y_val), verbose=2
-                         )
-
-# evaluate the model
-scores_val = model.predict_generator(generator=batch_generatorp(X_val, 32, False), val_samples=X_val.shape[0])
-scores = model.predict_generator(generator=batch_generatorp(Xtest, 32, False), val_samples=Xtest.shape[0])
-
-print('logloss val {}'.format(log_loss(y_val, scores_val)))
-
-#Scaling to 1-0 probs
-#for i in xrange(Xtest.shape[0]):
-#    scores2[i,]=scores[i,]/sum(scores[i,])
-
-pred = pd.DataFrame(scores, index = gatest.index, columns=targetencoder.classes_)
-#pred.head()
-
-
-pred.to_csv('Keras on labels and brands -2.csv',index=True)
-
+for j in range(folds):
+    results = pd.DataFrame()
+    
+    if j < folds - 1:
+            X_test_ = X_test[j*n: (j+1)*n, :]
+            results['ParcelId'] = sample_submission['ParcelId'].iloc[j*n: (j+1)*n]
+    else:
+            X_test_ = X_test[j*n: , :]
+            results['ParcelId'] = sample_submission['ParcelId'].iloc[j*n: ]
+            
+    for month in [10, 11, 12]:
+        X_test_[:, -1] = month_avgs[month - 1]
+        assert X_test_.shape[1] == X_test.shape[1]
+        y_pred = np.zeros(X_test_.shape[0])
+        for model in models:
+            y_pred += model.predict(X_test_) / kfolds
+        results['2016'+ str(month)] = y_pred
+        
+        
+    X_test_[:, -1] = month_avgs[20]
+    assert X_test_.shape[1] == X_test.shape[1]
+    y_pred = np.zeros(X_test_.shape[0])
+    for model in models:
+        y_pred += model.predict(X_test_) / kfolds
+    results['201710'] = y_pred
+    results['201711'] = y_pred
+    results['201712'] = y_pred
+    
+    if j == 0:
+        results_ = results.copy()
+    else:
+        results_ = pd.concat([results_, results], axis = 0)
+    print('{}% completed'.format(round(100*(j+1)/folds)))
+    
+    
+print('Saving predictions...')
+results = results_[sample_submission.columns]
+assert results.shape == sample_submission.shape
+results.to_csv('submission.csv', index = False, float_format = '%.5f')
+print('Done!')

@@ -1,23 +1,44 @@
-from matplotlib import pyplot as plt
+import pandas as pd
 import numpy as np
 
-plt.rcParams['figure.figsize'] = [12, 8]
-plt.xkcd()
+import matplotlib.pyplot as pl
+#%matplotlib inline
 
-fig = plt.figure()
-ax = fig.add_subplot(1, 1, 1)
-ax.bar(range(4), [4, 6, 40, 50], 0.6)
-ax.spines['right'].set_color('none')
-ax.spines['top'].set_color('none')
-ax.xaxis.set_ticks_position('bottom')
-ax.set_xticks(np.arange(4) + 0.3)
-ax.set_ylim([0, 60])
-ax.set_xticklabels(['RESTARTING TRAINING\nJOBS ON EC2',
-                    'TRYING TO ADD\nNEW FEATURES',
-                    'THINKING ABOUT HOW\nIS IT EVEN POSSIBLE\nTO REACH 0.6 MAP@5??',
-                    'REFRESHING THE\nLEADERBOARD'])
-plt.ylabel('TIME')
-plt.yticks([])
-plt.title("MY LAST WEEK IN THE COMPETITION")
-plt.show()
-plt.savefig('last_week_xkcd.png')
+from sklearn.neighbors import KernelDensity
+
+mapdata = np.loadtxt("../input/mapdata_copyright_openstreetmap_contributors.txt")
+traps = pd.read_csv('../input/train.csv', parse_dates=['Date'])[['Date', 'Trap','Longitude', 'Latitude', 'WnvPresent']]
+
+alpha_cm = pl.cm.Reds
+alpha_cm._init()
+alpha_cm._lut[:-3,-1] = abs(np.logspace(0, 1, alpha_cm.N) / 10 - 1)[::-1]
+aspect = mapdata.shape[0] * 1.0 / mapdata.shape[1]
+lon_lat_box = (-88, -87.5, 41.6, 42.1)
+
+pl.figure(figsize=(18,6))
+for year, subplot in zip([2007, 2009, 2011, 2013], [141, 142, 143, 144]):
+    sightings = traps[(traps['WnvPresent'] > 0) & (traps['Date'].apply(lambda x: x.year) == year)]
+    sightings = sightings.groupby(['Date', 'Trap','Longitude', 'Latitude']).max()['WnvPresent'].reset_index()
+    X = sightings[['Longitude', 'Latitude']].values
+    kd = KernelDensity(bandwidth=0.02)
+    kd.fit(X)
+
+    xv,yv = np.meshgrid(np.linspace(-88, -87.5, 100), np.linspace(41.6, 42.1, 100))
+    gridpoints = np.array([xv.ravel(),yv.ravel()]).T
+    zv = np.exp(kd.score_samples(gridpoints).reshape(100,100))
+    pl.subplot(subplot)
+    pl.gca().set_title(year)
+    pl.imshow(mapdata, 
+               cmap=pl.get_cmap('gray'), 
+               extent=lon_lat_box, 
+               aspect=aspect)
+    pl.imshow(zv, 
+               origin='lower', 
+               cmap=alpha_cm, 
+               extent=lon_lat_box, 
+               aspect=aspect)
+    pl.tight_layout()
+    locations = traps[['Longitude', 'Latitude']].drop_duplicates().values
+    pl.scatter(locations[:,0], locations[:,1], marker='x')
+
+pl.savefig('heatmap.png')

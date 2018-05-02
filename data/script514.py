@@ -1,194 +1,500 @@
 
 # coding: utf-8
 
-# # The Importance of Cleaning the Text
-
-# After a few different iterations, I think that I have found a pretty good way to clean the questions to improve the performance of a model. I was able to reduce my loss value by a few points because of this method.  Feel free to use this code and improve upon the method!
+# #A quick review of the IGN reviews
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import datetime
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# We need a nice color palette.
+
+# In[ ]:
+
+
+sns.set_palette('Set3', 10)
+sns.palplot(sns.color_palette())
+sns.set_context('talk')
+
+
+# In[ ]:
+
+
+raw_data = pd.read_csv('../input/ign.csv')
+
+
+# Upload the entire dataset. It has a row which contains in release_year column 1970 year. I'll remove this easter egg.
+
+# In[ ]:
+
+
+raw_data.head()
+
+
+# In[ ]:
+
+
+release_date = raw_data.apply(lambda x: pd.datetime.strptime("{0} {1} {2} 00:00:00".format(
+            x['release_year'],x['release_month'], x['release_day']), "%Y %m %d %H:%M:%S"),axis=1)
+raw_data['release_date'] = release_date
+
+
+# The easter egg.
+
+# In[ ]:
+
+
+raw_data[raw_data.release_year == 1970]
+
+
+# In[ ]:
+
+
+data = raw_data[raw_data.release_year > 1970]
+len(data)
+
+
+# Let's look at all score phrases in IGN reviews...
+
+# In[ ]:
+
+
+data.score_phrase.unique()
+
+
+# ... and average scores of each phrase:
+
+# In[ ]:
+
+
+data.groupby('score_phrase')['score'].mean().sort_values()
+
+
+# If you don't know the score phrase put so:
+# 
+#  - 0 - 1: disaster    
+# 
+#  - 1 - 2: unbearable 
+# 
+#  - 2 - 3: painful 
+# 
+#  - and so on
+# 
+
+# In[ ]:
+
+
+data.platform.unique()
+
+
+# There are all platforms which are found in the dataset:
+
+# ##Releases and dates
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+data.groupby(['release_day']).size().plot(c='r')
+plt.xticks(range(1,32,3))
+plt.tight_layout()
+
+
+# It is a plot of count of releases per days. Nothing interesting.
+
+# In[ ]:
+
+
+f, ax = plt.subplots(2,1,figsize=(15,10),sharex=True)
+data.release_date.dt.weekday.plot.kde(ax=ax[0],c='g')
+data.groupby(data.release_date.dt.weekday).size().plot(ax=ax[1],c='r')
+plt.xlim(0.,6.)
+plt.xticks(range(7),['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+plt.tight_layout()
+
+
+# But these plots are much more interesting. We see 2 plots: density of probability and count of releases per weekdays. **Maximum of releases has been in Thuesday, minimum has been in weekends.**
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,8))
+plt.xticks(range(1,13),['January','February','March','April','May','June',
+            'July','August','September','October','November','December'])
+data.groupby(['release_month']).size().plot(c='r')
+
+
+# Releases per months. Maximum has been in Fall.
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,8))
+data.groupby(['release_year']).size().plot(kind='bar')
+
+
+# And per yers.
+
+# In[ ]:
+
+
+table = data.groupby('release_date').size()
+f,ax = plt.subplots(2,1,figsize=(17,10))
+#table.rolling(window=30).mean().plot(c='orange',ax=ax[1])
+table.plot(ax=ax[0],c='red')
+ax[0].set_xlabel('')
+table.resample('M').mean().plot(c='orange',ax=ax[1])
+
+
+# The first plot is Count of releases per days in the entire datset. The second is the average count of releases per days in a month. We can see a **cyclic structure**.
+
+# ##The most populars
+
+# In[ ]:
+
+
+data.platform.value_counts()[:10].plot.pie(figsize=(10,10))
+
+
+# The top ten most popular gaming platforms...
+
+# In[ ]:
+
+
+f, ax = plt.subplots(2,2, figsize=(17,17))
+last_games = data[data.release_year == 2014]
+last_popular = last_games.platform.value_counts()[last_games.platform.value_counts() > 5]
+last_popular.plot.pie(ax=ax[0,0])
+ax[0,0].set_title('2014')
+ax[0,0].set_ylabel('')
+last_games = data[data.release_year == 2015]
+last_popular = last_games.platform.value_counts()[last_games.platform.value_counts() > 5]
+last_popular.plot.pie(ax=ax[0,1])
+ax[0,1].set_title('2015')
+ax[0,1].set_ylabel('')
+last_games = data[data.release_year == 2016]
+last_popular = last_games.platform.value_counts()[last_games.platform.value_counts() > 5]
+last_popular.plot.pie(ax=ax[1,0])
+ax[1,0].set_title('2016')
+ax[1,0].set_ylabel('')
+old_games = data[data.release_year <= 2000]
+old_popular = old_games.platform.value_counts()[old_games.platform.value_counts() > 5]
+old_popular.plot.pie(ax=ax[1,1])
+ax[1,1].set_title('2000 and older')
+ax[1,1].set_ylabel('')
+
+
+# ... and top platforms in some years.
+
+# In[ ]:
+
+
+years = tuple(range(1996,2017))
+s = data.groupby([data.release_year,data.platform]).title.count()
+top_years_platform = pd.DataFrame([[i,s[i].max(),s[i].argmax()] for i in years], 
+                                 columns=['release_year','count_games','platform'])
+
+sc = data.groupby([data.release_year,data.platform]).score
+s = sc.median()[sc.count() > 20]
+top_scores_platform = pd.DataFrame([[i,s[i].max(),s[i].argmax()] for i in years], 
+                                 columns=['release_year','score_game','platform'])
+
+
+# In[ ]:
+
+
+f, axes = plt.subplots(1,2,figsize=(18,20))
+
+ax = top_years_platform.count_games.plot(kind='barh',color='orange',ax=axes[0])
+ax.set_yticklabels(years) 
+ax.set_xlabel('Count of releases')
+rects = ax.patches
+for i, v in enumerate(top_years_platform.platform): 
+    ax.text(10, i-.1, v, fontweight='bold')
+
+ax2 = top_scores_platform.score_game.plot(kind='barh',color='blue',ax=axes[1])
+ax2.set_yticklabels(years) 
+ax2.set_xlabel('Average score')
+rects = ax2.patches
+for i, v in enumerate(top_scores_platform.platform): 
+    ax2.text(0.3, i-.1, v, fontweight='bold', color='white')
+
+
+# The left plot is the most popular platform in year. 
+# The right is a platform with the most high average score. For this purpose games are chosen that had more 20 releases per year.
+# **It is interesting that platforms on the left and right are not the same usually.**
+
+# In[ ]:
+
+
+data_pc = data[data.platform == 'PC']
+data_ps = data[data.platform == 'PlayStation']
+data_ps2 = data[data.platform == 'PlayStation 2']
+data_ps3 = data[data.platform == 'PlayStation 3']
+data_ps4 = data[data.platform == 'PlayStation 4']
+data_xbox = data[data.platform == 'Xbox']
+data_xbox360 = data[data.platform == 'Xbox 360']
+data_xbox_one = data[data.platform == 'Xbox One']
+df = pd.DataFrame({'PC' : data_pc.groupby('release_year').size(),
+                   'PS' : data_ps.groupby('release_year').size(),
+                   'PS2' : data_ps2.groupby('release_year').size(),
+                   'PS3' : data_ps3.groupby('release_year').size(),
+                   'PS4' : data_ps4.groupby('release_year').size(),
+                   'Xbox' : data_xbox.groupby('release_year').size(),
+                   'Xbox 360' : data_xbox360.groupby('release_year').size(),
+                   'Xbox One' : data_xbox_one.groupby('release_year').size()
+                  })
+
+
+# In[ ]:
+
+
+f,ax = plt.subplots(1,1,figsize=(15,20))
+df.plot(kind='barh',stacked=True,ax=ax)
+
+
+# The plot of the platforms by the year of the review
+
+# In[ ]:
+
+
+data_pc = data[data.platform == 'PC']
+plt.figure(figsize=(15,8))
+data_pc.groupby('release_year').platform.size().plot(kind='bar',color='green')
+
+
+# And for PC only.
+
+# ##Scores
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+plt.xlim(1995,2017)
+plt.ylim(1.8,10)
+sns.kdeplot(data.release_year, data.score, n_levels=20, cmap="Reds", shade=True, shade_lowest=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+plt.ylim(1.5,10.5)
+plt.xticks(range(1,13),['January','February','March','April','May','June',
+            'July','August','September','October','November','December'])
+sns.kdeplot(data.release_month, data.score, n_levels=20, cmap="Blues", shade=True, shade_lowest=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+plt.ylim(1.5,10.5)
+sns.kdeplot(data.release_day, data.score, n_levels=20, cmap="Greens", shade=True, shade_lowest=False)
+
+
+# There are joint distribution of density of scores and dates. Darker areas correspond to more typical values. Well we once again see that **November is the most popular month** among game developers. But now we see one more thing: **a typical score is approximately 8**. Let's check it out.
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,8))
+#sns.kdeplot(data.score, shade=True, c='g', label='Density')
+plt.xticks(np.linspace(0,10,21))
+plt.xlim(0,10)
+data.score.plot.kde(c='g', label='Density')
+plt.legend()
+
+
+# Yes, we have been right. The most typical score is 8. Moreover **reviewers like to put scores near with whole numbers.** I suppose it is a feature of human behavior.
+
+# We can create probability distribution graphics to different platforms. Let's make it for some actual platforms.
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,10))
+plt.xticks(np.linspace(0,10,21))
+plt.xlim(0,10)
+data.score.plot.kde(label='All platform')
+data[data.platform == 'PC'].score.plot.kde(label='PC')
+#data[data.platform == 'PlayStation'].score.plot.kde(label='PlayStation')
+#data[data.platform == 'PlayStation 2'].score.plot.kde(label='PlayStation 2')
+data[data.platform == 'PlayStation 3'].score.plot.kde(label='PlayStation 3')
+data[data.platform == 'PlayStation 4'].score.plot.kde(label='PlayStation 4')
+plt.legend(loc='upper left')
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,10))
+plt.xticks(np.linspace(0,10,21))
+plt.xlim(0,10)
+data.score.plot.kde(label='All platform')
+data[data.platform == 'PC'].score.plot.kde(label='PC')
+#data[data.platform == 'Xbox'].score.plot.kde(label='Xbox')
+data[data.platform == 'Xbox 360'].score.plot.kde(label='Xbox 360')
+data[data.platform == 'Xbox One'].score.plot.kde(label='Xbox One')
+plt.legend(loc='upper left')
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,10))
+plt.xticks(np.linspace(0,10,21))
+plt.xlim(0,10)
+data.score.plot.kde(label='All platform')
+data[data.platform == 'Android'].score.plot.kde(label='Android')
+data[data.platform == 'iPhone'].score.plot.kde(label='iPhone')
+data[data.platform == 'iPad'].score.plot.kde(label='iPad')
+plt.legend(loc='upper left')
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(17,10))
+plt.xticks(np.linspace(0,10,21))
+plt.xlim(0,10)
+data.score.plot.kde(label='All platform',c='black')
+data[data.platform == 'PC'].score.plot.kde(label='PC')
+data[data.platform == 'PlayStation 4'].score.plot.kde(label='PlayStation 4')
+data[data.platform == 'Xbox One'].score.plot.kde(label='Xbox One')
+data[data.platform == 'iPad'].score.plot.kde(label='iPad')
+plt.legend(loc='upper left')
+
+
+# PC has a peak little bit right than all platforms. **The platforms with the highest average scores are Playstation 4, Xbox One and iPad.** Playstation 4 has won.
+
+# ## Genres
+
+# In[ ]:
+
+
+genres = data.groupby('genre')['genre']
+genres_count=genres.count()
+large_genres=genres_count[genres_count>=150]
+large_genres.sort_values(ascending=False,inplace=True)
+large_genres
+
+
+# There are all genres in the dataset which have 150 games at least
+
+# In[ ]:
+
+
+data_genre = data[data.genre.isin(large_genres.keys())]
+table_score = pd.pivot_table(data_genre,values=['score'],index=['release_year'],columns=['genre'],aggfunc='mean',margins=False)
+table_count = pd.pivot_table(data_genre,values=['score'],index=['release_year'],columns=['genre'],aggfunc='count',margins=False)
+table = table_score[table_count > 10]
+plt.figure(figsize=(19,16))
+sns.heatmap(table.score,linewidths=.5,annot=True,vmin=0,vmax=10,cmap='YlGnBu')
+plt.title('Average scores of games (cell exists if a genre has at least 10 releases in year)')
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(19,16))
+sns.heatmap(table_count.score,linewidths=.5,annot=True,fmt='2.0f',vmin=0)
+plt.title('Count of games')
+
+
+# **People love actions, adventures, shooters, sports, strategies and RPG** more than another genres. We see it in the second plot. Also <b>action-adventures and RPG have higher average scores</b> than another ones. It is interesting that <b>some genres have "intervals" of popularity</b>, e.g. such like Music.
+
+# ## Some about titles
+
+# In[ ]:
+
+
 import nltk
-from nltk.corpus import stopwords
-from nltk.stem import SnowballStemmer
-import re
+
+
+# In[ ]:
+
+
+t = data.title.apply(nltk.word_tokenize).sum()
+
+
+# In[ ]:
+
+
+from collections import Counter
 from string import punctuation
 
+def content_text(text):
+    stopwords = set(nltk.corpus.stopwords.words('english'))
+    without_stp  = Counter()
+    for word in text:
+        word = word.lower()
+        if len(word) < 3:
+            continue
+        if word not in stopwords:
+            without_stp.update([word])
+    return [(y,c) for y,c in without_stp.most_common(20)]
+
+without_stop = content_text(t)
+without_stop
+
+
+# There are <b>the most common words in games titles.</b> Do you want to create a nice tag cloud? I want :)
 
 # In[ ]:
 
 
-train = pd.read_csv("../input/train.csv")[:100]
-test = pd.read_csv("../input/test.csv")[:100]
+from PIL import Image
+import random
+from wordcloud import WordCloud, STOPWORDS
+
+text = ' '.join(t)
+stopwords = set(STOPWORDS)
+
+wordcloud = WordCloud(background_color='white', max_font_size=110, stopwords=stopwords, 
+                      random_state=3, relative_scaling=.5).generate(text)
+plt.figure(figsize=(15,18))
+plt.imshow(wordcloud)
+plt.axis('off')
 
 
-# In[ ]:
+# If you call your game something like <b>"World War II. Adventure Game: Star Edition"</b>, then you have problems with imagination :) 
 
+# ## Let's talk about masterpieces
 
-# Check for any null values
-print(train.isnull().sum())
-print(test.isnull().sum())
-
-
-# In[ ]:
-
-
-# Add the string 'empty' to empty strings
-train = train.fillna('empty')
-test = test.fillna('empty')
-
-
-# In[ ]:
-
-
-# Preview some of the pairs of questions
-a = 0 
-for i in range(a,a+10):
-    print(train.question1[i])
-    print(train.question2[i])
-    print()
-
+# Let's just look at the table of masterpieces.
 
 # In[ ]:
 
 
-stop_words = ['the','a','an','and','but','if','or','because','as','what','which','this','that','these','those','then',
-              'just','so','than','such','both','through','about','for','is','of','while','during','to','What','Which',
-              'Is','If','While','This']
+master = data[data.score == 10][['title','platform','genre','release_year']]
+master
 
 
-# In[ ]:
-
-
-def text_to_wordlist(text, remove_stop_words=True, stem_words=False):
-    # Clean the text, with the option to remove stop_words and to stem words.
-
-    # Clean the text
-    text = re.sub(r"[^A-Za-z0-9]", " ", text)
-    text = re.sub(r"what's", "", text)
-    text = re.sub(r"What's", "", text)
-    text = re.sub(r"\'s", " ", text)
-    text = re.sub(r"\'ve", " have ", text)
-    text = re.sub(r"can't", "cannot ", text)
-    text = re.sub(r"n't", " not ", text)
-    text = re.sub(r"I'm", "I am", text)
-    text = re.sub(r" m ", " am ", text)
-    text = re.sub(r"\'re", " are ", text)
-    text = re.sub(r"\'d", " would ", text)
-    text = re.sub(r"\'ll", " will ", text)
-    text = re.sub(r"60k", " 60000 ", text)
-    text = re.sub(r" e g ", " eg ", text)
-    text = re.sub(r" b g ", " bg ", text)
-    text = re.sub(r"\0s", "0", text)
-    text = re.sub(r" 9 11 ", "911", text)
-    text = re.sub(r"e-mail", "email", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"quikly", "quickly", text)
-    text = re.sub(r" usa ", " America ", text)
-    text = re.sub(r" USA ", " America ", text)
-    text = re.sub(r" u s ", " America ", text)
-    text = re.sub(r" uk ", " England ", text)
-    text = re.sub(r" UK ", " England ", text)
-    text = re.sub(r"india", "India", text)
-    text = re.sub(r"switzerland", "Switzerland", text)
-    text = re.sub(r"china", "China", text)
-    text = re.sub(r"chinese", "Chinese", text) 
-    text = re.sub(r"imrovement", "improvement", text)
-    text = re.sub(r"intially", "initially", text)
-    text = re.sub(r"quora", "Quora", text)
-    text = re.sub(r" dms ", "direct messages ", text)  
-    text = re.sub(r"demonitization", "demonetization", text) 
-    text = re.sub(r"actived", "active", text)
-    text = re.sub(r"kms", " kilometers ", text)
-    text = re.sub(r"KMs", " kilometers ", text)
-    text = re.sub(r" cs ", " computer science ", text) 
-    text = re.sub(r" upvotes ", " up votes ", text)
-    text = re.sub(r" iPhone ", " phone ", text)
-    text = re.sub(r"\0rs ", " rs ", text) 
-    text = re.sub(r"calender", "calendar", text)
-    text = re.sub(r"ios", "operating system", text)
-    text = re.sub(r"gps", "GPS", text)
-    text = re.sub(r"gst", "GST", text)
-    text = re.sub(r"programing", "programming", text)
-    text = re.sub(r"bestfriend", "best friend", text)
-    text = re.sub(r"dna", "DNA", text)
-    text = re.sub(r"III", "3", text) 
-    text = re.sub(r"the US", "America", text)
-    text = re.sub(r"Astrology", "astrology", text)
-    text = re.sub(r"Method", "method", text)
-    text = re.sub(r"Find", "find", text) 
-    text = re.sub(r"banglore", "Banglore", text)
-    text = re.sub(r" J K ", " JK ", text)
-    
-    # Remove punctuation from text
-    text = ''.join([c for c in text if c not in punctuation])
-    
-    # Optionally, remove stop words
-    if remove_stop_words:
-        text = text.split()
-        text = [w for w in text if not w in stop_words]
-        text = " ".join(text)
-    
-    # Optionally, shorten words to their stems
-    if stem_words:
-        text = text.split()
-        stemmer = SnowballStemmer('english')
-        stemmed_words = [stemmer.stem(word) for word in text]
-        text = " ".join(stemmed_words)
-    
-    # Return a list of words
-    return(text)
-
+# Note that a game can occur more than once, as the output for multiple platforms. Let's draw charts of genres and platforms.
 
 # In[ ]:
 
 
-def process_questions(question_list, questions, question_list_name, dataframe):
-    '''transform questions and display progress'''
-    for question in questions:
-        question_list.append(text_to_wordlist(question))
-        if len(question_list) % 100000 == 0:
-            progress = len(question_list)/len(dataframe) * 100
-            print("{} is {}% complete.".format(question_list_name, round(progress, 1)))
+f, ax = plt.subplots(2,1, figsize=(10,20))
+master.groupby('genre').size().plot.pie(ax=ax[0],cmap='Set3')
+master.groupby('platform').size().plot.pie(ax=ax[1],cmap='terrain')
+ax[0].set_ylabel('')
+ax[1].set_ylabel('')
 
 
-# In[ ]:
+# Do you know all these platforms?
 
+# ## Conclusion
 
-train_question1 = []
-process_questions(train_question1, train.question1, 'train_question1', train)
-
-
-# In[ ]:
-
-
-train_question2 = []
-process_questions(train_question2, train.question2, 'train_question2', train)
-
-
-# In[ ]:
-
-
-test_question1 = []
-process_questions(test_question1, test.question1, 'test_question1', test)
-
-
-# In[ ]:
-
-
-test_question2 = []
-process_questions(test_question2, test.question2, 'test_question2', test)
-
-
-# In[ ]:
-
-
-# Preview some transformed pairs of questions
-a = 0 
-for i in range(a,a+10):
-    print(train_question1[i])
-    print(train_question2[i])
-    print()
-
+# Using this dataset we find out about cyclic structure of game releases, the most popular platforms, some details about game scoring, naming and much more. I hope you were interested. Thank you for watching!
+# 
+# P.S. Special thanks to other participants for some greats ideas.

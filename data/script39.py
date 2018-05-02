@@ -1,206 +1,245 @@
 
 # coding: utf-8
 
-# ### Imports
+# # Bivariate plotting with pandas
+# 
+# <table>
+# <tr>
+# <td><img src="https://i.imgur.com/bBj1G1v.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/ChK9zR3.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/KBloVHe.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/C7kEWq7.png" width="350px"/></td>
+# </tr>
+# <tr>
+# <td style="font-weight:bold; font-size:16px;">Scatter Plot</td>
+# <td style="font-weight:bold; font-size:16px;">Hex Plot</td>
+# <td style="font-weight:bold; font-size:16px;">Stacked Bar Chart</td>
+# <td style="font-weight:bold; font-size:16px;">Bivariate Line Chart</td>
+# </tr>
+# <tr>
+# <td>df.plot.scatter()</td>
+# <td>df.plot.hex()</td>
+# <td>df.plot.bar(stacked=True)</td>
+# <td>df.plot.line()</td>
+# </tr>
+# <tr>
+# <td>Good for interval and some nominal categorical data.</td>
+# <td>Good for interval and some nominal categorical data.</td>
+# <td>Good for nominal and ordinal categorical data.</td>
+# <td>Good for ordinal categorical and interval data.</td>
+# </tr>
+# </table>
+# 
+# In the previous notebook, we explored using `pandas` to plot and understand relationships within a single column. In this notebook, we'll expand this view by looking at plots that consider two variables at a time.
+# 
+# Data without relationships between variables is the data science equivalent of a blank canvas. To paint the picture in, we need to understand how variables interact with one another. Does an increase in one variable correlate with an increase in another? Does it relate to a decrease somewhere else? The best way to paint the picture in is by using plots that enable these possibilities.
 
 # In[ ]:
 
 
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn import linear_model
-from sklearn import tree
-from sklearn import neighbors
-from sklearn import ensemble
-from sklearn import svm
-from sklearn import gaussian_process
-from sklearn import naive_bayes
-from sklearn import neural_network
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import GridSearchCV
-get_ipython().run_line_magic('matplotlib', 'inline')
+reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
+reviews.head()
+
+
+# ## Scatter plot
+# 
+# The simplest bivariate plot is the lowly **scatter plot**. A simple scatter plot simply maps each variable of interest to a point in two-dimensional space. This is the result:
+
+# In[ ]:
+
+
+reviews[reviews['price'] < 100].sample(100).plot.scatter(x='price', y='points')
+
+
+# Note that in order to make effective use of this plot, we had to **downsample** our data, taking just 100 points from the full set. This is because naive scatter plots do not effectively treat points which map to the same place.
+# 
+# For example, if two wines, both costing 100 dollars, get a rating of 90, then the second one is overplotted onto the first one, and we add just one point to the plot.
+# 
+# This isn't a problem if it happens just a few times. But with enough points the distribution starts to look like a shapeless blob, and you lose the forest for the trees:
+
+# In[ ]:
+
+
+reviews[reviews['price'] < 100].plot.scatter(x='price', y='points')
+
+
+# There are a few ways to treat this problem. We've already demonstrated one way: sampling the points. Another interesting way to do this that's built right into `pandas` is to use our next plot type, a hexplot.
+
+# ## Hexplot
+# 
+# A  hexplot aggregates points in space into hexagons, and then colorize those hexagons:
+
+# In[ ]:
+
+
+reviews[reviews['price'] < 100].plot.hexbin(x='price', y='points', gridsize=15)
+
+
+# The data in this plot is directly comprable to the scatter plot from earlier, but the story it tells us is very different. The hexplot provides us with a much more useful view on the dataset, showing that the bottles of wine reviewed by Wine Magazine cluster around 87.5 points and around $20.
+# 
+# Hexplots and scatter plots can by applied to combinations of interval variables or ordinal categorical variables. To help aleviate overplotting, scatter plots (and, to a lesser extent, hexplots) benefit from variables which can take on a wide range of unique values.
+
+# ## Stacked plots
+# 
+# Scatter plots and hex plots are new. But we can also use the simpler plots we saw in the last notebook.
+# 
+# The easiest way to modify them to support another visual variable is by using stacking. A stacked chart is one which plots the variables one on top of the other.
+# 
+# We'll use a supplemental selection of the five most common wines for this next section.
+
+# In[ ]:
+
+
+wine_counts = pd.read_csv("../input/most-common-wine-scores/top-five-wine-score-counts.csv",
+                          index_col=0)
+
+
+# `wine_counts` counts the number of times each of the possible review scores was received by the five most commonly reviewed types of wines:
+
+# In[ ]:
+
+
+wine_counts.head()
+
+
+# Many `pandas` multivariate plots expect input data to be in this format, with one categorical variable in the columns, one categorical variable in the rows, and counts of their intersections in the entries. 
+# 
+# Let's now look at some stacked plots. We'll start with the stacked bar chart.
+
+# In[ ]:
+
+
+wine_counts.plot.bar(stacked=True)
+
+
+# Stacked bar plots share the strengths and weaknesses of univariate bar charts. They work best for nominal categorical or small ordinal categorical variables.
+# 
+# Another simple example is the area plot, which lends itself very naturally to this form of manipulation:
+
+# In[ ]:
+
+
+wine_counts.plot.area()
+
+
+# Like single-variable area charts, multivariate area charts are meant for nominal categorical or interval variables.
+# 
+# Stacked plots are visually very pretty. However, they suffer from two major problems.
+# 
+# The first limitation is that the second variable in a stacked plot must be a variable with a very limited number of possible values (probably an ordinal categorical, as here). Five different types of wine is a good number because it keeps the result interpretable; eight is sometimes mentioned as a suggested upper bound. Many dataset fields will not fit this critereon naturally, so you will have to "make do", as here, by selecting a group of interest.
+# 
+# The second limitation is one of interpretability. As easy as they are to make, and as pretty as they look, stacked plots are really hard to distinguish values within. For example, looking at the plot above, can you tell which wine is the most common one to have gotten a score of approximately 87: the purple, the red, or the green? It's actually really hard to tell!
+
+# ## Bivariate line chart
+# 
+# One plot type we've seen already that remains highly effective when made bivariate is the line chart. Because the line in this chart takes up so little visual space, it's really easy and effective to overplot multiple lines on the same chart.
+
+# In[ ]:
+
+
+wine_counts.plot.line()
+
+
+# Using a line chart this way makes inroads against the second limitation of stacked plotting. Bivariate line charts are much more interpretable: we can see in this chart fairly easily that the green wine (the Chardonnay) very slightly edges out the Pinot Noir around the 87-point scoreline.
+
+# ## Exercises
+# 
+# In this section we introduced and explored some common bivariate plot types:
+# 
+# * Scatter plots
+# * Hex plots
+# * Stacked bar charts and area charts
+# * Bivariate line charts
+# 
+# Let's now put what we've learned to the test!
+# 
+# Try answering the following questions:
+# 
+# 1. A scatter plot or hex plot is good for what two types of data?
+# 2. What type of data makes sense to show in a stacked bar chart, but not in a bivariate line chart?
+# 3. What type of data makes sense to show in a bivariate line chart, but not in a stacked bar chart?
+# 4. Suppose we create a scatter plot but find that due to the large number of points it's hard to interpret. What are two things we can do to fix this issue?
+# 
+# To see the answers, click the "Output" button on the cell below.
+
+# In[ ]:
+
+
+from IPython.display import HTML
+HTML("""
+<ol>
+<li>Scatter plots and hex plots work best with a mixture of ordinal categorical and interval data.</li>
+<br/>
+<li>Nominal categorical data makes sense in a (stacked) bar chart, but not in a (bivariate) line chart.</li>
+<br/>
+<li>Interval data makes sense in a bivariate line chart, but not in a stacked bar chart.</li>
+<br/>
+<li>One way to fix this issue would be to sample the points. Another way to fix it would be to use a hex plot.</li>
+</ol>
+""")
+
+
+# Next, let's replicate some plots. Recall the Pokemon dataset from earlier:
+
+# In[ ]:
+
+
+pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
+pokemon.head()
+
+
+# For the exercises that follow, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
+
+# In[ ]:
+
+
+pokemon.plot.scatter(x='Attack', y='Defense')
 
 
 # In[ ]:
 
 
-testset = pd.read_csv("../input/test.csv")
-trainset = pd.read_csv("../input/train.csv")
+pokemon.plot.hexbin(x='Attack', y='Defense', gridsize=20)
 
 
-# ### Show feature scatterplot
-
-# In[ ]:
-
-
-sns.set()
-sns.pairplot(trainset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "type"]], hue="type")
-
-
-# ### Creating additional features
-# It seems as if a combination of the features *has_soul* and *hair_length* can help us classify the monsters better. So therefor I will create an additional column which contains the product of these two.
+# For thee next plot, use the following data:
 
 # In[ ]:
 
 
-trainset['hair_soul'] = trainset.apply(lambda row: row['hair_length']*row['has_soul'],axis=1)
-trainset['hair_bone'] = trainset.apply(lambda row: row['hair_length']*row['bone_length'],axis=1)
-trainset['bone_soul'] = trainset.apply(lambda row: row['bone_length']*row['has_soul'],axis=1)
-trainset['hair_soul_bone'] = trainset.apply(lambda row: row['hair_length']*row['has_soul']*row['bone_length'],axis=1)
+pokemon_stats_legendary = pokemon.groupby(['Legendary', 'Generation']).mean()[['Attack', 'Defense']]
 
-testset['hair_soul'] = testset.apply(lambda row: row['hair_length']*row['has_soul'],axis=1)
-testset['hair_bone'] = testset.apply(lambda row: row['hair_length']*row['bone_length'],axis=1)
-testset['bone_soul'] = testset.apply(lambda row: row['bone_length']*row['has_soul'],axis=1)
-testset['hair_soul_bone'] = testset.apply(lambda row: row['hair_length']*row['has_soul']*row['bone_length'],axis=1)
-
-
-# Let's analyse the new features in a pairplot.
 
 # In[ ]:
 
 
-sns.set()
-sns.pairplot(trainset[["hair_soul", "hair_bone", "bone_soul", "hair_soul_bone", "type"]], hue="type")
+pokemon_stats_legendary.plot.bar(stacked=True)
 
 
-# ### Create dataframes
-# Selecting columns and onehot-encoding column "color". It seems that the color does not really help the predictions. So I left it out completely. Additionally I created two sets with the artificial features.
+# For the next plot, use the following data:
 
 # In[ ]:
 
 
-#x = pd.concat([trainset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul", "hair_bone", "bone_soul", "hair_soul_bone"]], pd.get_dummies(trainset["color"])], axis=1)
-x = trainset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul", "hair_bone", "bone_soul", "hair_soul_bone"]]
-x_original = trainset[["bone_length", "rotting_flesh", "hair_length", "has_soul"]]
-x_hair_soul = trainset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul"]]
-y = trainset[["type"]]
-#x_test = pd.concat([testset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul", "hair_bone", "bone_soul", "hair_soul_bone"]], pd.get_dummies(testset["color"])], axis=1)
-x_test = testset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul", "hair_bone", "bone_soul", "hair_soul_bone"]]
-x_test_original = testset[["bone_length", "rotting_flesh", "hair_length", "has_soul"]]
-x_test_hair_soul = testset[["bone_length", "rotting_flesh", "hair_length", "has_soul", "hair_soul"]]
+pokemon_stats_by_generation = pokemon.groupby('Generation').mean()[['HP', 'Attack', 'Defense', 'Sp. Atk', 'Sp. Def', 'Speed']]
 
-
-# ### Creating set of classifiers
 
 # In[ ]:
 
 
-clfs = {}
-
-#clfs['lr'] = {'clf': linear_model.LogisticRegression(), 'name':'LogisticRegression'}
-#clfs['rf'] = {'clf': ensemble.RandomForestClassifier(n_estimators=750, n_jobs=-1), 'name':'RandomForest'}
-clfs['tr'] = {'clf': tree.DecisionTreeClassifier(), 'name':'DecisionTree'}
-#clfs['knn'] = {'clf': neighbors.KNeighborsClassifier(n_neighbors=4), 'name':'kNearestNeighbors'}
-#clfs['svc'] = {'clf': svm.SVC(kernel='linear'), 'name': 'SupportVectorClassifier'}
-clfs['nusvc'] = {'clf': svm.NuSVC(), 'name': 'NuSVC'}
-clfs['linearsvc'] = {'clf': svm.LinearSVC(), 'name': 'LinearSVC'}
-clfs['SGD'] = {'clf': linear_model.SGDClassifier(), 'name': 'SGDClassifier'}
-clfs['GPC'] = {'clf': gaussian_process.GaussianProcessClassifier(), 'name': 'GaussianProcess'}
-clfs['nb'] = {'clf': naive_bayes.GaussianNB(), 'name':'GaussianNaiveBayes'}
-clfs['bag'] = {'clf': ensemble.BaggingClassifier(neighbors.KNeighborsClassifier(), max_samples=0.5, max_features=0.5), 'name': "BaggingClassifier"}
-clfs['gbc'] = {'clf': ensemble.GradientBoostingClassifier(), 'name': 'GradientBoostingClassifier'}
-#clfs['mlp'] = {'clf': neural_network.MLPClassifier(hidden_layer_sizes=(100,100,100), alpha=1e-5, solver='lbfgs', max_iter=500), 'name': 'MultilayerPerceptron'}
+pokemon_stats_by_generation.plot.line()
 
 
-# ### Find the best parameters by usig GridSearch
-# Using GridSearch you can find the best parameters for a classifier. You just have to give an array for each parameter and GridSearch will try out every combination. That takes a lot longer to compute of course.
-
-# In[ ]:
-
-
-parameters = {'solver': ['lbfgs'], 'max_iter': [1500], 'alpha': 10.0 ** -np.arange(1, 7), 'hidden_layer_sizes':np.arange(5, 12)}
-clfs['mlpgrid'] = {'clf': GridSearchCV(neural_network.MLPClassifier(), parameters), 'name': 'MLP with GridSearch'}
-
-parameters = {'kernel':['linear', 'sigmoid', 'poly', 'rbf'], 'gamma':np.linspace(0.0,2.0,num=21),'C': np.linspace(0.5,1.5,num=11)}
-clfs['svcgrid'] = {'clf': GridSearchCV(svm.SVC(), parameters), 'name': 'SVC with GridSearch'}
-
-parameters = {'n_estimators':np.arange(64, 1024, step=64)}
-clfs['rfgrid'] = {'clf': GridSearchCV(ensemble.RandomForestClassifier(), parameters), 'name': 'Random Forest with GridSearch'}
-
-parameters = {'n_neighbors':np.arange(3, 12)}
-clfs['knngrid'] = {'clf': GridSearchCV(neighbors.KNeighborsClassifier(), parameters), 'name': 'KNN with GridSearch'}
-
-parameters = {'n_estimators':np.arange(3, 12)}
-clfs['adagrid'] = {'clf': GridSearchCV(ensemble.AdaBoostClassifier(), parameters), 'name': 'AdaBoost with GridSearch'}
-
-parameters = {'C':[1],'tol':[0.0001],'solver': ['newton-cg'], 'multi_class': ['multinomial']}
-clfs['lrgrid'] = {'clf': GridSearchCV(linear_model.LogisticRegression(), parameters), 'name': 'LogisticRegression with GridSearch'}
-
-
-# ### Scoring classifiers with cross validation
-# I tried using artificial features here, but in most cases that did not lead to an improvement of the score. To save some computing time I commented the lines out.
-
-# In[ ]:
-
-
-for clf in clfs:
-    clfs[clf]['score'] = cross_val_score(clfs[clf]['clf'], x_original, y.values.ravel(), cv=5)
-    print(clfs[clf]['name'] + ": %0.4f (+/- %0.4f)" % (clfs[clf]['score'].mean(), clfs[clf]['score'].std()*2))
-    #clfs[clf]['score'] = cross_val_score(clfs[clf]['clf'], x, y.values.ravel(), cv=5)
-    #print(clfs[clf]['name'] + " (with all artificial features): %0.4f (+/- %0.4f)" % (clfs[clf]['score'].mean(), clfs[clf]['score'].std()*2))
-    clfs[clf]['score'] = cross_val_score(clfs[clf]['clf'], x_hair_soul, y.values.ravel(), cv=5)
-    print(clfs[clf]['name'] + " (with hair_soul feature): %0.4f (+/- %0.4f)" % (clfs[clf]['score'].mean(), clfs[clf]['score'].std()*2))
-
-
-# ### Create voting classifier with the best 3 models
-
-# In[ ]:
-
-
-# classifiers using the hair_soul feature
-clfs['vote_hair_soul'] = {'clf': ensemble.VotingClassifier(estimators=[
-            ('svcgrid', clfs['svcgrid']['clf']),
-            ('lrgrid', clfs['lrgrid']['clf']),
-            ('gbc', clfs['gbc']['clf'])
-        ], voting='hard'), 'name': 'VotingClassifierHairSoul'}
-
-# classifiers using the original features
-clfs['vote'] = {'clf': ensemble.VotingClassifier(estimators=[
-            ('svcgrid', clfs['svcgrid']['clf']),
-            ('lrgrid', clfs['lrgrid']['clf']),
-            ('nb', clfs['gbc']['clf'])
-        ], voting='hard'), 'name': 'VotingClassifier'}
-
-
-# ### Fitting classifiers using the whole training set
-# Fitting the voting classifier. I commented out the old code that was used to fit all classifiers to the complete trainingset. I am using the hair_soul artificial feature here.
-
-# In[ ]:
-
-
-#for clf in clfs:
-#    clfs[clf]['clf'].fit(x, y.values.ravel())
-    
-clfs['vote_hair_soul']['clf'] = clfs['vote_hair_soul']['clf'].fit(x_hair_soul, y.values.ravel())
-clfs['vote']['clf'] = clfs['vote']['clf'].fit(x_original, y.values.ravel())
-
-
-# ### Create predictions
-
-# In[ ]:
-
-
-#for clf in clfs:
-#    clfs[clf]['predictions'] = clfs[clf]['clf'].predict(x_test)
-    
-clfs['vote_hair_soul']['predictions'] = clfs['vote_hair_soul']['clf'].predict(x_test_hair_soul)
-clfs['vote']['predictions'] = clfs['vote']['clf'].predict(x_test_original)
-
-
-# ### Create submission file
-
-# In[ ]:
-
-
-#for clf in clfs:
-#    sub = pd.DataFrame(clfs[clf]['predictions'])
-#    pd.concat([testset["id"],sub], axis=1).rename(columns = {0: 'type'}).to_csv("submission_" + clfs[clf]['name'] + ".csv", index=False)
-
-sub = pd.DataFrame(clfs['vote_hair_soul']['predictions'])
-pd.concat([testset["id"],sub], axis=1).rename(columns = {0: 'type'}).to_csv("submission_" + clfs['vote_hair_soul']['name'] + ".csv", index=False)
-
-sub = pd.DataFrame(clfs['vote']['predictions'])
-pd.concat([testset["id"],sub], axis=1).rename(columns = {0: 'type'}).to_csv("submission_" + clfs['vote']['name'] + ".csv", index=False)
-
+# ## Conclusion
+# 
+# In this section we introduced and explored some common bivariate plot types:
+# 
+# * Scatter plots
+# * Hex plots
+# * Stacked bar charts and area charts
+# * Bivariate line charts
+# 
+# In the next section we will move on to exploring another plotting library, `seaborn`, which compliments `pandas` with many more advanced data visualization tools for you to use.
+# 
+# [Click here to move on to the next section, "Plotting with seaborn"](https://www.kaggle.com/residentmario/plotting-with-seaborn/).

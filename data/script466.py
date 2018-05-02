@@ -1,468 +1,352 @@
 
 # coding: utf-8
 
-# 这是我第一次参加kaggle比赛，收获很大，提交了很多次，最后的结果停留在0.12，最近比较忙，不能再集中精力搞kaggle了，写一篇kernels，和大家分享一下经验。
-# 说明：本篇kernel参考了很多其他kernel的代码和经验，稍后会给出相应的链接。
+# ## POKEMON STATS ANALYSIS
+
+# Hello People.....!!
 # 
-# Thanks to:
-# https://www.kaggle.com/pmarcelino/house-prices-advanced-regression-techniques/comprehensive-data-exploration-with-python
+# This is my first Kaggle Notebook and I have tried my best to keep this notebook as simple as possible and I have explained each and every function used thus even a beginner would easily understand this notebook. 
+# This Pokemon Dataset is a very good dataset to begin with and I myself started Analysis with the same. Hope this would help you too.
 # 
-# https://www.kaggle.com/meikegw/house-prices-advanced-regression-techniques/filling-up-missing-values
+# If u want to check a more advanced analysis notebook have a look at my another notebook: [Here][1]
 # 
-# https://www.kaggle.com/apapiu/house-prices-advanced-regression-techniques/regularized-linear-models
+# If u find this notebook useful **Please Upvote**.
+# 
+#   [1]: https://www.kaggle.com/ash316/ipl-analysis-and-visualisations
+
+# ### Let's get started with some Basic Analysis
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-import pandas as pd
-import matplotlib.pyplot as plt
+import pandas as pd   #importing all the important packages
 import numpy as np
-
-from sklearn.linear_model import Lasso
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.grid_search import GridSearchCV
-from sklearn.ensemble import GradientBoostingRegressor
-
-
-# 加载数据到内存
-
-# In[ ]:
-
-
-# 加载数据
-train_data = pd.read_csv("../input/train.csv")
-test_data = pd.read_csv("../input/train.csv")
+import matplotlib.pyplot as plt
+import seaborn as sns
+plt.style.use('fivethirtyeight')
 
 
 # In[ ]:
 
 
-# 定义若干个对数据进行清理的函数，这些函数主要作用在pandas的DataFrame数据类型上
-# 查看数据集属性值得确实情况
-def show_missing(houseprice):
-    missing = houseprice.columns[houseprice.isnull().any()].tolist()
-    return missing
-
-# 查看 categorical 特征的值情况
-def cat_exploration(houseprice, column):
-    print(houseprice[column].value_counts())
-
-# 对数据集中某一列的缺失值进行tia
-def cat_imputation(houseprice, column, value):
-    houseprice.loc[houseprice[column].isnull(), column] = value
-
-
-# 准备工作完事之后，开始对shu'ju'ji
-
-# In[ ]:
-
-
-# LotFrontage
-# check correlation with LotArea
-# print(test_data['LotFrontage'].corr(test_data['LotArea']))  # 0.64
-# print(train_data['LotFrontage'].corr(train_data['LotArea']))  # 0.42
-test_data['SqrtLotArea'] = np.sqrt(test_data['LotArea'])
-train_data['SqrtLotArea'] = np.sqrt(train_data['LotArea'])
-
-# print(test_data['LotFrontage'].corr(test_data['SqrtLotArea']))
-# print(train_data['LotFrontage'].corr(train_data['SqrtLotArea']))
-
-cond = test_data['LotFrontage'].isnull()
-test_data.LotFrontage[cond] = test_data.SqrtLotArea[cond]
-cond = train_data['LotFrontage'].isnull()
-train_data.LotFrontage[cond] = train_data.SqrtLotArea[cond]
-
-del test_data['SqrtLotArea']
-del train_data['SqrtLotArea']
+df =  pd.read_csv('../input/Pokemon.csv')  #read the csv file and save it into a variable
+df.head(n=10)                    #print the first 10 rows of the table
 
 
 # In[ ]:
 
 
-# MSZoning
-# 在test测试集中有缺失, train中没有
-# cat_exploration(test_data, 'MSZoning')
-# print(test_data[test_data['MSZoning'].isnull() == True])
-# MSSubClass  MSZoning
-# print(pd.crosstab(test_data.MSSubClass, test_data.MSZoning))
-# 30:RM 20:RL 70:RM
-test_data.loc[test_data['MSSubClass'] == 20, 'MSZoning'] = 'RL'
-test_data.loc[test_data['MSSubClass'] == 30, 'MSZoning'] = 'RM'
-test_data.loc[test_data['MSSubClass'] == 70, 'MSZoning'] = 'RM'
+df.columns = df.columns.str.upper().str.replace('_', '') #change into upper case
+df.head()
 
 
 # In[ ]:
 
 
-# Alley
-# print(cat_exploration(test_data, 'Alley'))
-# print(cat_exploration(train_data, 'Alley'))
-# Alley这个特征有太多的nans,这里填充None，也可以直接删除，不使用。后面在根据特征的重要性选择特征是，也可以舍去
-cat_imputation(test_data, 'Alley', 'None')
-cat_imputation(train_data, 'Alley', 'None')
+df[df['LEGENDARY']==True].head(5)  #Showing the legendary pokemons
 
 
 # In[ ]:
 
 
-# Utilities
-# 只有test有缺失值, train中没有
-# 并且这个column中值得分布极为不均匀
-# drop
-# print(cat_exploration(test_data, 'Utilities'))
-# print(cat_exploration(train_data, 'Utilities'))
-# print(test_data.loc[test_data['Utilities'].isnull() == True])
-test_data = test_data.drop(['Utilities'], axis=1)
-train_data = train_data.drop(['Utilities'], axis=1)
+df = df.set_index('NAME') #change and set the index to the name attribute
+
+
+# ### CLEANING THE DATAFRAME
+
+# In[ ]:
+
+
+## The index of Mega Pokemons contained extra and unneeded text. Removed all the text before "Mega"  
+df.index = df.index.str.replace(".*(?=Mega)", "")
+df.head(10)
 
 
 # In[ ]:
 
 
-# Exterior1st & Exterior2nd
-# 只在test中出现缺失值(nans only appear in test set)
-# 检查Exterior1st 和 Exterior2nd 是否存在缺失值共现的情况
-# cat_exploration(test_data, 'Exterior1st')
-# cat_exploration(train_data, 'Exterior1st')
-# print(test_data[['Exterior1st', 'Exterior2nd']][test_data['Exterior1st'].isnull() == True])
-# print(pd.crosstab(test_data.Exterior1st, test_data.ExterQual))
-test_data.loc[test_data['Exterior1st'].isnull(), 'Exterior1st'] = 'VinylSd'
-test_data.loc[test_data['Exterior2nd'].isnull(), 'Exterior2nd'] = 'VinylSd'
-
+df=df.drop(['#'],axis=1) #drop the columns with axis=1;axis=0 is for rows
 
 
 # In[ ]:
 
 
-# MasVnrType & MasVnrArea
-# print(test_data[['MasVnrType', 'MasVnrArea']][test_data['MasVnrType'].isnull() == True])
-# print(train_data[['MasVnrType', 'MasVnrArea']][train_data['MasVnrType'].isnull() == True])
-# So the missing values for the "MasVnr..." Variables are in the same rows.
-# cat_exploration(test_data, 'MasVnrType')
-# cat_exploration(train_data, 'MasVnrType')
-cat_imputation(test_data, 'MasVnrType', 'None')
-cat_imputation(train_data, 'MasVnrType', 'None')
-cat_imputation(test_data, 'MasVnrArea', 0.0)
-cat_imputation(train_data, 'MasVnrArea', 0.0)
+print('The columns of the dataset are: ',df.columns) #show the dataframe columns
+print('The shape of the dataframe is: ',df.shape)    #shape of the dataframe
 
 
 # In[ ]:
 
 
-# basement
-# train
-basement_cols = ['BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'BsmtFinSF1', 'BsmtFinSF2']
-# print(train_data[basement_cols][train_data['BsmtQual'].isnull() == True])
-for cols in basement_cols:
-    if 'FinFS' not in cols:
-        cat_imputation(train_data, cols, 'None')
-
-# test
-basement_cols = ['Id', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2']
-# print(test_data[basement_cols][test_data['BsmtCond'].isnull() == True])
-# 其中,有三行只有BsmtCond为NaN,该三行的其他列均有值  580  725  1064
-# print(pd.crosstab(test_data.BsmtCond, test_data.BsmtQual))
-"""
-BsmtQual   Ex  Fa   Gd   TA
-BsmtCond
-Fa          0  14    7   37
-Gd         12   2   30   13
-Po          1   1    0    1
-TA        124  36  553  581
-"""
-test_data.loc[test_data['Id'] == 580, 'BsmtCond'] = 'TA'
-test_data.loc[test_data['Id'] == 725, 'BsmtCond'] = 'TA'
-test_data.loc[test_data['Id'] == 1064, 'BsmtCond'] = 'TA'
-# 除了上述三行之外, 其他行的NaN都是一样的
-for cols in basement_cols:
-    if cols not in 'SF' and cols not in 'Bath':
-        test_data.loc[test_data['BsmtFinSF1'] == 0.0, cols] = 'None'
-for cols in basement_cols:
-    if test_data[cols].dtype == np.object:
-        cat_imputation(test_data, cols, 'None')
-    else:
-        cat_imputation(test_data, cols, 0.0)
-cat_imputation(test_data, 'BsmtFinSF1', '0')
-cat_imputation(test_data, 'BsmtFinSF2', '0')
-cat_imputation(test_data, 'BsmtUnfSF', '0')
-cat_imputation(test_data, 'TotalBsmtSF', '0')
-cat_imputation(test_data, 'BsmtFullBath', '0')
-cat_imputation(test_data, 'BsmtHalfBath', '0')
-
-
-# 对于BsmtQual这个特征，取值有 Ex，Gd，TA，Fa，Po. 从数据的说明中可以看出，这依次是优秀，好，次好，一般，差几个等级，这具有明显的可比较性，可以使用map编码。如下：
-
-# In[ ]:
-
-
-train_data = train_data.replace({'BsmtQual': {'Ex': 5, 'Gd': 4, 'TA': 3, 'Fa': 2, 'Po': 1, np.NaN: 0}})
-test_data = test_data.replace({'BsmtQual': {'Ex': 5, 'Gd': 4, 'TA': 3, 'Fa': 2, 'Po': 1, np.NaN: 0}})
-
-
-# 我感觉，除了BsmtQual这个特征以外，其他几个特征，比如BsmtCond，HeatingQC等都可以尝试类似的编码方式。避免使用one-hot编码。
-
-# In[ ]:
-
-
-# KitchenQual
-# 只在测试集中有缺失值
-# cat_exploration(test_data, 'KitchenQual')
-# cat_exploration(train_data, 'KitchenQual')
-# print(test_data[['KitchenQual', 'KitchenAbvGr']][test_data['KitchenQual'].isnull() == True])
-# print(pd.crosstab(test_data.KitchenQual, test_data.KitchenAbvGr))
-cat_imputation(test_data, 'KitchenQual', 'TA')
+#some values in TYPE2 are empty and thus they have to be filled or deleted
+df['TYPE 2'].fillna(df['TYPE 1'], inplace=True) #fill NaN values in Type2 with corresponding values of Type
 
 
 # In[ ]:
 
 
-# Functional
-# 只在测试集中有缺失值
-# 填充一个最常见的值
-# cat_exploration(test_data, 'Functional')
-cat_imputation(test_data, 'Functional', 'Typ')
+print(df.loc['Bulbasaur']) #retrieves complete row data from index with value Bulbasaur
+print(df.iloc[0]) #retrieves complete row date from index 0 ; integer version of loc
+print(df.ix[0]) #similar to iloc
+print(df.ix['Kakuna']) #similar to loc
+#loc works on labels in the index.
+#iloc works on the positions in the index (so it only takes integers).
+#ix usually tries to behave like loc but falls back to behaving like iloc if the label is not in the index.
+#inoreder to find details about any pokemon, just specify its name
 
 
 # In[ ]:
 
 
-# FireplaceQu & Fireplaces
-# cat_exploration(test_data, 'FireplaceQu')
-# cat_exploration(train_data, 'FireplaceQu')
-# print(test_data['Fireplaces'][test_data['FireplaceQu'].isnull()==True].describe())
-# print(train_data['Fireplaces'][train_data['FireplaceQu'].isnull() == True].describe())
-cat_imputation(test_data, 'FireplaceQu', 'None')
-cat_imputation(train_data, 'FireplaceQu', 'None')
+#filtering pokemons using logical operators
+df[((df['TYPE 1']=='Fire') | (df['TYPE 1']=='Dragon')) & ((df['TYPE 2']=='Dragon') | (df['TYPE 2']=='Fire'))].head(3)
 
 
 # In[ ]:
 
 
-# Garage
-# train set
-garage_cols = ['GarageType', 'GarageQual', 'GarageCond', 'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea']
-# print(train_data[garage_cols][train_data['GarageType'].isnull() == True])
-for cols in garage_cols:
-    if train_data[cols].dtype == np.object:
-        cat_imputation(train_data, cols, 'None')
-    else:
-        cat_imputation(train_data, cols, 0)
-
-# test set
-garage_cols = ['GarageType', 'GarageQual', 'GarageCond', 'GarageYrBlt', 'GarageFinish', 'GarageCars', 'GarageArea']
-# print(test_data[garage_cols][test_data['GarageType'].isnull() == True])
-for cols in garage_cols:
-    if test_data[cols].dtype == np.object:
-        cat_imputation(test_data, cols, 'None')
-    else:
-        cat_imputation(test_data, cols, 0)
+print("MAx HP:",df['HP'].argmax())  #returns the pokemon with highest HP
+print("Max DEFENCE:",(df['DEFENSE']).idxmax()) #similar to argmax()
 
 
 # In[ ]:
 
 
-# PoolQC
-# 不易处理, 并且分布偏差大, drop
-test_data = test_data.drop(['PoolQC'], axis=1)
-train_data = train_data.drop(['PoolQC'], axis=1)
-test_data = test_data.drop(['PoolArea'], axis=1)
-train_data = train_data.drop(['PoolArea'], axis=1)
+df.sort_values('TOTAL',ascending=False).head(3)  #this arranges the pokemons in the descendng order of the Totals.
+#sort_values() is used for sorting and ascending=False is making it in descending order
 
 
 # In[ ]:
 
 
-# Fence
-# cat_exploration(test_data, 'Fence')
-# cat_exploration(train_data, 'Fence')
-cat_imputation(test_data, 'Fence', 'None')
-cat_imputation(train_data, 'Fence', 'None')
+print('The unique  pokemon types are',df['TYPE 1'].unique()) #shows all the unique types in column
+print('The number of unique types are',df['TYPE 1'].nunique()) #shows count of unique values 
 
-# MiscFeature
-cat_imputation(test_data, 'MiscFeature', 'None')
-cat_imputation(train_data, 'MiscFeature', 'None')
-
-# SaleType
-# nans only appear in test set
-# cat_exploration(test_data, 'SaleType')
-cat_imputation(test_data, 'SaleType', 'WD')
-
-# Electrical
-# nans only appear in train set
-# cat_exploration(train_data, 'Electrical')
-cat_imputation(train_data, 'Electrical', 'SBrkr')
-
-
-# 到此为止，我们基本把所有的缺失值都填补完整了，但是还有一列MSSubClass，原始数据类型是int64,我并不认为这一列具有可比性，所以把MSSubClass映射成object
 
 # In[ ]:
 
 
-# convert MSSubClass to object
-train_data = train_data.replace({"MSSubClass": {20: "A", 30: "B", 40: "C", 45: "D", 50: "E",
-                                                60: "F", 70: "G", 75: "H", 80: "I", 85: "J",
-                                                90: "K", 120: "L", 150: "M", 160: "N", 180: "O", 190: "P"}})
-test_data = test_data.replace({"MSSubClass": {20: "A", 30: "B", 40: "C", 45: "D", 50: "E",
-                                              60: "F", 70: "G", 75: "H", 80: "I", 85: "J",
-                                              90: "K", 120: "L", 150: "M", 160: "N", 180: "O", 190: "P"}})
+print(df['TYPE 1'].value_counts(), '\n' ,df['TYPE 2'].value_counts())#count different types of pokemons
+df.groupby(['TYPE 1']).size()  #same as above
+(df['TYPE 1']=='Bug').sum() #counts for a single value
 
 
-# 之后，将所有categorical类型的特征进行one-hot编码。需要注意的是：训练集和测试集中，相同的列可能会有不同的类型需要统一：
+# In[ ]:
+
+
+df_summary = df.describe() #summary of the pokemon dataframe
+df_summary
+
+
+# ## VISUALISATIONS
+
+# ##### The attack distribution for the pokemons across all the genarations
+
+# In[ ]:
+
+
+bins=range(0,200,20) #they act as containers
+plt.hist(df["ATTACK"],bins,histtype="bar",rwidth=1.2,color='#0ff0ff') #hist() is used to plot a histogram
+plt.xlabel('Attack') #set the xlabel name
+plt.ylabel('Count') #set the ylabel name
+plt.plot()
+plt.axvline(df['ATTACK'].mean(),linestyle='dashed',color='red') #draw a vertical line showing the average Attack value
+plt.show()
+
+
+# Above is a Histogram showing the distribution of attacks for the Pokemons. The average value is between 75-77
+
+# ### Fire Vs Water
+
+# In[ ]:
+
+
+fire=df[(df['TYPE 1']=='Fire') | ((df['TYPE 2'])=="Fire")] #fire contains all fire pokemons
+water=df[(df['TYPE 1']=='Water') | ((df['TYPE 2'])=="Water")]  #all water pokemins
+plt.scatter(fire.ATTACK.head(50),fire.DEFENSE.head(50),color='R',label='Fire',marker="*",s=50) #scatter plot
+plt.scatter(water.ATTACK.head(50),water.DEFENSE.head(50),color='B',label="Water",s=25)
+plt.xlabel("Attack")
+plt.ylabel("DEFENCE")
+plt.legend()
+plt.plot()
+fig=plt.gcf()  #get the current figure using .gcf()
+fig.set_size_inches(12,6) #set the size for the figure
+plt.show()
+
+
+# This shows that fire type pokemons have a better attack than water type pokemons but have a lower defence than water type.
+
+# ### Strongest Pokemons By Types
+
+# In[ ]:
+
+
+strong=df.sort_values(by='TOTAL', ascending=False) #sorting the rows in descending order
+strong.drop_duplicates(subset=['TYPE 1'],keep='first') #since the rows are now sorted in descending oredr
+#thus we take the first row for every new type of pokemon i.e the table will check TYPE 1 of every pokemon
+#The first pokemon of that type is the strongest for that type
+#so we just keep the first row
+
+
+# ## Distribution of various pokemon types
+
+# In[ ]:
+
+
+labels = 'Water', 'Normal', 'Grass', 'Bug', 'Psychic', 'Fire', 'Electric', 'Rock', 'Other'
+sizes = [112, 98, 70, 69, 57, 52, 44, 44, 175]
+colors = ['Y', 'B', '#00ff00', 'C', 'R', 'G', 'silver', 'white', 'M']
+explode = (0, 0, 0.1, 0, 0, 0, 0, 0, 0)  # only "explode" the 3rd slice 
+plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=90)
+plt.axis('equal')
+plt.title("Percentage of Different Types of Pokemon")
+plt.plot()
+fig=plt.gcf()
+fig.set_size_inches(7,7)
+plt.show()
+
+
+# ## All stats analysis of the pokemons
+
+# In[ ]:
+
+
+df2=df.drop(['GENERATION','TOTAL'],axis=1)
+sns.boxplot(data=df2)
+plt.ylim(0,300)  #change the scale of y axix
+plt.show()
+
+
+# In[ ]:
+
+
+plt.subplots(figsize = (15,5))
+plt.title('Attack by Type1')
+sns.boxplot(x = "TYPE 1", y = "ATTACK",data = df)
+plt.ylim(0,200)
+plt.show()
+
+
+# #### This shows that the Dragon type pokemons have an edge over the other types as they have a higher attacks compared to the other types. Also since the fire pokemons have lower range of values, but higher attacks, they can be preferred over the grass and water types for attacking.
 # 
 
 # In[ ]:
 
 
-for col in test_data.columns:
-    t1 = test_data[col].dtype
-    t2 = train_data[col].dtype
-    if t1 != t2:
-        print(col, t1, t2)
-"""
-Id object int64
-BsmtFinSF1 object int64
-BsmtFinSF2 float64 int64
-BsmtUnfSF float64 int64
-TotalBsmtSF float64 int64
-BsmtFullBath float64 int64
-BsmtHalfBath float64 int64
-GarageCars float64 int64
-GarageArea float64 int64
-"""
+plt.subplots(figsize = (15,5))
+plt.title('Attack by Type2')
+sns.boxplot(x = "TYPE 2", y = "ATTACK",data=df)
+plt.show()
 
 
 # In[ ]:
 
 
-# convert to type of int64
-c = ['BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF', 'BsmtFullBath', 'BsmtHalfBath']
-for cols in c:
-    tmp_col = test_data[cols].astype(pd.np.float64)
-    tmp_col = pd.DataFrame({cols: tmp_col})
-    del test_data[cols]
-    test_data = pd.concat((test_data, tmp_col), axis=1)
+plt.subplots(figsize = (15,5))
+plt.title('Defence by Type')
+sns.boxplot(x = "TYPE 1", y = "DEFENSE",data = df)
+plt.show()
 
 
-# one-hot编码，pandas  get_dummies
+# This shows that steel type pokemons have the highest defence but normal type pokemons have the lowest defence
 
-# In[ ]:
-
-
-for cols in train_data.columns:
-    if train_data[cols].dtype == np.object:
-        train_data = pd.concat((train_data, pd.get_dummies(train_data[cols], prefix=cols)), axis=1)
-        del train_data[cols]
-
-for cols in test_data.columns:
-    if test_data[cols].dtype == np.object:
-        test_data = pd.concat((test_data, pd.get_dummies(test_data[cols], prefix=cols)), axis=1)
-        del test_data[cols]
-
-
-# 进行one-hot编码后，会出现一种情况就是：某个特征的某一个取值只出现在训练集中，没有出现在测试集中，或者相反，这个时候需要特征对齐
+# ### Now lets see the same stats in violinplot
 
 # In[ ]:
 
 
-# 特征对齐
-col_train = train_data.columns
-col_test = test_data.columns
-for index in col_train:
-    if index in col_test:
-        pass
-    else:
-        del train_data[index]
-
-col_train = train_data.columns
-col_test = test_data.columns
-for index in col_test:
-    if index in col_train:
-        pass
-    else:
-        del test_data[index]
+plt.subplots(figsize = (20,10))
+plt.title('Attack by Type1')
+sns.violinplot(x = "TYPE 1", y = "ATTACK",data = df)
+plt.ylim(0,200)
+plt.show()
 
 
-# 对齐后数据有294个特征，而训练样本只有1460个，相对而言，样本数目偏少。可通过随机森林等算法，对特征做一次初步的选择，取前100即可
+# What the violinplot actually does is it plots according to the density of a region. This means that the parts of the plot where the width is thicker denotes a region with higher density points whereas regions with thinner area show less densely populated points.
 
 # In[ ]:
 
 
-"""
-特征重要性选择
-"""
-etr = RandomForestRegressor(n_estimators=400)
-train_y = train_training_set['SalePrice']
-train_x = train_training_set.drop(['SalePrice', 'Id'], axis=1)
-etr.fit(train_x, train_y)
-# print(etr.feature_importances_)
-imp = etr.feature_importances_
-imp = pd.DataFrame({'feature': train_x.columns, 'score': imp})
-print(imp.sort(['score'], ascending=[0]))  # 按照特征重要性, 进行降序排列, 最重要的特征在最前面
-imp = imp.sort(['score'], ascending=[0])
-imp.to_csv("../feature_importances2.csv", index=False)
+plt.subplots(figsize = (20,10))
+plt.title('Attack by Type1')
+sns.violinplot(x = "TYPE 1", y = "DEFENSE",data = df)
+plt.ylim(0,200)
+plt.show()
 
 
-# 选择出的特征重要性如下：
-# feature	score
-# OverallQual	0.5799000743690015
-# GrLivArea	0.10820875312650209
-# TotalBsmtSF	0.03837705846167602
-# 2ndFlrSF	0.03592784725614217
-# BsmtFinSF1	0.02883734771640305
-# 1stFlrSF	        0.02209390770590623
-# GarageCars	0.01957845181770064
-# GarageArea	0.015546817280099282
-# LotArea	        0.01343009949254447
-# YearBuilt	0.010665744211930665
-# TotRmsAbvGrd	0.007997881761944894
-# YearRemodAdd	0.007490734554926266
-# LotFrontage	0.006723088430274712
-# FullBath	        0.005806831944580276
-# MasVnrArea	0.00546035892325319
-# BsmtUnfSF	0.005047811295259738
-# WoodDeckSF	0.004557271424397398
-# OpenPorchSF	0.00449570144260445
-# OverallCond	0.0043676484943912545
-# BsmtQual_5	0.004270097611559787
+# In[ ]:
+
+
+plt.subplots(figsize = (15,5))
+plt.title('Strongest Genaration')
+sns.violinplot(x = "GENERATION", y = "TOTAL",data = df)
+plt.show()
+
+
+# This shows that generation 3  has the better pokemons
+
+# ### Strong Pokemons By Type
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+top_types=df['TYPE 1'].value_counts()[:10] #take the top 10 Types
+df1=df[df['TYPE 1'].isin(top_types.index)] #take the pokemons of the type with highest numbers, top 10
+sns.swarmplot(x='TYPE 1',y='TOTAL',data=df1,hue='LEGENDARY') # this plot shows the points belonging to individual pokemons
+# It is distributed by Type
+plt.axhline(df1['TOTAL'].mean(),color='red',linestyle='dashed')
+plt.show()
+
+
+#  Legendary Pokemons are mostly taking the top spots in the Strongest Pokemons
 # 
-# 使用GBDT选择出的特征重要性系数和RF相差不大，总体趋势是一样的。
-# 模型选择使用的GBDT，参数是经过很多次调试得到的
+
+# ### Finding any Correlation between the attributes
 
 # In[ ]:
 
 
-gbrt = GradientBoostingRegressor(
-                random_state=1,
-                learning_rate=0.015, 
-                min_samples_split=2,
-                max_features='sqrt',   # 分裂的feature是随机挑选的
-                n_estimators=it,
-                min_samples_leaf=1,
-                subsample=0.2,
-                max_depth=3,
-            )
+plt.figure(figsize=(10,6)) #manage the size of the plot
+sns.heatmap(df.corr(),annot=True) #df.corr() makes a correlation matrix and sns.heatmap is used to show the correlations heatmap
+plt.show()
 
 
-# 目前最好的测试结果是0.12207
+# From the heatmap it can be seen that there is not much correlation between the attributes of the pokemons. The highest we can see is the correlation between Sp.Atk and the Total 
+
+# ### Number of Pokemons by Type And Generation
+
+# ### Type 1
+
+# In[ ]:
+
+
+a=df.groupby(['GENERATION','TYPE 1']).count().reset_index()
+a=a[['GENERATION','TYPE 1','TOTAL']]
+a=a.pivot('GENERATION','TYPE 1','TOTAL')
+a[['Water','Fire','Grass','Dragon','Normal','Rock','Flying','Electric']].plot(color=['b','r','g','#FFA500','brown','#6666ff','#001012','y'],marker='o')
+fig=plt.gcf()
+fig.set_size_inches(12,6)
+plt.show()
+
+
+# We can see that water pokemons had the highest numbers in the 1st Generation. However the number has decreased with passing generations. Similarly Grass type pokemons showed an increase in their numbers till generation 5.
+
+# In[ ]:
+
+
+a=df.groupby(['GENERATION','TYPE 2']).count().reset_index()
+a=a[['GENERATION','TYPE 2','TOTAL']]
+a=a.pivot('GENERATION','TYPE 2','TOTAL')
+a[['Water','Fire','Grass','Dragon','Normal','Rock','Flying','Electric']].plot(color=['b','r','g','#FFA500','brown','#6666ff','#001012','y'],marker='o')
+fig=plt.gcf()
+fig.set_size_inches(12,6)
+plt.show()
+
+
+# This graph shows that the number of Type2 Grass Pokemons has been steadily increasing. The same is the case for the Dragon Type Pokemons. For other Types the trends are somewhat uneven.
+
+# ### Thanks A Lot to Alberto Barradas for this great Dataset.
 # 
-# 
+# Thank You All for reading this notebook. Hope You All Liked It!!!!!!

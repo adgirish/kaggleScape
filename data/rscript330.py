@@ -1,177 +1,127 @@
-"""
-Ref: https://www.kaggle.com/the1owl/surprise-me
-"""
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import numpy as np
-import pandas as pd
-from sklearn import preprocessing
-from sklearn.model_selection import GridSearchCV
-import xgboost as xgb
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# Data wrangling brought to you by the1owl
-# https://www.kaggle.com/the1owl/surprise-me
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-data = {
-    'tra':
-    pd.read_csv('../input/air_visit_data.csv'),
-    'as':
-    pd.read_csv('../input/air_store_info.csv'),
-    'hs':
-    pd.read_csv('../input/hpg_store_info.csv'),
-    'ar':
-    pd.read_csv('../input/air_reserve.csv'),
-    'hr':
-    pd.read_csv('../input/hpg_reserve.csv'),
-    'id':
-    pd.read_csv('../input/store_id_relation.csv'),
-    'tes':
-    pd.read_csv('../input/sample_submission.csv'),
-    'hol':
-    pd.read_csv('../input/date_info.csv').rename(columns={
-        'calendar_date': 'visit_date'
-    })
-}
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+# Any results you write to the current directory are saved as output.
 
-for df in ['ar', 'hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(
-        lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    data[df] = data[df].groupby(
-        ['air_store_id', 'visit_datetime'], as_index=False)[[
-            'reserve_datetime_diff', 'reserve_visitors'
-        ]].sum().rename(columns={
-            'visit_datetime': 'visit_date'
-        })
-    print(data[df].head())
+# MA result from https://www.kaggle.com/paulorzp/log-means-and-medians-to-predict-new-itens-0-546/code
+def read_ma():
+    ma = pd.read_csv("../output/comb8.csv")
+    ma.columns = ['id','unit_sales_ma']
+    ma['unit_sales_ma'] = pd.np.log1p(ma['unit_sales_ma']) # logarithm conversion
+    print("ma", ma.columns, ma.shape)
+    print(ma.head(3))
+    return ma
 
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
-data['tes']['visit_date'] = data['tes']['id'].map(
-    lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(
-    lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
 
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat(
-    [
-        pd.DataFrame({
-            'air_store_id': unique_stores,
-            'dow': [i] * len(unique_stores)
-        }) for i in range(7)
-    ],
-    axis=0,
-    ignore_index=True).reset_index(drop=True)
+def prepare_train_data():
+    print("----- Reading the data -----")
 
-#sure it can be compressed...
-tmp = data['tra'].groupby(
-    ['air_store_id', 'dow'],
-    as_index=False)['visitors'].min().rename(columns={
-        'visitors': 'min_visitors'
-    })
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
-tmp = data['tra'].groupby(
-    ['air_store_id', 'dow'],
-    as_index=False)['visitors'].mean().rename(columns={
-        'visitors': 'mean_visitors'
-    })
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
-tmp = data['tra'].groupby(
-    ['air_store_id', 'dow'],
-    as_index=False)['visitors'].median().rename(columns={
-        'visitors': 'median_visitors'
-    })
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
-tmp = data['tra'].groupby(
-    ['air_store_id', 'dow'],
-    as_index=False)['visitors'].max().rename(columns={
-        'visitors': 'max_visitors'
-    })
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
-tmp = data['tra'].groupby(
-    ['air_store_id', 'dow'],
-    as_index=False)['visitors'].count().rename(columns={
-        'visitors': 'count_observations'
-    })
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
+    train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                            skiprows=range(1, 101688779) #Skip dates before 2017-01-01
+                            )
 
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id'])
-lbl = preprocessing.LabelEncoder()
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
+    print("----- Scale the data -----")
+    train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+    train['unit_sales'] = pd.np.log1p(train['unit_sales']) #logarithm conversion
 
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+    print("----- Reindex the data -----")
+    # creating records for all items, in all markets on all dates
+    # for correct calculation of daily unit sales averages.
+    u_dates = train.date.unique()
+    u_stores = train.store_nbr.unique()
+    u_items = train.item_nbr.unique()
+    train.set_index(["date", "store_nbr", "item_nbr"], inplace=True)
+    train = train.reindex(
+        pd.MultiIndex.from_product(
+            (u_dates, u_stores, u_items),
+            names=["date", "store_nbr", "item_nbr"]
+        )
+    )
 
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date'])
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date'])
+    del u_dates, u_stores, u_items
 
-train = pd.merge(data['tra'], stores, how='left', on=['air_store_id', 'dow'])
-test = pd.merge(data['tes'], stores, how='left', on=['air_store_id', 'dow'])
+    print("----- Fill in missing values -----")
+    # Fill NaNs
+    train.loc[:, "unit_sales"].fillna(0, inplace=True)
+    train.reset_index(inplace=True) # reset index and restoring unique columns
+    lastdate = train.iloc[train.shape[0]-1].date
 
-for df in ['ar', 'hr']:
-    train = pd.merge(
-        train, data[df], how='left', on=['air_store_id', 'visit_date'])
-    test = pd.merge(
-        test, data[df], how='left', on=['air_store_id', 'visit_date'])
+    print("train", train.columns, train.shape)
+    print(train.head(3))
 
-col = [
-    c for c in train
-    if c not in ['id', 'air_store_id', 'visit_date', 'visitors']
-]
-train = train.fillna(-1)
-test = test.fillna(-1)
+    return train, lastdate
 
-# XGB starter template borrowed from @anokas
-# https://www.kaggle.com/anokas/simple-xgboost-starter-0-0655
+def average_dow(train):
+    # Average by dow
+    train["dow"] = train["date"].dt.dayofweek
+    train_mean_dow = train[['store_nbr', 'item_nbr', 'dow', 'unit_sales']].groupby(['store_nbr', 'item_nbr', 'dow']).mean()
+    train_mean_dow.reset_index(inplace=True)
+    train_mean_dow.columns = ['store_nbr', 'item_nbr', 'dow', 'unit_sales_dow']
+    print("train_mean_dow", train_mean_dow.columns, train_mean_dow.shape)
+    print(train_mean_dow.head(3))
 
-print('Binding to float32')
+    train_mean_week = train_mean_dow[['store_nbr', 'item_nbr', 'unit_sales_dow']].groupby(['store_nbr', 'item_nbr']).mean()
+    train_mean_week.reset_index(inplace=True)
+    train_mean_week.columns = ['store_nbr', 'item_nbr', 'unit_sales_week']
+    print("train_mean_week", train_mean_week.columns, train_mean_week.shape)
+    print(train_mean_week.head(3))
 
-for c, dtype in zip(train.columns, train.dtypes):
-    if dtype == np.float64:
-        train[c] = train[c].astype(np.float32)
+    train_mean = pd.merge(train_mean_dow, train_mean_week, on=['store_nbr', 'item_nbr'])
+    print("train_mean", train_mean.columns, train_mean.shape)
+    print(train_mean.head(3))
 
-for c, dtype in zip(test.columns, test.dtypes):
-    if dtype == np.float64:
-        test[c] = test[c].astype(np.float32)
+    # store_nbr  item_nbr  dow  unit_sales_dow  unit_sales_week
+    return train_mean
 
-train_x = train.drop(['air_store_id', 'visit_date', 'visitors'], axis=1)
-train_y = np.log1p(train['visitors'].values)
-print(train_x.shape, train_y.shape)
-test_x = test.drop(['id', 'air_store_id', 'visit_date', 'visitors'], axis=1)
 
-# parameter tuning of xgboost
-# start from default setting
-boost_params = {'eval_metric': 'rmse'}
-xgb0 = xgb.XGBRegressor(
-    max_depth=8,
-    learning_rate=0.01,
-    n_estimators=10000,
-    objective='reg:linear',
-    gamma=0,
-    min_child_weight=1,
-    subsample=1,
-    colsample_bytree=1,
-    scale_pos_weight=1,
-    seed=27,
-    **boost_params)
+def prepare_test_data(ma):
+    # dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
 
-xgb0.fit(train_x, train_y)
-predict_y = xgb0.predict(test_x)
-test['visitors'] = np.expm1(predict_y)
-test[['id', 'visitors']].to_csv(
-    'xgb0_submission.csv', index=False, float_format='%.3f')  # LB0.495
+    # Load test
+    test = pd.read_csv("../input/test.csv", usecols=[0, 1, 2, 3], dtype=dtypes, parse_dates=['date'])
+
+    print("test", test.columns, test.shape)
+    print(test.head(3))
+
+    rs_ma = pd.merge(ma, test, on=['id'])
+    rs_ma["dow"] = rs_ma["date"].dt.dayofweek
+
+    print("rs_ma", rs_ma.columns, rs_ma.shape)
+    print(rs_ma.head(3))
+
+    # id  unit_sales_ma       date  store_nbr  item_nbr  dow
+    return rs_ma
+
+
+def adjust_sub(rs_ma, train_mean):
+    final = pd.merge(rs_ma, train_mean, on=['store_nbr', 'item_nbr', 'dow'], how='left')
+    print("final - v1", final.columns, final.shape)
+    print(final.head(3))
+    #(['id', 'unit_sales_ma', 'date', 'store_nbr', 'item_nbr', 'dow', 'unit_sales_dow', 'unit_sales_week'])
+
+    final['unit_sales'] = final['unit_sales_ma']
+    pos_idx = final['unit_sales_week'] > 0
+    final_pos = final.loc[pos_idx]
+
+    final.loc[pos_idx, 'unit_sales'] = final_pos['unit_sales_ma'] * final_pos['unit_sales_dow'] / final_pos['unit_sales_week']
+    final['unit_sales'] = pd.np.expm1(final['unit_sales']) # restoring unit values
+
+    final[['id','unit_sales']].to_csv('../output/ma_scale_dow.csv.gz', index=False, float_format='%.4f', compression='gzip')
+
+ma = read_ma()
+train, lastdate = prepare_train_data()
+train_mean = average_dow(train)
+rs_ma = prepare_test_data(ma)
+adjust_sub(rs_ma, train_mean)

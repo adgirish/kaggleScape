@@ -1,201 +1,324 @@
 
 # coding: utf-8
 
-# In[33]:
+# **Introduction**
+# 
+# This will be a short exploratory analysis with the goal of becoming more familiar with the 2018 Data Science Bowl dataset and identifying some possible hurdles that could have a negative effect on model performance.
+# 
+# **Contents:**
+# - Importing and processing image data
+# - Looking at the image metadata summary statistics
+# - Plotting image width, height and area distributions
+# - Plotting number of nuclei per image distribution
+# - Plotting images with the most and fewest nuclei
+# - Plotting the smallest and largest nuclei
+# - Plotting a sample of images
+# - Conclusion
+
+# In[2]:
 
 
-__author__ = 'Tilii: https://kaggle.com/tilii7' 
-
+import os
+import sys
+import random
 import warnings
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore')
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    get_ipython().run_line_magic('matplotlib', 'inline')
-    import matplotlib.cm as cm
-    from sklearn.decomposition import PCA
-    from sklearn.manifold import TSNE
+
+import numpy as np
+import pandas as pd
+import math
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set(color_codes=True)
+import cv2
+
+from tqdm import tqdm
+from itertools import chain
+from skimage.io import imread, imshow, imread_collection, concatenate_images
+from skimage.transform import resize
+from skimage.morphology import label
+
+TRAIN_PATH = '../input/stage1_train/'
+TEST_PATH = '../input/stage1_test/'
+
+warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
+seed = 42
+random.seed = seed
+np.random.seed = seed
+
+# Get train and test IDs
+train_ids = next(os.walk(TRAIN_PATH))[1]
+test_ids = next(os.walk(TEST_PATH))[1]
+
+
+# In[3]:
+
+
+# sys.stdout.flush()
+# These lists will be used to store the images.
+imgs = []
+masks = []
+
+# These lists will be used to store the image metadata that will then be used to create
+# pandas dataframes.
+img_data = []
+mask_data = []
+print('Processing images ... ')
+
+# Loop over the training images. tqdm is used to display progress as reading
+# all the images can take about 1 - 2 minutes.
+for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+    path = TRAIN_PATH + id_
+    img = imread(path + '/images/' + id_ + '.png')
     
+    # Get image.
+    imgs.append(img)
+    img_height = img.shape[0]
+    img_width = img.shape[1]
+    img_area = img_width * img_height
+
+    # Initialize counter. There is one mask for each annotated nucleus.
+    nucleus_count = 1
+    
+    # Loop over the mask ids, read the images and gather metadata from them.
+    for mask_file in next(os.walk(path + '/masks/'))[2]:
+        mask = imread(path + '/masks/' + mask_file)
+        masks.append(mask)
+        mask_height = mask.shape[0]
+        mask_width = mask.shape[1]
+        mask_area = mask_width * img_height
+        
+        # Sum and divide by 255 to get the number
+        # of pixels for the nucleus. Masks are grayscale.
+        nucleus_area = (np.sum(mask) / 255)
+        
+        mask_to_img_ratio = nucleus_area / mask_area
+        
+        # Append to masks data list that will be used to create a pandas dataframe.
+        mask_data.append([n, mask_height, mask_width, mask_area, nucleus_area, mask_to_img_ratio])
+        
+        # Increment nucleus count.
+        nucleus_count = nucleus_count + 1
+    
+    # Build image info list that will be used to create dataframe. This is done after the masks loop
+    # because we want to store the number of nuclei per image in the img_data list.
+    img_data.append([img_height, img_width, img_area, nucleus_count])
 
 
-# Simply loading the files without any transformation. If you wish to manipulate the data in any way, it should be done here before doing dimensionality reduction in subsequent steps.
-
-# In[34]:
-
-
-print('\nLoading files ...')
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-X = train.drop(['id', 'target'], axis=1).values
-y = train['target'].values.astype(np.int8)
-target_names = np.unique(y)
-print('\nThere are %d unique target valuess in this dataset:' % (len(target_names)), target_names)
-
-
-# Principal Component Analysis (**[PCA](https://en.wikipedia.org/wiki/Principal_component_analysis)**) identifies the combination of  components (directions in the feature space) that account for the most variance in the data.
-
-# In[35]:
-
-
-n_comp = 20
-# PCA
-print('\nRunning PCA ...')
-pca = PCA(n_components=n_comp, svd_solver='full', random_state=1001)
-X_pca = pca.fit_transform(X)
-print('Explained variance: %.4f' % pca.explained_variance_ratio_.sum())
-
-print('Individual variance contributions:')
-for j in range(n_comp):
-    print(pca.explained_variance_ratio_[j])
-
-
-# Better than 90% of the data is explained by a single principal component. Just a shade under 99% of variance is explained by 15 components, which means that this dataset can be safely reduced to ~15 features.
+# **Create Images Metadata Dataframe**
 # 
-# Here we plot our 0/1 samples on the first two principal components.
+# Create a pandas data frame from the list of image metadata that was created in the loop above. This will make the data easier to manipulate and plot.
+# 
+# After creating the data frame we can take a look at its summary stats along with the first five and last five rows to make sure it looks ok and get familiar with it.
 
-# In[36]:
+# In[4]:
 
 
-colors = ['blue', 'red']
-plt.figure(1, figsize=(10, 10))
+# Create dataframe for images
+df_img = pd.DataFrame(img_data, columns=['height', 'width', 'area', 'nuclei'])
 
-for color, i, target_name in zip(colors, [0, 1], target_names):
-    plt.scatter(X_pca[y == i, 0], X_pca[y == i, 1], color=color, s=1,
-                alpha=.8, label=target_name, marker='.')
-plt.legend(loc='best', shadow=False, scatterpoints=3)
-plt.title(
-        "Scatter plot of the training data projected on the 1st "
-        "and 2nd principal components")
-plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[0] * 100.0))
-plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[1] * 100.0))
 
-plt.savefig('pca-porto-01.png', dpi=150)
+# In[ ]:
+
+
+df_img.describe()
+
+
+# In[ ]:
+
+
+df_img.head()
+
+
+# In[ ]:
+
+
+df_img.tail()
+
+
+# **Create Image Masks Metadata Dataframe**
+# 
+# Let's create another data frame for the masks metadata.
+
+# In[6]:
+
+
+# Create dataframe for masks
+df_mask = pd.DataFrame(mask_data, columns=['img_index', 'height', 'width', 'area', 'nucleus_area', 'mask_to_img_ratio'])
+
+
+# In[ ]:
+
+
+df_mask.describe()
+
+
+# In[ ]:
+
+
+df_mask.head()
+
+
+# In[ ]:
+
+
+df_mask.tail()
+
+
+# **Plot some of the metadata distributions**
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(1, 3, figsize=(10,5))
+width_plt = sns.distplot(df_img['width'].values, ax=ax[0])
+width_plt.set(xlabel='width (px)')
+width_plt.set(ylim=(0, 0.01))
+height_plt = sns.distplot(df_img['height'].values, ax=ax[1])
+height_plt.set(xlabel='height (px)')
+height_plt.set(ylim=(0, 0.015))
+area_plt = sns.distplot(df_img['area'].values)
+area_plt.set(xlabel="area (px)")
+fig.show()
+plt.tight_layout()
+
+
+# The image dimensions do not appear to be equally distributed and have a somewhat bimodal distribution. This issue will need to be addressed before feeding the images to our model. The images could be resized to squares but this will cause images to be squashed either vertically or horizontally and would result in a loss of information. Most of the images look like they are 256x256 so the squashing/stretching might not be an issue. Scaling the smaller images up might be a better option than scaling the larger images down as this would also result in a loss of information. Different strategies should be tried here to see what works best. 
+
+# In[ ]:
+
+
+sns.distplot(df_img['nuclei'].values)
+plt.xlabel("nuclei")
 plt.show()
 
 
-# There is a nice separation between various groups of customers, but not so between 0/1 categories within each group. This is somewhat exaggerated by the fact that "0" points (blue) are plotted first and "1" points (red) are plotted last. There seems to be more red than blue in that image, even though there are >25x "0" points in reality. I'd be grateful if someone knows how to plot this in a way that would not create this misleading impression.
+# The distribution of nuclei (masks) per image appears to be skewed to the right. There is quite a large range in the number of nuclei per image. 
+
+# In[ ]:
+
+
+plt.figure(figsize=(18, 18))
+much_nuclei = df_img['nuclei'].argmax()
+print(much_nuclei)
+plt.grid(None)
+plt.imshow(imgs[much_nuclei])
+
+
+# There are 198 annotated nuclei in this image. It's an interesting structure, possibly some kind of creature!
+
+# In[ ]:
+
+
+plt.figure(figsize=(18, 18))
+not_much_nuclei = df_img['nuclei'].argmin()
+print(df_img['nuclei'].min())
+plt.grid(None)
+plt.imshow(imgs[not_much_nuclei])
+
+
+# There appears to be a lot going on in this image but there are only two annotated nuclei.
+
+# **Nuclei Sizes**
 # 
-# Regardless, 0/1 points are not separated well at all. That means that they will not be easy to classify, which we all know by now.
+# Let's take a look at some differently sized nuclei in the training set. 
 
-# **[t-SNE](https://lvdmaaten.github.io/tsne/)** could potentially lead to better data separation/visualization, because unlike PCA it preserves the local structure of data points. The problem with sklearn implementation of t-SNE is its lack of memory optimization. I am pretty sure that the t-SNE code at the very bottom will lead to memory errors on most personal computers, but I leave it commented out if anyone wants to try.
+# In[ ]:
+
+
+smallest_mask_index = df_mask['mask_to_img_ratio'].argmin()
+
+fig, ax = plt.subplots(1, 2, figsize=(16, 16))
+ax[0].grid(None)
+ax[0].imshow(masks[smallest_mask_index])
+ax[1].grid(None)
+ax[1].imshow(imgs[df_mask.iloc[[smallest_mask_index], [0]].values[0][0]])
+plt.tight_layout()
+
+
+# Wow! This nucleus is either very small or very far away! This makes me concerned about scaling down some of the larger images as some of these small nuclei could become undetectable or a least much more difficult to detect.
+
+# In[ ]:
+
+
+smallest_mask_resized_128 = resize(masks[smallest_mask_index], (128, 128))
+smallest_mask_resized_256 = resize(masks[smallest_mask_index], (256, 256))
+smallest_mask_resized_512 = resize(masks[smallest_mask_index], (512, 512))
+print(np.sum(smallest_mask_resized_128))
+print(np.sum(smallest_mask_resized_256))
+print(np.sum(smallest_mask_resized_512))
+fig, ax = plt.subplots(1, 3, figsize=(14, 14))
+ax[0].grid(None)
+ax[1].grid(None)
+ax[2].grid(None)
+ax[0].imshow(smallest_mask_resized_128)
+ax[1].imshow(smallest_mask_resized_256)
+ax[2].imshow(smallest_mask_resized_512)
+
+
+# As you can see above, the nucleus mask completely disappears when the image is scaled down to 128x128 pixels.
+
+# In[9]:
+
+
+biggest_mask_index = df_mask['mask_to_img_ratio'].argmax()
+biggest_mask_img_index = df_mask.iloc[[biggest_mask_index], [0]].values[0][0]
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 12))
+ax[0].grid(None)
+ax[1].grid(None)
+ax[0].imshow(masks[biggest_mask_index])
+ax[1].imshow(imgs[biggest_mask_img_index])
+plt.tight_layout()
+
+
+# In the image on the right, the nuclei appear to overlap each other. Let's see what the masks look like when stacked on top of each other.
+
+# In[10]:
+
+
+big_nuclei = df_mask.index[df_mask['img_index'] == biggest_mask_img_index]
+plt.figure(figsize=(18, 18))
+for i, mask_id in enumerate(big_nuclei):
+    plt.grid(None)
+    plt.imshow(masks[mask_id], interpolation='none', alpha=0.1)
+
+
+# Whereas the nuclei in the image overlap the masks do not appear to do so. 
+
+# In[14]:
+
+
+sample_nuclei = df_img.sample(36).index
+fig, ax = plt.subplots(9, 4, figsize=(16, 16))
+row = 0
+col = 0
+for i, img_id in enumerate(sample_nuclei):
+    ax[row, col].grid(False)
+    ax[row, col].imshow(imgs[img_id])
+    
+    # Increment col index and reset each time
+    # it gets to 4 to start a new row
+    col = col + 1
+    if(col == 4):
+        col = 0
+    
+    # Increment row index every 4 items
+    if((i + 1) % 4 == 0):
+        row = row + 1
+plt.tight_layout()
+
+
+# There is a wide range of different nuclei sizes and shapes.
+
+# **Conclusion**
 # 
-# Instead, I ran t-SNE using a much faster and more memory-friendly commandline version, which can be found at the link above.
+# There is a large range of image dimensions in the dataset and not all of the images are square. The smallest image was 256x256 and the largest was 1040x1388 pixels. The smallest nucleus was only a few pixels in size and was found in one of the larger images (1000x1000), resizing this image caused the tiny nucleus to disappear so resizing images should be approached with great caution. The size of nuclei vary a lot throughout the images in the training set and is likely to make detection more challenging. 
 # 
-# Here is the output of that exercise:
+# I have only scratched the surface of this dataset and there is much more to explore. A few more things I would like to look into are the distribution of color in the images, identifying different nuclei groups/clusters and taking a look at the test set.
 # 
-# ![](https://i.imgur.com/7EqkUWH.png)
+# *Any suggestions for improvements would be very helpful. Also, please don't hesitate to point out any mistakes I might have made (there are probably a lot of them!).*
 
-# Again, we can see clear separation between different groups of customers. Some groups even have a nice "coffee bean" structure where two subgroups can be identified (gender?). Alas, there is no clear separation between 0/1 categories.
-# 
-# In strictly technical terms, we are screwed :D
-
-# In[37]:
-
-
-# tsne = TSNE(n_components=2, init='pca', random_state=1001, perplexity=30, method='barnes_hut', n_iter=1000, verbose=1)
-# X_tsne = tsne.fit_transform(X) # this will either fail or take a while (most likely overnight)
-
-# plt.figure(2, figsize=(10, 10))
-
-# for color, i, target_name in zip(colors, [0, 1], target_names):
-#     plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], color=color, s=1,
-#                 alpha=.8, label=target_name, marker='.')
-# plt.legend(loc='best', shadow=False, scatterpoints=3)
-# plt.title('Scatter plot of t-SNE embedding')
-# plt.xlabel('X')
-# plt.ylabel('Y')
-
-# plt.savefig('t-SNE-porto-01.png', dpi=150)
-# plt.show()
-
-
-# It was kindly brought up to me that a strange-looking PCA plot above is probably because of categorical variables in this dataset. I leave the original plot up there for posterity.
-# 
-# Let's encode the categorical variables and try again.
-
-# In[38]:
-
-
-from sklearn.preprocessing import MinMaxScaler
-
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
-
-X = train.drop(['id', 'target'], axis=1)
-test.drop(['id'], axis=1, inplace=True)
-n_train = X.shape[0]
-train_test = pd.concat((X, test)).reset_index(drop=True)
-col_to_drop = X.columns[X.columns.str.endswith('_cat')]
-col_to_dummify = X.columns[X.columns.str.endswith('_cat')].astype(str).tolist()
-
-for col in col_to_dummify:
-    dummy = pd.get_dummies(train_test[col].astype('category'))
-    columns = dummy.columns.astype(str).tolist()
-    columns = [col + '_' + w for w in columns]
-    dummy.columns = columns
-    train_test = pd.concat((train_test, dummy), axis=1)
-
-train_test.drop(col_to_dummify, axis=1, inplace=True)
-train_test_scaled, scaler = scale_data(train_test)
-X = np.array(train_test_scaled[:n_train, :])
-test = np.array(train_test_scaled[n_train:, :])
-print('\n Shape of processed train data:', X.shape)
-print(' Shape of processed test data:', test.shape)
-
-
-# Repeating PCA and making another plot of the first two principal components.
-
-# In[39]:
-
-
-print('\nRunning PCA again ...')
-pca = PCA(n_components=n_comp, svd_solver='full', random_state=1001)
-X_pca = pca.fit_transform(X)
-print('Explained variance: %.4f' % pca.explained_variance_ratio_.sum())
-
-print('Individual variance contributions:')
-for j in range(n_comp):
-    print(pca.explained_variance_ratio_[j])
-
-plt.figure(1, figsize=(10, 10))
-
-for color, i, target_name in zip(colors, [0, 1], target_names):
-    plt.scatter(X_pca[y == i, 0], X_pca[y == i, 1], color=color, s=1,
-                alpha=.8, label=target_name, marker='.')
-plt.legend(loc='best', shadow=False, scatterpoints=3)
-plt.title(
-        "Scatter plot of the training data projected on the 1st "
-        "and 2nd principal components")
-plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[0] * 100.0))
-plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[1] * 100.0))
-
-plt.savefig('pca-porto-02.png', dpi=150)
-plt.show()
-
-
-# I think that's a better plot visually and there is a good number of well-defined clusters, but still no clear separation between 0/1 points.
-# 
-# We can red-do the t-SNE plot as well using modified dataset. **Don't try this at home** - it takes 24+ hours using a commandline version of bh_tsne.
-# 
-# Anyway, here is the new t-SNE plot:
-# 
-# ![](https://i.imgur.com/HYR699D.png)
-# 
-# Again, lots of interesting clusters, but blue and red dots overlap for the most part.
-
-# This just happens to be a difficult classification classification problem, so maybe it is not a big surprise that raw data does not contain enough info for t-SNE to distinguish clearly between the classes.
-# 
-# Unfortunately, it is not much better even after training. Below is a t-SNE plot of activations from the last hidden layer (3rd) of a neural network that was trained on this dataset for 80 epochs. If you download the full version (it is roughly 10.5 x 10.5 inches), you may be able to see better that lots of red dots are concetrated in the lower left quadrat (6-9 on a clock dial), and that there are clearly fewer red dots in the upper right quadrant (0-3 on a clock dial). So the network has succeded somewhat in sequestering the red dots, but they still overlap quite a bit with blue ones.
-# 
-# ![](https://i.imgur.com/qilITsO.png)
-# 
-# Later I will have more t-SNE plots from neural network activations in [__this kernel__](https://www.kaggle.com/tilii7/keras-averaging-runs-gini-early-stopping).
+# I adapted various parts of the following kernels while putting this together:
+# - https://www.kaggle.com/jerrythomas/exploratory-analysis
+# - https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277

@@ -1,319 +1,234 @@
-import argparse
-import functools
-from collections import defaultdict
 
-import numpy as np
 import pandas as pd
+import numpy as np
+from sklearn import *
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
+from multiprocessing import * 
+
 import xgboost as xgb
+from lightgbm import LGBMClassifier
+from sklearn.linear_model import LogisticRegression
 
-from nltk.corpus import stopwords
-from collections import Counter
-from sklearn.metrics import log_loss
-from sklearn.cross_validation import train_test_split
-
-from xgboost import XGBClassifier
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
 
-def word_match_share(row, stops=None):
-    q1words = {}
-    q2words = {}
-    for word in row['question1']:
-        if word not in stops:
-            q1words[word] = 1
-    for word in row['question2']:
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
-    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
-    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
-    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
-    return R
 
-def jaccard(row):
-    wic = set(row['question1']).intersection(set(row['question2']))
-    uw = set(row['question1']).union(row['question2'])
-    if len(uw) == 0:
-        uw = [1]
-    return (len(wic) / len(uw))
+# Preprocessing 
+id_test = test['id'].values
+target_train = train['target'].values
 
-def common_words(row):
-    return len(set(row['question1']).intersection(set(row['question2'])))
+train = train.replace(-1, np.nan)
+test = test.replace(-1, np.nan)
 
-def total_unique_words(row):
-    return len(set(row['question1']).union(row['question2']))
+print(train.values.shape, test.values.shape)
 
-def total_unq_words_stop(row, stops):
-    return len([x for x in set(row['question1']).union(row['question2']) if x not in stops])
-
-def wc_diff(row):
-    return abs(len(row['question1']) - len(row['question2']))
-
-def wc_ratio(row):
-    l1 = len(row['question1'])*1.0 
-    l2 = len(row['question2'])
-    if l2 == 0:
-        return np.nan
-    if l1 / l2:
-        return l2 / l1
-    else:
-        return l1 / l2
-
-def wc_diff_unique(row):
-    return abs(len(set(row['question1'])) - len(set(row['question2'])))
-
-def wc_ratio_unique(row):
-    l1 = len(set(row['question1'])) * 1.0
-    l2 = len(set(row['question2']))
-    if l2 == 0:
-        return np.nan
-    if l1 / l2:
-        return l2 / l1
-    else:
-        return l1 / l2
-
-def wc_diff_unique_stop(row, stops=None):
-    return abs(len([x for x in set(row['question1']) if x not in stops]) - len([x for x in set(row['question2']) if x not in stops]))
-
-def wc_ratio_unique_stop(row, stops=None):
-    l1 = len([x for x in set(row['question1']) if x not in stops])*1.0 
-    l2 = len([x for x in set(row['question2']) if x not in stops])
-    if l2 == 0:
-        return np.nan
-    if l1 / l2:
-        return l2 / l1
-    else:
-        return l1 / l2
-
-def same_start_word(row):
-    if not row['question1'] or not row['question2']:
-        return np.nan
-    return int(row['question1'][0] == row['question2'][0])
-
-def char_diff(row):
-    return abs(len(''.join(row['question1'])) - len(''.join(row['question2'])))
-
-def char_ratio(row):
-    l1 = len(''.join(row['question1'])) 
-    l2 = len(''.join(row['question2']))
-    if l2 == 0:
-        return np.nan
-    if l1 / l2:
-        return l2 / l1
-    else:
-        return l1 / l2
-
-def char_diff_unique_stop(row, stops=None):
-    return abs(len(''.join([x for x in set(row['question1']) if x not in stops])) - len(''.join([x for x in set(row['question2']) if x not in stops])))
+d_median = train.median(axis=0)
+d_mean = train.mean(axis=0)
+train = train.fillna(-1)
+one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
 
 
-def get_weight(count, eps=10000, min_count=2):
-    if count < min_count:
-        return 0
-    else:
-        return 1 / (count + eps)
-    
-def tfidf_word_match_share_stops(row, stops=None, weights=None):
-    q1words = {}
-    q2words = {}
-    for word in row['question1']:
-        if word not in stops:
-            q1words[word] = 1
-    for word in row['question2']:
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
-    
-    shared_weights = [weights.get(w, 0) for w in q1words.keys() if w in q2words] + [weights.get(w, 0) for w in q2words.keys() if w in q1words]
-    total_weights = [weights.get(w, 0) for w in q1words] + [weights.get(w, 0) for w in q2words]
-    
-    R = np.sum(shared_weights) / np.sum(total_weights)
-    return R
 
-def tfidf_word_match_share(row, weights=None):
-    q1words = {}
-    q2words = {}
-    for word in row['question1']:
-        q1words[word] = 1
-    for word in row['question2']:
-        q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
-    
-    shared_weights = [weights.get(w, 0) for w in q1words.keys() if w in q2words] + [weights.get(w, 0) for w in q2words.keys() if w in q1words]
-    total_weights = [weights.get(w, 0) for w in q1words] + [weights.get(w, 0) for w in q2words]
-    
-    R = np.sum(shared_weights) / np.sum(total_weights)
-    return R
+## XGB 
+## Thanks to The1owl for providing well tuned parameters for xgb == https://www.kaggle.com/the1owl/forza-baseline/code
 
+def gini(y, pred):
+    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
+    g = 2 * metrics.auc(fpr, tpr) -1
+    return g
 
-def build_features(data, stops, weights):
-    X = pd.DataFrame()
-    f = functools.partial(word_match_share, stops=stops)
-    X['word_match'] = data.apply(f, axis=1, raw=True) #1
+def gini_xgb(pred, y):
+    y = y.get_label()
+    return 'gini', gini(y, pred)
 
-    f = functools.partial(tfidf_word_match_share, weights=weights)
-    X['tfidf_wm'] = data.apply(f, axis=1, raw=True) #2
+# params = {'eta': 0.33, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 'objective': 'binary:logistic', 'eval_metric': 'auc', 'seed': 99, 'silent': True}
+# x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
 
-    f = functools.partial(tfidf_word_match_share_stops, stops=stops, weights=weights)
-    X['tfidf_wm_stops'] = data.apply(f, axis=1, raw=True) #3
+def transform_df(df):
+    df = pd.DataFrame(df)
+    dcol = [c for c in df.columns if c not in ['id','target']]
+    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
+    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
+    for c in dcol:
+        if '_bin' not in c: #standard arithmetic
+            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
+            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
+            #df[c+str('_sq')] = np.power(df[c].values,2).astype(np.float32)
+            #df[c+str('_sqr')] = np.square(df[c].values).astype(np.float32)
+            #df[c+str('_log')] = np.log(np.abs(df[c].values) + 1)
+            #df[c+str('_exp')] = np.exp(df[c].values) - 1
+    for c in one_hot:
+        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
+            for val in one_hot[c]:
+                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
+    return df
 
-    X['jaccard'] = data.apply(jaccard, axis=1, raw=True) #4
-    X['wc_diff'] = data.apply(wc_diff, axis=1, raw=True) #5
-    X['wc_ratio'] = data.apply(wc_ratio, axis=1, raw=True) #6
-    X['wc_diff_unique'] = data.apply(wc_diff_unique, axis=1, raw=True) #7
-    X['wc_ratio_unique'] = data.apply(wc_ratio_unique, axis=1, raw=True) #8
-
-    f = functools.partial(wc_diff_unique_stop, stops=stops)    
-    X['wc_diff_unq_stop'] = data.apply(f, axis=1, raw=True) #9
-    f = functools.partial(wc_ratio_unique_stop, stops=stops)    
-    X['wc_ratio_unique_stop'] = data.apply(f, axis=1, raw=True) #10
-
-    X['same_start'] = data.apply(same_start_word, axis=1, raw=True) #11
-    X['char_diff'] = data.apply(char_diff, axis=1, raw=True) #12
-
-    f = functools.partial(char_diff_unique_stop, stops=stops) 
-    X['char_diff_unq_stop'] = data.apply(f, axis=1, raw=True) #13
-
-#     X['common_words'] = data.apply(common_words, axis=1, raw=True)  #14
-    X['total_unique_words'] = data.apply(total_unique_words, axis=1, raw=True)  #15
-
-    f = functools.partial(total_unq_words_stop, stops=stops)
-    X['total_unq_words_stop'] = data.apply(f, axis=1, raw=True)  #16
-    
-    X['char_ratio'] = data.apply(char_ratio, axis=1, raw=True) #17    
-
-    return X
+def multi_transform(df):
+    print('Init Shape: ', df.shape)
+    p = Pool(cpu_count())
+    df = p.map(transform_df, np.array_split(df, cpu_count()))
+    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+    p.close(); p.join()
+    print('After Shape: ', df.shape)
+    return df
 
 
-def main():
-    parser = argparse.ArgumentParser(description='XGB with Handcrafted Features')
-    parser.add_argument('--save', type=str, default='XGB_leaky',
-                        help='save_file_names')
-    args = parser.parse_args()
+# x1 = multi_transform(x1)
+# x2 = multi_transform(x2)
+lgbtest=test
+# test = multi_transform(test)
 
-    df_train = pd.read_csv('../data/train_features.csv', encoding="ISO-8859-1")
-    X_train_ab = df_train.iloc[:, 2:-1]
-    X_train_ab = X_train_ab.drop('euclidean_distance', axis=1)
-    X_train_ab = X_train_ab.drop('jaccard_distance', axis=1)
+# col = [c for c in x1.columns if c not in ['id','target']]
+# col = [c for c in col if not c.startswith('ps_calc_')]
+# print(x1.values.shape, x2.values.shape)
 
-    df_train = pd.read_csv('../data/train.csv')
-    df_train = df_train.fillna(' ')
+# #remove duplicates just in case
+# tdups = multi_transform(train)
+# dups = tdups[tdups.duplicated(subset=col, keep=False)]
 
-    df_test = pd.read_csv('../data/test.csv')
-    ques = pd.concat([df_train[['question1', 'question2']], \
-        df_test[['question1', 'question2']]], axis=0).reset_index(drop='index')
-    q_dict = defaultdict(set)
-    for i in range(ques.shape[0]):
-            q_dict[ques.question1[i]].add(ques.question2[i])
-            q_dict[ques.question2[i]].add(ques.question1[i])
+# x1 = x1[~(x1['id'].isin(dups['id'].values))]
+# x2 = x2[~(x2['id'].isin(dups['id'].values))]
+# print(x1.values.shape, x2.values.shape)
 
-    def q1_freq(row):
-        return(len(q_dict[row['question1']]))
+# y1 = x1['target']
+# y2 = x2['target']
+# x1 = x1[col]
+# x2 = x2[col]
+
+# watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
+# model = xgb.train(params, xgb.DMatrix(x1, y1), 5000,  watchlist, feval=gini_xgb, maximize=True, verbose_eval=50, early_stopping_rounds=200)
+# test['target'] = model.predict(xgb.DMatrix(test[col]), ntree_limit=model.best_ntree_limit+45)
+# test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
+# test[['id','target']].to_csv('xgb_submission.csv', index=False, float_format='%.5f')
+
+
+#### LGB Ensemble
+##Thanks to Vladimir Demidov == source: https://www.kaggle.com/yekenot/simple-stacker-lb-0-284/code 
+
+test = lgbtest
+train = train.drop(['target','id'], axis = 1)
+test = test.drop(['id'], axis = 1)
+
+col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
+train = train.drop(col_to_drop, axis=1)  
+test = test.drop(col_to_drop, axis=1)  
+
+
+class Ensemble(object):
+    def __init__(self, n_splits, stacker, base_models):
+        self.n_splits = n_splits
+        self.stacker = stacker
+        self.base_models = base_models
+
+    def fit_predict(self, X, y, T):
+        X = np.array(X)
+        y = np.array(y)
+        T = np.array(T)
+
+        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
+
+        S_train = np.zeros((X.shape[0], len(self.base_models)))
+        S_test = np.zeros((T.shape[0], len(self.base_models)))
+        for i, clf in enumerate(self.base_models):
+
+            S_test_i = np.zeros((T.shape[0], self.n_splits))
+
+            for j, (train_idx, test_idx) in enumerate(folds):
+                X_train = X[train_idx]
+                y_train = y[train_idx]
+                X_holdout = X[test_idx]
+#                y_holdout = y[test_idx]
+
+                print ("Fit %s fold %d" % (str(clf).split('(')[0], j+1))
+                clf.fit(X_train, y_train)
+#                cross_score = cross_val_score(clf, X_train, y_train, cv=3, scoring='roc_auc')
+#                print("    cross_score: %.5f" % (cross_score.mean()))
+                y_pred = clf.predict_proba(X_holdout)[:,1]                
+
+                S_train[test_idx, i] = y_pred
+                S_test_i[:, j] = clf.predict_proba(T)[:,1]
+            S_test[:, i] = S_test_i.mean(axis=1)
+
+        results = cross_val_score(self.stacker, S_train, y, cv=3, scoring='roc_auc')
+        print("Stacker score: %.5f" % (results.mean()))
+
+        self.stacker.fit(S_train, y)
+        res = self.stacker.predict_proba(S_test)[:,1]
+        return res
+
         
-    def q2_freq(row):
-        return(len(q_dict[row['question2']]))
+# LightGBM params
+lgb_params = {}
+lgb_params['learning_rate'] = 0.02
+lgb_params['n_estimators'] = 650
+lgb_params['max_bin'] = 10
+lgb_params['subsample'] = 0.8
+lgb_params['subsample_freq'] = 10
+lgb_params['colsample_bytree'] = 0.8   
+lgb_params['min_child_samples'] = 500
+lgb_params['random_state'] = 99
+
+
+lgb_params2 = {}
+lgb_params2['n_estimators'] = 1090
+lgb_params2['learning_rate'] = 0.02
+lgb_params2['colsample_bytree'] = 0.3   
+lgb_params2['subsample'] = 0.7
+lgb_params2['subsample_freq'] = 2
+lgb_params2['num_leaves'] = 16
+lgb_params2['random_state'] = 99
+
+
+lgb_params3 = {}
+lgb_params3['n_estimators'] = 1100
+lgb_params3['max_depth'] = 4
+lgb_params3['learning_rate'] = 0.02
+lgb_params3['random_state'] = 99
+
+# incorporated one more layer of my defined lgb params 
+lgb_params4 = {}
+lgb_params4['n_estimators'] = 1450
+lgb_params4['max_bin'] = 20
+lgb_params3['max_depth'] = 6
+lgb_params4['learning_rate'] = 0.25 # shrinkage_rate
+lgb_params4['boosting_type'] = 'gbdt'
+lgb_params4['objective'] = 'binary'
+lgb_params4['min_data'] = 500         # min_data_in_leaf
+lgb_params4['min_hessian'] = 0.05     # min_sum_hessian_in_leaf
+lgb_params4['verbose'] = 0
+
+lgb_model = LGBMClassifier(**lgb_params)
+
+lgb_model2 = LGBMClassifier(**lgb_params2)
+
+lgb_model3 = LGBMClassifier(**lgb_params3)
+
+lgb_model4 = LGBMClassifier(**lgb_params4)
+
+log_model = LogisticRegression()
+
+stack = Ensemble(n_splits=3,
+        stacker = log_model,
+        base_models = (lgb_model, lgb_model2, lgb_model3, lgb_model4))        
         
-    def q1_q2_intersect(row):
-        return(len(set(q_dict[row['question1']]).intersection(set(q_dict[row['question2']]))))
+y_pred = stack.fit_predict(train, target_train, test)        
 
-    df_train['q1_q2_intersect'] = df_train.apply(q1_q2_intersect, axis=1, raw=True)
-    df_train['q1_freq'] = df_train.apply(q1_freq, axis=1, raw=True)
-    df_train['q2_freq'] = df_train.apply(q2_freq, axis=1, raw=True)
-
-    df_test['q1_q2_intersect'] = df_test.apply(q1_q2_intersect, axis=1, raw=True)
-    df_test['q1_freq'] = df_test.apply(q1_freq, axis=1, raw=True)
-    df_test['q2_freq'] = df_test.apply(q2_freq, axis=1, raw=True)
-
-    test_leaky = df_test.loc[:, ['q1_q2_intersect','q1_freq','q2_freq']]
-    del df_test
-
-    train_leaky = df_train.loc[:, ['q1_q2_intersect','q1_freq','q2_freq']]
-
-    # explore
-    stops = set(stopwords.words("english"))
-
-    df_train['question1'] = df_train['question1'].map(lambda x: str(x).lower().split())
-    df_train['question2'] = df_train['question2'].map(lambda x: str(x).lower().split())
-
-    train_qs = pd.Series(df_train['question1'].tolist() + df_train['question2'].tolist())
-
-    words = [x for y in train_qs for x in y]
-    counts = Counter(words)
-    weights = {word: get_weight(count) for word, count in counts.items()}
-
-    print('Building Features')
-    X_train = build_features(df_train, stops, weights)
-    X_train = pd.concat((X_train, X_train_ab, train_leaky), axis=1)
-    y_train = df_train['is_duplicate'].values
-
-    X_train, X_valid, y_train, y_valid = train_test_split(X_train, y_train, test_size=0.1, random_state=4242)
-
-    #UPDownSampling
-    pos_train = X_train[y_train == 1]
-    neg_train = X_train[y_train == 0]
-    X_train = pd.concat((neg_train, pos_train.iloc[:int(0.8*len(pos_train))], neg_train))
-    y_train = np.array([0] * neg_train.shape[0] + [1] * pos_train.iloc[:int(0.8*len(pos_train))].shape[0] + [0] * neg_train.shape[0])
-    print(np.mean(y_train))
-    del pos_train, neg_train
-
-    pos_valid = X_valid[y_valid == 1]
-    neg_valid = X_valid[y_valid == 0]
-    X_valid = pd.concat((neg_valid, pos_valid.iloc[:int(0.8 * len(pos_valid))], neg_valid))
-    y_valid = np.array([0] * neg_valid.shape[0] + [1] * pos_valid.iloc[:int(0.8 * len(pos_valid))].shape[0] + [0] * neg_valid.shape[0])
-    print(np.mean(y_valid))
-    del pos_valid, neg_valid
+lgbsub = pd.DataFrame()
+lgbsub['id'] = id_test
+lgbsub['target'] = y_pred
+lgbsub.to_csv('lgb_esm_submission.csv', index=False)
 
 
-    params = {}
-    params['objective'] = 'binary:logistic'
-    params['eval_metric'] = 'logloss'
-    params['eta'] = 0.02
-    params['max_depth'] = 7
-    params['subsample'] = 0.6
-    params['base_score'] = 0.2
-    # params['scale_pos_weight'] = 0.2
-
-    d_train = xgb.DMatrix(X_train, label=y_train)
-    d_valid = xgb.DMatrix(X_valid, label=y_valid)
-
-    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-
-    bst = xgb.train(params, d_train, 2500, watchlist, early_stopping_rounds=50, verbose_eval=50)
-    print(log_loss(y_valid, bst.predict(d_valid)))
-    bst.save_model(args.save + '.mdl')
-
-
-    print('Building Test Features')
-    df_test = pd.read_csv('../data/test_features.csv', encoding="ISO-8859-1")
-    x_test_ab = df_test.iloc[:, 2:-1]
-    x_test_ab = x_test_ab.drop('euclidean_distance', axis=1)
-    x_test_ab = x_test_ab.drop('jaccard_distance', axis=1)
-    
-    df_test = pd.read_csv('../data/test.csv')
-    df_test = df_test.fillna(' ')
-
-    df_test['question1'] = df_test['question1'].map(lambda x: str(x).lower().split())
-    df_test['question2'] = df_test['question2'].map(lambda x: str(x).lower().split())
-    
-    x_test = build_features(df_test, stops, weights)
-    x_test = pd.concat((x_test, x_test_ab, test_leaky), axis=1)
-    d_test = xgb.DMatrix(x_test)
-    p_test = bst.predict(d_test)
-    sub = pd.DataFrame()
-    sub['test_id'] = df_test['test_id']
-    sub['is_duplicate'] = p_test
-    sub.to_csv('../predictions/' + args.save + '.csv')
-
-if __name__ == '__main__':
-    main()
-
-
-
-
-
+# df1 = pd.read_csv('lgb_esm_submission.csv')
+# df2 = pd.read_csv('xgb_submission.csv') 
+# df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
+# blend = pd.merge(df1, df2, how='left', on='id')
+# for c in df1.columns:
+#     if c != 'id':
+#         blend[c] = (blend[c]*7)  + (blend[c+'_']*3)
+# blend = blend[df1.columns]
+# blend['target'] = (np.exp(blend['target'].values) - 1.0).clip(0,1)
+# blend.to_csv('final_submission.csv', index=False, float_format='%.6f')
 

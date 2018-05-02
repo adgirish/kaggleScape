@@ -1,251 +1,425 @@
 
 # coding: utf-8
 
-# In[ ]:
+# # Data reading
+
+# In[1]:
 
 
 get_ipython().run_line_magic('matplotlib', 'inline')
+from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
 import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+from nltk.tokenize import wordpunct_tokenize
+from nltk.stem.snowball import EnglishStemmer
+from nltk.stem import WordNetLemmatizer
+from functools import lru_cache
+from tqdm import tqdm as tqdm
+from sklearn.metrics import log_loss
+from sklearn.model_selection import StratifiedKFold
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from scipy import sparse
 
 
-# # Scripty Medals
+# In[2]:
+
+
+train = pd.read_csv('../input/train.csv')
+train.head()
+
+
+# In[4]:
+
+
+train['comment_text'] = train['comment_text'].fillna('nan')
+
+
+# In[5]:
+
+
+test = pd.read_csv('../input/test.csv')
+test.head()
+
+
+# In[6]:
+
+
+test['comment_text'] = test['comment_text'].fillna('nan')
+
+
+# In[7]:
+
+
+submission = pd.read_csv('../input/sample_submission.csv')
+submission.head()
+
+
+# # Basic analysis
+# We have multilabel classification task. So let's check proportion of each label:
+
+# In[8]:
+
+
+for label in ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']:
+    print(label, (train[label] == 1.0).sum() / len(train))
+
+
+# and correlation between target variables (maybe we'l could build some kind of hierarchy classification or something like it).
+
+# In[9]:
+
+
+train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']].corr()
+
+
+# # Text postprocessing
 # 
-# This notebook continues the analysis done in "[Scripty McScriptface the Lazy Kaggler](https://www.kaggle.com/dvasyukova/d/kaggle/meta-kaggle/scripty-mcscriptface-the-lazy-kaggler)".
+# I'll try models with:
+# - text as is
+# - stemmed text
+# - lemmatized text
+
+# In[10]:
+
+
+stemmer = EnglishStemmer()
+
+@lru_cache(30000)
+def stem_word(text):
+    return stemmer.stem(text)
+
+
+lemmatizer = WordNetLemmatizer()
+
+@lru_cache(30000)
+def lemmatize_word(text):
+    return lemmatizer.lemmatize(text)
+
+
+def reduce_text(conversion, text):
+    return " ".join(map(conversion, wordpunct_tokenize(text.lower())))
+
+
+def reduce_texts(conversion, texts):
+    return [reduce_text(conversion, str(text))
+            for text in tqdm(texts)]
+
+
+# In[11]:
+
+
+train['comment_text_stemmed'] = reduce_texts(stem_word, train['comment_text'])
+test['comment_text_stemmed'] = reduce_texts(stem_word, test['comment_text'])
+train['comment_text_lemmatized'] = reduce_texts(lemmatize_word, train['comment_text'])
+test['comment_text_lemmatized'] = reduce_texts(lemmatize_word, test['comment_text'])
+
+
+# In[14]:
+
+
+train.head()
+
+
+# In[15]:
+
+
+test.head()
+
+
+# # Validation
 # 
-# The purpose is to calculate how many competitions medals can be earned by using public script submissions. 
+# Our metric is collumn-average of collumn log_loss values. So let's define custom metric based on binary log loss and define cross-validation function:
+
+# In[16]:
+
+
+def metric(y_true, y_pred):
+    assert y_true.shape == y_pred.shape
+    columns = y_true.shape[1]
+    column_losses = []
+    for i in range(0, columns):
+        column_losses.append(log_loss(y_true[:, i], y_pred[:, i]))
+    return np.array(column_losses).mean()
+
+
+# ## Cross-validation
 # 
-# Criteria for medals: [Kaggle Progression System](https://www.kaggle.com/progression).
+# I don't found quickly a way to stratified split for multilabel case.
 # 
-# ## Load data
+# So I used next way for stratified splitting:
+# 
+# - define ordered list of all possible label combinations. E.g.
+# 
+#     - 0 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=0, "identity_hate"=0]
+#     - 1 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=0]
+#     - 2 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=1]
+# 
+# - for each row replace label combination with combination index 
+# - use StratifiedKFold on this
+# - train and test model by train/test indices from StratifiedKFold
+# 
+# Basic idea is next:
+# - we can present label combination as class for multiclass classification - at least for some cases
+# - we can stratified split by combination indices
+#     - so in each split distribution of combination indices will be similar to full set
+#     - so source label distribution also will be similar
+#     
+# But I don't sure that all my assumpions are fully correct - at least, for common case.
 
-# In[ ]:
-
-
-# Competitions - use only those that award points
-competitions = (pd.read_csv('../input/Competitions.csv')
-                .rename(columns={'Id':'CompetitionId'}))
-competitions = competitions[(competitions.UserRankMultiplier > 0)]
-# Scriptprojects to link scripts to competitions
-scriptprojects = (pd.read_csv('../input/ScriptProjects.csv')
-                    .rename(columns={'Id':'ScriptProjectId'}))
-# Evaluation algorithms
-evaluationalgorithms = (pd.read_csv('../input/EvaluationAlgorithms.csv')
-                          .rename(columns={'Id':'EvaluationAlgorithmId'}))
-competitions = (competitions.merge(scriptprojects[['ScriptProjectId','CompetitionId']],
-                                   on='CompetitionId',how='left')
-                            .merge(evaluationalgorithms[['IsMax','EvaluationAlgorithmId']],
-                                   on='EvaluationAlgorithmId',how='left')
-                            .dropna(subset = ['ScriptProjectId'])
-                            .set_index('CompetitionId'))
-competitions['ScriptProjectId'] = competitions['ScriptProjectId'].astype(int)
-# Fill missing values for two competitions
-competitions.loc[4488,'IsMax'] = True # Flavours of physics
-competitions.loc[4704,'IsMax'] = False # Santa's Stolen Sleigh
-# Teams
-teams = (pd.read_csv('../input/Teams.csv')
-         .rename(columns={'Id':'TeamId'}))
-teams = teams[teams.CompetitionId.isin(competitions.index)]
-teams['Score'] = teams.Score.astype(float)
-# Submissions
-submissions = pd.read_csv('../input/Submissions.csv')
-submissions = submissions.dropna(subset=['Id','DateSubmitted','PublicScore'])
-submissions.DateSubmitted = pd.to_datetime(submissions.DateSubmitted)
-submissions = submissions[(submissions.TeamId.isin(teams.TeamId))
-                         &(submissions.IsAfterDeadline==False)
-                         &(~(submissions.PublicScore.isnull()))]
-submissions = submissions.merge(teams[['TeamId','CompetitionId']],
-                                how='left',on='TeamId')
-submissions = submissions.merge(competitions[['IsMax']],
-                                how='left',left_on='CompetitionId', right_index=True)
+# In[17]:
 
 
-# Find ranks sufficient for medals.
-
-# In[ ]:
-
-
-competitions['Nteams'] = teams.groupby('CompetitionId').size()
-#competitions[['Bronze','Silver','Gold']] = np.zeros((competitions.shape[0],3),dtype=int)
-t = competitions.Nteams
-competitions.loc[t <= 99, 'Bronze'] = np.floor(0.4*t)
-competitions.loc[t <= 99, 'Silver'] = np.floor(0.2*t)
-competitions.loc[t <= 99, 'Gold'] = np.floor(0.1*t)
-
-competitions.loc[(100<=t)&(t<=249),'Bronze'] = np.floor(0.4*t)
-competitions.loc[(100<=t)&(t<=249),'Silver'] = np.floor(0.2*t)
-competitions.loc[(100<=t)&(t<=249), 'Gold'] = 10
-
-competitions.loc[(250<=t)&(t<=999),'Bronze'] = 100
-competitions.loc[(250<=t)&(t<=999),'Silver'] = 50
-competitions.loc[(250<=t)&(t<=999), 'Gold'] = 10 + np.floor(0.002*t)
-
-competitions.loc[t >= 1000, 'Bronze'] = np.floor(0.1*t)
-competitions.loc[t >= 1000, 'Silver'] = np.floor(0.05*t)
-competitions.loc[t >= 1000, 'Gold'] = 10 + np.floor(0.002*t)
-
-#competitions[['Nteams','Gold','Silver','Bronze','Title']]
+def cv(model, X, y, label2binary, n_splits=3):
+    def split(X, y):
+        return StratifiedKFold(n_splits=n_splits).split(X, y)
+    
+    def convert_y(y):
+        new_y = np.zeros([len(y)])
+        for i, val in enumerate(label2binary):
+            idx = (y == val).max(axis=1)
+            new_y[idx] = i
+        return new_y
+    
+    X = np.array(X)
+    y = np.array(y)
+    scores = []
+    for train, test in tqdm(split(X, convert_y(y)), total=n_splits):
+        fitted_model = model(X[train], y[train])
+        scores.append(metric(y[test], fitted_model(X[test])))
+    return np.array(scores)
 
 
-# In[ ]:
+# Let's define possible label combinations:
+
+# In[18]:
 
 
-def isscored(group):
-    # if two or less submissions select all
-    if group.shape[0] <= 2:
-        pd.Series(np.ones(group.shape[0],dtype=np.bool),index=group.index)
-    nsel = group.IsSelected.sum()
-    # if two selected return them
-    if nsel == 2:
-        return group.IsSelected
-    # if need to select more - choose by highest public score
-    toselect = list(group.IsSelected.values.nonzero()[0])
-    ismax = group['IsMax'].iloc[0]
-    ind = np.argsort(group['PublicScore'].values)
-    scored = group.IsSelected.copy()
-    if ismax:
-        ind = ind[::-1]
-    for i in ind:
-        if i not in toselect:
-            toselect.append(i)
-        if len(toselect)==2:
-            break
-    scored.iloc[toselect] = True
-    return scored
-submissions['PublicScore'] = submissions['PublicScore'].astype(float)
-submissions['PrivateScore'] = submissions['PrivateScore'].astype(float)
-scored = submissions.groupby('TeamId',sort=False).apply(isscored)
-scored.index = scored.index.droplevel()
-submissions['IsScored'] = scored
+label2binary = np.array([
+    [0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1, 1],
+    [0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0, 1],
+    [0, 0, 0, 1, 1, 0],
+    [0, 0, 0, 1, 1, 1],
+    [0, 0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0, 1],
+    [0, 0, 1, 0, 1, 0],
+    [0, 0, 1, 0, 1, 1],
+    [0, 0, 1, 1, 0, 0],
+    [0, 0, 1, 1, 0, 1],
+    [0, 0, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1],
+    [0, 1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 1],
+    [0, 1, 0, 0, 1, 0],
+    [0, 1, 0, 0, 1, 1],
+    [0, 1, 0, 1, 0, 0],
+    [0, 1, 0, 1, 0, 1],
+    [0, 1, 0, 1, 1, 0],
+    [0, 1, 0, 1, 1, 1],
+    [0, 1, 1, 0, 0, 0],
+    [0, 1, 1, 0, 0, 1],
+    [0, 1, 1, 0, 1, 0],
+    [0, 1, 1, 0, 1, 1],
+    [0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 0, 1],
+    [0, 1, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 1, 1],
+    [1, 0, 0, 1, 0, 0],
+    [1, 0, 0, 1, 0, 1],
+    [1, 0, 0, 1, 1, 0],
+    [1, 0, 0, 1, 1, 1],
+    [1, 0, 1, 0, 0, 0],
+    [1, 0, 1, 0, 0, 1],
+    [1, 0, 1, 0, 1, 0],
+    [1, 0, 1, 0, 1, 1],
+    [1, 0, 1, 1, 0, 0],
+    [1, 0, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0],
+    [1, 0, 1, 1, 1, 1],
+    [1, 1, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 1],
+    [1, 1, 0, 0, 1, 0],
+    [1, 1, 0, 0, 1, 1],
+    [1, 1, 0, 1, 0, 0],
+    [1, 1, 0, 1, 0, 1],
+    [1, 1, 0, 1, 1, 0],
+    [1, 1, 0, 1, 1, 1],
+    [1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 0, 0, 1],
+    [1, 1, 1, 0, 1, 0],
+    [1, 1, 1, 0, 1, 1],
+    [1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 0, 1],
+    [1, 1, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1, 1],
+])
 
 
-# ## Submit two best public scripts
+# # Dummy model
+# 
+# Let's build dummy model that always return 0.5 and compare score on cross-validation with test-set public leatherboard "All 0.5s Benchmark" (score - 0.693)
 
-# In[ ]:
-
-
-competitions["NScriptSubs"] = (submissions
-                               [~(submissions.SourceScriptVersionId.isnull())]
-                               .groupby('CompetitionId')['Id'].count())
-scriptycomps = competitions[competitions.NScriptSubs > 0].copy()
-scriptycomps.shape
+# In[19]:
 
 
-# In[ ]:
+def dummy_model(X, y):
+    def _predict(X):
+        return np.ones([X.shape[0], 6]) * 0.5
+    
+    return _predict
+
+cv(dummy_model,
+   train['comment_text'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
 
 
-def find_private_score(df):
-    if df.SourceScriptVersionId.isnull().all():
-        # no scripts
-        return
-    ismax = df.IsMax.iloc[0]
-    submit = (df.loc[~(df.SourceScriptVersionId.isnull())]
-                .groupby('SourceScriptVersionId')
-                [['PublicScore','PrivateScore']]
-                .agg('first')
-                .sort_values(by='PublicScore',ascending = not ismax)
-                .iloc[:2])
-    score = submit.PrivateScore.max() if ismax else submit.PrivateScore.min()
-    # Find scores from all teams
-    results = (df.loc[df.IsScored]
-                 .groupby('TeamId')
-                 ['PrivateScore']
-                 .agg('max' if ismax else 'min')
-                 .sort_values(ascending = not ismax)
-                 .values)
-    if ismax:
-        ranktail = (results <  score).nonzero()[0][0] + 1
-        rankhead = (results <= score).nonzero()[0][0] + 1
-    else:
-        ranktail = (results >  score).nonzero()[0][0] + 1
-        rankhead = (results >= score).nonzero()[0][0] + 1
-    rank = int(0.5*(ranktail+rankhead))
-    return pd.Series({'Rank':rank,'Score':score})
+# seems like we built metric correctly, so let's go to baseline building
+# 
+# # Baseline (binary logistic regression over word-based tf-idf)
+# 
+# Let's build model that:
+# - compute tf-idf for given train texts
+# - train 6 logistic regressions (one for each label)
+# - compute tf-idf on test texts
+# - compute probability of "1" class for all 6 regressions
 
-scriptycomps[['Rank','Score']] = (submissions.groupby('CompetitionId')
-                                             .apply(find_private_score))
-# Fix Liberty Mutual result
-scriptycomps.loc[4471,'Rank'] = 150
+# In[20]:
 
 
-# In[ ]:
+def regression_baseline(X, y):
+    tfidf = TfidfVectorizer()
+    X_tfidf = tfidf.fit_transform(X)
+    columns = y.shape[1]
+    regressions = [
+        LogisticRegression().fit(X_tfidf, y[:, i])
+        for i in range(columns)
+    ]
+    
+    def _predict(X):
+        X_tfidf = tfidf.transform(X)
+        predictions = np.zeros([len(X), columns])
+        for i, regression in enumerate(regressions):
+            regression_prediction = regression.predict_proba(X_tfidf)
+            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
+        return predictions
+    
+    return _predict
 
 
-scriptycomps = scriptycomps.sort_values(by='Nteams')
-fig, ax = plt.subplots(figsize=(10,8))
-h = np.arange(len(scriptycomps))
-ax.barh(h, scriptycomps.Nteams,color='white')
-ax.barh(h, scriptycomps.Bronze,color='#F0BA7C')
-ax.barh(h, scriptycomps.Silver,color='#E9E9E9')
-ax.barh(h, scriptycomps.Gold,color='#FFD448')
-ax.set_yticks(h+0.4)
-ax.set_yticklabels(scriptycomps.Title.values);
-ax.set_ylabel('');
-ax.scatter(scriptycomps.Rank,h + 0.4,s=40,c='b',zorder=100,marker='d',alpha=0.6)
-ax.set_xlim(0,1000)
-ax.legend(['Scripty\'s rank','None',
-           'Bronze','Silver','Gold'],loc=4,fontsize='large');
-ax.set_title('Medals from submitting the best public script');
-ax.set_xlabel('Rank')
-ax.set_ylim(0,h.max()+1);
+# Now let's check model on source texts/stemmed texts/lemmatized texts
+
+# In[21]:
 
 
-# ## Submit most popular script versions
-
-# In[ ]:
-
-
-def find_private_score(df):
-    if df.SourceScriptVersionId.isnull().all():
-        # no scripts
-        return
-    ismax = df.IsMax.iloc[0]
-    competition = df.name
-    submit = (df.loc[~(df.SourceScriptVersionId.isnull())
-                     &(df.IsScored)]
-                .groupby('SourceScriptVersionId')
-                .agg({'PublicScore':'first','PrivateScore':'first','Id':'size'})
-                .rename(columns={'Id':'Nteams'})
-                .sort_values(by='Nteams',ascending = False)
-                .iloc[:2])
-    score = submit.PrivateScore.max() if ismax else submit.PrivateScore.min()
-    # Find scores from all teams
-    results = (df.loc[df.IsScored]
-                 .groupby('TeamId')
-                 ['PrivateScore']
-                 .agg('max' if ismax else 'min')
-                 .sort_values(ascending = not ismax)
-                 .values)
-    rank = int(np.median((results==score).nonzero()[0])) + 1
-    return pd.Series({'Rank':rank,'Score':score})
-
-scriptycomps[['Rank','Score']] = (submissions.groupby('CompetitionId')
-                                             .apply(find_private_score))
+cv(regression_baseline,
+   train['comment_text'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
 
 
-# In[ ]:
+# In[22]:
 
 
-#scriptycomps = scriptycomps.sort_values(by='Nteams')
-fig, ax = plt.subplots(figsize=(10,8))
-h = np.arange(len(scriptycomps))
-ax.barh(h, scriptycomps.Nteams,color='white')
-ax.barh(h, scriptycomps.Bronze,color='#F0BA7C')
-ax.barh(h, scriptycomps.Silver,color='#E9E9E9')
-ax.barh(h, scriptycomps.Gold,color='#FFD448')
-ax.set_yticks(h+0.4)
-ax.set_yticklabels(scriptycomps.Title.values);
-ax.set_ylabel('');
-ax.scatter(scriptycomps.Rank,h + 0.4,s=40,c='b',zorder=100,marker='d',alpha=0.6)
-ax.set_xlim(0,1000)
-ax.legend(['Scripty\'s rank','None',
-           'Bronze','Silver','Gold'],loc=4,fontsize='large');
-ax.set_title('Medals from submitting most popular script versions');
-ax.set_xlabel('Rank')
-ax.set_ylim(0,h.max()+1);
+cv(regression_baseline,
+   train['comment_text_stemmed'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
 
 
-# It looks like submitting most popular script versions gets you no medals at all, while chasing the best scoring scripts on public LB could bring some bronze medals. 
+# In[23]:
+
+
+cv(regression_baseline,
+   train['comment_text_lemmatized'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# As you can see - this baseline gives best score on stemmed texts.
+# Anyway - let's  try to add character-level features:
+# 
+# # Regressions over tfidf over words and character n-grams
+# 
+# Let's build model that:
+# - compute tfidf of words of stemmed texts
+# - compute tfidf of character n-grams from source text
+# - train/predict regressions on computed tfidf-s.
+
+# In[25]:
+
+
+def regression_wordchars(X, y):
+    tfidf_word = TfidfVectorizer()
+    X_tfidf_word = tfidf_word.fit_transform(X[:, 1])
+    tfidf_char = TfidfVectorizer(analyzer='char', ngram_range=(1, 3), lowercase=False)
+    X_tfidf_char = tfidf_char.fit_transform(X[:, 0])
+    X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
+    
+    columns = y.shape[1]
+    regressions = [
+        LogisticRegression().fit(X_tfidf, y[:, i])
+        for i in range(columns)
+    ]
+    
+    def _predict(X):
+        X_tfidf_word = tfidf_word.transform(X[:, 1])
+        X_tfidf_char = tfidf_char.transform(X[:, 0])
+        X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
+        predictions = np.zeros([len(X), columns])
+        for i, regression in enumerate(regressions):
+            regression_prediction = regression.predict_proba(X_tfidf)
+            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
+        return predictions
+    
+    return _predict
+
+
+# In[26]:
+
+
+cv(regression_wordchars,
+   train[['comment_text', 'comment_text_stemmed']],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# # Prediction
+# 
+# Let's use our best model - regression over word&chars tfidf to build submission:
+
+# In[27]:
+
+
+get_ipython().run_cell_magic('time', '', "model = regression_wordchars(np.array(train[['comment_text', 'comment_text_stemmed']]),\n                             np.array(train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']]))")
+
+
+# In[28]:
+
+
+get_ipython().run_cell_magic('time', '', "prediction = model(np.array(test[['comment_text', 'comment_text_stemmed']]))")
+
+
+# In[30]:
+
+
+for i, label in enumerate(['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']):
+    submission[label] = prediction[:, i]
+submission.head()
+
+
+# In[29]:
+
+
+submission.to_csv('output.csv', index=None)
+

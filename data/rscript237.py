@@ -1,72 +1,60 @@
-# coding: utf-8
-# Based on notebook by https://www.kaggle.com/shubh24 
-# https://www.kaggle.com/shubh24/pagerank-on-quora-a-basic-implementation
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
-
 import pandas as pd
-import hashlib
-import gc 
+import sklearn
+from sklearn.preprocessing import LabelEncoder
+from sklearn.cross_validation import train_test_split
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier 
+from sklearn.metrics import log_loss
+from sklearn.calibration import CalibratedClassifierCV
 
-df_train = pd.read_csv('../input/train.csv').fillna("")
-df_test = pd.read_csv('../input/test.csv').fillna("")
+# During the Otto Group competition, some Kagglers discussed in the forum about Calibration for Random Forests.
+# It was a brand new functionality of the last scikit-learn version (0.16) : 
+# see : http://scikit-learn.org/stable/whats_new.html
+# Calibration makes that the output of the models gives a true probability of a sample to belong to a particular class
+# For instance, a well calibrated (binary) classifier should classify the samples such that among the samples 
+# to which it gave a predict_proba value close to 0.8, approximately 80% actually belong to the positive class
+# See http://scikit-learn.org/stable/modules/calibration.html for more details
+# This script is an example of how to implement calibration, and check if it boosts performance.
 
+# Import Data
+X = pd.read_csv('../input/train.csv')
+X = X.drop('id', axis=1)
 
-# Generating a graph of Questions and their neighbors
-def generate_qid_graph_table(row):
-    hash_key1 = hashlib.md5(row["question1"].encode('utf-8')).hexdigest()
-    hash_key2 = hashlib.md5(row["question2"].encode('utf-8')).hexdigest()
+# Extract target
+# Encode it to make it manageable by ML algo
+y = X.target.values
+y = LabelEncoder().fit_transform(y)
 
-    qid_graph.setdefault(hash_key1, []).append(hash_key2)
-    qid_graph.setdefault(hash_key2, []).append(hash_key1)
+# Remove target from train, else it's too easy ...
+X = X.drop('target', axis=1)
 
+# Split Train / Test
+Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.20, random_state=36)
 
-qid_graph = {}
-print('Apply to train...')
-df_train.apply(generate_qid_graph_table, axis=1)
-print('Apply to test...')
-df_test.apply(generate_qid_graph_table, axis=1)
+# First, we will train and apply a Random Forest WITHOUT calibration
+# we use a BaggingClassifier to make 5 predictions, and average
+# because that's what CalibratedClassifierCV do behind the scene,
+# and we want to compare things fairly, i.e. be sure that averaging several models 
+# is not what explains a performance difference between no calibration, and calibration.
 
+clf = RandomForestClassifier(n_estimators=50, n_jobs=-1)
+clfbag = BaggingClassifier(clf, n_estimators=5)
+clfbag.fit(Xtrain, ytrain)
+ypreds = clfbag.predict_proba(Xtest)
+print("loss WITHOUT calibration : ", log_loss(ytest, ypreds, eps=1e-15, normalize=True))
 
-def pagerank():
-    MAX_ITER = 20
-    d = 0.85
+# Now, we train and apply a Random Forest WITH calibration
+# In our case, 'isotonic' worked better than default 'sigmoid'
+# This is not always the case. Depending of the case, you have to test the two possibilities
 
-    # Initializing -- every node gets a uniform value!
-    pagerank_dict = {i: 1 / len(qid_graph) for i in qid_graph}
-    num_nodes = len(pagerank_dict)
+clf = RandomForestClassifier(n_estimators=50, n_jobs=-1)
+calibrated_clf = CalibratedClassifierCV(clf, method='isotonic', cv=5)
+calibrated_clf.fit(Xtrain, ytrain)
+ypreds = calibrated_clf.predict_proba(Xtest)
+print("loss WITH calibration : ", log_loss(ytest, ypreds, eps=1e-15, normalize=True))
 
-    for iter in range(0, MAX_ITER):
+print(" ")
+print("Conclusion : in our case, calibration improved performance a lot ! (reduced loss)")
 
-        for node in qid_graph:
-            local_pr = 0
-
-            for neighbor in qid_graph[node]:
-                local_pr += pagerank_dict[neighbor] / len(qid_graph[neighbor])
-
-            pagerank_dict[node] = (1 - d) / num_nodes + d * local_pr
-
-    return pagerank_dict
-
-print('Main PR generator...')
-pagerank_dict = pagerank()
-
-def get_pagerank_value(row):
-    q1 = hashlib.md5(row["question1"].encode('utf-8')).hexdigest()
-    q2 = hashlib.md5(row["question2"].encode('utf-8')).hexdigest()
-    s = pd.Series({
-        "q1_pr": pagerank_dict[q1],
-        "q2_pr": pagerank_dict[q2]
-    })
-    return s
-
-print('Apply to train...')
-pagerank_feats_train = df_train.apply(get_pagerank_value, axis=1)
-print('Writing train...')
-pagerank_feats_train.to_csv("pagerank_train.csv", index=False)
-del df_train
-gc.collect()
-print('Apply to test...')
-pagerank_feats_test = df_test.apply(get_pagerank_value, axis=1)
-print('Writing test...')
-pagerank_feats_test.to_csv("pagerank_test.csv", index=False)
-
+# We can see that we highly improved performance with calibration (loss is reduced) !
+# Using calibration helped our team a lot to climb the leaderboard.
+# In the future competitions, that's for sure, I will not forget to test this trick !

@@ -1,296 +1,555 @@
 
 # coding: utf-8
 
-# I’m recently started to be interested in data analysis and it is my first visualization. 
+# I estimate here what is the "probability" of various outcomes (e.g., adoption, euthanasia) as a function of animal age, gender, and breed.
+# I treat dogs and cats separately in all cases.
+# Probability is in quotation marks because what I calculate is fractions (nr. of animals with given age and outcome / nr. of animals with given age) and not real probabilities.
+# 
+# The breed feature is difficult to work with and I'm not sure I'm doing the best thing. There are mix breeds (e.g., Plott Hound/Boxer - separated with /) and there are breeds with Mix in their names (e.g., German Shepherd Mix).
+# For now, I identified all unique breeds: Plott Hound, Boxer, German Shepherd, and Mix are the 4 unique breeds in the examples above. For each breed entry, I check which unique breeds are present, and use all hits to calculate the fractions. That is, mixed breed animals are counted more than once.
+# 
+# What I found:
+# 
+# - Young dogs (older than a month) are likely adopted.
+# - Old dogs are likely returned to their owner.
+# - Young (older than a month) and old cats are likely adopted.
+# - Old cats are likely euthanised.
+# - Dogs in general are more likely to be returned to their owner than cats.
+# - Some small dogs (e.g., Shin Tzus, Lhasa Apsos, Pekingese) have a very low adoption probability (~10% while the average is ~40%). 
+# - Dogs percieved agressive (Pit Bulls, Bull Dogs, Siberian Huskies, Rottweilers) also have a lower than average adoption probability (~30%).
+# - Neutered males and spayed females are much more likely to get adopted. 
+# 
+# The last point is potentially actionable!
+# 
+# - If it is possible and not too expensive to neuter/spay the incoming animals, their probability of adoption could go from ~5% to ~50% for dogs and more than 60% for cats. 
+# 
+# One of the figures also show that cats with names are 4 times more likely to get adopted. This correlation was intriguing and potentially actionable (give name to cats to boost their adoption rate), but it is explained by the large number of neonatal cats who are unnamed and not adoptable. See Fig. 1 of my blog post for more details:
+# 
+# https://www.kaggle.com/c/shelter-animal-outcomes/forums/t/22538/solution-of-team-kaggle-for-the-paws-no-outcome-datetime-features
+# 
+# Please also check out my other scripts:
+# 
+# The solution of my team (Kaggle for the paws) is described here (git repo is available there):
+# 
+# https://www.kaggle.com/c/shelter-animal-outcomes/forums/t/22538/solution-of-team-kaggle-for-the-paws-no-outcome-datetime-features
+# 
+# I group dog breeds into dog groups (e.g., herding, sporting, toy). This conversion reduces the number of categories and provides new insigths into the problem.
+# 
+# https://www.kaggle.com/andraszsom/shelter-animal-outcomes/dog-breeds-dog-groups
+# 
+# I calculate uncertainty estimates (confidence intervals) for the outcome types. The main question I answer there is this: what is the confidence interval of the true outcome probabilities based on the observed probabilities?   
+# 
+# https://www.kaggle.com/andraszsom/shelter-animal-outcomes/uncertainty-estimates-of-outcome-types
+# 
+# Let's start!
+# 
+
+# Question 1: What fraction of animals end up with the various outcomes as a function of the animal's age?
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-import seaborn as sns
-import time
-import warnings
-warnings.filterwarnings('ignore')
-
-global_temp_country = pd.read_csv('../input/GlobalLandTemperaturesByCountry.csv')
+matplotlib.rcParams.update({'font.size': 12})
 
 
-# ##1) Mapping of average temperatures in the countries
+# Function to convert age to days:
 
 # In[ ]:
 
 
-#Let's remove the duplicated countries (in the analysis, we don't consider the presence of 
-#colonies at this the countries) and countries for which no information about the temperature
+def age_to_days(item):
+    # convert item to list if it is one string
+    if type(item) is str:
+        item = [item]
+    ages_in_days = np.zeros(len(item))
+    for i in range(len(item)):
+        # check if item[i] is str
+        if type(item[i]) is str:
+            if 'day' in item[i]:
+                ages_in_days[i] = int(item[i].split(' ')[0])
+            if 'week' in item[i]:
+                ages_in_days[i] = int(item[i].split(' ')[0])*7
+            if 'month' in item[i]:
+                ages_in_days[i] = int(item[i].split(' ')[0])*30
+            if 'year' in item[i]:
+                ages_in_days[i] = int(item[i].split(' ')[0])*365    
+        else:
+            # item[i] is not a string but a nan
+            ages_in_days[i] = 0
+    return ages_in_days
 
-global_temp_country_clear = global_temp_country[~global_temp_country['Country'].isin(
-    ['Denmark', 'Antarctica', 'France', 'Europe', 'Netherlands',
-     'United Kingdom', 'Africa', 'South America'])]
 
-global_temp_country_clear = global_temp_country_clear.replace(
-   ['Denmark (Europe)', 'France (Europe)', 'Netherlands (Europe)', 'United Kingdom (Europe)'],
-   ['Denmark', 'France', 'Netherlands', 'United Kingdom'])
+# Load the data:
 
-#Let's average temperature for each country
-
-countries = np.unique(global_temp_country_clear['Country'])
-mean_temp = []
-for country in countries:
-    mean_temp.append(global_temp_country_clear[global_temp_country_clear['Country'] == 
-                                               country]['AverageTemperature'].mean())
+# In[ ]:
 
 
+df = pd.read_csv('../input/train.csv', sep=',')
+
+feature = 'AgeuponOutcome'
+feature_values_dog = np.array(df.loc[df['AnimalType'] == 'Dog',feature])
+outcome_dog = np.array(df.loc[df['AnimalType'] == 'Dog','OutcomeType'])
+
+feature_values_cat = np.array(df.loc[df['AnimalType'] == 'Cat',feature])
+outcome_cat = np.array(df.loc[df['AnimalType'] == 'Cat','OutcomeType'])
+
+
+# Calculate the fractions of outcomes:
+
+# In[ ]:
+
+
+ages_dog = age_to_days(feature_values_dog)
+ages_cat = age_to_days(feature_values_cat)
+
+unique_ages = np.unique(np.append(ages_dog,ages_cat))
+unique_outcomes = np.unique(np.append(outcome_dog,outcome_cat))
+
+fractions_cat = np.zeros([len(unique_ages),len(unique_outcomes)])
+fractions_dog = np.zeros([len(unique_ages),len(unique_outcomes)])
+nr_animals_with_age_dog = np.zeros(len(unique_ages))
+nr_animals_with_age_cat = np.zeros(len(unique_ages))
+
+for i in range(len(unique_ages)):
+    for j in range(len(unique_outcomes)):
+        sublist_dog = outcome_dog[ages_dog == unique_ages[i]]  
+        if len(sublist_dog) > 0:
+            fractions_dog[i,j] = 1e0*len(sublist_dog[sublist_dog == unique_outcomes[j]]) / len(sublist_dog)
+        else:
+            fractions_dog[i,j] = 0e0
+        sublist_cat = outcome_cat[ages_cat == unique_ages[i]]        
+        fractions_cat[i,j] = 1e0*len(sublist_cat[sublist_cat == unique_outcomes[j]]) / len(sublist_cat)
+        
+    nr_animals_with_age_dog[i] = len(sublist_dog)
+    nr_animals_with_age_cat[i] = len(sublist_cat)
+
+
+# Figures:
+
+# In[ ]:
+
+
+# nr of animals vs age
+plt.figure(figsize=(10,4))
+plt.subplot(1, 2, 1)
+plt.title('Dog')
+plt.plot(unique_ages,nr_animals_with_age_dog,'+',markersize=10,mew=2)
+plt.plot(unique_ages,nr_animals_with_age_dog)
+plt.xlim([0.7,1e4])
+plt.xscale('log')
+plt.yscale('log')
+plt.xlabel('age [days]')
+plt.ylabel('number of animals in train.csv')
+plt.tight_layout(w_pad=0, h_pad=0)
+
+plt.subplot(1, 2, 2)
+plt.title('Cat')
+plt.plot(unique_ages,nr_animals_with_age_cat,'+',markersize=10,mew=2)
+plt.plot(unique_ages,nr_animals_with_age_cat)
+plt.xlim([0.7,1e4])
+plt.xscale('log')
+plt.yscale('log')
+plt.xlabel('age [days]')
+plt.ylabel('number of animals in train.csv')
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.savefig('age-vs-nr_points.jpg',dpi=150)
+plt.show()
+plt.close()
+
+
+# In[ ]:
+
+
+# fraction of outcomes
+
+ages_for_axis = np.append(unique_ages,age_to_days('20 years'))
+
+left = (ages_for_axis[1:-1] + ages_for_axis[:-2])/2e0
+right = (ages_for_axis[1:-1] + ages_for_axis[2:])/2e0
+width = right-left
+
+plt.figure(figsize=(10,4))
+
+plt.subplot(1, 2, 1)
+plt.title('Dog')
+plt.xlabel('age [days]')
+plt.ylabel('fraction outcomes')
+plt.xscale('log')
+plt.xlim([0.7,1e4])
+plt1 = plt.bar(left, fractions_dog[1:,0], width,color='#5A8F29',edgecolor='none')
+plt2 = plt.bar(left, fractions_dog[1:,1], width,color='k',bottom = np.sum(fractions_dog[1:,:1],axis=1),edgecolor='none')
+plt3 = plt.bar(left, fractions_dog[1:,2], width,color='#FF8F00',bottom = np.sum(fractions_dog[1:,:2],axis=1),edgecolor='none')
+plt4 = plt.bar(left, fractions_dog[1:,3], width,color='#FFF5EE',bottom = np.sum(fractions_dog[1:,:3],axis=1),edgecolor='none')
+plt5 = plt.bar(left, fractions_dog[1:,4], width,color='#3C7DC4',bottom = np.sum(fractions_dog[1:,:4],axis=1),edgecolor='none')
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.tick_params(axis='x', length=6, which='major',width=2)
+plt.tick_params(axis='x', length=4, which='minor',width=1)
+plt.minorticks_on()
+plt.tight_layout(w_pad=0, h_pad=0)
+
+plt.subplot(1, 2, 2)
+plt.title('Cat')
+plt.xlabel('age [days]')
+plt.ylabel('fraction outcomes')
+plt.xscale('log')
+plt.xlim([0.7,1e4])
+plt1 = plt.bar(left, fractions_cat[1:,0], width,color='#5A8F29',edgecolor='none')
+plt2 = plt.bar(left, fractions_cat[1:,1], width,color='k',bottom = np.sum(fractions_cat[1:,:1],axis=1),edgecolor='none')
+plt3 = plt.bar(left, fractions_cat[1:,2], width,color='#FF8F00',bottom = np.sum(fractions_cat[1:,:2],axis=1),edgecolor='none')
+plt4 = plt.bar(left, fractions_cat[1:,3], width,color='#FFF5EE',bottom = np.sum(fractions_cat[1:,:3],axis=1),edgecolor='none')
+plt5 = plt.bar(left, fractions_cat[1:,4], width,color='#3C7DC4',bottom = np.sum(fractions_cat[1:,:4],axis=1),edgecolor='none')
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.tick_params(axis='x', length=6, which='major',width=2)
+plt.tick_params(axis='x', length=4, which='minor',width=1)
+plt.minorticks_on()
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.savefig('age-vs-outcome.jpg',dpi=150)
+plt.show()
+plt.close()
+
+
+# - Young dogs (older than a month) are likely adopted.
+# - Old dogs are likely returned to their owner.
+# - Young (older than a month) and old cats are likely adopted.
+# - Old cats are likely euthanised.
+
+# Question 2: What fraction of animals end up adopted/euthanised etc. vs. their gender?
+
+# In[ ]:
+
+
+feature = 'SexuponOutcome'
+
+feature_values_dog = np.array(df.loc[df['AnimalType'] == 'Dog',feature])
+outcome_dog = np.array(df.loc[df['AnimalType'] == 'Dog','OutcomeType'])
+
+feature_values_cat = np.array(df.loc[df['AnimalType'] == 'Cat',feature])
+outcome_cat = np.array(df.loc[df['AnimalType'] == 'Cat','OutcomeType'])
+
+unique_sexes = np.unique(feature_values_cat)
+unique_outcomes = np.unique(np.append(outcome_dog,outcome_cat))
+
+fractions_cat = np.zeros([len(unique_sexes),len(unique_outcomes)])
+fractions_dog = np.zeros([len(unique_sexes),len(unique_outcomes)])
+nr_animals_with_sex_dog = np.zeros(len(unique_sexes))
+nr_animals_with_sex_cat = np.zeros(len(unique_sexes))
+
+for i in range(len(unique_sexes)):
+    for j in range(len(unique_outcomes)):
+        sublist_dog = outcome_dog[feature_values_dog == unique_sexes[i]]  
+        if len(sublist_dog) > 0:
+            fractions_dog[i,j] = 1e0*len(sublist_dog[sublist_dog == unique_outcomes[j]]) / len(sublist_dog)
+        else:
+            fractions_dog[i,j] = 0e0
+        sublist_cat = outcome_cat[feature_values_cat == unique_sexes[i]]        
+        fractions_cat[i,j] = 1e0*len(sublist_cat[sublist_cat == unique_outcomes[j]]) / len(sublist_cat)
+        
+    nr_animals_with_sex_dog[i] = len(sublist_dog)
+    nr_animals_with_sex_cat[i] = len(sublist_cat)
     
-data = [ dict(
-        type = 'choropleth',
-        locations = countries,
-        z = mean_temp,
-        locationmode = 'country names',
-        text = countries,
-        marker = dict(
-            line = dict(color = 'rgb(0,0,0)', width = 1)),
-            colorbar = dict(autotick = True, tickprefix = '', 
-            title = '# Average\nTemperature,\n°C')
-            )
-       ]
-
-layout = dict(
-    title = 'Average land temperature in countries',
-    geo = dict(
-        showframe = False,
-        showocean = True,
-        oceancolor = 'rgb(0,255,255)',
-        projection = dict(
-        type = 'orthographic',
-            rotation = dict(
-                    lon = 60,
-                    lat = 10),
-        ),
-        lonaxis =  dict(
-                showgrid = True,
-                gridcolor = 'rgb(102, 102, 102)'
-            ),
-        lataxis = dict(
-                showgrid = True,
-                gridcolor = 'rgb(102, 102, 102)'
-                )
-            ),
-        )
-
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='worldmap')
 
 
-# It is possible to notice that Russia has one of the lowest average temperature (like a Canada). The lowest temperature in Greenland (it is distinctly visible on the map). The hottest country in Africa, on the equator. It is quite natural.
+# Plots:
+
+# In[ ]:
+
+
+
+# nr of animals with given sexes
+
+plt.figure(figsize=(10,4))
+plt.subplot(1, 2, 1)
+plt.title('Dog')
+plt.xlim([-0.5,4.5])
+plt.plot(range(len(unique_sexes)),nr_animals_with_sex_dog,'+',markersize=10,mew=2)
+plt.xticks(range(len(unique_sexes)), unique_sexes, rotation=20)
+plt.xlabel('sex')
+plt.ylabel('number of animals in train.csv')
+
+plt.subplot(1, 2, 2)
+plt.title('Cat')
+plt.xlim([-0.5,4.5])
+plt.plot(range(len(unique_sexes)),nr_animals_with_sex_cat,'+',markersize=10,mew=2)
+plt.xticks(range(len(unique_sexes)), unique_sexes, rotation=20)
+plt.xlabel('sex')
+plt.ylabel('number of animals in train.csv')
+plt.tight_layout()
+plt.savefig('gender-vs-nr_points.jpg',dpi=150)
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,4))
+
+plt.subplot(1, 2, 1)
+plt.title('Dog')
+plt.xlabel('sex')
+plt.ylabel('fraction outcomes')
+plt.xlim([-0.5,4.5])
+plt1 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_dog[:,0], 0.5,color='#5A8F29')
+plt2 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_dog[:,1], 0.5,color='k',bottom = np.sum(fractions_dog[:,:1],axis=1))
+plt3 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_dog[:,2], 0.5,color='#FF8F00',bottom = np.sum(fractions_dog[:,:2],axis=1))
+plt4 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_dog[:,3], 0.5,color='#FFF5EE',bottom = np.sum(fractions_dog[:,:3],axis=1))
+plt5 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_dog[:,4], 0.5,color='#3C7DC4',bottom = np.sum(fractions_dog[:,:4],axis=1))
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.xticks(range(len(unique_sexes)), unique_sexes, rotation=20)
+
+plt.subplot(1, 2, 2)
+plt.title('Cat')
+plt.xlabel('sex')
+plt.ylabel('fraction outcomes')
+plt.xlim([-0.5,4.5])
+plt1 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_cat[:,0], 0.5,color='#5A8F29')
+plt2 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_cat[:,1], 0.5,color='k',bottom = np.sum(fractions_cat[:,:1],axis=1))
+plt3 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_cat[:,2], 0.5,color='#FF8F00',bottom = np.sum(fractions_cat[:,:2],axis=1))
+plt4 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_cat[:,3], 0.5,color='#FFF5EE',bottom = np.sum(fractions_cat[:,:3],axis=1))
+plt5 = plt.bar(np.arange(len(unique_sexes))-0.25, fractions_cat[:,4], 0.5,color='#3C7DC4',bottom = np.sum(fractions_cat[:,:4],axis=1))
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.xticks(range(len(unique_sexes)), unique_sexes, rotation=20)
+plt.tight_layout()
+plt.savefig('gender-vs-outcome.jpg',dpi=150)
+plt.show()
+
+
+# - Dogs in general are more likely to be returned to their owner than cats.
+# - Intact males/females are less likely to get adopted.
 # 
-# ##2) Sort the countries by the average temperature and plot Horizontal Bar
+# The last point is potentially actionable. If it is possible and not too expensive to neuter/spay the incoming animals, their probability of adoption would go from ~5% to ~50% for dogs and more than 60% for cats.
+
+# Question 3: breed vs. outcome?
 
 # In[ ]:
 
 
-mean_temp_bar, countries_bar = (list(x) for x in zip(*sorted(zip(mean_temp, countries), 
-                                                             reverse = True)))
-sns.set(font_scale=0.9) 
-f, ax = plt.subplots(figsize=(4.5, 50))
-colors_cw = sns.color_palette('coolwarm', len(countries))
-sns.barplot(mean_temp_bar, countries_bar, palette = colors_cw[::-1])
-Text = ax.set(xlabel='Average temperature', title='Average land temperature in countries')
+# Load data
+feature = 'Breed'
 
+feature_values_dog = df.loc[df['AnimalType'] == 'Dog',feature]
+outcome_dog = df.loc[df['AnimalType'] == 'Dog','OutcomeType']
 
-# ##3) Is there a global warming?
+feature_values_cat = df.loc[df['AnimalType'] == 'Cat',feature]
+outcome_cat = df.loc[df['AnimalType'] == 'Cat','OutcomeType']
 
-# Let's read the data from the "GlobalTemperatures.csv" file, which has a monthly Earth’s temperature  and plot it on the chart.
 
 # In[ ]:
 
 
-global_temp = pd.read_csv("../input/GlobalTemperatures.csv")
+# collect unique breeds:
+# split up mixed breeds and merge the sublists
+feature_values = [i.split('/') for i in feature_values_dog]
+feature_values = [j for i in feature_values for j in i]
+# remove 'Mix' from the strings, but add it as a unique element
+feature_values = [i == i[:-4] if i[-3:] == 'Mix' else i for i in feature_values]
+feature_values = feature_values + ['Mix']
+unique_breeds_dog = np.unique(feature_values)
 
-#Extract the year from a date
-years = np.unique(global_temp['dt'].apply(lambda x: x[:4]))
-mean_temp_world = []
-mean_temp_world_uncertainty = []
+# same for cats
+feature_values = [i.split('/') for i in feature_values_cat]
+feature_values = [j for i in feature_values for j in i]
+# remove 'Mix' from the strings, but add it as a unique element
+feature_values = [i == i[:-4] if i[-3:] == 'Mix' else i for i in feature_values]
+feature_values = feature_values + ['Mix']
+unique_breeds_cat = np.unique(feature_values)
 
-for year in years:
-    mean_temp_world.append(global_temp[global_temp['dt'].apply(
-        lambda x: x[:4]) == year]['LandAverageTemperature'].mean())
-    mean_temp_world_uncertainty.append(global_temp[global_temp['dt'].apply(
-                lambda x: x[:4]) == year]['LandAverageTemperatureUncertainty'].mean())
-
-trace0 = go.Scatter(
-    x = years, 
-    y = np.array(mean_temp_world) + np.array(mean_temp_world_uncertainty),
-    fill= None,
-    mode='lines',
-    name='Uncertainty top',
-    line=dict(
-        color='rgb(0, 255, 255)',
-    )
-)
-trace1 = go.Scatter(
-    x = years, 
-    y = np.array(mean_temp_world) - np.array(mean_temp_world_uncertainty),
-    fill='tonexty',
-    mode='lines',
-    name='Uncertainty bot',
-    line=dict(
-        color='rgb(0, 255, 255)',
-    )
-)
-
-trace2 = go.Scatter(
-    x = years, 
-    y = mean_temp_world,
-    name='Average Temperature',
-    line=dict(
-        color='rgb(199, 121, 093)',
-    )
-)
-data = [trace0, trace1, trace2]
-
-layout = go.Layout(
-    xaxis=dict(title='year'),
-    yaxis=dict(title='Average Temperature, °C'),
-    title='Average land temperature in world',
-    showlegend = False)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
+# unique outcomes:
+unique_outcomes = np.unique(np.append(outcome_dog,outcome_cat))
 
 
-# From the charts you can see, that there is global warming nowadays. The average temperature of Earth surface has the highest value in the last three centuries. The fastest temperature growth occurred in the last 30 years! This worries me, I hope soon humanity will fully switch to ecological sources of energy, that will reduce CO2. If it’s will not happened, we will be in disaster. This charts also have confidence intervals, which shows that measurement of temperature has become more accurate in the last few years.
+# In[ ]:
+
+
+# arrays to fill
+fractions_cat = np.zeros([len(unique_breeds_cat),len(unique_outcomes)])
+fractions_dog = np.zeros([len(unique_breeds_dog),len(unique_outcomes)])
+nr_animals_with_breed_dog = np.zeros(len(unique_breeds_dog))
+nr_animals_with_breed_cat = np.zeros(len(unique_breeds_cat))
+
+for i in range(len(unique_breeds_dog)):
+    sublist_dog = outcome_dog[[unique_breeds_dog[i] in x for x in feature_values_dog]]
+    
+    for j in range(len(unique_outcomes)):
+        if len(sublist_dog) > 0:
+            fractions_dog[i,j] = 1e0*len(sublist_dog[sublist_dog == unique_outcomes[j]]) / len(sublist_dog)
+        else:
+            fractions_dog[i,j] = 0e0
+    nr_animals_with_breed_dog[i] = len(sublist_dog)
+    
+for i in range(len(unique_breeds_cat)):
+    sublist_cat = outcome_cat[[unique_breeds_cat[i] in x for x in feature_values_cat]]
+    for j in range(len(unique_outcomes)):
+        if len(sublist_cat) > 0:
+            fractions_cat[i,j] = 1e0*len(sublist_cat[sublist_cat == unique_outcomes[j]]) / len(sublist_cat)
+        else:
+            fractions_cat[i,j] = 0e0
+    nr_animals_with_breed_cat[i] = len(sublist_cat)
+
+
+# In[ ]:
+
+
+# sort the dog and cat fractions with respect to nr. of animals in train.csv
+indcs_dog = np.argsort(nr_animals_with_breed_dog)
+fractions_dog = fractions_dog[indcs_dog]
+
+indcs_cat = np.argsort(nr_animals_with_breed_cat)
+fractions_cat = fractions_cat[indcs_cat]
+
+
+# In[ ]:
+
+
+# plot figures
+
+plt.figure(figsize=(25,10))
+
+plt.subplot(2,1,1)
+plt.title('Dog')
+plt.yscale('log')
+plt.xticks([])
+plt.xlim([0,len(unique_breeds_dog)])
+plt.plot(range(len(unique_breeds_dog)),nr_animals_with_breed_dog[indcs_dog],'+',markersize=10,mew=2)
+plt.ylabel('number of animals in train.csv')
+plt.tick_params(axis='x', length=6, which='major',width=2)
+plt.tick_params(axis='x', length=4, which='minor',width=1)
+plt.minorticks_on()
+
+plt.subplot(2,1,2)
+plt.xlabel('breed')
+plt.ylabel('fraction outcomes')
+plt.xlim([0,len(unique_breeds_dog)])
+plt.ylim([0,1])
+plt.plot(np.arange(len(unique_breeds_dog)+2),np.zeros(len(unique_breeds_dog)+2)+np.average(fractions_dog[:,0],weights = nr_animals_with_breed_dog[indcs_dog]),'k')
+plt1 = plt.bar(np.arange(len(unique_breeds_dog))-0.5, fractions_dog[:,0], 1,color='#5A8F29',edgecolor='none')
+plt2 = plt.bar(np.arange(len(unique_breeds_dog))-0.5, fractions_dog[:,1], 1,color='k',bottom = np.sum(fractions_dog[:,:1],axis=1),edgecolor='none')
+plt3 = plt.bar(np.arange(len(unique_breeds_dog))-0.5, fractions_dog[:,2], 1,color='#FF8F00',bottom = np.sum(fractions_dog[:,:2],axis=1),edgecolor='none')
+plt4 = plt.bar(np.arange(len(unique_breeds_dog))-0.5, fractions_dog[:,3], 1,color='#FFF5EE',bottom = np.sum(fractions_dog[:,:3],axis=1),edgecolor='none')
+plt5 = plt.bar(np.arange(len(unique_breeds_dog))-0.5, fractions_dog[:,4], 1,color='#3C7DC4',bottom = np.sum(fractions_dog[:,:4],axis=1),edgecolor='none')
+plt.xticks(np.arange(len(unique_breeds_dog))+1, unique_breeds_dog[indcs_dog[1:]], rotation=90)
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.savefig('breed-vs-outcome_dog.jpg',dpi=150)
+plt.show()
+plt.close()
+
+
+plt.figure(figsize=(8,8))
+
+plt.subplot(2,1,1)
+plt.title('Cat')
+plt.yscale('log')
+plt.xticks([])
+plt.xlim([0,len(unique_breeds_cat)])
+plt.plot(range(len(unique_breeds_cat)),nr_animals_with_breed_cat[indcs_cat[0:]],'+',markersize=10,mew=2)
+plt.ylabel('number of animals in train.csv')
+plt.tight_layout(w_pad=0, h_pad=0)
+
+plt.subplot(2,1,2)
+plt.xlabel('breed')
+plt.ylabel('fraction outcomes')
+plt.xlim([0,len(unique_breeds_cat)])
+plt.ylim([0,1])
+plt1 = plt.bar(np.arange(len(unique_breeds_cat))-0.5, fractions_cat[:,0], 1,color='#5A8F29',edgecolor='none')
+plt2 = plt.bar(np.arange(len(unique_breeds_cat))-0.5, fractions_cat[:,1], 1,color='k',bottom = np.sum(fractions_cat[:,:1],axis=1),edgecolor='none')
+plt3 = plt.bar(np.arange(len(unique_breeds_cat))-0.5, fractions_cat[:,2], 1,color='#FF8F00',bottom = np.sum(fractions_cat[:,:2],axis=1),edgecolor='none')
+plt4 = plt.bar(np.arange(len(unique_breeds_cat))-0.5, fractions_cat[:,3], 1,color='#FFF5EE',bottom = np.sum(fractions_cat[:,:3],axis=1),edgecolor='none')
+plt5 = plt.bar(np.arange(len(unique_breeds_cat))-0.5, fractions_cat[:,4], 1,color='#3C7DC4',bottom = np.sum(fractions_cat[:,:4],axis=1),edgecolor='none')
+plt.legend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc=2,fontsize=10)
+plt.xticks(np.arange(len(unique_breeds_cat))+1, unique_breeds_cat[indcs_cat[1:]], rotation=90)
+plt.tick_params(axis='x', length=6, which='major',width=2)
+plt.tick_params(axis='x', length=4, which='minor',width=1)
+plt.minorticks_on()
+plt.tight_layout(w_pad=0, h_pad=0)
+plt.savefig('breed-vs-outcome_cat.jpg',dpi=150)
+plt.show()
+plt.close()
+
+
+# - Some small dogs (e.g., Shin Tzus, Lhasa Apsos, Pekingese) have a very low adoption probability (~10% while the average is ~40%). 
+# - Dogs percieved agressive (Pit Bulls, Bull Dogs, Siberian Huskies, Rottweilers) also have a lower than average adoption probability (~30%).
 # 
-# Let’s look at the chart of annual temperature changes in certain continents (we take into consideration one country per continent and mark Greenland as the coldest place on Earth).
+# The black line on breed-vs-outcome_dog shows the weighted average adoption probability.
 
 # In[ ]:
 
 
-continent = ['Russia', 'United States', 'Niger', 'Greenland', 'Australia', 'Bolivia']
-mean_temp_year_country = [ [0] * len(years[70:]) for i in range(len(continent))]
-j = 0
-for country in continent:
-    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
-    i = 0
-    for year in years[70:]:
-        mean_temp_year_country[j][i] = all_temp_country[all_temp_country['dt'].apply(
-                lambda x: x[:4]) == year]['AverageTemperature'].mean()
-        i +=1
-    j += 1
+# check the name feature vs outcomes
 
-traces = []
-colors = ['rgb(0, 255, 255)', 'rgb(255, 0, 255)', 'rgb(0, 0, 0)',
-          'rgb(255, 0, 0)', 'rgb(0, 255, 0)', 'rgb(0, 0, 255)']
-for i in range(len(continent)):
-    traces.append(go.Scatter(
-        x=years[70:],
-        y=mean_temp_year_country[i],
-        mode='lines',
-        name=continent[i],
-        line=dict(color=colors[i]),
-    ))
+feature = 'Name'
 
-layout = go.Layout(
-    xaxis=dict(title='year'),
-    yaxis=dict(title='Average Temperature, °C'),
-    title='Average land temperature on the continents',)
+feature_values_dog = df.loc[df['AnimalType'] == 'Dog',feature]
+outcome_dog = df.loc[df['AnimalType'] == 'Dog','OutcomeType']
+outcome_dog = np.array(outcome_dog)
 
-fig = go.Figure(data=traces, layout=layout)
-py.iplot(fig)
+feature_values_cat = df.loc[df['AnimalType'] == 'Cat',feature]
+outcome_cat = df.loc[df['AnimalType'] == 'Cat','OutcomeType']
+outcome_cat = np.array(outcome_cat)
+
+# unique outcomes:
+unique_outcomes = np.unique(outcome_dog)
+
+fraction_outcomes_cat = np.zeros([2,5])
+fraction_outcomes_dog = np.zeros([2,5])
 
 
-# We can see that since the 1980 there has been a continuous increase in mean annual temperature for the countries, which we take into consideration (particularly strong dynamics can be seen in the cold countries). The interruption of the temperature values on the chart is due to the lack of observations in these years.
+for i in range(len(unique_outcomes)):
+    cat_noname = np.sum(feature_values_cat[outcome_cat == unique_outcomes[i]].isnull())
+    cat_with_name = np.sum(feature_values_cat[outcome_cat == unique_outcomes[i]].notnull())
+    dog_noname = np.sum(feature_values_dog[outcome_dog == unique_outcomes[i]].isnull())
+    dog_with_name = np.sum(feature_values_dog[outcome_dog == unique_outcomes[i]].notnull())
+    
+    fraction_outcomes_cat[0,i] = 1e0*cat_noname/np.sum(feature_values_cat.isnull())
+    fraction_outcomes_cat[1,i] = 1e0*cat_with_name/np.sum(feature_values_cat.notnull())
 
-# ##4) Dynamic map
+    fraction_outcomes_dog[0,i] = 1e0*dog_noname/np.sum(feature_values_dog.isnull())
+    fraction_outcomes_dog[1,i] = 1e0*dog_with_name/np.sum(feature_values_dog.notnull())
 
-# I've done a visualization in Jupyter, using "plotly". When I tried to upload my research on the Kaggle there was a problem: the "Stream()" function doesn't work with "pyplot.offline". Therefore, to show a dynamically changing is not an easy task.
+# plot
+plt.figure(figsize=(6,4))
+
+plt.subplot(1, 2, 1)
+plt.title('Dog')
+plt.ylabel('fraction outcomes')
+plt.xlim([-0.5,1.5])
+plt1 = plt.bar(np.arange(2)-0.25, fraction_outcomes_dog[:,0], 0.5,color='#5A8F29')
+plt2 = plt.bar(np.arange(2)-0.25, fraction_outcomes_dog[:,1], 0.5,color='k',bottom = np.sum(fraction_outcomes_dog[:,:1],axis=1))
+plt3 = plt.bar(np.arange(2)-0.25, fraction_outcomes_dog[:,2], 0.5,color='#FF8F00',bottom = np.sum(fraction_outcomes_dog[:,:2],axis=1))
+plt4 = plt.bar(np.arange(2)-0.25, fraction_outcomes_dog[:,3], 0.5,color='#FFF5EE',bottom = np.sum(fraction_outcomes_dog[:,:3],axis=1))
+plt5 = plt.bar(np.arange(2)-0.25, fraction_outcomes_dog[:,4], 0.5,color='#3C7DC4',bottom = np.sum(fraction_outcomes_dog[:,:4],axis=1))
+plt.xticks(range(2), ['Unnamed','Named'], rotation=0)
+
+plt.subplot(1, 2, 2)
+plt.title('Cat')
+plt.ylabel('fraction outcomes')
+plt.xlim([-0.5,1.5])
+plt1 = plt.bar(np.arange(2)-0.25, fraction_outcomes_cat[:,0], 0.5,color='#5A8F29')
+plt2 = plt.bar(np.arange(2)-0.25, fraction_outcomes_cat[:,1], 0.5,color='k',bottom = np.sum(fraction_outcomes_cat[:,:1],axis=1))
+plt3 = plt.bar(np.arange(2)-0.25, fraction_outcomes_cat[:,2], 0.5,color='#FF8F00',bottom = np.sum(fraction_outcomes_cat[:,:2],axis=1))
+plt4 = plt.bar(np.arange(2)-0.25, fraction_outcomes_cat[:,3], 0.5,color='#FFF5EE',bottom = np.sum(fraction_outcomes_cat[:,:3],axis=1))
+plt5 = plt.bar(np.arange(2)-0.25, fraction_outcomes_cat[:,4], 0.5,color='#3C7DC4',bottom = np.sum(fraction_outcomes_cat[:,:4],axis=1))
+plt.xticks(range(2), ['Unnamed','Named'], rotation=0)
+
+plt.figlegend([plt1,plt2,plt3,plt4,plt5],unique_outcomes,loc='center',fontsize=12,bbox_to_anchor=(0.5, 1.04),
+          ncol=3, fancybox=True, shadow=True)
+
+plt.tight_layout()
+plt.savefig('outcome-vs-name.jpg',bbox_inches='tight',dpi=150)
+plt.show()
+plt.close()
+
+
+# - Dogs with names are more likely to returned to their owner. 
+# - For both animals, euthanasia is more likely if they are unnamed.
+# - Cats are ~4 times more likely to get adopted if they are named.
 # 
-# Let's create a map that shows changes in average temperature of countries with 10 years period.
-
-# In[ ]:
-
-
-#Extract the year from a date
-years = np.unique(global_temp_country_clear['dt'].apply(lambda x: x[:4]))
-
-#Let's create an array and add the values of average temperatures in the countries every 10 years
-mean_temp_year_country = [ [0] * len(countries) for i in range(len(years[::10]))]
-
-j = 0
-for country in countries:
-    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
-    i = 0
-    for year in years[::10]:
-        mean_temp_year_country[i][j] = all_temp_country[all_temp_country['dt'].apply(
-                lambda x: x[:4]) == year]['AverageTemperature'].mean()
-        i +=1
-    j += 1
-
-
-# In[ ]:
-
-
-#Let's create a Streaming in Plotly (here, alas, does not work, so commented out)
-#stream_tokens = tls.get_credentials_file()['stream_ids']
-#token =  stream_tokens[-1]
-#stream_id = dict(token=token, maxpoints=60)
-
-data = [ dict(
-        type = 'choropleth',
-        locations = countries,
-        z = mean_temp,
-        locationmode = 'country names',
-        text = countries,
-        marker = dict(
-            line = dict(color = 'rgb(0,0,0)', width = 1)),
-            colorbar = dict(autotick = True, tickprefix = '',
-            title = '# Average\nTemperature,\n°C'),
-        #The following line is also needed to create Stream
-        #stream = stream_id
-            )
-       ]
-
-layout = dict(
-    title = 'Average land temperature in countries',
-    geo = dict(
-        showframe = False,
-        showocean = True,
-        oceancolor = 'rgb(0,255,255)',
-        type = 'equirectangular'
-    ),
-)
-
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='world_temp_map')
-
-
-# It’s a pity, but here you can only see a static map. On the dynamic map we would be seen that the European countries  started to measure temperature much more earlier than another countries. Perhaps this is due to more rapid economic development of the European countries in the 18th century. Russia and the United States began to measure the temperature only a half-century later.
-
-# In[ ]:
-
-
-#Let's run a Stream
-
-"""s = py.Stream(stream_id=token)
-i = 0
-s.open()
-while True:
-    ye = years[::10]
-    s.write(dict(z = mean_temp_year_country[i]), dict(
-            title = 'Average land temperature in countries.   Year: {0}'.format(ye[i])), validate=False)
-    time.sleep(1)
-    i += 1
-    if i == len(ye):
-        i = 0
-s.close()"""
-
-
-# ##The results
-
-# During my research it was found that there has been a global increase trend in temperature, particularly over the last 30 years. This is due to the violent activities of a humankind. In more developed countries the temperature began to register much earlier. Over time the accuracy of the observations is increased, that is quite natural. Mankind must reflect and take all necessary remedies to reduce emissions of greenhouse gases in the atmosphere. This work was entirely done using python and "plotly". I had received practical skills and knowledge in python and in awesome library for data visualisation.
+# The last point is explained by the large number of neonatal cats which are unnamed and not adoptable, thus this correlation is not actionable. For more details, see Fig. 1 of my blog post:
+# 
+# https://andraszsom.wordpress.com/2016/07/27/kaggle-for-the-paws/

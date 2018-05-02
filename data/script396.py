@@ -1,377 +1,757 @@
 
 # coding: utf-8
 
-# # Type 1 clustering
-# 
-# I want to understand what kind of images we have acording to the standard procedure, for example described [here](http://www.gfmer.ch/ccdc/pdf/module5.pdf). Namely,
-# do we have images :
-# 
-# - native cervix
-# - acetic acid
-# - lugol iodine
-# 
-# of the same patient ?
-#  
-# **Edit**: Clustering method updated
-# 
-
 # In[ ]:
 
 
-import os
-from glob import glob
+#changes:
+#optimizing Ridge and applying lightgbm
+#using thread and gc to optimize memory
+#reference from great notebook of Peter
+import time
+start_time = time.time()
 
+SUBMIT_MODE = True
+
+
+import pandas as pd
 import numpy as np
+import time
+import gc
+import string
+import re
 
-TRAIN_DATA = "../input/train"
-type_1_files = glob(os.path.join(TRAIN_DATA, "Type_1", "*.jpg"))
-type_1_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_1"))+1:-4] for s in type_1_files])
-type_2_files = glob(os.path.join(TRAIN_DATA, "Type_2", "*.jpg"))
-type_2_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_2"))+1:-4] for s in type_2_files])
-type_3_files = glob(os.path.join(TRAIN_DATA, "Type_3", "*.jpg"))
-type_3_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_3"))+1:-4] for s in type_3_files])
+from nltk.corpus import stopwords
 
-print("Train data")
-print(len(type_1_files), len(type_2_files), len(type_3_files))
-print("Type 1", type_1_ids[:10])
-print("Type 2", type_2_ids[:10])
-print("Type 3", type_3_ids[:10])
+from scipy.sparse import csr_matrix, hstack
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_selection.univariate_selection import SelectKBest, f_regression
+from sklearn.preprocessing import LabelBinarizer
 
-ADDITIONAL_DATA = "../input/additional"
-additional_type_1_files = glob(os.path.join(ADDITIONAL_DATA, "Type_1", "*.jpg"))
-additional_type_1_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_1"))+1:-4] for s in additional_type_1_files])
-additional_type_2_files = glob(os.path.join(ADDITIONAL_DATA, "Type_2", "*.jpg"))
-additional_type_2_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_2"))+1:-4] for s in additional_type_2_files])
-additional_type_3_files = glob(os.path.join(ADDITIONAL_DATA, "Type_3", "*.jpg"))
-additional_type_3_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_3"))+1:-4] for s in additional_type_3_files])
+import wordbatch
+from wordbatch.extractors import WordBag
+from wordbatch.models import FM_FTRL
 
-print("Additional data")
-print(len(additional_type_1_files), len(additional_type_2_files), len(additional_type_2_files))
-print("Type 1", additional_type_1_ids[:10])
-print("Type 2", additional_type_2_ids[:10])
-print("Type 3", additional_type_3_ids[:10])
-
-
-
-def get_filename(image_id, image_type):
-    """
-    Method to get image file path from its id and type   
-    """
-    if image_type == "Type_1" or         image_type == "Type_2" or         image_type == "Type_3":
-        data_path = os.path.join(TRAIN_DATA, image_type)
-    elif image_type == "Test":
-        data_path = TEST_DATA
-    elif image_type == "AType_1" or           image_type == "AType_2" or           image_type == "AType_3":
-        data_path = os.path.join(ADDITIONAL_DATA, image_type[1:])
-    else:
-        raise Exception("Image type '%s' is not recognized" % image_type)
-
-    ext = 'jpg'
-    return os.path.join(data_path, "{}.{}".format(image_id, ext))
-
-
-def get_image_data(image_id, image_type):
-    """
-    Method to get image data as np.array specifying image id and type
-    """
-    fname = get_filename(image_id, image_type)
-    img = cv2.imread(fname)
-    assert img is not None, "Failed to read image : %s, %s" % (image_id, image_type)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return img
-
-
-import matplotlib.pylab as plt
-
-def plt_st(l1,l2):
-    plt.figure(figsize=(l1,l2))
-
-
-# Idea is to use clustering on images of one type to group data
-
-# In[ ]:
-
-
-def compute_histogram(img, hist_size=100):
-    hist = cv2.calcHist([img], [0], mask=None, histSize=[hist_size], ranges=(0, 255))
-    hist = cv2.normalize(hist, dst=hist)
-    return hist
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import Ridge
+from sklearn.naive_bayes import MultinomialNB
+import lightgbm as lgb
 
 
 # In[ ]:
 
 
-type_ids=(type_1_ids, additional_type_1_ids)
-image_types = ["Type_1", "AType_1"]
-ll = [int(len(ids)) for ids in type_ids]
-
-id_type_list = []
-for ids, image_type in zip(type_ids, image_types):
-    for image_id in ids:
-        id_type_list.append((image_id, image_type))
-
-
-# In[ ]:
-
-
-print("Total number of images: ", len(id_type_list))
-# Find empty images:
-empty_images = []
-for image_id, image_type in id_type_list:
-    size = os.path.getsize(get_filename(image_id, image_type))
-    if size == 0:
-        empty_images.append((image_id, image_type))
-print("Number of empty images: ", len(empty_images))
+def rmse(predicted, actual):
+    return np.sqrt(((predicted - actual) ** 2).mean())
+def split_cat(text):
+    try:
+        return text.split("/")
+    except:
+        return ("No Label", "No Label", "No Label")
 
 
 # In[ ]:
 
 
-# Remove empty images from id_type_list
-for image_id, image_type in empty_images:
-    id_type_list.remove((image_id, image_type))
+class TargetEncoder:
+    # Adapted from https://www.kaggle.com/ogrellier/python-target-encoding-for-categorical-features
+    def __repr__(self):
+        return 'TargetEncoder'
+
+    def __init__(self, cols, smoothing=1, min_samples_leaf=1, noise_level=0, keep_original=False):
+        self.cols = cols
+        self.smoothing = smoothing
+        self.min_samples_leaf = min_samples_leaf
+        self.noise_level = noise_level
+        self.keep_original = keep_original
+
+    @staticmethod
+    def add_noise(series, noise_level):
+        return series * (1 + noise_level * np.random.randn(len(series)))
+
+    def encode(self, train, test, target):
+        for col in self.cols:
+            if self.keep_original:
+                train[col + '_te'], test[col + '_te'] = self.encode_column(train[col], test[col], target)
+            else:
+                train[col], test[col] = self.encode_column(train[col], test[col], target)
+        return train, test
+
+    def encode_column(self, trn_series, tst_series, target):
+        temp = pd.concat([trn_series, target], axis=1)
+        # Compute target mean
+        averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
+        # Compute smoothing
+        smoothing = 1 / (1 + np.exp(-(averages["count"] - self.min_samples_leaf) / self.smoothing))
+        # Apply average function to all target data
+        prior = target.mean()
+        # The bigger the count the less full_avg is taken into account
+        averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
+        averages.drop(['mean', 'count'], axis=1, inplace=True)
+        # Apply averages to trn and tst series
+        ft_trn_series = pd.merge(
+            trn_series.to_frame(trn_series.name),
+            averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+            on=trn_series.name,
+            how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+        # pd.merge does not keep the index so restore it
+        ft_trn_series.index = trn_series.index
+        ft_tst_series = pd.merge(
+            tst_series.to_frame(tst_series.name),
+            averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+            on=tst_series.name,
+            how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+        # pd.merge does not keep the index so restore it
+        ft_tst_series.index = tst_series.index
+        return self.add_noise(ft_trn_series, self.noise_level), self.add_noise(ft_tst_series, self.noise_level)  
 
 
 # In[ ]:
 
 
-import cv2
+def to_number(x):
+    try:
+        if not x.isdigit():
+            return 0
+        x = int(x)
+        if x > 100:
+            return 100
+        else:
+            return x
+    except:
+        return 0
+
+def sum_numbers(desc):
+    if not isinstance(desc, str):
+        return 0
+    try:
+        return sum([to_number(s) for s in desc.split()])
+    except:
+        return 0
 
 
 # In[ ]:
 
 
-RESIZED_IMAGES = {}
+# Define helpers for text normalization
+stopwords = {x: 1 for x in stopwords.words('english')}
+non_alphanums = re.compile(u'[^A-Za-z0-9]+')
+non_alphanumpunct = re.compile(u'[^A-Za-z0-9\.?!,; \(\)\[\]\'\"\$]+')
+RE_PUNCTUATION = '|'.join([re.escape(x) for x in string.punctuation])
 
+def normalize_text(text):
+    return u" ".join(
+        [x for x in [y for y in non_alphanums.sub(' ', text).lower().strip().split(" ")] \
+         if len(x) > 1 and x not in stopwords])
 
-# In[ ]:
+def clean_name(x):
+    if len(x):
+        x = non_alphanums.sub(' ', x).split()
+        if len(x):
+            return x[0].lower()
+    return ''
 
-
-image_size = (256, 256)
-center = (image_size[0]//2, image_size[1]//2)
-hist_size = 30
-
-crop_size = 30
-
-n_features = 3 * hist_size
-X = np.zeros((len(id_type_list), n_features), dtype=np.float32)
-for i, (image_id, image_type) in enumerate(id_type_list):
     
-    key = (image_id, image_type)
-    if key in RESIZED_IMAGES:
-        img = RESIZED_IMAGES[key]
-    else:
-        img = get_image_data(image_id, image_type)
-        img = cv2.resize(img, dsize=image_size[::-1])    
-        RESIZED_IMAGES[key] = img
-    
-    # crop 
-    proc = img[center[1]-crop_size:center[1]+crop_size,center[0]-crop_size:center[0]+crop_size,:]
-    # Blur 
-    proc = cv2.GaussianBlur(proc, (7, 7), 0)
-    hsv = cv2.cvtColor(proc, cv2.COLOR_RGB2HSV)
-    hue = hsv[:,:,0]
-    sat = hsv[:,:,1]
-    val = hsv[:,:,2]
-    hist_hue = compute_histogram(hue, hist_size)
-    hist_sat = compute_histogram(sat, hist_size)    
-    hist_val = compute_histogram(val, hist_size)    
-    X[i, 0:hist_size] = hist_hue[:,0]
-    X[i, hist_size:2*hist_size] = hist_sat[:,0]
-    X[i, 2*hist_size:] = hist_val[:,0]
+print('[{}] Finished defining stuff'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-n_classes = 10
-
-from sklearn.cluster import KMeans
-kmeans = KMeans(n_clusters=n_classes)
-kmeans.fit(X)
-y_classes = kmeans.predict(X)
-_ = plt.hist(y_classes)
-
-
-# In[ ]:
-
-
-all_classes_images = []
-
-for class_index in range(n_classes):    
-    class_indices = np.where(y_classes == class_index)[0]
-    n = 10    
-    m = int(np.ceil(len(class_indices) / n)) 
-    one_class_image = np.zeros((m*(image_size[0]+2), n*(image_size[1]+2), 3), dtype=np.uint8)    
-    
-    counter = 0
-    for i in range(m):
-        ys = i*(image_size[1] + 2)
-        ye = ys + image_size[1]
-        for j in range(n):
-            xs = j*(image_size[0] + 2)
-            xe = xs + image_size[0]
-            if counter == len(class_indices):
-                break
-            image_id, image_type = id_type_list[class_indices[counter]]; counter+=1
-            key = (image_id, image_type)
-            assert key in RESIZED_IMAGES, "WTF"
-            img = RESIZED_IMAGES[key]                
-            img = cv2.putText(img, image_id + ' | ' + str(image_type) + ' | ' + str(class_index), (5,img.shape[0] - 5), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), thickness=2)
-            one_class_image[ys:ye, xs:xe, :] = img[:,:,:]
-
-        if counter == len(class_indices):
-            break
-    
-    all_classes_images.append(one_class_image)
+train = pd.read_table('../input/train.tsv', engine='c', 
+                      dtype={'item_condition_id': 'category',
+                             'shipping': 'category',
+                            }, 
+                     converters={'category_name': split_cat})
+test = pd.read_table('../input/test.tsv', engine='c', 
+                      dtype={'item_condition_id': 'category',
+                             'shipping': 'category',
+                            },
+                    converters={'category_name': split_cat})
+print('[{}] Finished load data'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-class_index = 0
+train['is_train'] = 1
+test['is_train'] = 0
+print('[{}] Compiled train / test'.format(time.time() - start_time))
+print('Train shape: ', train.shape)
+print('Test shape: ', test.shape)
 
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+train = train[train.price != 0].reset_index(drop=True)
+print('[{}] Removed nonzero price'.format(time.time() - start_time))
+print('Train shape: ', train.shape)
+print('Test shape: ', test.shape)
 
+y = np.log1p(train['price'])
+nrow_train = train.shape[0]
 
-# In[ ]:
-
-
-class_index = 1
-
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+merge = pd.concat([train, test])
+submission = test[['test_id']]
+print('[{}] Compiled merge'.format(time.time() - start_time))
+print('Merge shape: ', merge.shape)
 
 
 # In[ ]:
 
 
-class_index = 2
-
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+del train
+del test
+merge.drop(['train_id', 'test_id', 'price'], axis=1, inplace=True)
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-class_index = 3
+merge['gencat_name'] = merge['category_name'].str.get(0).replace('', 'missing').astype('category')
+merge['subcat1_name'] = merge['category_name'].str.get(1).fillna('missing').astype('category')
+merge['subcat2_name'] = merge['category_name'].str.get(2).fillna('missing').astype('category')
+merge.drop('category_name', axis=1, inplace=True)
+print('[{}] Split categories completed.'.format(time.time() - start_time))
 
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
-
-
-# In[ ]:
-
-
-class_index = 4
-
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+merge['item_condition_id'] = merge['item_condition_id'].cat.add_categories(['missing']).fillna('missing')
+merge['shipping'] = merge['shipping'].cat.add_categories(['missing']).fillna('missing')
+merge['item_description'].fillna('missing', inplace=True)
+merge['brand_name'] = merge['brand_name'].fillna('missing').astype('category')
+print('[{}] Handle missing completed.'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-class_index = 5
-
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+merge['name_first'] = merge['name'].apply(clean_name)
+print('[{}] FE 1/37'.format(time.time() - start_time))
+merge['name_first_count'] = merge.groupby('name_first')['name_first'].transform('count')
+print('[{}] FE 2/37'.format(time.time() - start_time))
+merge['gencat_name_count'] = merge.groupby('gencat_name')['gencat_name'].transform('count')
+print('[{}] FE 3/37'.format(time.time() - start_time))
+merge['subcat1_name_count'] = merge.groupby('subcat1_name')['subcat1_name'].transform('count')
+print('[{}] FE 4/37'.format(time.time() - start_time))
+merge['subcat2_name_count'] = merge.groupby('subcat2_name')['subcat2_name'].transform('count')
+print('[{}] FE 5/37'.format(time.time() - start_time))
+merge['brand_name_count'] = merge.groupby('brand_name')['brand_name'].transform('count')
+print('[{}] FE 6/37'.format(time.time() - start_time))
+merge['NameLower'] = merge.name.str.count('[a-z]')
+print('[{}] FE 7/37'.format(time.time() - start_time))
+merge['DescriptionLower'] = merge.item_description.str.count('[a-z]')
+print('[{}] FE 8/37'.format(time.time() - start_time))
+merge['NameUpper'] = merge.name.str.count('[A-Z]')
+print('[{}] FE 9/37'.format(time.time() - start_time))
+merge['DescriptionUpper'] = merge.item_description.str.count('[A-Z]')
+print('[{}] FE 10/37'.format(time.time() - start_time))
+merge['name_len'] = merge['name'].apply(lambda x: len(x))
+print('[{}] FE 11/37'.format(time.time() - start_time))
+merge['des_len'] = merge['item_description'].apply(lambda x: len(x))
+print('[{}] FE 12/37'.format(time.time() - start_time))
+merge['name_desc_len_ratio'] = merge['name_len']/merge['des_len']
+print('[{}] FE 13/37'.format(time.time() - start_time))
+merge['desc_word_count'] = merge['item_description'].apply(lambda x: len(x.split()))
+print('[{}] FE 14/37'.format(time.time() - start_time))
+merge['mean_des'] = merge['item_description'].apply(lambda x: 0 if len(x) == 0 else float(len(x.split())) / len(x)) * 10
+print('[{}] FE 15/37'.format(time.time() - start_time))
+merge['name_word_count'] = merge['name'].apply(lambda x: len(x.split()))
+print('[{}] FE 16/37'.format(time.time() - start_time))
+merge['mean_name'] = merge['name'].apply(lambda x: 0 if len(x) == 0 else float(len(x.split())) / len(x))  * 10
+print('[{}] FE 17/37'.format(time.time() - start_time))
+merge['desc_letters_per_word'] = merge['des_len'] / merge['desc_word_count']
+print('[{}] FE 18/37'.format(time.time() - start_time))
+merge['name_letters_per_word'] = merge['name_len'] / merge['name_word_count']
+print('[{}] FE 19/37'.format(time.time() - start_time))
+merge['NameLowerRatio'] = merge['NameLower'] / merge['name_len']
+print('[{}] FE 20/37'.format(time.time() - start_time))
+merge['DescriptionLowerRatio'] = merge['DescriptionLower'] / merge['des_len']
+print('[{}] FE 21/37'.format(time.time() - start_time))
+merge['NameUpperRatio'] = merge['NameUpper'] / merge['name_len']
+print('[{}] FE 22/37'.format(time.time() - start_time))
+merge['DescriptionUpperRatio'] = merge['DescriptionUpper'] / merge['des_len']
+print('[{}] FE 23/37'.format(time.time() - start_time))
+merge['NamePunctCount'] = merge.name.str.count(RE_PUNCTUATION)
+print('[{}] FE 24/37'.format(time.time() - start_time))
+merge['DescriptionPunctCount'] = merge.item_description.str.count(RE_PUNCTUATION)
+print('[{}] FE 25/37'.format(time.time() - start_time))
+merge['NamePunctCountRatio'] = merge['NamePunctCount'] / merge['name_word_count']
+print('[{}] FE 26/37'.format(time.time() - start_time))
+merge['DescriptionPunctCountRatio'] = merge['DescriptionPunctCount'] / merge['desc_word_count']
+print('[{}] FE 27/37'.format(time.time() - start_time))
+merge['NameDigitCount'] = merge.name.str.count('[0-9]')
+print('[{}] FE 28/37'.format(time.time() - start_time))
+merge['DescriptionDigitCount'] = merge.item_description.str.count('[0-9]')
+print('[{}] FE 29/37'.format(time.time() - start_time))
+merge['NameDigitCountRatio'] = merge['NameDigitCount'] / merge['name_word_count']
+print('[{}] FE 30/37'.format(time.time() - start_time))
+merge['DescriptionDigitCountRatio'] = merge['DescriptionDigitCount']/merge['desc_word_count']
+print('[{}] FE 31/37'.format(time.time() - start_time))
+merge['stopword_ratio_desc'] = merge['item_description'].apply(lambda x: len([w for w in x.split() if w in stopwords])) / merge['desc_word_count']
+print('[{}] FE 32/37'.format(time.time() - start_time))
+merge['num_sum'] = merge['item_description'].apply(sum_numbers) 
+print('[{}] FE 33/37'.format(time.time() - start_time))
+merge['weird_characters_desc'] = merge['item_description'].str.count(non_alphanumpunct)
+print('[{}] FE 34/37'.format(time.time() - start_time))
+merge['weird_characters_name'] = merge['name'].str.count(non_alphanumpunct)
+print('[{}] FE 35/37'.format(time.time() - start_time))
+merge['prices_count'] = merge['item_description'].str.count('[rm]')
+print('[{}] FE 36/37'.format(time.time() - start_time))
+merge['price_in_name'] = merge['item_description'].str.contains('[rm]', regex=False).astype('int')
+print('[{}] FE 37/37'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-class_index = 6
+cols = set(merge.columns.values)
+basic_cols = {'name', 'item_condition_id', 'brand_name',
+  'shipping', 'item_description', 'gencat_name',
+  'subcat1_name', 'subcat2_name', 'name_first', 'is_train'}
 
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+cols_to_normalize = cols - basic_cols - {'price_in_name'}
+other_cols = basic_cols | {'price_in_name'}
 
 
 # In[ ]:
 
 
-class_index = 7
+merge_to_normalize = merge[list(cols_to_normalize)]
+merge_to_normalize = (merge_to_normalize - merge_to_normalize.mean()) / (merge_to_normalize.max() - merge_to_normalize.min())
+print('[{}] FE Normalized'.format(time.time() - start_time))
 
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+merge = merge[list(other_cols)]
+merge = pd.concat([merge, merge_to_normalize],axis=1)
+print('[{}] FE Merged'.format(time.time() - start_time))
 
-
-# In[ ]:
-
-
-class_index = 8
-
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+del(merge_to_normalize)
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
 
 
 # In[ ]:
 
 
-class_index = 9
+df_test = merge.loc[merge['is_train'] == 0]
+df_train = merge.loc[merge['is_train'] == 1]
+del merge
+gc.collect()
+df_test = df_test.drop(['is_train'], axis=1)
+df_train = df_train.drop(['is_train'], axis=1)
 
-m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
-n = int(np.ceil(m / 15.0))
-for i in range(n):
-    plt_st(20, 20)
-    ys = i*(image_size[0] + 2)*15
-    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
-    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
-    plt.title("Class %i, part %i" % (class_index, i))
+if SUBMIT_MODE:
+    y_train = y
+    del y
+    gc.collect()
+else:
+    df_train, df_test, y_train, y_test = train_test_split(df_train, y, test_size=0.2, random_state=144)
+
+print('[{}] Splitting completed.'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2,
+                                                              "hash_ngrams_weights": [1.5, 1.0],
+                                                              "hash_size": 2 ** 29,
+                                                              "norm": None,
+                                                              "tf": 'binary',
+                                                              "idf": None,
+                                                              }), procs=8)
+wb.dictionary_freeze = True
+X_name_train = wb.fit_transform(df_train['name'])
+X_name_test = wb.transform(df_test['name'])
+del(wb)
+mask = np.where(X_name_train.getnnz(axis=0) > 3)[0]
+X_name_train = X_name_train[:, mask]
+X_name_test = X_name_test[:, mask]
+print('[{}] Vectorize `name` completed.'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2,
+                                                              "hash_ngrams_weights": [1.0, 1.0],
+                                                              "hash_size": 2 ** 28,
+                                                              "norm": "l2",
+                                                              "tf": 1.0,
+                                                              "idf": None}), procs=8)
+wb.dictionary_freeze = True
+X_description_train = wb.fit_transform(df_train['item_description'])
+X_description_test = wb.transform(df_test['item_description'])
+del(wb)
+mask = np.where(X_description_train.getnnz(axis=0) > 3)[0]
+X_description_train = X_description_train[:, mask]
+X_description_test = X_description_test[:, mask]
+print('[{}] Vectorize `item_description` completed.'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(X_description_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+# Ridge adapted from https://www.kaggle.com/object/more-effective-ridge-script?scriptVersionId=1851819
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train desc ridge (1)'.format(time.time() - start_time))
+desc_ridge_preds1 = model.predict(X_train_2)
+desc_ridge_preds1f = model.predict(X_description_test)
+print('[{}] Finished to predict desc ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train desc ridge (2)'.format(time.time() - start_time))
+desc_ridge_preds2 = model.predict(X_train_1)
+desc_ridge_preds2f = model.predict(X_description_test)
+print('[{}] Finished to predict desc ridge (2)'.format(time.time() - start_time))
+desc_ridge_preds_oof = np.concatenate((desc_ridge_preds2, desc_ridge_preds1), axis=0)
+desc_ridge_preds_test = (desc_ridge_preds1f + desc_ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(desc_ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(desc_ridge_preds_test, y_test)))
+
+
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(X_name_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train name ridge (1)'.format(time.time() - start_time))
+name_ridge_preds1 = model.predict(X_train_2)
+name_ridge_preds1f = model.predict(X_name_test)
+print('[{}] Finished to predict name ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train name ridge (2)'.format(time.time() - start_time))
+name_ridge_preds2 = model.predict(X_train_1)
+name_ridge_preds2f = model.predict(X_name_test)
+print('[{}] Finished to predict name ridge (2)'.format(time.time() - start_time))
+name_ridge_preds_oof = np.concatenate((name_ridge_preds2, name_ridge_preds1), axis=0)
+name_ridge_preds_test = (name_ridge_preds1f + name_ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(name_ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(name_ridge_preds_test, y_test)))
+
+
+# In[ ]:
+
+
+del X_train_1
+del X_train_2
+del y_train_1
+del y_train_2
+del name_ridge_preds1
+del name_ridge_preds1f
+del name_ridge_preds2
+del name_ridge_preds2f
+del desc_ridge_preds1
+del desc_ridge_preds1f
+del desc_ridge_preds2
+del desc_ridge_preds2f
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+lb = LabelBinarizer(sparse_output=True)
+X_brand_train = lb.fit_transform(df_train['brand_name'])
+X_brand_test = lb.transform(df_test['brand_name'])
+print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+X_cat_train = lb.fit_transform(df_train['gencat_name'])
+X_cat_test = lb.transform(df_test['gencat_name'])
+X_cat1_train = lb.fit_transform(df_train['subcat1_name'])
+X_cat1_test = lb.transform(df_test['subcat1_name'])
+X_cat2_train = lb.fit_transform(df_train['subcat2_name'])
+X_cat2_test = lb.transform(df_test['subcat2_name'])
+print('[{}] Finished label binarize categories'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+X_dummies_train = csr_matrix(
+    pd.get_dummies(df_train[list(cols - (basic_cols - {'item_condition_id', 'shipping'}))],
+                   sparse=True).values)
+print('[{}] Create dummies completed - train'.format(time.time() - start_time))
+
+X_dummies_test = csr_matrix(
+    pd.get_dummies(df_test[list(cols - (basic_cols - {'item_condition_id', 'shipping'}))],
+                   sparse=True).values)
+print('[{}] Create dummies completed - test'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+sparse_merge_train = hstack((X_dummies_train, X_description_train, X_brand_train, X_cat_train,
+                             X_cat1_train, X_cat2_train, X_name_train)).tocsr()
+del X_description_train, lb, X_name_train, X_dummies_train
+gc.collect()
+print('[{}] Create sparse merge train completed'.format(time.time() - start_time))
+
+sparse_merge_test = hstack((X_dummies_test, X_description_test, X_brand_test, X_cat_test,
+                             X_cat1_test, X_cat2_test, X_name_test)).tocsr()
+del X_description_test, X_name_test, X_dummies_test
+gc.collect()
+print('[{}] Create sparse merge test completed'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+if SUBMIT_MODE:
+    iters = 3
+else:
+    iters = 1
+    rounds = 3
+
+model = FM_FTRL(alpha=0.035, beta=0.001, L1=0.00001, L2=0.15, D=sparse_merge_train.shape[1],
+                alpha_fm=0.05, L2_fm=0.0, init_fm=0.01,
+                D_fm=100, e_noise=0, iters=iters, inv_link="identity", threads=4)
+
+if SUBMIT_MODE:
+    model.fit(sparse_merge_train, y_train)
+    print('[{}] Train FM completed'.format(time.time() - start_time))
+    predsFM = model.predict(sparse_merge_test)
+    print('[{}] Predict FM completed'.format(time.time() - start_time))
+else:
+    for i in range(rounds):
+        model.fit(sparse_merge_train, y_train)
+        predsFM = model.predict(sparse_merge_test)
+        print('[{}] Iteration {}/{} -- RMSLE: {}'.format(time.time() - start_time, i + 1, rounds, rmse(predsFM, y_test)))
+
+
+# In[ ]:
+
+
+del model
+gc.collect()
+if not SUBMIT_MODE:
+    print("FM_FTRL dev RMSLE:", rmse(predsFM, y_test))
+
+
+fselect = SelectKBest(f_regression, k=48000)
+train_features = fselect.fit_transform(sparse_merge_train, y_train)
+test_features = fselect.transform(sparse_merge_test)
+print('[{}] Select best completed'.format(time.time() - start_time))
+
+
+del sparse_merge_train
+del sparse_merge_test
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+tv = TfidfVectorizer(max_features=250000,
+                     ngram_range=(1, 3),
+                     stop_words=None)
+X_name_train = tv.fit_transform(df_train['name'])
+print('[{}] Finished TFIDF vectorize `name` (1/2)'.format(time.time() - start_time))
+X_name_test = tv.transform(df_test['name'])
+print('[{}] Finished TFIDF vectorize `name` (2/2)'.format(time.time() - start_time))
+
+tv = TfidfVectorizer(max_features=500000,
+                     ngram_range=(1, 3),
+                     stop_words=None)
+X_description_train = tv.fit_transform(df_train['item_description'])
+print('[{}] Finished TFIDF vectorize `item_description` (1/2)'.format(time.time() - start_time))
+X_description_test = tv.transform(df_test['item_description'])
+print('[{}] Finished TFIDF vectorize `item_description` (2/2)'.format(time.time() - start_time))
+
+X_dummies_train = csr_matrix(
+    pd.get_dummies(df_train[['item_condition_id', 'shipping']], sparse=True).values)
+X_dummies_test = csr_matrix(
+    pd.get_dummies(df_test[['item_condition_id', 'shipping']], sparse=True).values)
+
+sparse_merge_train = hstack((X_description_train, X_brand_train, X_cat_train,
+                             X_cat1_train, X_cat2_train, X_name_train)).tocsr()
+del X_dummies_train, X_description_train, X_brand_train, X_cat_train
+del X_cat1_train, X_cat2_train, X_name_train
+gc.collect()
+print('[{}] Create sparse merge train completed'.format(time.time() - start_time))
+
+sparse_merge_test = hstack((X_description_test, X_brand_test, X_cat_test,
+                            X_cat1_test, X_cat2_test, X_name_test)).tocsr()
+del X_dummies_test, X_description_test, X_brand_test, X_cat_test
+del X_cat1_test, X_cat2_test, X_name_test
+gc.collect()
+print('[{}] Create sparse merge test completed'.format(time.time() - start_time))
+
+
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(sparse_merge_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train ridge (1)'.format(time.time() - start_time))
+ridge_preds1 = model.predict(X_train_2)
+ridge_preds1f = model.predict(sparse_merge_test)
+print('[{}] Finished to predict ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train ridge (2)'.format(time.time() - start_time))
+ridge_preds2 = model.predict(X_train_1)
+ridge_preds2f = model.predict(sparse_merge_test)
+print('[{}] Finished to predict ridge (2)'.format(time.time() - start_time))
+ridge_preds_oof = np.concatenate((ridge_preds2, ridge_preds1), axis=0)
+ridge_preds_test = (ridge_preds1f + ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(ridge_preds_test, y_test)))
+
+
+model = MultinomialNB(alpha=0.01)
+model.fit(X_train_1, y_train_1 >= 4)
+print('[{}] Finished to train MNB (1)'.format(time.time() - start_time))
+mnb_preds1 = model.predict_proba(X_train_2)[:, 1]
+mnb_preds1f = model.predict_proba(sparse_merge_test)[:, 1]
+print('[{}] Finished to predict MNB (1)'.format(time.time() - start_time))
+model = MultinomialNB(alpha=0.01)
+model.fit(X_train_2, y_train_2 >= 4)
+print('[{}] Finished to train MNB (2)'.format(time.time() - start_time))
+mnb_preds2 = model.predict_proba(X_train_1)[:, 1]
+mnb_preds2f = model.predict_proba(sparse_merge_test)[:, 1]
+print('[{}] Finished to predict MNB (2)'.format(time.time() - start_time))
+mnb_preds_oof = np.concatenate((mnb_preds2, mnb_preds1), axis=0)
+mnb_preds_test = (mnb_preds1f + mnb_preds2f) / 2.0
+
+
+del ridge_preds1
+del ridge_preds1f
+del ridge_preds2
+del ridge_preds2f
+del mnb_preds1
+del mnb_preds1f
+del mnb_preds2
+del mnb_preds2f
+del X_train_1
+del X_train_2
+del y_train_1
+del y_train_2
+del sparse_merge_train
+del sparse_merge_test
+del model
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+df_train['ridge'] = ridge_preds_oof
+df_train['name_ridge'] = name_ridge_preds_oof
+df_train['desc_ridge'] = desc_ridge_preds_oof
+df_train['mnb'] = mnb_preds_oof
+df_test['ridge'] = ridge_preds_test
+df_test['name_ridge'] = name_ridge_preds_test
+df_test['desc_ridge'] = desc_ridge_preds_test
+df_test['mnb'] = mnb_preds_test
+print('[{}] Finished adding submodels'.format(time.time() - start_time))
+
+
+f_cats = ['brand_name', 'gencat_name', 'subcat1_name', 'subcat2_name', 'name_first']
+target_encode = TargetEncoder(min_samples_leaf=100, smoothing=10, noise_level=0.01,
+                              keep_original=True, cols=f_cats)
+df_train, df_test = target_encode.encode(df_train, df_test, y_train)
+print('[{}] Finished target encoding'.format(time.time() - start_time))
+
+
+df_train.drop(f_cats, axis=1, inplace=True)
+df_test.drop(f_cats, axis=1, inplace=True)
+del mnb_preds_oof
+del mnb_preds_test
+del ridge_preds_oof
+del ridge_preds_test
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+cols = ['gencat_name_te', 'brand_name_te', 'subcat1_name_te', 'subcat2_name_te',
+        'name_first_te', 'mnb', 'desc_ridge', 'name_ridge', 'ridge']
+train_dummies = csr_matrix(df_train[cols].values)
+print('[{}] Finished dummyizing model 1/5'.format(time.time() - start_time))
+test_dummies = csr_matrix(df_test[cols].values)
+print('[{}] Finished dummyizing model 2/5'.format(time.time() - start_time))
+del df_train
+del df_test
+gc.collect()
+print('[{}] Finished dummyizing model 3/5'.format(time.time() - start_time))
+train_features = hstack((train_features, train_dummies)).tocsr()
+print('[{}] Finished dummyizing model 4/5'.format(time.time() - start_time))
+test_features = hstack((test_features, test_dummies)).tocsr()
+print('[{}] Finished dummyizing model 5/5'.format(time.time() - start_time))
+
+
+d_train = lgb.Dataset(train_features, label=y_train)
+del train_features; gc.collect()
+if SUBMIT_MODE:
+    watchlist = [d_train]
+else:
+    d_valid = lgb.Dataset(test_features, label=y_test)
+    watchlist = [d_train, d_valid]
+
+params = {
+    'learning_rate': 0.15,
+    'application': 'regression',
+    'max_depth': 13,
+    'num_leaves': 400,
+    'verbosity': -1,
+    'metric': 'RMSE',
+    'data_random_seed': 1,
+    'bagging_fraction': 0.8,
+    'feature_fraction': 0.6,
+    'nthread': 4,
+    'lambda_l1': 10,
+    'lambda_l2': 10
+}
+print('[{}] Finished compiling LGB'.format(time.time() - start_time))
+
+modelL = lgb.train(params,
+                  train_set=d_train,
+                  num_boost_round=1350,
+                  valid_sets=watchlist,
+                  verbose_eval=50)
+
+predsL = modelL.predict(test_features)
+predsL[predsL < 0] = 0
+
+if not SUBMIT_MODE:
+    print("LGB RMSLE:", rmse(predsL, y_test))
+
+del d_train
+del modelL
+if not SUBMIT_MODE:
+    del d_valid
+gc.collect()
+
+
+preds_final = predsFM * 0.33 + predsL * 0.67
+if not SUBMIT_MODE:
+    print('Final RMSE: ', rmse(preds_final, y_test))
+
+
+if SUBMIT_MODE:
+    preds_final = np.expm1(preds_final)
+    submission['price'] = preds_final
+    submission.to_csv('lgb_and_fm.csv', index=False)
+    print('[{}] Writing submission done'.format(time.time() - start_time))
 

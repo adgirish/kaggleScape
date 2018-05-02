@@ -1,380 +1,340 @@
 
 # coding: utf-8
 
-# It seems like none of the Keras scripts published so far managed to get above 0.26. As written below, this script won't do much better either, but that is with 4 folds, and only two repeated runs and 3 epochs per fold. A proper version of this script with 5 folds and 3 repeated runs has out-of-fold CV of 0.274 and a leaderboard score of 0.270.
+# **Author:** Raoul Malm  
 # 
-# Keep on reading for suggestions how to get this script to score better.
+# **Description:** 
+# 
+# This notebook demonstrates the future price prediction for different stocks using recurrent neural networks in tensorflow. Recurrent neural networks with basic, LSTM or GRU cells are implemented. 
+# 
+# **Outline:**
+# 
+# 1. [Libraries and settings](#1-bullet)
+# 2. [Analyze data](#2-bullet)
+# 3. [Manipulate data](#3-bullet)
+# 4. [Model and validate data](#4-bullet)
+# 5. [Predictions](#5-bullet)
+# 
+# **Reference:**  
+# 
+# [LSTM_Stock_prediction-20170507 by BenF](https://www.kaggle.com/benjibb/lstm-stock-prediction-20170507/notebook)
+
+# # 1. Libraries and settings <a class="anchor" id="1-bullet"></a> 
 
 # In[ ]:
 
 
 import numpy as np
-np.random.seed()
 import pandas as pd
-from datetime import datetime
-from sklearn.metrics import log_loss, roc_auc_score
-from sklearn.model_selection import StratifiedKFold
-from sklearn.preprocessing import MinMaxScaler
+import math
+import sklearn
+import sklearn.preprocessing
+import datetime
+import os
+import matplotlib.pyplot as plt
+import tensorflow as tf
 
-from keras.models import load_model
-from keras.models import Sequential, Model
-from keras.layers import Input, Dense, Dropout, Activation
-from keras.layers.normalization import BatchNormalization
-from keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, Callback
-from keras.wrappers.scikit_learn import KerasClassifier
+# split data in 80%/10%/10% train/validation/test sets
+valid_set_size_percentage = 10 
+test_set_size_percentage = 10 
 
-
-# This callback is very important. It calculates roc_auc and gini values so they can be monitored during the run. Also, it creates a log of those parameters so that they can be used for early stopping. A tip of the hat to **[Roberto](https://www.kaggle.com/rspadim)** and **[this kernel](https://www.kaggle.com/rspadim/gini-keras-callback-earlystopping-validation)** for helping me figure out the latter.
-# 
-# *Note that this callback in combination with early stopping doesn't print well if you are using verbose=1 (moving arrow) during fitting. I recommend that you use verbose=2 in fitting.*
-
-# In[ ]:
+#display parent directory and working directory
+print(os.path.dirname(os.getcwd())+':', os.listdir(os.path.dirname(os.getcwd())));
+print(os.getcwd()+':', os.listdir(os.getcwd()));
 
 
-class roc_auc_callback(Callback):
-    def __init__(self,training_data,validation_data):
-        self.x = training_data[0]
-        self.y = training_data[1]
-        self.x_val = validation_data[0]
-        self.y_val = validation_data[1]
-
-    def on_train_begin(self, logs={}):
-        return
-
-    def on_train_end(self, logs={}):
-        return
-
-    def on_epoch_begin(self, epoch, logs={}):
-        return
-
-    def on_epoch_end(self, epoch, logs={}):
-        y_pred = self.model.predict_proba(self.x, verbose=0)
-        roc = roc_auc_score(self.y, y_pred)
-        logs['roc_auc'] = roc_auc_score(self.y, y_pred)
-        logs['norm_gini'] = ( roc_auc_score(self.y, y_pred) * 2 ) - 1
-
-        y_pred_val = self.model.predict_proba(self.x_val, verbose=0)
-        roc_val = roc_auc_score(self.y_val, y_pred_val)
-        logs['roc_auc_val'] = roc_auc_score(self.y_val, y_pred_val)
-        logs['norm_gini_val'] = ( roc_auc_score(self.y_val, y_pred_val) * 2 ) - 1
-
-        print('\rroc_auc: %s - roc_auc_val: %s - norm_gini: %s - norm_gini_val: %s' % (str(round(roc,5)),str(round(roc_val,5)),str(round((roc*2-1),5)),str(round((roc_val*2-1),5))), end=10*' '+'\n')
-        return
-
-    def on_batch_begin(self, batch, logs={}):
-        return
-
-    def on_batch_end(self, batch, logs={}):
-        return
-
-
-# Housekeeping utilities.
+# # 2. Analyze data <a class="anchor" id="2-bullet"></a> 
+# - load stock prices from prices-split-adjusted.csv
+# - analyze data
 
 # In[ ]:
 
 
-def timer(start_time=None):
-    if not start_time:
-        start_time = datetime.now()
-        return start_time
-    elif start_time:
-        thour, temp_sec = divmod(
-            (datetime.now() - start_time).total_seconds(), 3600)
-        tmin, tsec = divmod(temp_sec, 60)
-        print('\n Time taken: %i hours %i minutes and %s seconds.' %
-              (thour, tmin, round(tsec, 2)))
+# import all stock prices 
+df = pd.read_csv("../input/prices-split-adjusted.csv", index_col = 0)
+df.info()
+df.head()
 
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
+# number of different stocks
+print('\nnumber of different stocks: ', len(list(set(df.symbol))))
+print(list(set(df.symbol))[:10])
 
-
-# I never seem to be able to write a generic routine for data loading where one would just plug in file names and everything else would be done automatically. Still trying.
 
 # In[ ]:
 
 
-# train and test data path
-DATA_TRAIN_PATH = '../input/train.csv'
-DATA_TEST_PATH = '../input/test.csv'
+df.tail()
 
-def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
-    train_loader = pd.read_csv(path_train, dtype={'target': np.int8, 'id': np.int32})
-    train = train_loader.drop(['target', 'id'], axis=1)
-    train_labels = train_loader['target'].values
-    train_ids = train_loader['id'].values
-    print('\n Shape of raw train data:', train.shape)
-
-    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
-    test = test_loader.drop(['id'], axis=1)
-    test_ids = test_loader['id'].values
-    print(' Shape of raw test data:', test.shape)
-
-    return train, train_labels, test, train_ids, test_ids
-
-
-# You can ignore most of the parameters below other than the top two. Obviously, more folds means longer running time, but I can tell you from experience that 10 folds with Keras will usually do better than 4. The number of "runs" should be in the 3-5 range. At a minimum, I suggest 5 folds and 3 independent runs per fold (which will eventually get averaged).  This is because of stochastic nature of neural networks, so one run per fold may or may not produce the best possible result.
-# 
-# **If you can afford it, 10 folds and 5 runs per fold would be my recommendation. Be warned that it may take a day or two, even if you have a GPU.**
 
 # In[ ]:
 
 
-folds = 4
-runs = 2
+df.describe()
 
-cv_LL = 0
-cv_AUC = 0
-cv_gini = 0
-fpred = []
-avpred = []
-avreal = []
-avids = []
-
-
-# Loading data. Converting "categorical" variables, even though in this dataset they are actually numeric.
 
 # In[ ]:
 
 
-# Load data set and target values
-train, target, test, tr_ids, te_ids = load_data()
-n_train = train.shape[0]
-train_test = pd.concat((train, test)).reset_index(drop=True)
-col_to_drop = train.columns[train.columns.str.endswith('_cat')]
-col_to_dummify = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
+df.info()
 
-for col in col_to_dummify:
-    dummy = pd.get_dummies(train_test[col].astype('category'))
-    columns = dummy.columns.astype(str).tolist()
-    columns = [col + '_' + w for w in columns]
-    dummy.columns = columns
-    train_test = pd.concat((train_test, dummy), axis=1)
-
-train_test.drop(col_to_dummify, axis=1, inplace=True)
-train_test_scaled, scaler = scale_data(train_test)
-train = train_test_scaled[:n_train, :]
-test = train_test_scaled[n_train:, :]
-print('\n Shape of processed train data:', train.shape)
-print(' Shape of processed test data:', test.shape)
-
-
-# The two parameters below are worth playing with. Larger patience gives the network a better chance to find solutions when it gets close to the local/global minimum. It also means longer training times. Batch size is one of those parameters that can always be optimized for any given dataset. If you have a GPU, larger batch sizes translate to faster training, but that may or may not be better for the quality of training.
 
 # In[ ]:
 
 
-patience = 10
-batchsize = 128
+plt.figure(figsize=(15, 5));
+plt.subplot(1,2,1);
+plt.plot(df[df.symbol == 'EQIX'].open.values, color='red', label='open')
+plt.plot(df[df.symbol == 'EQIX'].close.values, color='green', label='close')
+plt.plot(df[df.symbol == 'EQIX'].low.values, color='blue', label='low')
+plt.plot(df[df.symbol == 'EQIX'].high.values, color='black', label='high')
+plt.title('stock price')
+plt.xlabel('time [days]')
+plt.ylabel('price')
+plt.legend(loc='best')
+#plt.show()
+
+plt.subplot(1,2,2);
+plt.plot(df[df.symbol == 'EQIX'].volume.values, color='black', label='volume')
+plt.title('stock volume')
+plt.xlabel('time [days]')
+plt.ylabel('volume')
+plt.legend(loc='best');
 
 
-# There are lots of comments within the code below. I think the callback section is particularly import.
+# # 3. Manipulate data <a class="anchor" id="3-bullet"></a> 
+# - choose a specific stock
+# - drop feature: volume
+# - normalize stock data
+# - create train, validation and test data sets
 
 # In[ ]:
 
 
-# Let's split the data into folds. I always use the same random number for reproducibility, 
-# and suggest that you do the same (you certainly don't have to use 1001).
+# function for min-max normalization of stock
+def normalize_data(df):
+    min_max_scaler = sklearn.preprocessing.MinMaxScaler()
+    df['open'] = min_max_scaler.fit_transform(df.open.values.reshape(-1,1))
+    df['high'] = min_max_scaler.fit_transform(df.high.values.reshape(-1,1))
+    df['low'] = min_max_scaler.fit_transform(df.low.values.reshape(-1,1))
+    df['close'] = min_max_scaler.fit_transform(df['close'].values.reshape(-1,1))
+    return df
 
-skf = StratifiedKFold(n_splits=folds, random_state=1001)
-starttime = timer(None)
-for i, (train_index, test_index) in enumerate(skf.split(train, target)):
-    start_time = timer(None)
-    X_train, X_val = train[train_index], train[test_index]
-    y_train, y_val = target[train_index], target[test_index]
-    train_ids, val_ids = tr_ids[train_index], tr_ids[test_index]
+# function to create train, validation, test data given stock data and sequence length
+def load_data(stock, seq_len):
+    data_raw = stock.as_matrix() # convert to numpy array
+    data = []
     
-# This is where we define and compile the model. These parameters are not optimal, as they were chosen 
-# to get a notebook to complete in 60 minutes. Other than leaving BatchNormalization and last sigmoid 
-# activation alone, virtually everything else can be optimized: number of neurons, types of initializers, 
-# activation functions, dropout values. The same goes for the optimizer at the end.
+    # create all possible sequences of length seq_len
+    for index in range(len(data_raw) - seq_len): 
+        data.append(data_raw[index: index + seq_len])
+    
+    data = np.array(data);
+    valid_set_size = int(np.round(valid_set_size_percentage/100*data.shape[0]));  
+    test_set_size = int(np.round(test_set_size_percentage/100*data.shape[0]));
+    train_set_size = data.shape[0] - (valid_set_size + test_set_size);
+    
+    x_train = data[:train_set_size,:-1,:]
+    y_train = data[:train_set_size,-1,:]
+    
+    x_valid = data[train_set_size:train_set_size+valid_set_size,:-1,:]
+    y_valid = data[train_set_size:train_set_size+valid_set_size,-1,:]
+    
+    x_test = data[train_set_size+valid_set_size:,:-1,:]
+    y_test = data[train_set_size+valid_set_size:,-1,:]
+    
+    return [x_train, y_train, x_valid, y_valid, x_test, y_test]
 
-#########
-# Never move this model definition to the beginning of the file or anywhere else outside of this loop. 
-# The model needs to be initialized anew every time you run a different fold. If not, it will continue 
-# the training from a previous model, and that is not what you want.
-#########
+# choose one stock
+df_stock = df[df.symbol == 'EQIX'].copy()
+df_stock.drop(['symbol'],1,inplace=True)
+df_stock.drop(['volume'],1,inplace=True)
 
-    # This definition must be within the for loop or else it will continue training previous model
-    def baseline_model():
-        model = Sequential()
-        model.add(
-            Dense(
-                200,
-                input_dim=X_train.shape[1],
-                kernel_initializer='glorot_normal',
-                ))
-        model.add(Activation('relu'))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.5))
-        model.add(Dense(100, kernel_initializer='glorot_normal'))
-        model.add(Activation('relu'))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.25))
-        model.add(Dense(50, kernel_initializer='glorot_normal'))
-        model.add(Activation('relu'))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.15))
-        model.add(Dense(25, kernel_initializer='glorot_normal'))
-        model.add(Activation('relu'))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.1))
-        model.add(Dense(1, activation='sigmoid'))
+cols = list(df_stock.columns.values)
+print('df_stock.columns.values = ', cols)
 
-        # Compile model
-        model.compile(optimizer='adam', metrics = ['accuracy'], loss='binary_crossentropy')
+# normalize stock
+df_stock_norm = df_stock.copy()
+df_stock_norm = normalize_data(df_stock_norm)
 
-        return model
+# create train, test data
+seq_len = 20 # choose sequence length
+x_train, y_train, x_valid, y_valid, x_test, y_test = load_data(df_stock_norm, seq_len)
+print('x_train.shape = ',x_train.shape)
+print('y_train.shape = ', y_train.shape)
+print('x_valid.shape = ',x_valid.shape)
+print('y_valid.shape = ', y_valid.shape)
+print('x_test.shape = ', x_test.shape)
+print('y_test.shape = ',y_test.shape)
 
-# This is where we repeat the runs for each fold. If you choose runs=1 above, it will run a 
-# regular N-fold procedure.
 
-#########
-# It is important to leave the call to random seed here, so each run starts with a different seed.
-#########
+# In[ ]:
 
-    for run in range(runs):
-        print('\n Fold %d - Run %d\n' % ((i + 1), (run + 1)))
-        np.random.seed()
 
-# Lots to unpack here.
+plt.figure(figsize=(15, 5));
+plt.plot(df_stock_norm.open.values, color='red', label='open')
+plt.plot(df_stock_norm.close.values, color='green', label='low')
+plt.plot(df_stock_norm.low.values, color='blue', label='low')
+plt.plot(df_stock_norm.high.values, color='black', label='high')
+#plt.plot(df_stock_norm.volume.values, color='gray', label='volume')
+plt.title('stock')
+plt.xlabel('time [days]')
+plt.ylabel('normalized price/volume')
+plt.legend(loc='best')
+plt.show()
 
-# The first callback prints out roc_auc and gini values at the end of each epoch. It must be listed 
-# before the EarlyStopping callback, which monitors gini values saved in the previous callback. Make 
-# sure to set the mode to "max" because the default value ("auto") will not handle gini properly 
-# (it will act as if the model is not improving even when roc/gini go up).
 
-# CSVLogger creates a record of all iterations. Not really needed but it doesn't hurt to have it.
+# # 4. Model and validate data <a class="anchor" id="4-bullet"></a> 
+# - RNNs with basic, LSTM, GRU cells
+# 
 
-# ModelCheckpoint saves a model each time gini improves. Its mode also must be set to "max" for reasons 
-# explained above.
+# In[ ]:
 
-        callbacks = [
-            roc_auc_callback(training_data=(X_train, y_train),validation_data=(X_val, y_val)),  # call this before EarlyStopping
-            EarlyStopping(monitor='norm_gini_val', patience=patience, mode='max', verbose=1),
-            CSVLogger('keras-5fold-run-01-v1-epochs.log', separator=',', append=False),
-            ModelCheckpoint(
-                    'keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check',
-                    monitor='norm_gini_val', mode='max', # mode must be set to max or Keras will be confused
-                    save_best_only=True,
-                    verbose=1)
-        ]
 
-# The classifier is defined here. Epochs should be be set to a very large number (not 3 like below) which 
-# will never be reached anyway because of early stopping. I usually put 5000 there. Because why not.
+## Basic Cell RNN in tensorflow
 
-        nnet = KerasClassifier(
-            build_fn=baseline_model,
-# Epoch needs to be set to a very large number ; early stopping will prevent it from reaching
-#            epochs=5000,
-            epochs=3,
-            batch_size=batchsize,
-            validation_data=(X_val, y_val),
-            verbose=2,
-            shuffle=True,
-            callbacks=callbacks)
+index_in_epoch = 0;
+perm_array  = np.arange(x_train.shape[0])
+np.random.shuffle(perm_array)
 
-        fit = nnet.fit(X_train, y_train)
+# function to get the next batch
+def get_next_batch(batch_size):
+    global index_in_epoch, x_train, perm_array   
+    start = index_in_epoch
+    index_in_epoch += batch_size
+    
+    if index_in_epoch > x_train.shape[0]:
+        np.random.shuffle(perm_array) # shuffle permutation array
+        start = 0 # start next epoch
+        index_in_epoch = batch_size
         
-# We want the best saved model - not the last one where the training stopped. So we delete the old 
-# model instance and load the model from the last saved checkpoint. Next we predict values both for 
-# validation and test data, and create a summary of parameters for each run.
+    end = index_in_epoch
+    return x_train[perm_array[start:end]], y_train[perm_array[start:end]]
 
-        del nnet
-        nnet = load_model('keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check')
-        scores_val_run = nnet.predict_proba(X_val, verbose=0)
-        LL_run = log_loss(y_val, scores_val_run)
-        print('\n Fold %d Run %d Log-loss: %.5f' % ((i + 1), (run + 1), LL_run))
-        AUC_run = roc_auc_score(y_val, scores_val_run)
-        print(' Fold %d Run %d AUC: %.5f' % ((i + 1), (run + 1), AUC_run))
-        print(' Fold %d Run %d normalized gini: %.5f' % ((i + 1), (run + 1), AUC_run*2-1))
-        y_pred_run = nnet.predict_proba(test, verbose=0)
-        if run > 0:
-            scores_val = scores_val + scores_val_run
-            y_pred = y_pred + y_pred_run
-        else:
-            scores_val = scores_val_run
-            y_pred = y_pred_run
-            
-# We average all runs from the same fold and provide a parameter summary for each fold. Unless something 
-# is wrong, the numbers printed here should be better than any of the individual runs.
+# parameters
+n_steps = seq_len-1 
+n_inputs = 4 
+n_neurons = 200 
+n_outputs = 4
+n_layers = 2
+learning_rate = 0.001
+batch_size = 50
+n_epochs = 100 
+train_set_size = x_train.shape[0]
+test_set_size = x_test.shape[0]
 
-    scores_val = scores_val / runs
-    y_pred = y_pred / runs
-    LL = log_loss(y_val, scores_val)
-    print('\n Fold %d Log-loss: %.5f' % ((i + 1), LL))
-    AUC = roc_auc_score(y_val, scores_val)
-    print(' Fold %d AUC: %.5f' % ((i + 1), AUC))
-    print(' Fold %d normalized gini: %.5f' % ((i + 1), AUC*2-1))
-    timer(start_time)
+tf.reset_default_graph()
+
+X = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+y = tf.placeholder(tf.float32, [None, n_outputs])
+
+# use Basic RNN Cell
+layers = [tf.contrib.rnn.BasicRNNCell(num_units=n_neurons, activation=tf.nn.elu)
+          for layer in range(n_layers)]
+
+# use Basic LSTM Cell 
+#layers = [tf.contrib.rnn.BasicLSTMCell(num_units=n_neurons, activation=tf.nn.elu)
+#          for layer in range(n_layers)]
+
+# use LSTM Cell with peephole connections
+#layers = [tf.contrib.rnn.LSTMCell(num_units=n_neurons, 
+#                                  activation=tf.nn.leaky_relu, use_peepholes = True)
+#          for layer in range(n_layers)]
+
+# use GRU cell
+#layers = [tf.contrib.rnn.GRUCell(num_units=n_neurons, activation=tf.nn.leaky_relu)
+#          for layer in range(n_layers)]
+                                                                     
+multi_layer_cell = tf.contrib.rnn.MultiRNNCell(layers)
+rnn_outputs, states = tf.nn.dynamic_rnn(multi_layer_cell, X, dtype=tf.float32)
+
+stacked_rnn_outputs = tf.reshape(rnn_outputs, [-1, n_neurons]) 
+stacked_outputs = tf.layers.dense(stacked_rnn_outputs, n_outputs)
+outputs = tf.reshape(stacked_outputs, [-1, n_steps, n_outputs])
+outputs = outputs[:,n_steps-1,:] # keep only last output of sequence
+                                              
+loss = tf.reduce_mean(tf.square(outputs - y)) # loss function = mean squared error 
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate) 
+training_op = optimizer.minimize(loss)
+                                              
+# run graph
+with tf.Session() as sess: 
+    sess.run(tf.global_variables_initializer())
+    for iteration in range(int(n_epochs*train_set_size/batch_size)):
+        x_batch, y_batch = get_next_batch(batch_size) # fetch the next training batch 
+        sess.run(training_op, feed_dict={X: x_batch, y: y_batch}) 
+        if iteration % int(5*train_set_size/batch_size) == 0:
+            mse_train = loss.eval(feed_dict={X: x_train, y: y_train}) 
+            mse_valid = loss.eval(feed_dict={X: x_valid, y: y_valid}) 
+            print('%.2f epochs: MSE train/valid = %.6f/%.6f'%(
+                iteration*batch_size/train_set_size, mse_train, mse_valid))
+
+    y_train_pred = sess.run(outputs, feed_dict={X: x_train})
+    y_valid_pred = sess.run(outputs, feed_dict={X: x_valid})
+    y_test_pred = sess.run(outputs, feed_dict={X: x_test})
     
-# We add up predictions on the test data for each fold. Create out-of-fold predictions for validation data.
-
-    if i > 0:
-        fpred = pred + y_pred
-        avreal = np.concatenate((avreal, y_val), axis=0)
-        avpred = np.concatenate((avpred, scores_val), axis=0)
-        avids = np.concatenate((avids, val_ids), axis=0)
-    else:
-        fpred = y_pred
-        avreal = y_val
-        avpred = scores_val
-        avids = val_ids
-    pred = fpred
-    cv_LL = cv_LL + LL
-    cv_AUC = cv_AUC + AUC
-    cv_gini = cv_gini + (AUC*2-1)
 
 
-# Here we average all the predictions and provide the final summary.
+# # 5. Predictions <a class="anchor" id="5-bullet"></a> 
 
 # In[ ]:
 
 
-LL_oof = log_loss(avreal, avpred)
-print('\n Average Log-loss: %.5f' % (cv_LL/folds))
-print(' Out-of-fold Log-loss: %.5f' % LL_oof)
-AUC_oof = roc_auc_score(avreal, avpred)
-print('\n Average AUC: %.5f' % (cv_AUC/folds))
-print(' Out-of-fold AUC: %.5f' % AUC_oof)
-print('\n Average normalized gini: %.5f' % (cv_gini/folds))
-print(' Out-of-fold normalized gini: %.5f' % (AUC_oof*2-1))
-score = str(round((AUC_oof*2-1), 5))
-timer(starttime)
-mpred = pred / folds
+y_train.shape
 
-
-# Save the file with out-of-fold predictions. For easier book-keeping, file names have the out-of-fold gini score and are are tagged by date and time.
 
 # In[ ]:
 
 
-print('#\n Writing results')
-now = datetime.now()
-oof_result = pd.DataFrame(avreal, columns=['target'])
-oof_result['prediction'] = avpred
-oof_result['id'] = avids
-oof_result.sort_values('id', ascending=True, inplace=True)
-oof_result = oof_result.set_index('id')
-sub_file = 'train_5fold-keras-run-01-v1-oof_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
-print('\n Writing out-of-fold file:  %s' % sub_file)
-oof_result.to_csv(sub_file, index=True, index_label='id')
+ft = 0 # 0 = open, 1 = close, 2 = highest, 3 = lowest
 
+## show predictions
+plt.figure(figsize=(15, 5));
+plt.subplot(1,2,1);
 
-# Save the final prediction. This is the one to submit.
+plt.plot(np.arange(y_train.shape[0]), y_train[:,ft], color='blue', label='train target')
 
-# In[ ]:
+plt.plot(np.arange(y_train.shape[0], y_train.shape[0]+y_valid.shape[0]), y_valid[:,ft],
+         color='gray', label='valid target')
 
+plt.plot(np.arange(y_train.shape[0]+y_valid.shape[0],
+                   y_train.shape[0]+y_test.shape[0]+y_test.shape[0]),
+         y_test[:,ft], color='black', label='test target')
 
-result = pd.DataFrame(mpred, columns=['target'])
-result['id'] = te_ids
-result = result.set_index('id')
-print('\n First 10 lines of your 5-fold average prediction:\n')
-print(result.head(10))
-sub_file = 'submission_5fold-average-keras-run-01-v1_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
-print('\n Writing submission:  %s' % sub_file)
-result.to_csv(sub_file, index=True, index_label='id')
+plt.plot(np.arange(y_train_pred.shape[0]),y_train_pred[:,ft], color='red',
+         label='train prediction')
+
+plt.plot(np.arange(y_train_pred.shape[0], y_train_pred.shape[0]+y_valid_pred.shape[0]),
+         y_valid_pred[:,ft], color='orange', label='valid prediction')
+
+plt.plot(np.arange(y_train_pred.shape[0]+y_valid_pred.shape[0],
+                   y_train_pred.shape[0]+y_valid_pred.shape[0]+y_test_pred.shape[0]),
+         y_test_pred[:,ft], color='green', label='test prediction')
+
+plt.title('past and future stock prices')
+plt.xlabel('time [days]')
+plt.ylabel('normalized price')
+plt.legend(loc='best');
+
+plt.subplot(1,2,2);
+
+plt.plot(np.arange(y_train.shape[0], y_train.shape[0]+y_test.shape[0]),
+         y_test[:,ft], color='black', label='test target')
+
+plt.plot(np.arange(y_train_pred.shape[0], y_train_pred.shape[0]+y_test_pred.shape[0]),
+         y_test_pred[:,ft], color='green', label='test prediction')
+
+plt.title('future stock prices')
+plt.xlabel('time [days]')
+plt.ylabel('normalized price')
+plt.legend(loc='best');
+
+corr_price_development_train = np.sum(np.equal(np.sign(y_train[:,1]-y_train[:,0]),
+            np.sign(y_train_pred[:,1]-y_train_pred[:,0])).astype(int)) / y_train.shape[0]
+corr_price_development_valid = np.sum(np.equal(np.sign(y_valid[:,1]-y_valid[:,0]),
+            np.sign(y_valid_pred[:,1]-y_valid_pred[:,0])).astype(int)) / y_valid.shape[0]
+corr_price_development_test = np.sum(np.equal(np.sign(y_test[:,1]-y_test[:,0]),
+            np.sign(y_test_pred[:,1]-y_test_pred[:,0])).astype(int)) / y_test.shape[0]
+
+print('correct sign prediction for close - open price for train/valid/test: %.2f/%.2f/%.2f'%(
+    corr_price_development_train, corr_price_development_valid, corr_price_development_test))
 

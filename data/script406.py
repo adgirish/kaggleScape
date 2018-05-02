@@ -1,751 +1,613 @@
 
 # coding: utf-8
 
-# # Psychology of a Professional Athlete
-# In this script we explore all shot attempts of Kobe Bryant throughout his career and try to see if Kobe displays the "hot hand" effect
+# This notebook is the reproduction of [A Very Extensive Sberbank Exploratory Analysis](https://www.kaggle.com/captcalculator/a-very-extensive-sberbank-exploratory-analysis) notebook in python. Here i copied only titles, for more detailed description please refer to original notebook.
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from matplotlib.patches import Circle, Rectangle, Arc
-from sklearn import mixture
-from sklearn import ensemble
-from sklearn import model_selection
-from sklearn.metrics import accuracy_score as accuracy
-from sklearn.metrics import log_loss
-import time
-import itertools
-import operator
+import seaborn as sns
+color = sns.color_palette()
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+pd.options.mode.chained_assignment = None  # default='warn'
+pd.set_option('display.max_columns', 500)
 
 
-# ## Load the data and create some useful fields
-# show the newly created fields as a sanity check
+# ## Training Data
 
 # In[ ]:
 
 
-#%% load training data
-allData = pd.read_csv('../input/data.csv')
-data = allData[allData['shot_made_flag'].notnull()].reset_index()
-
-#%% add some temporal columns to the data
-data['game_date_DT'] = pd.to_datetime(data['game_date'])
-data['dayOfWeek']    = data['game_date_DT'].dt.dayofweek
-data['dayOfYear']    = data['game_date_DT'].dt.dayofyear
-
-data['secondsFromPeriodEnd']   = 60*data['minutes_remaining']+data['seconds_remaining']
-data['secondsFromPeriodStart'] = 60*(11-data['minutes_remaining'])+(60-data['seconds_remaining'])
-data['secondsFromGameStart']   = (data['period'] <= 4).astype(int)*(data['period']-1)*12*60 + (data['period'] > 4).astype(int)*((data['period']-4)*5*60 + 3*12*60) + data['secondsFromPeriodStart']
-
-# look at first couple of rows and verify that everything is good
-data.loc[:10,['period','minutes_remaining','seconds_remaining','secondsFromGameStart']]
+train_df = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
+train_df['price_doc_log'] = np.log1p(train_df['price_doc'])
 
 
-# ## Plot Shot Attempts as a function of time during the game
-# here we apply 3 different binnings of time and show the attempts as function from game start
+# ## Missing Data
 
 # In[ ]:
 
 
-# plot the shot attempts as a function of time (from start of game) with several different binnings
-plt.rcParams['figure.figsize'] = (16, 16)
-plt.rcParams['font.size'] = 16
+train_na = (train_df.isnull().sum() / len(train_df)) * 100
+train_na = train_na.drop(train_na[train_na == 0].index).sort_values(ascending=False)
 
-binsSizes = [24,12,6]
-
-plt.figure();
-for k, binSizeInSeconds in enumerate(binsSizes):
-    timeBins = np.arange(0,60*(4*12+3*5),binSizeInSeconds)+0.01
-    attemptsAsFunctionOfTime, b = np.histogram(data['secondsFromGameStart'], bins=timeBins)     
-    
-    maxHeight = max(attemptsAsFunctionOfTime) + 30
-    barWidth = 0.999*(timeBins[1]-timeBins[0])
-    plt.subplot(len(binsSizes),1,k+1); 
-    plt.bar(timeBins[:-1],attemptsAsFunctionOfTime, align='edge', width=barWidth); plt.title(str(binSizeInSeconds) + ' second time bins')
-    plt.vlines(x=[0,12*60,2*12*60,3*12*60,4*12*60,4*12*60+5*60,4*12*60+2*5*60,4*12*60+3*5*60], ymin=0,ymax=maxHeight, colors='r')
-    plt.xlim((-20,3200)); plt.ylim((0,maxHeight)); plt.ylabel('attempts')
-plt.xlabel('time [seconds from start of game]')
-
-
-# ### It looks like Kobe is entrusted to take the last shot of every period
-# it also looks like he's usually on the bench at the start of 2nd and 4th periods
-
-# ## Plot Shot Accuracy as function of time during the game
 
 # In[ ]:
 
 
-#%% plot the accuracy as a function of time
-plt.rcParams['figure.figsize'] = (15, 10)
-plt.rcParams['font.size'] = 16
-
-binSizeInSeconds = 20
-timeBins = np.arange(0,60*(4*12+3*5),binSizeInSeconds)+0.01
-attemptsAsFunctionOfTime,     b = np.histogram(data['secondsFromGameStart'], bins=timeBins)     
-madeAttemptsAsFunctionOfTime, b = np.histogram(data.loc[data['shot_made_flag']==1,'secondsFromGameStart'], bins=timeBins)     
-attemptsAsFunctionOfTime[attemptsAsFunctionOfTime < 1] = 1
-accuracyAsFunctionOfTime = madeAttemptsAsFunctionOfTime.astype(float)/attemptsAsFunctionOfTime
-accuracyAsFunctionOfTime[attemptsAsFunctionOfTime <= 50] = 0 # zero accuracy in bins that don't have enough samples
-
-maxHeight = max(attemptsAsFunctionOfTime) + 30
-barWidth = 0.999*(timeBins[1]-timeBins[0])
-
-plt.figure();
-plt.subplot(2,1,1); plt.bar(timeBins[:-1],attemptsAsFunctionOfTime, align='edge', width=barWidth); 
-plt.xlim((-20,3200)); plt.ylim((0,maxHeight)); plt.ylabel('attempts'); plt.title(str(binSizeInSeconds) + ' second time bins')
-plt.vlines(x=[0,12*60,2*12*60,3*12*60,4*12*60,4*12*60+5*60,4*12*60+2*5*60,4*12*60+3*5*60], ymin=0,ymax=maxHeight, colors='r')
-plt.subplot(2,1,2); plt.bar(timeBins[:-1],accuracyAsFunctionOfTime, align='edge', width=barWidth); 
-plt.xlim((-20,3200)); plt.ylabel('accuracy'); plt.xlabel('time [seconds from start of game]')
-plt.vlines(x=[0,12*60,2*12*60,3*12*60,4*12*60,4*12*60+5*60,4*12*60+2*5*60,4*12*60+3*5*60], ymin=0.0,ymax=0.7, colors='r')
+f, ax = plt.subplots(figsize=(12, 8))
+plt.xticks(rotation='90')
+sns.barplot(x=train_na.index, y=train_na)
+ax.set(title='Percent missing data by feature', ylabel='% missing')
 
 
-# ### Note that the accuracy of these "last second shots" is consisently lower than usuall
-# This is probably due to the fact that a large amonut of these shots are from very far away
-
-# ## Now let's continue our initial exploration and examine the spatial location aspect of kobe's shots
-# we'll do this by building a **gaussian mixture model** that tries to summerize Kobe's shot locations compactly
+# ## Data Quality Issues
 
 # In[ ]:
 
 
-#%% cluster the shot attempts of kobe using GMM on their location
-numGaussians = 13
-gaussianMixtureModel = mixture.GaussianMixture(n_components=numGaussians, covariance_type='full', 
-                                               init_params='kmeans', n_init=50, 
-                                               verbose=0, random_state=5)
-gaussianMixtureModel.fit(data.loc[:,['loc_x','loc_y']])
+# state should be discrete valued between 1 and 4. There is a 33 in it that is cleary a data entry error
+# Lets just replace it with the mode.
+train_df.loc[train_df['state'] == 33, 'state'] = train_df['state'].mode().iloc[0]
 
-# add the GMM cluster as a field in the dataset
-data['shotLocationCluster'] = gaussianMixtureModel.predict(data.loc[:,['loc_x','loc_y']])
+# build_year has an erronus value 20052009. Since its unclear which it should be, let's replace with 2007
+train_df.loc[train_df['build_year'] == 20052009, 'build_year'] = 2007
 
 
-# ## Define some helper functions
-# the function **draw_court()** is shamelessly stolen from **[MichaelKrueger](https://www.kaggle.com/bbx396)**'s excelent [script](https://www.kaggle.com/bbx396/kobechart))
+# ## Housing Internal Characteristics
 
 # In[ ]:
 
 
-#%% define draw functions (stealing shamelessly the draw_court() function from MichaelKrueger's excelent script)
+internal_chars = ['full_sq', 'life_sq', 'floor', 'max_floor', 'build_year', 'num_room', 'kitch_sq', 'state', 'price_doc']
+corrmat = train_df[internal_chars].corr()
 
-def draw_court(ax=None, color='black', lw=2, outer_lines=False):
-    # If an axes object isn't provided to plot onto, just get current one
-    if ax is None:
-        ax = plt.gca()
-
-    # Create the various parts of an NBA basketball court
-
-    # Create the basketball hoop
-    # Diameter of a hoop is 18" so it has a radius of 9", which is a value
-    # 7.5 in our coordinate system
-    hoop = Circle((0, 0), radius=7.5, linewidth=lw, color=color, fill=False)
-
-    # Create backboard
-    backboard = Rectangle((-30, -7.5), 60, -1, linewidth=lw, color=color)
-
-    # The paint
-    # Create the outer box 0f the paint, width=16ft, height=19ft
-    outer_box = Rectangle((-80, -47.5), 160, 190, linewidth=lw, color=color,
-                          fill=False)
-    # Create the inner box of the paint, widt=12ft, height=19ft
-    inner_box = Rectangle((-60, -47.5), 120, 190, linewidth=lw, color=color,
-                          fill=False)
-
-    # Create free throw top arc
-    top_free_throw = Arc((0, 142.5), 120, 120, theta1=0, theta2=180,
-                         linewidth=lw, color=color, fill=False)
-    # Create free throw bottom arc
-    bottom_free_throw = Arc((0, 142.5), 120, 120, theta1=180, theta2=0,
-                            linewidth=lw, color=color, linestyle='dashed')
-    # Restricted Zone, it is an arc with 4ft radius from center of the hoop
-    restricted = Arc((0, 0), 80, 80, theta1=0, theta2=180, linewidth=lw,
-                     color=color)
-
-    # Three point line
-    # Create the side 3pt lines, they are 14ft long before they begin to arc
-    corner_three_a = Rectangle((-220, -47.5), 0, 140, linewidth=lw,
-                               color=color)
-    corner_three_b = Rectangle((220, -47.5), 0, 140, linewidth=lw, color=color)
-    # 3pt arc - center of arc will be the hoop, arc is 23'9" away from hoop
-    # I just played around with the theta values until they lined up with the 
-    # threes
-    three_arc = Arc((0, 0), 475, 475, theta1=22, theta2=158, linewidth=lw,
-                    color=color)
-
-    # Center Court
-    center_outer_arc = Arc((0, 422.5), 120, 120, theta1=180, theta2=0,
-                           linewidth=lw, color=color)
-    center_inner_arc = Arc((0, 422.5), 40, 40, theta1=180, theta2=0,
-                           linewidth=lw, color=color)
-
-    # List of the court elements to be plotted onto the axes
-    court_elements = [hoop, backboard, outer_box, inner_box, top_free_throw,
-                      bottom_free_throw, restricted, corner_three_a,
-                      corner_three_b, three_arc, center_outer_arc,
-                      center_inner_arc]
-
-    if outer_lines:
-        # Draw the half court line, baseline and side out bound lines
-        outer_lines = Rectangle((-250, -47.5), 500, 470, linewidth=lw,
-                                color=color, fill=False)
-        court_elements.append(outer_lines)
-
-    # Add the court elements onto the axes
-    for element in court_elements:
-        ax.add_patch(element)
-
-    return ax
-
-def Draw2DGaussians(gaussianMixtureModel, ellipseColors, ellipseTextMessages):
-    
-    fig, h = plt.subplots();
-    for i, (mean, covarianceMatrix) in enumerate(zip(gaussianMixtureModel.means_, gaussianMixtureModel.covariances_)):
-        # get the eigen vectors and eigen values of the covariance matrix
-        v, w = np.linalg.eigh(covarianceMatrix)
-        v = 2.5*np.sqrt(v) # go to units of standard deviation instead of variance
-        
-        # calculate the ellipse angle and two axis length and draw it
-        u = w[0] / np.linalg.norm(w[0])    
-        angle = np.arctan(u[1] / u[0])
-        angle = 180 * angle / np.pi  # convert to degrees
-        currEllipse = mpl.patches.Ellipse(mean, v[0], v[1], 180 + angle, color=ellipseColors[i])
-        currEllipse.set_alpha(0.5)
-        h.add_artist(currEllipse)
-        h.text(mean[0]+7, mean[1]-1, ellipseTextMessages[i], fontsize=13, color='blue')
-
-
-# ## Draw the 2D Gaussians of Shot Attempts
-# Each elipse is the countour that represents 2.5 standard deviations away from the center of the gaussian
-# Each number in blue represents the precent of shots taken from this gaussian out of all shots
 
 # In[ ]:
 
 
-#%% show gaussian mixture elipses of shot attempts
-plt.rcParams['figure.figsize'] = (13, 10)
-plt.rcParams['font.size'] = 15
-
-ellipseTextMessages = [str(100*gaussianMixtureModel.weights_[x])[:4]+'%' for x in range(numGaussians)]
-ellipseColors = ['red','green','purple','cyan','magenta','yellow','blue','orange','silver','maroon','lime','olive','brown','darkblue']
-Draw2DGaussians(gaussianMixtureModel, ellipseColors, ellipseTextMessages)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270); plt.title('shot attempts')
+f, ax = plt.subplots(figsize=(10, 7))
+plt.xticks(rotation='90')
+sns.heatmap(corrmat, square=True, linewidths=.5, annot=True)
 
 
-# We can see that Kobe is making **more attempts** from the **left side** of the court (or right side from his point of view). this is probably because he's **right handed**.
-# 
-# Also, we can see that a huge number of attempts (16.8%) is from directly under the basket, and 5.06% additinal attemps are from very close to the basket
-# 
-
-# ## Show the Scatter Plot of all Kobe's shot attempts colored by the cluster assignment according to the GMM
-# 
-# Just to make sure the gaussian model actually captures something
+# ## Area of Home and Number of Rooms
 
 # In[ ]:
 
 
-#%% just to make sure the gaussian model actually captures something, show the scatter and cluster assignment
-plt.rcParams['figure.figsize'] = (13, 10)
-plt.rcParams['font.size'] = 15
+f, ax = plt.subplots(figsize=(10, 7))
+plt.scatter(x=train_df['full_sq'], y=train_df['price_doc'], c='r')
 
-plt.figure(); draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270); plt.title('cluser assignment')
-plt.scatter(x=data['loc_x'],y=data['loc_y'],c=data['shotLocationCluster'],s=40,cmap='hsv',alpha=0.1)
-
-
-# It doesn't seem perfect, but definatly captures some interesting things about the data
-# for example, we can see that the large and very far away cluster is capturing all of the very distant shots
-
-# ## Plot the Shot Accuracy of each Gaussian Cluster 
-# Each blue number here will represent the accuracy of the shots taken from this cluster so we can get a feel for what are easy and what are difficult shots
 
 # In[ ]:
 
 
-#%% for each cluster, calculate it's individual accuracy and plot it
-plt.rcParams['figure.figsize'] = (13, 10)
-plt.rcParams['font.size'] = 15
+f, ax = plt.subplots(figsize=(10, 7))
+ind = train_df[train_df['full_sq'] > 2000].index
+plt.scatter(x=train_df.drop(ind)['full_sq'], y=train_df.drop(ind)['price_doc'], c='r', alpha=0.5)
+ax.set(title='Price by area in sq meters', xlabel='Area', ylabel='Price')
 
-variableCategories = data['shotLocationCluster'].value_counts().index.tolist()
-
-clusterAccuracy = {}
-for category in variableCategories:
-    shotsAttempted = np.array(data['shotLocationCluster'] == category).sum()
-    shotsMade = np.array(data.loc[data['shotLocationCluster'] == category,'shot_made_flag'] == 1).sum()
-    clusterAccuracy[category] = float(shotsMade)/shotsAttempted
-
-ellipseTextMessages = [str(100*clusterAccuracy[x])[:4]+'%' for x in range(numGaussians)]
-Draw2DGaussians(gaussianMixtureModel, ellipseColors, ellipseTextMessages)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270); plt.title('shot accuracy')
-
-
-# ### We can clearly see the dependence between distance and accuracy
-# Another interesting fact is that Kobe not only makes more attempts from the right side (from his point of view), but also he's better at making those attempts
-
-# ## Now let's Plot a 2D Spatio-Temporal plot of Kobe's career
-# 
-# * on **x-axis** there will be **time** since start of game
-# * on **y-axis** there will be the **cluster index** Kobe made the shot (sorted by the cluster accuracy)
-# * the **intensity** will be the **number of attempts** by Kobe from that particular cluster at that particular time
-# * red verticle lines are the end of each period
 
 # In[ ]:
 
 
-#%% plot a 2-d spatio-temporal histogram of kobe's games during his entire carrer
-plt.rcParams['figure.figsize'] = (18, 10)
-plt.rcParams['font.size'] = 18
+(train_df['life_sq'] > train_df['full_sq']).sum()
 
-# sort the clusters according to their accuracy
-sortedClustersByAccuracyTuple = sorted(clusterAccuracy.items(), key=operator.itemgetter(1),reverse=True)
-sortedClustersByAccuracy = [x[0] for x in sortedClustersByAccuracyTuple]
-
-binSizeInSeconds = 12
-timeInUnitsOfBins = ((data['secondsFromGameStart']+0.0001)/binSizeInSeconds).astype(int)
-locationInUintsOfClusters = np.array([sortedClustersByAccuracy.index(data.loc[x,'shotLocationCluster']) for x in range(data.shape[0])])
-
-# build a spatio-temporal histogram of Kobe's games
-shotAttempts = np.zeros((gaussianMixtureModel.n_components,1+max(timeInUnitsOfBins)))
-for shot in range(data.shape[0]):
-    shotAttempts[locationInUintsOfClusters[shot],timeInUnitsOfBins[shot]] += 1
-
-# make the y-axis have larger area so it will be more visible 
-shotAttempts = np.kron(shotAttempts,np.ones((5,1)))
-# the locations of the period ends
-vlinesList = 0.5001+np.array([0,12*60,2*12*60,3*12*60,4*12*60,4*12*60+5*60]).astype(int)/binSizeInSeconds
-
-plt.figure(figsize=(13,8))
-plt.imshow(shotAttempts, cmap='copper',interpolation="nearest"); plt.xlim(0,float(4*12*60+6*60)/binSizeInSeconds);
-plt.vlines(x=vlinesList, ymin=-0.5,ymax=shotAttempts.shape[0]-0.5, colors='r');
-plt.xlabel('time from start of game [sec]'); plt.ylabel('cluster (sorted by accuracy)')
-
-
-# The clusters are sorted in descending order of accuracy. under the basek high accuracy shots are at the top, and low accuracy shots from half court are at the bottom
-# ### We can now see that the "last second shots" in the 1st, 2nd and 3rd periods were indeed "hopeless shots" from very far away
-# It's interesting to note, however, that in the 4th period, the last second shot don't belong to the "hopeless" cluster, but rather to the regular 3-pointer clusters (which are still much more difficult, but not hopeless)
-# 
-
-# ## For later analysis, we'll want to assess shot difficulty based on shot properties
-# (such as shot type and shot distance)
 
 # In[ ]:
 
 
-#%% create a new table for shot difficulty model
-def FactorizeCategoricalVariable(inputDB,categoricalVarName):
-    opponentCategories = inputDB[categoricalVarName].value_counts().index.tolist()
-    
-    outputDB = pd.DataFrame()
-    for category in opponentCategories:
-        featureName = categoricalVarName + ': ' + str(category)
-        outputDB[featureName] = (inputDB[categoricalVarName] == category).astype(int)
-
-    return outputDB
-
-featuresDB = pd.DataFrame()
-featuresDB['homeGame'] = data['matchup'].apply(lambda x: 1 if (x.find('@') < 0) else 0)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'opponent')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'action_type')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'shot_type')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'combined_shot_type')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'shot_zone_basic')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'shot_zone_area')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'shot_zone_range')],axis=1)
-featuresDB = pd.concat([featuresDB,FactorizeCategoricalVariable(data,'shotLocationCluster')],axis=1)
-
-featuresDB['playoffGame']          = data['playoffs']
-featuresDB['locX']                 = data['loc_x']
-featuresDB['locY']                 = data['loc_y']
-featuresDB['distanceFromBasket']   = data['shot_distance']
-featuresDB['secondsFromPeriodEnd'] = data['secondsFromPeriodEnd']
-
-featuresDB['dayOfWeek_cycX']  = np.sin(2*np.pi*(data['dayOfWeek']/7))
-featuresDB['dayOfWeek_cycY']  = np.cos(2*np.pi*(data['dayOfWeek']/7))
-featuresDB['timeOfYear_cycX'] = np.sin(2*np.pi*(data['dayOfYear']/365))
-featuresDB['timeOfYear_cycY'] = np.cos(2*np.pi*(data['dayOfYear']/365))
-
-labelsDB = data['shot_made_flag']
+f, ax = plt.subplots(figsize=(10, 7))
+sns.countplot(x=train_df['num_room'])
+ax.set(title='Distribution of room count', xlabel='num_room')
 
 
-# ## Build a model based on featuresDB table, and make sure it doesn't overfit 
-# (i.e. the training error and the test error are the same)
-# #### Use an ExtraTreesClassifier for that
+# ## Sale Type
 
 # In[ ]:
 
 
-#%% build a simple model and make sure it doesnt overfit
-randomSeed = 1
-numFolds   = 4
+#can't plot density graph due to bug in kaggle kernels
+#https://github.com/mwaskom/seaborn/issues/1103
+#g = sns.FacetGrid(train_df, col="product_type", size=6)
+#g.map(sns.kdeplot, "price_doc_log", color="r", shade=True)
+#g.add_legend()
+#ax.set(ylabel='density')
 
-stratifiedCV = model_selection.StratifiedKFold(n_splits=numFolds, shuffle=True, random_state=randomSeed)
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+train_df.drop(train_df['product_type'] == 'Investment')["price_doc_log"].plot.kde(ax=ax[0])
+train_df.drop(train_df['product_type'] == 'OwnerOccupier')["price_doc_log"].plot.kde(ax=ax[1])
+ax[0].set(xlabel='price_log')
+ax[1].set(xlabel='price_log')
 
-mainLearner = ensemble.ExtraTreesClassifier(n_estimators=500, max_depth=5, 
-                                            min_samples_leaf=120, max_features=120, 
-                                            criterion='entropy', bootstrap=False, 
-                                            n_jobs=-1, random_state=randomSeed)
-
-startTime = time.time()
-trainAccuracy = []; validAccuracy = [];
-trainLogLosses = []; validLogLosses = []
-for trainInds, validInds in stratifiedCV.split(featuresDB, labelsDB):
-    # split to train and valid sets
-    X_train_CV = featuresDB.iloc[trainInds,:]
-    y_train_CV = labelsDB.iloc[trainInds]
-    X_valid_CV = featuresDB.iloc[validInds,:]
-    y_valid_CV = labelsDB.iloc[validInds]
-    
-    # train learner
-    mainLearner.fit(X_train_CV, y_train_CV)
-    
-    # make predictions
-    y_train_hat_mainLearner = mainLearner.predict_proba(X_train_CV)[:,1]
-    y_valid_hat_mainLearner = mainLearner.predict_proba(X_valid_CV)[:,1]
-
-    # store results
-    trainAccuracy.append(accuracy(y_train_CV, y_train_hat_mainLearner > 0.5))
-    validAccuracy.append(accuracy(y_valid_CV, y_valid_hat_mainLearner > 0.5))
-    trainLogLosses.append(log_loss(y_train_CV, y_train_hat_mainLearner))
-    validLogLosses.append(log_loss(y_valid_CV, y_valid_hat_mainLearner))
-
-print("-----------------------------------------------------")
-print("total (train,valid) Accuracy = (%.5f,%.5f). took %.2f minutes" % (np.mean(trainAccuracy),np.mean(validAccuracy), (time.time()-startTime)/60))
-print("total (train,valid) Log Loss = (%.5f,%.5f). took %.2f minutes" % (np.mean(trainLogLosses),np.mean(validLogLosses), (time.time()-startTime)/60))
-print("-----------------------------------------------------")
-
-
-# ### Use the model to add a "shotDifficulty" field to every original shot entry
-# (which is actually the predicted probability of making the shot. meaning, the name is a bit confusing right now)
-# 
-# 
 
 # In[ ]:
 
 
-mainLearner.fit(featuresDB, labelsDB)
-data['shotDifficulty'] = mainLearner.predict_proba(featuresDB)[:,1]
+train_df.groupby('product_type')['price_doc'].median()
 
 
-# ## Get a feel for the important features of this model
-# look at the feature importances according to ET Classifier
+# ## Build Year
 
 # In[ ]:
 
 
-# just to get a feel for what determins shot difficulty, look at feature importances
-featureInds = mainLearner.feature_importances_.argsort()[::-1]
-featureImportance = pd.DataFrame(np.concatenate((featuresDB.columns[featureInds,None], mainLearner.feature_importances_[featureInds,None]), axis=1),
-                                  columns=['featureName', 'importanceET'])
+f, ax = plt.subplots(figsize=(12, 8))
+plt.xticks(rotation='90')
+ind = train_df[(train_df['build_year'] <= 1691) | (train_df['build_year'] >= 2018)].index
+by_df = train_df.drop(ind).sort_values(by=['build_year'])
+sns.countplot(x=by_df['build_year'])
+ax.set(title='Distribution of build year')
 
-featureImportance.iloc[:30,:]
-
-
-# # We would like to asses some aspects of the decision making process of Kobe Bryant
-# ### For that we will collect two distinct groups of shots and analyse the differences between them:
-# 
-# 1. The shots that came right **after a sucessful shot** attempt
-# 1. The shots that came right **after a missed shot** attempt
 
 # In[ ]:
 
 
-#%% collect data given that kobe made or missed last shot
-timeBetweenShotsDict = {}
-timeBetweenShotsDict['madeLast']   = []
-timeBetweenShotsDict['missedLast'] = []
-
-changeInDistFromBasketDict = {}
-changeInDistFromBasketDict['madeLast']   = []
-changeInDistFromBasketDict['missedLast'] = []
-
-changeInShotDifficultyDict = {}
-changeInShotDifficultyDict['madeLast']   = []
-changeInShotDifficultyDict['missedLast'] = []
-
-afterMadeShotsList   = []
-afterMissedShotsList = []
-
-for shot in range(1,data.shape[0]):
-
-    # make sure the current shot and last shot were all in the same period of the same game
-    sameGame   = data.loc[shot,'game_date'] == data.loc[shot-1,'game_date']
-    samePeriod = data.loc[shot,'period']    == data.loc[shot-1,'period']
-
-    if samePeriod and sameGame:
-        madeLastShot       = data.loc[shot-1,'shot_made_flag'] == 1
-        missedLastShot     = data.loc[shot-1,'shot_made_flag'] == 0
-        
-        timeDifferenceFromLastShot = data.loc[shot,'secondsFromGameStart']     - data.loc[shot-1,'secondsFromGameStart']
-        distDifferenceFromLastShot = data.loc[shot,'shot_distance']            - data.loc[shot-1,'shot_distance']
-        shotDifficultyDifferenceFromLastShot = data.loc[shot,'shotDifficulty'] - data.loc[shot-1,'shotDifficulty']
-
-        # check for currupt data points (assuming all samples should have been chronologically ordered)
-        if timeDifferenceFromLastShot < 0:
-            continue
-        
-        if madeLastShot:
-            timeBetweenShotsDict['madeLast'].append(timeDifferenceFromLastShot)
-            changeInDistFromBasketDict['madeLast'].append(distDifferenceFromLastShot)
-            changeInShotDifficultyDict['madeLast'].append(shotDifficultyDifferenceFromLastShot)
-            afterMadeShotsList.append(shot)
-            
-        if missedLastShot:
-            timeBetweenShotsDict['missedLast'].append(timeDifferenceFromLastShot)
-            changeInDistFromBasketDict['missedLast'].append(distDifferenceFromLastShot)
-            changeInShotDifficultyDict['missedLast'].append(shotDifficultyDifferenceFromLastShot)
-            afterMissedShotsList.append(shot)
-
-afterMissedData = data.iloc[afterMissedShotsList,:]
-afterMadeData   = data.iloc[afterMadeShotsList,:]
-
-shotChancesListAfterMade = afterMadeData['shotDifficulty'].tolist()
-totalAttemptsAfterMade   = afterMadeData.shape[0]
-totalMadeAfterMade       = np.array(afterMadeData['shot_made_flag'] == 1).sum()
-
-shotChancesListAfterMissed = afterMissedData['shotDifficulty'].tolist()
-totalAttemptsAfterMissed   = afterMissedData.shape[0]
-totalMadeAfterMissed       = np.array(afterMissedData['shot_made_flag'] == 1).sum()
+f, ax = plt.subplots(figsize=(12, 6))
+by_price = by_df.groupby('build_year')[['build_year', 'price_doc']].mean()
+sns.regplot(x="build_year", y="price_doc", data=by_price, scatter=False, order=3, truncate=True)
+plt.plot(by_price['build_year'], by_price['price_doc'], color='r')
+ax.set(title='Mean price by year of build')
 
 
-# ## Plot histogram of "Time Since Last Shot Attempt" for the two groups
+# ## Timestamp
 
 # In[ ]:
 
 
-#%% after making a shot, kobe wants more
-plt.rcParams['figure.figsize'] = (13, 10)
+f, ax = plt.subplots(figsize=(12, 6))
+ts_df = train_df.groupby('timestamp')[['price_doc']].mean()
+#sns.regplot(x="timestamp", y="price_doc", data=ts_df, scatter=False, truncate=True)
+plt.plot(ts_df.index, ts_df['price_doc'], color='r', )
+ax.set(title='Daily median price over time')
 
-jointHist, timeBins = np.histogram(timeBetweenShotsDict['madeLast']+timeBetweenShotsDict['missedLast'],bins=200)
-barWidth = 0.999*(timeBins[1]-timeBins[0])
-
-timeDiffHist_GivenMadeLastShot, b = np.histogram(timeBetweenShotsDict['madeLast'],bins=timeBins)
-timeDiffHist_GivenMissedLastShot, b = np.histogram(timeBetweenShotsDict['missedLast'],bins=timeBins)
-maxHeight = max(max(timeDiffHist_GivenMadeLastShot),max(timeDiffHist_GivenMissedLastShot)) + 30
-
-plt.figure();
-plt.subplot(2,1,1); plt.bar(timeBins[:-1], timeDiffHist_GivenMadeLastShot, width=barWidth); plt.xlim((0,500)); plt.ylim((0,maxHeight))
-plt.title('made last shot'); plt.ylabel('counts')
-plt.subplot(2,1,2); plt.bar(timeBins[:-1], timeDiffHist_GivenMissedLastShot, width=barWidth); plt.xlim((0,500)); plt.ylim((0,maxHeight))
-plt.title('missed last shot'); plt.xlabel('time since last shot'); plt.ylabel('counts')
-
-
-# It looks like after making a shot, kobe is a little bit more eager to throw the next shot
-# ### To everyone who is wondering about why is there a "silent period" after a made shot:
-# it's most likely because the ball is transfered to the other team after a sucesfull shot and it takes some time to get the ball back
-
-# ## To better visualize this difference between the histograms, let's look at cumulative histograms
 
 # In[ ]:
 
 
-#%% to make the difference clearer, show the cumulative histogram
-plt.rcParams['figure.figsize'] = (13, 6)
-
-timeDiffCumHist_GivenMadeLastShot = np.cumsum(timeDiffHist_GivenMadeLastShot).astype(float)
-timeDiffCumHist_GivenMadeLastShot = timeDiffCumHist_GivenMadeLastShot/max(timeDiffCumHist_GivenMadeLastShot)
-timeDiffCumHist_GivenMissedLastShot = np.cumsum(timeDiffHist_GivenMissedLastShot).astype(float)
-timeDiffCumHist_GivenMissedLastShot = timeDiffCumHist_GivenMissedLastShot/max(timeDiffCumHist_GivenMissedLastShot)
-
-maxHeight = max(timeDiffCumHist_GivenMadeLastShot[-1],timeDiffCumHist_GivenMissedLastShot[-1])
-
-plt.figure();
-madePrev = plt.plot(timeBins[:-1], timeDiffCumHist_GivenMadeLastShot, label='made Prev'); plt.xlim((0,500))
-missedPrev = plt.plot(timeBins[:-1], timeDiffCumHist_GivenMissedLastShot, label='missed Prev'); plt.xlim((0,500)); plt.ylim((0,1))
-plt.title('cumulative density function - CDF'); plt.xlabel('time since last shot'); plt.legend(loc='lower right')
+import datetime
+import matplotlib.dates as mdates
+years = mdates.YearLocator()   # every year
+yearsFmt = mdates.DateFormatter('%Y')
+ts_vc = train_df['timestamp'].value_counts()
+f, ax = plt.subplots(figsize=(12, 6))
+plt.bar(left=ts_vc.index, height=ts_vc)
+ax.xaxis.set_major_locator(years)
+ax.xaxis.set_major_formatter(yearsFmt)
+ax.set(title='Sales volume over time', ylabel='Number of transactions')
 
 
-# ## Plot histogram of "Current Shot Distance - Previous Shot Distance" for the two groups
-# Note that if Kobe throws from close by, and then from far away, this will result in positive values of "curr shot distance - prev shot distance". and vise versa - If Kobe throws from far away and then from close by, this will result in negative values.
+# ## Home State/Material
 
 # In[ ]:
 
 
-#%% after making a shot, kobe is a more confident and throws from further away
-plt.rcParams['figure.figsize'] = (13, 10)
+f, ax = plt.subplots(figsize=(12, 8))
+ts_df = train_df.groupby(by=[train_df.timestamp.dt.month])[['price_doc']].median()
+plt.plot(ts_df.index, ts_df, color='r')
+ax.set(title='Price by month of year')
 
-jointHist, distDiffBins = np.histogram(changeInDistFromBasketDict['madeLast']+changeInDistFromBasketDict['missedLast'],bins=100,density=False)
-barWidth = 0.999*(distDiffBins[1]-distDiffBins[0])
-
-distDiffHist_GivenMadeLastShot,   b = np.histogram(changeInDistFromBasketDict['madeLast'],bins=distDiffBins)
-distDiffHist_GivenMissedLastShot, b = np.histogram(changeInDistFromBasketDict['missedLast'],bins=distDiffBins)
-maxHeight = max(max(distDiffHist_GivenMadeLastShot),max(distDiffHist_GivenMissedLastShot)) + 30
-
-plt.figure();
-plt.subplot(2,1,1); plt.bar(distDiffBins[:-1], distDiffHist_GivenMadeLastShot, width=barWidth); plt.xlim((-40,40)); plt.ylim((0,maxHeight))
-plt.title('made last shot'); plt.ylabel('counts')
-plt.subplot(2,1,2); plt.bar(distDiffBins[:-1], distDiffHist_GivenMissedLastShot, width=barWidth); plt.xlim((-40,40)); plt.ylim((0,maxHeight))
-plt.title('missed last shot'); plt.xlabel('curr shot distance - prev shot distance'); plt.ylabel('counts')
-
-
-# We can clearly see that the made group of shots is more leaning to the right
-# ### It therefore looks like Kobe is more confident after making a shot, and because of it, he takes a larger risk and throws from further away
-# This is even more evident than the previous plot, but let's plot the cumulative histograms again to make it clearer
 
 # In[ ]:
 
 
-#%% to make the difference clearer, show the cumulative histogram
-plt.rcParams['figure.figsize'] = (13, 6)
+f, ax = plt.subplots(figsize=(12, 8))
+ind = train_df[train_df['state'].isnull()].index
+train_df['price_doc_log10'] = np.log10(train_df['price_doc'])
+sns.violinplot(x="state", y="price_doc_log10", data=train_df.drop(ind), inner="box")
+# sns.swarmplot(x="state", y="price_doc_log10", data=train_df.dropna(), color="w", alpha=.2);
+ax.set(title='Log10 of median price by state of home', xlabel='state', ylabel='log10(price)')
 
-distDiffCumHist_GivenMadeLastShot = np.cumsum(distDiffHist_GivenMadeLastShot).astype(float)
-distDiffCumHist_GivenMadeLastShot = distDiffCumHist_GivenMadeLastShot/max(distDiffCumHist_GivenMadeLastShot)
-distDiffCumHist_GivenMissedLastShot = np.cumsum(distDiffHist_GivenMissedLastShot).astype(float)
-distDiffCumHist_GivenMissedLastShot = distDiffCumHist_GivenMissedLastShot/max(distDiffCumHist_GivenMissedLastShot)
-
-maxHeight = max(distDiffCumHist_GivenMadeLastShot[-1],distDiffCumHist_GivenMissedLastShot[-1])
-
-plt.figure();
-madePrev = plt.plot(distDiffBins[:-1], distDiffCumHist_GivenMadeLastShot, label='made Prev'); plt.xlim((-40,40))
-missedPrev = plt.plot(distDiffBins[:-1], distDiffCumHist_GivenMissedLastShot, label='missed Prev'); plt.xlim((-40,40)); plt.ylim((0,1))
-plt.title('cumulative density function - CDF'); plt.xlabel('curr shot distance - prev shot distance'); plt.legend(loc='lower right')
-
-
-# ## Lastly, Let's plot the "Shot Difficulty" change for the two groups
-# here negative values indicate that kobe took a larger risk, and positive values indicate that kobe made a safer subsequent shot
 
 # In[ ]:
 
 
-#%% after making a shot, kobe is a more confident and makes much more difficult shots generally
-plt.rcParams['figure.figsize'] = (13, 10)
+train_df.drop(ind).groupby('state')['price_doc'].mean()
 
-jointHist, difficultyDiffBins = np.histogram(changeInShotDifficultyDict['madeLast']+changeInShotDifficultyDict['missedLast'],bins=100)
-barWidth = 0.999*(difficultyDiffBins[1]-difficultyDiffBins[0])
-
-shotDifficultyDiffHist_GivenMadeLastShot,   b = np.histogram(changeInShotDifficultyDict['madeLast'],bins=difficultyDiffBins)
-shotDifficultyDiffHist_GivenMissedLastShot, b = np.histogram(changeInShotDifficultyDict['missedLast'],bins=difficultyDiffBins)
-maxHeight = max(max(shotDifficultyDiffHist_GivenMadeLastShot),max(shotDifficultyDiffHist_GivenMissedLastShot)) + 30
-
-plt.figure();
-plt.subplot(2,1,1); plt.bar(difficultyDiffBins[:-1], shotDifficultyDiffHist_GivenMadeLastShot, width=barWidth); plt.xlim((-1,1)); plt.ylim((0,maxHeight))
-plt.title('made last shot'); plt.ylabel('counts')
-plt.subplot(2,1,2); plt.bar(difficultyDiffBins[:-1], shotDifficultyDiffHist_GivenMissedLastShot, width=barWidth); plt.xlim((-1,1)); plt.ylim((0,maxHeight))
-plt.title('missed last shot'); plt.xlabel('chance to make curr shot - chance to make prev shot'); plt.ylabel('counts')
-
-
-# ### We can see that the plot is heavier on the left side
-# ### It is therefore even more evident now that kobe feels he's "In The Zone" after making a shot 
-# and therefore he allows himself to attempt more difficult shots
-
-# ## Some of you might be wondering about wheather it's simply regression to the mean or not
-# this thinking is sound, since all successful attempts are inherently biased towards easier shots, and if we use relative meassures such as "shot difficulty change" we will for sure get this effect by simply "going back to the mean", so we need to make sure this isn't it.
 
 # In[ ]:
 
 
-#%% is this regression to the mean?
-plt.rcParams['figure.figsize'] = (12, 10)
+f, ax = plt.subplots(figsize=(12, 8))
+ind = train_df[train_df['material'].isnull()].index
+sns.violinplot(x="material", y="price_doc_log", data=train_df.drop(ind), inner="box")
+# sns.swarmplot(x="state", y="price_doc_log10", data=train_df.dropna(), color="w", alpha=.2);
+ax.set(title='Distribution of price by build material', xlabel='material', ylabel='log(price)')
 
-accuracyAllShots    = data['shot_made_flag'].mean()
-accuracyAfterMade   = afterMadeData['shot_made_flag'].mean()
-accuracyAfterMissed = afterMissedData['shot_made_flag'].mean()
-
-standardErrorAllShots    = np.sqrt(accuracyAllShots*(1-accuracyAllShots)/data.shape[0])
-standardErrorAfterMade   = np.sqrt(accuracyAfterMade*(1-accuracyAfterMade)/afterMadeData.shape[0])
-standardErrorAfterMissed = np.sqrt(accuracyAfterMissed*(1-accuracyAfterMissed)/afterMissedData.shape[0])
-
-accuracyVec = np.array([accuracyAfterMade,accuracyAllShots,accuracyAfterMissed])
-errorVec    = np.array([standardErrorAfterMade,standardErrorAllShots,standardErrorAfterMissed])
-
-barWidth = 0.7
-xLocs = np.arange(len(accuracyVec)) + 0.5
-
-fig, h = plt.subplots(); h.bar(xLocs, accuracyVec, barWidth, color='b', yerr=errorVec)
-h.set_xticks(xLocs); h.set_xticklabels(('after made', 'all shots', 'after missed'))
-plt.ylim([0.41,0.47]); plt.xlim([-0.3,3.3]); plt.title('not regression to the mean')
-
-
-# ### OK, now we've established that it's not simply regression to the mean, and that there are infact two different groups of shots with very different accuracies, the question arises:
-
-# # Is Kobe right in his "Hot Hand" feeling? 
-# Maybe Kobe really is "in the zone" and therefore it's "OK" for him to take on more difficult shots?
 
 # In[ ]:
 
 
-#%% but wait, maybe kobe is making more difficult shots because he's "in the zone"
-
-predictedShotPercentAfterMade = np.array(shotChancesListAfterMade).mean()
-predictedStadardDev = np.sqrt(predictedShotPercentAfterMade*(1-predictedShotPercentAfterMade))
-stadardError = predictedStadardDev/np.sqrt(len(shotChancesListAfterMade))
-predPlusErr  = predictedShotPercentAfterMade + 2*stadardError
-predMinusErr = predictedShotPercentAfterMade - 2*stadardError
-actualShotPercentAfterMade = float(totalMadeAfterMade)/totalAttemptsAfterMade
-
-print("-----------------------------------------------------")
-print('provided that kobe MADE the previous shot:')
-print('according to "shotDifficulty" model, 95% confidence interval ['+ str(predMinusErr)+', '+str(predPlusErr)+']')
-print('and Kobe actually made ' + str(actualShotPercentAfterMade) + ', which is within confidence interval')
-print("-----------------------------------------------------")
-
-predictedShotPercentAfterMissed = np.array(shotChancesListAfterMissed).mean()
-predictedStadardDev = np.sqrt(predictedShotPercentAfterMissed*(1-predictedShotPercentAfterMissed))
-stadardError = predictedStadardDev/np.sqrt(len(shotChancesListAfterMissed))
-predPlusErr  = predictedShotPercentAfterMissed + 2*stadardError
-predMinusErr = predictedShotPercentAfterMissed - 2*stadardError
-actualShotPercentAfterMissed = float(totalMadeAfterMissed)/totalAttemptsAfterMissed
-
-print("-----------------------------------------------------")
-print('provided that kobe MISSED the previous shot:')
-print('according to "shotDifficulty" model, 95% confidence interval ['+ str(predMinusErr)+', '+str(predPlusErr)+']')
-print('and Kobe actually made ' + str(actualShotPercentAfterMissed) + ', which is within confidence interval')
-print("-----------------------------------------------------")
+train_df.drop(ind).groupby('material')['price_doc'].median()
 
 
-# ### We can see that the accuracy is completely explained by the "shotDifficulty" model we've created, that doesn't contain any hot hand related features.
-# # The answer looks to be that Kobe doesn't have a "Hot Hand" effect
-
-# ## let's now try to visualize this a little better
+# ## Floor of Home
 
 # In[ ]:
 
 
-#%% let's try and visualize this - show scatter plot of after made and after missed shots
-plt.rcParams['figure.figsize'] = (16, 8)
+f, ax = plt.subplots(figsize=(12, 8))
+plt.scatter(x=train_df['floor'], y=train_df['price_doc_log'], c='r', alpha=0.4)
+sns.regplot(x="floor", y="price_doc_log", data=train_df, scatter=False, truncate=True)
+ax.set(title='Price by floor of home', xlabel='floor', ylabel='log(price)')
 
-afterMissedData = data.iloc[afterMissedShotsList,:]
-afterMadeData = data.iloc[afterMadeShotsList,:]
-
-plt.figure();
-plt.subplot(1,2,1); plt.title('shots after made')
-plt.scatter(x=afterMadeData['loc_x'],y=afterMadeData['loc_y'],c=afterMadeData['shotLocationCluster'],s=50,cmap='hsv',alpha=0.06)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270);
-
-plt.subplot(1,2,2); plt.title('shots after missed');
-plt.scatter(x=afterMissedData['loc_x'],y=afterMissedData['loc_y'],c=afterMissedData['shotLocationCluster'],s=50,cmap='hsv',alpha=0.06)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270);
-
-
-# ### Keen eyes can see differences in density here, but it's not very clear, so let's show the data in the gaussians format, hoping that it will be clearer
 
 # In[ ]:
 
 
-#%% show shot attempts of after made and after missed shots
-plt.rcParams['figure.figsize'] = (13, 10)
-
-variableCategories = afterMadeData['shotLocationCluster'].value_counts().index.tolist()
-clusterFrequency = {}
-for category in variableCategories:
-    shotsAttempted = np.array(afterMadeData['shotLocationCluster'] == category).sum()
-    clusterFrequency[category] = float(shotsAttempted)/afterMadeData.shape[0]
-
-ellipseTextMessages = [str(100*clusterFrequency[x])[:4]+'%' for x in range(numGaussians)]
-Draw2DGaussians(gaussianMixtureModel, ellipseColors, ellipseTextMessages)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270); plt.title('after made shots')
-
-variableCategories = afterMissedData['shotLocationCluster'].value_counts().index.tolist()
-clusterFrequency = {}
-for category in variableCategories:
-    shotsAttempted = np.array(afterMissedData['shotLocationCluster'] == category).sum()
-    clusterFrequency[category] = float(shotsAttempted)/afterMissedData.shape[0]
-
-ellipseTextMessages = [str(100*clusterFrequency[x])[:4]+'%' for x in range(numGaussians)]
-Draw2DGaussians(gaussianMixtureModel, ellipseColors, ellipseTextMessages)
-draw_court(outer_lines=True); plt.ylim(-60,440); plt.xlim(270,-270); plt.title('after missed shots')
+f, ax = plt.subplots(figsize=(12, 8))
+plt.scatter(x=train_df['max_floor'], y=train_df['price_doc_log'], c='r', alpha=0.4)
+sns.regplot(x="max_floor", y="price_doc_log", data=train_df, scatter=False, truncate=True)
+ax.set(title='Price by max floor of home', xlabel='max_floor', ylabel='log(price)')
 
 
-# ### Now it's very evident that after missing a shot, kobe is much more likely to throw directly from the basket relative to after making a shot (27% after missing the previous shot vs. 18% after making the previous shot) 
-# 
-# ### It's also very evident that after making a shot, kobe is much more likely to try a 3 pointer as his next shot
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 8))
+plt.scatter(x=train_df['floor'], y=train_df['max_floor'], c='r', alpha=0.4)
+plt.plot([0, 80], [0, 80], color='.5')
+
+
+# In[ ]:
+
+
+train_df.loc[train_df['max_floor'] < train_df['floor'], ['id', 'floor','max_floor']].head(20)
+
+
+# In[ ]:
+
+
+## Demographic Characteristics
+
+
+# In[ ]:
+
+
+demo_vars = ['area_m', 'raion_popul', 'full_all', 'male_f', 'female_f', 'young_all', 'young_female', 
+             'work_all', 'work_male', 'work_female', 'price_doc']
+corrmat = train_df[demo_vars].corr()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 7))
+plt.xticks(rotation='90')
+sns.heatmap(corrmat, square=True, linewidths=.5, annot=True)
+
+
+# In[ ]:
+
+
+train_df['sub_area'].unique().shape[0]
+
+
+# In[ ]:
+
+
+train_df['area_km'] = train_df['area_m'] / 1000000
+train_df['density'] = train_df['raion_popul'] / train_df['area_km']
+f, ax = plt.subplots(figsize=(10, 6))
+sa_price = train_df.groupby('sub_area')[['density', 'price_doc']].median()
+sns.regplot(x="density", y="price_doc", data=sa_price, scatter=True, truncate=True)
+ax.set(title='Median home price by raion population density (people per sq. km)')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 20))
+sa_vc = train_df['sub_area'].value_counts()
+sa_vc = pd.DataFrame({'sub_area':sa_vc.index, 'count': sa_vc.values})
+ax = sns.barplot(x="count", y="sub_area", data=sa_vc, orient="h")
+ax.set(title='Number of Transactions by District')
+f.tight_layout()
+
+
+# In[ ]:
+
+
+train_df['work_share'] = train_df['work_all'] / train_df['raion_popul']
+f, ax = plt.subplots(figsize=(12, 6))
+sa_price = train_df.groupby('sub_area')[['work_share', 'price_doc']].mean()
+sns.regplot(x="work_share", y="price_doc", data=sa_price, scatter=True, order=4, truncate=True)
+ax.set(title='District mean home price by share of working age population')
+
+
+# ## School Characteristics
+
+# In[ ]:
+
+
+school_chars = ['children_preschool', 'preschool_quota', 'preschool_education_centers_raion', 'children_school', 
+                'school_quota', 'school_education_centers_raion', 'school_education_centers_top_20_raion', 
+                'university_top_20_raion', 'additional_education_raion', 'additional_education_km', 'university_km', 'price_doc']
+corrmat = train_df[school_chars].corr()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 7))
+plt.xticks(rotation='90')
+sns.heatmap(corrmat, square=True, linewidths=.5, annot=True)
+
+
+# In[ ]:
+
+
+train_df['university_top_20_raion'].unique()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 8))
+sns.stripplot(x="university_top_20_raion", y="price_doc", data=train_df, jitter=True, alpha=.2, color=".8");
+sns.boxplot(x="university_top_20_raion", y="price_doc", data=train_df)
+ax.set(title='Distribution of home price by # of top universities in Raion', xlabel='university_top_20_raion', 
+       ylabel='price_doc')
+
+
+# ## Cultural/Recreational Characteristics
+
+# In[ ]:
+
+
+cult_chars = ['sport_objects_raion', 'culture_objects_top_25_raion', 'shopping_centers_raion', 'park_km', 'fitness_km', 
+                'swim_pool_km', 'ice_rink_km','stadium_km', 'basketball_km', 'shopping_centers_km', 'big_church_km',
+                'church_synagogue_km', 'mosque_km', 'theater_km', 'museum_km', 'exhibition_km', 'catering_km', 'price_doc']
+corrmat = train_df[cult_chars].corr()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 7))
+plt.xticks(rotation='90')
+sns.heatmap(corrmat, square=True, linewidths=.5, annot=True)
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 6))
+so_price = train_df.groupby('sub_area')[['sport_objects_raion', 'price_doc']].median()
+sns.regplot(x="sport_objects_raion", y="price_doc", data=so_price, scatter=True, truncate=True)
+ax.set(title='Median Raion home price by # of sports objects in Raion')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 6))
+co_price = train_df.groupby('sub_area')[['culture_objects_top_25_raion', 'price_doc']].median()
+sns.regplot(x="culture_objects_top_25_raion", y="price_doc", data=co_price, scatter=True, truncate=True)
+ax.set(title='Median Raion home price by # of sports objects in Raion')
+
+
+# In[ ]:
+
+
+train_df.groupby('culture_objects_top_25')['price_doc'].median()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 6))
+sns.regplot(x="park_km", y="price_doc", data=train_df, scatter=True, truncate=True, scatter_kws={'color': 'r', 'alpha': .2})
+ax.set(title='Median Raion home price by # of sports objects in Raion')
+
+
+# ## Infrastructure Features
+
+# In[ ]:
+
+
+inf_features = ['nuclear_reactor_km', 'thermal_power_plant_km', 'power_transmission_line_km', 'incineration_km',
+                'water_treatment_km', 'incineration_km', 'railroad_station_walk_km', 'railroad_station_walk_min', 
+                'railroad_station_avto_km', 'railroad_station_avto_min', 'public_transport_station_km', 
+                'public_transport_station_min_walk', 'water_km', 'mkad_km', 'ttk_km', 'sadovoe_km','bulvar_ring_km',
+                'kremlin_km', 'price_doc']
+corrmat = train_df[inf_features].corr()
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 7))
+plt.xticks(rotation='90')
+sns.heatmap(corrmat, square=True, linewidths=.5, annot=True)
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(10, 6))
+sns.regplot(x="kremlin_km", y="price_doc", data=train_df, scatter=True, truncate=True, scatter_kws={'color': 'r', 'alpha': .2})
+ax.set(title='Home price by distance to Kremlin')
+
+
+# ## Variable Importance
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+X_train = train_df.drop(labels=['timestamp', 'id', 'incineration_raion'], axis=1).dropna()
+y_train = X_train['price_doc']
+X_train.drop('price_doc', axis=1, inplace=True)
+for f in X_train.columns:
+    if X_train[f].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(X_train[f])
+        X_train[f] = lbl.transform(X_train[f])
+rf = RandomForestRegressor(random_state=0)
+rf = rf.fit(X_train, y_train)
+
+
+# In[ ]:
+
+
+fi = list(zip(X_train.columns, rf.feature_importances_))
+print('## rf variable importance')
+d = [print('## %-40s%s' % (i)) for i in fi[:20]]
+
+
+# ## Train vs Test Data
+
+# In[ ]:
+
+
+test_df = pd.read_csv("../input/test.csv", parse_dates=['timestamp'])
+test_na = (test_df.isnull().sum() / len(test_df)) * 100
+test_na = test_na.drop(test_na[test_na == 0].index).sort_values(ascending=False)
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 8))
+plt.xticks(rotation='90')
+sns.barplot(x=test_na.index, y=test_na)
+ax.set(title='Percent missing data by feature', ylabel='% missing')
+
+
+# In[ ]:
+
+
+all_data = pd.concat([train_df.drop('price_doc', axis=1), test_df])
+all_data['dataset'] = ''
+l = len(train_df)
+all_data.iloc[:l]['dataset'] = 'train'
+all_data.iloc[l:]['dataset'] = 'test'
+train_dataset = all_data['dataset'] == 'train'
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+all_data['full_sq_log'] = np.log1p(all_data['full_sq'])
+all_data.drop(train_dataset)["full_sq_log"].plot.kde(ax=ax[0])
+all_data.drop(~train_dataset)["full_sq_log"].plot.kde(ax=ax[1])
+ax[0].set(title='test', xlabel='full_sq_log')
+ax[1].set(title='train', xlabel='full_sq_log')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+all_data['life_sq_log'] = np.log1p(all_data['life_sq'])
+all_data.drop(train_dataset)["life_sq_log"].plot.kde(ax=ax[0])
+all_data.drop(~train_dataset)["life_sq_log"].plot.kde(ax=ax[1])
+ax[0].set(title='test', xlabel='life_sq_log')
+ax[1].set(title='train', xlabel='life_sq_log')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+all_data['kitch_sq_log'] = np.log1p(all_data['kitch_sq'])
+all_data.drop(train_dataset)["kitch_sq_log"].plot.kde(ax=ax[0])
+all_data.drop(~train_dataset)["kitch_sq_log"].plot.kde(ax=ax[1])
+ax[0].set(title='test', xlabel='kitch_sq_log')
+ax[1].set(title='train', xlabel='kitch_sq_log')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+sns.countplot(x=test_df['num_room'], ax=ax[0])
+sns.countplot(x=train_df['num_room'], ax=ax[1])
+ax[0].set(title='test', xlabel='num_room')
+ax[1].set(title='train', xlabel='num_room')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+all_data.drop(train_dataset)["floor"].plot.kde(ax=ax[0])
+all_data.drop(~train_dataset)["floor"].plot.kde(ax=ax[1])
+ax[0].set(title='test', xlabel='floor')
+ax[1].set(title='train', xlabel='floor')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+all_data.drop(train_dataset)["max_floor"].plot.kde(ax=ax[0])
+all_data.drop(~train_dataset)["max_floor"].plot.kde(ax=ax[1])
+ax[0].set(title='test', xlabel='max_floor')
+ax[1].set(title='train', xlabel='max_floor')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+ax[0].scatter(x=test_df['floor'], y=test_df['max_floor'], c='r', alpha=0.4)
+ax[0].plot([0, 80], [0, 80], color='.5')
+ax[1].scatter(x=train_df['floor'], y=train_df['max_floor'], c='r', alpha=0.4)
+ax[1].plot([0, 80], [0, 80], color='.5')
+ax[0].set(title='test', xlabel='floor', ylabel='max_floor')
+ax[1].set(title='train', xlabel='floor', ylabel='max_floor')
+
+
+# In[ ]:
+
+
+years = mdates.YearLocator()   # every year
+yearsFmt = mdates.DateFormatter('%Y')
+ts_vc_train = train_df['timestamp'].value_counts()
+ts_vc_test = test_df['timestamp'].value_counts()
+f, ax = plt.subplots(figsize=(12, 6))
+plt.bar(left=ts_vc_train.index, height=ts_vc_train)
+plt.bar(left=ts_vc_test.index, height=ts_vc_test)
+ax.xaxis.set_major_locator(years)
+ax.xaxis.set_major_formatter(yearsFmt)
+ax.set(title='Number of transactions by day', ylabel='count')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+sns.countplot(x=test_df['product_type'], ax=ax[0])
+sns.countplot(x=train_df['product_type'], ax=ax[1])
+ax[0].set(title='test', xlabel='product_type')
+ax[1].set(title='train', xlabel='product_type')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+sns.countplot(x=test_df['state'], ax=ax[0])
+sns.countplot(x=train_df['state'], ax=ax[1])
+ax[0].set(title='test', xlabel='state')
+ax[1].set(title='train', xlabel='state')
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 8), sharey=True)
+sns.countplot(x=test_df['material'], ax=ax[0])
+sns.countplot(x=train_df['material'], ax=ax[1])
+ax[0].set(title='test', xlabel='material')
+ax[1].set(title='train', xlabel='material')
+

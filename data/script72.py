@@ -1,562 +1,291 @@
 
 # coding: utf-8
 
-# This notebook provides detail analysis of the various factors by means of visualisation.
+# #**Hey Kagglers, this notebook will go over a couple of basic Natural Language Processing techniques using the [scikit-learn](http://scikit-learn.org/stable/) library. Special thanks to [Aaron7sun](https://www.kaggle.com/aaron7sun) for providing the [dataset](https://www.kaggle.com/aaron7sun/stocknews) and "assignment" for us to do!**  
+# #Thanks for reading and feel free to leave feedback. I'd like to make more tutorial notebooks like this, so let me know if you think there is anything I could improve.
+
+# ----------
+
+# # Notebook Prep
+
+# First things first, let's import the libraries we'll be using.  
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+import pandas as pd
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.linear_model import LogisticRegression
 
 
-# In[ ]:
+# [Pandas](http://pandas.pydata.org/) will make our data easy to look at and work with.  
+# [CountVectorizer](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.CountVectorizer.html), part of scikit-learn, will take care of our NLP tasks.  
+# [LogisticRegression](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html), also part of scikit-learn, will train and test our predictive models.
 
+# ----------
 
-#Loading all the necessary libraries
+# # Data Import
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt #for visualisation
-import seaborn as sns #for visualisation
-get_ipython().run_line_magic('matplotlib', 'inline')
-
+# Now, let's [read](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.read_csv.html) in the data with Pandas.  
+# If you're working in something other than a Kaggle notebook, be sure to change the file location.  
+# For this tutorial, we're just going to use the combined dataset that Aaron prepared for us, but you're welcome to import the other two CSV files if you want to combine them in a different way.
 
 # In[ ]:
 
 
-hospital_data=pd.read_csv("../input/HospInfo.csv")
-hospital_data.head()
+data = pd.read_csv('../input/Combined_News_DJIA.csv')
 
 
-# In[ ]:
-
-
-hospital_data.info()
-
-
-# We can see that there are few columns which has missing values
-
-# ### Let us make it more clear by calculating number of missing values in a column
+# Next, let's take a look at the data with the [head](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.DataFrame.head.html) method.
 
 # In[ ]:
 
 
-def num_missing(x):
-  return sum(x.isnull())
-
-#Applying per column:
-print ("Missing values per column:")
-print (hospital_data.apply(num_missing, axis=0) )#axis=0 defines that function is to be applied on each column
+data.head()
 
 
-# ### Above we can see that the location has all the values misssing except the 1st row.This column is of no use.Let us drop location column.
+# We've got a lot of vaiables here, but the layout is pretty straight-forward.  
+# As a reminder, the Label variable will be a **1** if the DJIA **stayed the same or rose** on that date or 
+#  **0** if the DJIA **fell** on that date.
 
-# In[ ]:
-
-
-hospital_data.drop('Location',axis=1,inplace='True')
-
+# And finally, before we get started on the rest of the notebook, we need to split our data into a training set and a testing set. Per Aaron's instructions, we'll use all of the dates up to the end of 2014 as our training data and everything after as testing data.
 
 # In[ ]:
 
 
-hospital_data.shape
+train = data[data['Date'] < '2015-01-01']
+test = data[data['Date'] > '2014-12-31']
+
+
+# ----------
+
+# # Text Preprocessing
+
+# Now that our data is loaded in, we need to clean it up just a little bit to prepare it for the rest of our analysis.  
+# To illustrate this process, look at how the example headline below changes from cell to cell.  
+# Don't worry about the code too much here, since this example is only meant to be visual.
+
+# In[ ]:
+
+
+example = train.iloc[3,10]
+print(example)
 
 
 # In[ ]:
 
 
-hospital_data.describe()
+example2 = example.lower()
+print(example2)
 
 
 # In[ ]:
 
 
-hospital_data.columns.tolist()
-
-
-# # Checking Ownership of the hospitals
-# Let us check how many hospitals are owned by a particular individual or government and others.
-
-# In[ ]:
-
-
-unique_hospital_ownership=hospital_data['Hospital Ownership'].unique()
-unique_hospital_ownership
+example3 = CountVectorizer().build_tokenizer()(example2)
+print(example3)
 
 
 # In[ ]:
 
 
-dummy_data=pd.get_dummies(hospital_data['Hospital Ownership'])
-dummy_data.head()
-#dummy_data.info()
+pd.DataFrame([[x,example3.count(x)] for x in set(example3)], columns = ['Word', 'Count'])
+
+
+# Were you able to see everything that changed?  
+# The process involved:  
+# - Converting the headline to lowercase letters  
+# - Splitting the sentence into a list of words  
+# - Removing punctuation and meaningless words  
+# - Transforming that list into a table of counts
+
+# What started as a relatively "messy" sentence has now become an neatly organized table!  
+# And while this may not be exactly what goes on behind the scenes with scikit-learn, this example should give you a pretty good idea about how it works.
+
+# So now that you've seen what the text processing looks like, let's get started on the fun part, modeling!
+
+# ----------
+
+# # Basic Model Training and Testing
+
+# As mentioned previously, scikit-learn is going to take care of all of our preprocessing needs.  
+# The tool we'll be using is CountVectorizer, which takes a single list of strings as input, and produces word counts for each one.
+
+# You might be wondering if our dataframe meets this "single list of strings" criteria, and the answer to that is... it doesn't!  
+# In order to meet this criteria, we'll use the following [for loop](https://wiki.python.org/moin/ForLoop) to iterate through each row of our dataset, [combine](https://docs.python.org/3.5/library/stdtypes.html#str.join) all of our headlines into a single string, then [add](https://docs.python.org/3.5/tutorial/datastructures.html) that string to the list we need for CountVectorizer.
+
+# In[ ]:
+
+
+trainheadlines = []
+for row in range(0,len(train.index)):
+    trainheadlines.append(' '.join(str(x) for x in train.iloc[row,2:27]))
+
+
+# With our headlines formatted, we can set up our CountVectorizer.  
+# To start, let's just use the default settings and see how it goes!  
+# Below, we'll name our default vectorizer, then [use](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.CountVectorizer.html#sklearn.feature_extraction.text.CountVectorizer.fit_transform) it on our list of combined headlines.  
+# After that, we'll take a look at the size of the result to see how many words we have.
+
+# In[ ]:
+
+
+basicvectorizer = CountVectorizer()
+basictrain = basicvectorizer.fit_transform(trainheadlines)
+print(basictrain.shape)
+
+
+# Wow! Our resulting table contains counts for 31,675 different words!
+
+# Now, let's train a logistic regression model using this data.  
+# In the cell below, we're simply naming our model, then [fitting](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html#sklearn.linear_model.LogisticRegression.fit) the model based on our X and Y values.
+
+# In[ ]:
+
+
+basicmodel = LogisticRegression()
+basicmodel = basicmodel.fit(basictrain, train["Label"])
+
+
+# Our model is ready to go, so let's set up our test data.  
+# Here, we're just going to repeat the steps we used to prep our training data, then [predict](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html#sklearn.linear_model.LogisticRegression.predict) whether the DJIA increased or decreased for each day in the test dataset.
+
+# In[ ]:
+
+
+testheadlines = []
+for row in range(0,len(test.index)):
+    testheadlines.append(' '.join(str(x) for x in test.iloc[row,2:27]))
+basictest = basicvectorizer.transform(testheadlines)
+predictions = basicmodel.predict(basictest)
+
+
+# The predictions are set, so let's use a [crosstab](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.crosstab.html) to take a look at the results!
+
+# In[ ]:
+
+
+pd.crosstab(test["Label"], predictions, rownames=["Actual"], colnames=["Predicted"])
+
+
+# Prediction accuracy is just over 42%. It seems like this model isn't too reliable.  
+# Now, let's also take a look at the coefficients of our model. (Excellent request from [Lucie](https://www.kaggle.com/luciegattepaille)!)
+
+# The cell below will get a list of the names from our CountVectorizer and a list of the coefficients from our model, then combine the two lists into a Pandas dataframe.  
+# Once that's made, we can sort it and check out the top 10 positive and negative coefficients.
+
+# In[ ]:
+
+
+basicwords = basicvectorizer.get_feature_names()
+basiccoeffs = basicmodel.coef_.tolist()[0]
+coeffdf = pd.DataFrame({'Word' : basicwords, 
+                        'Coefficient' : basiccoeffs})
+coeffdf = coeffdf.sort_values(['Coefficient', 'Word'], ascending=[0, 1])
+coeffdf.head(10)
 
 
 # In[ ]:
 
 
-a=dummy_data['Government - Federal'].sum()
-b=dummy_data['Government - Hospital District or Authority'].sum()
-c=dummy_data['Government - Local'].sum()
-d=dummy_data['Government - State'].sum()
-e=dummy_data['Physician'].sum()
-f=dummy_data['Proprietary'].sum()
-g=dummy_data['Tribal'].sum()
-h=dummy_data['Voluntary non-profit - Church'].sum()
-i=dummy_data['Voluntary non-profit - Other'].sum()
-j=dummy_data['Voluntary non-profit - Private'].sum()
-list=[a,b,c,d,e,f,g,h,i,j]
-list
+coeffdf.tail(10)
 
 
-# **Here we got the total count of ownership of the hospitals by different groups**
+# Our most positive words don't seem particularly interesting, however there are some negative sounding words within our bottom 10, such as "sanctions," "low," and "hacking."  
+# Maybe the saying "no news is good news" is true here?
 
-# In[ ]:
+# ----------
 
+# # Advanced Modeling
 
-ax=sns.barplot(y=unique_hospital_ownership,x=list,data=hospital_data)
-ax.set(xlabel='Number of  hospitals', ylabel='Ownership')
+# The technique we just used is known as a **bag-of-words** model. We essentially placed all of our headlines into a "bag" and counted the words as we pulled them out.  
+# However, most people would agree that a single word doesn't always have enough meaning by itself.  
+# Obviously, we need to consider the rest of the words in the sentence as well!  
 
+# This is where the **n-gram** model comes in.  
+# In this model, n represents the length of a sequence of words to be counted.  
+# This means our bag-of-words model was the same as an n-gram model where n = 1.  
+# So now, let's see what happens when we run an n-gram model where n = 2.
 
-# **We can see that most of the hospitals are owned by Physician.Also the hospitals under Church which is non-profit organisation are very few**
+# Below, we'll create a new CountVectorizer with the n-gram parameter set to 2 instead of the default value of 1.
 
 # In[ ]:
 
 
-a= pd.pivot_table(hospital_data,values=['Hospital overall rating'],index=['Hospital Ownership'],columns=['Hospital Type'],aggfunc='count',margins=False)
-
-plt.figure(figsize=(10,10))
-sns.heatmap(a['Hospital overall rating'],linewidths=.5,annot=True,vmin=0.01,cmap='YlGnBu')
-plt.title('Total rating of the types of hospitals under the ownership of various community')
+advancedvectorizer = CountVectorizer(ngram_range=(2,2))
+advancedtrain = advancedvectorizer.fit_transform(trainheadlines)
 
 
-# #Categorising Hospitals w.r.t to their ratings
+# Now that we've run our vectorizer, let's see what our data looks like this time around.
 
 # In[ ]:
 
 
-hospital_data['Hospital overall rating'].unique()
+print(advancedtrain.shape)
 
 
-# **Let us drop those rows where Hospital overall Rating==Not Available**
+# This time we have 366,721 unique variables representing two-word combinations!  
+# And here I thought last time was big...
 
-# In[ ]:
-
-
-AvailableRating_data=hospital_data.drop(hospital_data[hospital_data['Hospital overall rating']=='Not Available'].index)
-#AvailableRating_data.info()
-
-
-# ### Sorting the values in Descending order as per the overall rating of the hospitals
+# So, just like last time, let's name and fit our regression model.
 
 # In[ ]:
 
 
-sorted_rating=AvailableRating_data.sort_values(['Hospital overall rating'], ascending=False)
-sorted_rating['Hospital overall rating'].head()
-sorted_rating[['Hospital Name','Hospital overall rating']].head()
+advancedmodel = LogisticRegression()
+advancedmodel = advancedmodel.fit(advancedtrain, train["Label"])
 
 
-# In[ ]:
-
-
-Unique_sorted_rating=sorted_rating['Hospital overall rating'].unique()
-Unique_sorted_rating
-
-
-# ### Finding all the rows with rating 5,4,3,2,1 and separating them and keeping a count of those rows which belongs to that particular rating category
+# And again like last time, let's transform our test data and make some predictions!
 
 # In[ ]:
 
 
-rating_with_5=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='5']
-Rating_5=rating_with_5['Provider ID'].count()
-#rating_with_5[['Hospital Name','Hospital overall rating']].head()
-rating_with_4=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='4']
-Rating_4=rating_with_4['Provider ID'].count()
-rating_with_3=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='3']
-Rating_3=rating_with_3['Provider ID'].count()
-rating_with_2=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='2']
-Rating_2=rating_with_2['Provider ID'].count()
-rating_with_1=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='1']
-Rating_1=rating_with_1['Provider ID'].count()
-#Rating_5
-#Rating_4
-#Rating_3
-#Rating_2
-#Rating_1
-list=[Rating_5,Rating_4,Rating_3,Rating_2,Rating_1]
-list
-print(Rating_5,Rating_4,Rating_3,Rating_2,Rating_1)
+testheadlines = []
+for row in range(0,len(test.index)):
+    testheadlines.append(' '.join(str(x) for x in test.iloc[row,2:27]))
+advancedtest = advancedvectorizer.transform(testheadlines)
+advpredictions = advancedmodel.predict(advancedtest)
+
+
+# Crosstab says...!
+
+# In[ ]:
+
+
+pd.crosstab(test["Label"], advpredictions, rownames=["Actual"], colnames=["Predicted"])
+
+
+# This time we're up to nearly 57% prediction accuracy.  
+# We might only consider this a slight improvement, but keep in mind that we've barely scratched the surface of NLP here, and we haven't even touched more advanced machine learning techniques.  
+# Let's check out our coefficients again as well!
+
+# In[ ]:
+
+
+advwords = advancedvectorizer.get_feature_names()
+advcoeffs = advancedmodel.coef_.tolist()[0]
+advcoeffdf = pd.DataFrame({'Words' : advwords, 
+                        'Coefficient' : advcoeffs})
+advcoeffdf = advcoeffdf.sort_values(['Coefficient', 'Words'], ascending=[0, 1])
+advcoeffdf.head(10)
 
 
 # In[ ]:
 
 
-ax=sns.barplot(x=Unique_sorted_rating,y=list,data=hospital_data,palette='pastel')
-ax.set(xlabel='Rating out of 5', ylabel='Number of  hospitals')
+advcoeffdf.tail(10)
 
 
-# **Thus we can see that most of the hospitals are given the rating of 3.Hospitals with very high rating(5) and very low rating(1) are very few.**
+# It seems that the results this time were fairly similar. Most of the positive bigrams are unremarkable, while a few of the negative ones like "bin laden" and "threatens to" could be considered to carry some negative meaning.
 
-# # Which states has maximum number of 5 star rating hospitals?
+# ----------
 
-# In[ ]:
+# # What's next?
 
+# If you'd like to keep going forward with this notebook, here are a couple of project ideas:  
+# - Experiment with different n values using the n-gram model  
+# - Use previous days' headlines to truly "predict" whether the DJIA will rise or fall  
+# - Try a machine learning algorithm instead of the basic logistic regression used in this notebook
 
-hospital_data['Hospital Type'].unique()
-
-
-# # Acute care hospitals with 5 star rating.
-
-# In[ ]:
-
-
-State_acute_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Acute Care Hospitals") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
-State_acute_5.head()
-#State_acute_5['State'].unique()
-
-
-# In[ ]:
-
-
-S_A_5=State_acute_5['State'].value_counts()
-index=S_A_5.index
-values=S_A_5.values
-values
-
-
-# In[ ]:
-
-
-dims = (8, 10)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=index,x=values,palette='GnBu_d')
-ax.set(xlabel='Total number of Acute Care hospitals with 5 rating', ylabel='States')
-
-
-# **Thus Texas leads with Acute care hospitals with 5 star rating**
-
-# # Critical Access Hospitals with 5 star rating
-
-# In[ ]:
-
-
-Critical_access_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Critical Access Hospitals") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
-C_A_5=Critical_access_5['State'].value_counts()
-C_A_5
-index=C_A_5.index
-values=C_A_5.values
-values
-
-
-# In[ ]:
-
-
-dims = (8, 2)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=index,x=values,palette='YlOrBr')
-ax.set(xlabel='Total number of Critical Care hospitals with 5 rating', ylabel='States')
-
-
-# **Thus there are only two states with Critical Acess hospitals each with rating as 5**
-
-# # Childrens Hospitals with 1 star rating
-
-# In[ ]:
-
-
-Chidrens_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Childrens") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
-C_5=Chidrens_5['State'].value_counts()
-C_5
-index=C_5.index
-values=C_5.values
-values
-index
-
-
-# **Thus there no hospitals for childrens with 5 star rating**
-
-# # Which states has maximum number of 1 star rating hospitals?
-
-# # Acute care hospitals with 1 star rating.
-
-# In[ ]:
-
-
-State_acute_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Acute Care Hospitals") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
-State_acute_1.head()
-#State_acute_1['State'].unique()
-S_A_1=State_acute_1['State'].value_counts()
-index=S_A_1.index
-values=S_A_1.values
-values
-
-
-# In[ ]:
-
-
-dims = (8, 10)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=index,x=values,palette='cubehelix')
-ax.set(xlabel='Total number of Acute Care hospitals with 1 rating', ylabel='States')
-
-
-# **New york has maximum number of Acute care hospitals with 1 star rating**
-
-# # Critical Access Hospitals with 1 star rating
-
-# In[ ]:
-
-
-Critical_access_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Critical Access Hospitals") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
-C_A_1=Critical_access_1['State'].value_counts()
-C_A_1
-index=C_A_1.index
-values=C_A_1.values
-values
-
-
-# In[ ]:
-
-
-dims = (8, 1)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=index,x=values,palette='Spectral')
-ax.set(xlabel='Total number of Critical Acess hospitals with 1 rating', ylabel='States')
-
-
-# **Thus there is only one Critical Acess hospital in USA with 1 star rating which is Kentucky.**
-
-# # Chidrens Hospitals with 1 star rating
-
-# In[ ]:
-
-
-Chidrens_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Childrens") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
-C_1=Chidrens_1['State'].value_counts()
-C_1
-index=C_1.index
-values=C_1.values
-values
-index
-
-
-# **Thus there no hospitals for childrens with 5 star rating**
-
-# ### Checking which hospital types are more common
-
-# In[ ]:
-
-
-unique_hospital_type=hospital_data['Hospital Type'].unique()
-#hospital_data['Hospital Type'].count()
-
-
-# In[ ]:
-
-
-hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Acute Care Hospitals']
-Acute_care=hospital_type['Hospital Type'].count()
-
-hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Critical Access Hospitals']
-Critical_Acess=hospital_type['Hospital Type'].count()
-
-hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Childrens']
-Childrens=hospital_type['Hospital Type'].count()
-list=[Acute_care,Critical_Acess,Childrens]
-list
-
-
-# In[ ]:
-
-
-ax=sns.barplot(x=unique_hospital_type,y=list,data=hospital_data,palette='colorblind')
-ax.set(xlabel='Types of hospitals', ylabel='Number of  hospitals')
-
-
-# ###Thus there are large number of Acute Care Hospitals followed by Critical Acess Hospitals.Childrens hospitals are very rare.
-
-# # The average hospital rating, by state
-
-# In[ ]:
-
-
-hospital_data['Hospital overall rating'].unique()
-
-
-# In[ ]:
-
-
-clean_hospital_data=hospital_data.drop(hospital_data[hospital_data['Hospital overall rating']=='Not Available'].index)
-#clean_hospital_data['Hospital overall rating'].astype(float)
-clean_hospital_data['Hospital overall rating'].unique()
-
-
-# ### Converting it to float data type for calculation
-
-# In[ ]:
-
-
-clean_hospital_data['Hospital overall rating']=clean_hospital_data['Hospital overall rating'].astype(float)
-
-
-# In[ ]:
-
-
-clean_hospital_data['Hospital overall rating'].mean()
-clean_hospital_data['Hospital overall rating'].count()
-
-
-# In[ ]:
-
-
-Statewise_avarage_rating=clean_hospital_data.groupby('State')['Hospital overall rating'].mean()
-#Statewise_avarage_rating.sort_values(ascending=False)
-
-
-# ### Separating index and values
-
-# In[ ]:
-
-
-index=Statewise_avarage_rating.sort_values(ascending=False).index
-values=Statewise_avarage_rating.sort_values(ascending=False).values
-#index
-#values
-
-
-# In[ ]:
-
-
-a4_dims = (8, 10)
-fig, ax = plt.subplots(figsize=a4_dims)
-
-ax=sns.barplot(y=index,x=values)
-ax.set(xlabel='Average rating of the hospitals', ylabel='State')
-
-
-# **Thus South Dacota has the best average rating of the hospitals.District of columbia has the worst average rating.**
-
-# # Let us check which types of hospitals are more likely to have not submitted proper data
-
-# ###  Which type of hospitals has highest Non-availabilty of Mortality comparison data?
-
-# In[ ]:
-
-
-Mortality_NotAvailable=hospital_data.loc[hospital_data['Mortality national comparison']=='Not Available']
-Mortality_NotAvailable['Mortality national comparison'].count()
-
-
-# In[ ]:
-
-
-Non_available_data=Mortality_NotAvailable.groupby('Hospital Type')['Mortality national comparison'].count()
-#Non_available_data
-Non_available_data.sort_values(ascending=False)
-
-
-# In[ ]:
-
-
-index=Non_available_data.sort_values(ascending=False).index
-values=Non_available_data.sort_values(ascending=False).values
-#index
-#values
-
-
-# In[ ]:
-
-
-dims = (6, 6)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=values,x=index,palette='PiYG')
-ax.set(xlabel='Hospitals types', ylabel='Count of Mortality data Non-Availabilty') 
-
-
-# **Thus Critical Acess hospitals has highest Non-availabilty of mortality comparison of the data and chidrens hospitals has minimum.**
-
-# # Which type of hospitals has highest Non-availabilty of Safety of Care data?
-
-# In[ ]:
-
-
-SafetyOfCare_NotAvailable=hospital_data.loc[hospital_data['Safety of care national comparison']=='Not Available']
-SafetyOfCare_NotAvailable['Safety of care national comparison'].count()
-
-
-# In[ ]:
-
-
-SafetyOfCare_NotAvailable=hospital_data.loc[hospital_data['Safety of care national comparison']=='Not Available']
-SafetyOfCare_NotAvailable['Safety of care national comparison'].count()
-Non_available_data=SafetyOfCare_NotAvailable.groupby('Hospital Type')['Safety of care national comparison'].count()
-#Non_available_data
-Non_available_data.sort_values(ascending=False)
-index=Non_available_data.sort_values(ascending=False).index
-values=Non_available_data.sort_values(ascending=False).values
-
-
-# In[ ]:
-
-
-dims = (6, 6)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=values,x=index,palette='BrBG')
-ax.set(xlabel='Hospital Types ', ylabel='Count of Safety of care data Non-Availabilty')
-
-
-# # Which type of hospitals has highest Non-availabilty of Readmission national comparison data?
-
-# In[ ]:
-
-
-Readmission_NotAvailable=hospital_data.loc[hospital_data['Readmission national comparison']=='Not Available']
-Readmission_NotAvailable['Readmission national comparison'].count()
-Non_available_data=Readmission_NotAvailable.groupby('Hospital Type')['Readmission national comparison'].count()
-#Non_available_data
-Non_available_data.sort_values(ascending=False)
-index=Non_available_data.sort_values(ascending=False).index
-values=Non_available_data.sort_values(ascending=False).values
-#index
-#values
-
-
-# In[ ]:
-
-
-dims = (6, 7)
-fig, ax = plt.subplots(figsize=dims)
-
-ax=sns.barplot(y=values,x=index,palette='RdYlGn')
-ax.set(xlabel='Hospital Types ', ylabel='Count of Readmission data Non-Availabilty')
-
-
-# **Similarly there are few more columns which we can take into consideration**
-
-# In[ ]:
-
-
-#Still Working
-
+# Thanks again for reading! I hope you found this helpful!

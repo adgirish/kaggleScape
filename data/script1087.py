@@ -1,260 +1,468 @@
 
 # coding: utf-8
 
-# # Montecarlo Model Selection 
-# 
-# In this notebook we apply a montecarlo based feature selection method to identify a reduced number of features that can be used as a good predictor for this credit card fraud dataset. Using a reduced number of features is of crucial importance when overfitting needs to be prevented. This models has been tested in some other datasets with similar results.  
-# 
-# We expand the set of explanatory features by computing the products of all features against the rest. When the product of two features has better sorting capabilities than both features individually we include the product in our set of candidate features, a minimum threshold is applied. 
-# 
-# Additionally the original set of features and the new set resulting from multiplying pairs of feature are transformed by means a logistic distribution. We have observed that this transformation increases predictive capabilities when compared to the ubiquitous normal transformation. 
-# 
-# In order to measure if a model has a good predictive power we define a modified Jaccard distance. As follows:
-#                                                   
-# $$Modified\,Jaccard\,Distance = 1 − \dfrac{\sum\limits_{i}{\min{ (target_{i},\,model\, probability_{i})}}}{\sum\limits_{i}{\max{(target_{i},\,model\, probability_{i})}}}$$                               
-# The lower the distance the best the model predicts the target.
-# 
-# In each Montecarlo iteration a reduced set of features, say 5 to 8, is randomly selected, then we compute the Logistic Regression model that best predicts fraud with this features and, finally we compute the modified Jaccard distance from the prediction to the target. The process is repeated for a large number of iterations. Resulting models are sorted by distance. 
-# 
-# We have tested modified Jaccard distance metric against most common metrics such as ROC, AUC, recall… and found that models with the low values of this modified Jaccard distance have a better balanced results in the rest of metrics. 
-# 
-# Final model selection is done by choosing the model with me minimum modified Jaccard distance, or any other among those with minimum distance that best fits the test subsample. 
+# #Intro
+# This piece of work is inspired by a [youtube video lecture](https://www.youtube.com/watch?v=vaL1I2BD_xY) by Martin Gorner, a Google developer 
+# who put forth this idea of combining YOLO grid with SqueezeNet (instead of DarkNet - original stack for [YOLO](https://arxiv.org/pdf/1506.02640.pdf)).
 
-# ### Libraries
-# 
-# We will use [scikit-learn](http://scikit-learn.org/stable/) for machine learning in general. All additional functions needed can be found as a dataset named [MonteCarloModelSelection_Functions.py](https://www.kaggle.com/forzzeeteam/monte-carlo-model-selection/data). 
+# In[1]:
 
-# In[ ]:
-
-
-import numpy as np
-import pandas as pd
-import csv
-from sklearn.model_selection import train_test_split
 
 import os
-print(os.listdir("../input"))
-
-import sys 
-
-sys.path.append ('../input/montecarlomodelselection-functions/')
-from MonteCarloModelSelection_Functions import *      
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-get_ipython().run_line_magic('autosave', '0')
-
-
-# ### Loading Dataset 
-
-# In[ ]:
-
-
-# Loading dataset creditcard
-filename = '../input/creditcardfraud/creditcard.csv'   
-
-with open(filename, 'r') as f:
-    reader=csv.reader(f, delimiter=',') 
-    labels=next(reader)
-
-    raw_data=[]
-    for row in reader:
-        raw_data.append(row)
-
-data = np.array(raw_data)
-data = data.astype(np.float)
-
-
-# The Amount column is normalized. 
-
-# In[ ]:
-
-
-# Setting target and data
-target = data[:,-1]
-dataAmount   = data[:,29]
-data   = data[:,1:29]
-
-# Normalising Amount column 
-dataAmountNormalize = np.array((dataAmount-np.mean(dataAmount))/np.std(dataAmount))
-data = np.c_[ data,dataAmountNormalize]
-
-
-# In[ ]:
-
-
-# Output Path
-path = './output/'
-
-
-# ### Transformation 
-# All features are tranformed using Univariate Logistic Regression. Normal transformation can be applied too, however we observed better results for the logit transformation. 
-
-# In[ ]:
-
-
-# Calculating transformed dataset by means of logit or normal method
-transformation = 'logit' 
-transformed_dataset = Transformation(data, target, transformation)
-
-
-# Calculate some metrics, initially we will pay special attention to the sorting capabilities of the different features by using different metrics.
-# 
-# 
-
-# In[ ]:
-
-
-# Calculating all metric
-metric ='all'
-global_pi = Calculate_Metrics(transformed_dataset, target, metric, path, transformation)
-
-
-# A new dataset resulting from combinations of products of features can be found. Following we look for products of features that improve the sorting capabilities of the features. First we select products that result in a “modified Jaccard distance” lower than that of the features independently and at the same time the metric is lower than 0.6.
-
-# In[ ]:
-
-
-# Calculating new datasets with combinations of products of features using distance metric
-threshold = 0.6
-transformation = 'logit'
-metric = 'all'
-metric_prod = 'distance'
-new_dataset, new_dataset_df = Products_Analysis(data, transformed_dataset, target, global_pi, metric, metric_prod, transformation, path, threshold)
-
-
-# Since “distance” did not produce predictive products of features the try “roc”.
-
-# In[ ]:
-
-
-# Calculating new datasets with combinations of products of features using roc metric
-threshold = 0.6
-transformation = 'logit'
-metric = 'all'
-metric_prod = 'roc'
-new_dataset, new_dataset_df = Products_Analysis(data, transformed_dataset, target, global_pi, metric, metric_prod, transformation, path, threshold)
-
-
-# In[ ]:
-
-
-new_dataset_df.tail(20)
-
-
-# 18 new combinations have been created: 0 ratio and 16 ratio, 1 ratio and 6 ratio, etc. 
-
-# ### Resampling and Setting up the Training and Testing Sets
-# The original dataset has 492 fraud and 284.315 no fraud observations. We split the dataset into train and test as in the following table. 
-# 
-# |         | DATASET           | TRAIN  | TEST  | 
-# | ------------- |:-------------:| -----:|-----:|
-# | No Fraud      | 284315 | 199019 |85296 | 
-# | Fraud      | 492      |    345| 147 |
-# | Total | 284807      |   199364 | 85443 |
-# - Dataset
-
-# In[ ]:
-
-
-X_train, X_test, y_train, y_test = train_test_split(new_dataset, target, test_size = 0.3, random_state = 0)
-
-
-# We split the dataset in order to work with a balanced dataset. Equal number of Fraud/No Fraud observations.
-#  
-# 
-# |         | DATASET           | TRAIN UNDERSAMPLED  | TEST UNDERSAMPLED | 
-# | ------------- |:-------------:| -----:|-----:|
-# | No Fraud      | 284315 | 688 | 296 | 
-# | Fraud      | 492      |   343| 149 |
-# | Total | 284807      |   345 | 147 |
-# 
-# - Resampled dataset
-
-# In[ ]:
-
-
-# Resampling dataset  
+import sys
+import numpy as np
+import tensorflow as tf
+import random
+import math
 import warnings
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning) 
-np.random.seed(10)
-number_records_fraud = target.sum().astype(int)
-normal_indices = (target==0).nonzero()[0]
-fraud_indices = (target==1).nonzero()[0]
-random_normal_indices = np.random.choice(normal_indices, number_records_fraud, replace = False)
-random_normal_indices = np.array(random_normal_indices)
-under_sample_indices = np.concatenate([fraud_indices,random_normal_indices])
-under_sample_data = new_dataset[under_sample_indices,:]
-X_undersample = under_sample_data
-y_undersample = target[under_sample_indices]
-X_train_undersample, X_test_undersample, y_train_undersample, y_test_undersample = train_test_split(X_undersample, y_undersample, test_size = 0.3, random_state = 0)
+import pandas as pd
+import cv2
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.ticker as ticker
+
+from tqdm import tqdm
+from itertools import chain
+from skimage.io import imread, imshow, imread_collection, concatenate_images
+from skimage.transform import resize
+from skimage.morphology import label
+
+warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
+seed = 19
+random.seed = seed
+np.random.seed = seed
 
 
-# ### Montecarlo selection of features 
-# 
-# We performed **Montecarlo simulation** with 10.000 iterations to randomly select 5 features. In each iteration a new model is calibrated and its permormance metrics are calculated.
-
-# In[ ]:
+# In[2]:
 
 
-metric = 'Distance'
-number_iterations = 10000
-number_ini_ratio = 5
-number_final_ratio = 5
-results= Multivariate_Best_Model(number_iterations, X_train_undersample, y_train_undersample, X_test_undersample, y_test_undersample, metric, path, number_ini_ratio, number_final_ratio)       
+IMG_WIDTH = 384
+IMG_HEIGHT = 384
+IMG_CHANNELS = 3
+
+TRAIN_PATH = '../input/data-science-bowl-2018-2/stage1_train'
+TEST_PATH = '../input/data-science-bowl-2018-2/stage1_test'
 
 
-# Models resulting from the montecarlo process are stored in a DataFrame with the following columns:
-# - *Models*: set of ratios randomly selected.
-# - *Metrics*: 'Roc', 'Accuracy', 'Precision', 'Recall', 'F1', 'Auc' metrics calculated for each set of models.
-# - *P_def*: model probability.
-# - *Prediction*: model prediction.
-# - *Score*: score as the argument of the logit funtion.
-# - *Betas*: multipliers of each variable in the logit function. 
-# - *Distance*: Modified Jaccard Distance. 
-# 
-# Then models are sorted by the Modified Jaccard Distance
-# 
-
-# In[ ]:
+# In[3]:
 
 
-results.head(5)
+train_ids = next(os.walk(TRAIN_PATH))[1]
+test_ids = next(os.walk(TEST_PATH))[1]
+
+train_images = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
+test_images = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
 
 
-# ### PLOTS AND RESULTS
-# 
-# - Resampled dataset
-
-# In[ ]:
+# In[4]:
 
 
-models_list = [i-1 for i in results['Models'][0]]
-bt = results['Betas'][0]
-ind_best = models_list 
-X_test_b = X_test_undersample[:,ind_best]
-X_test_b_1 = np.array([1]*X_test_b.shape[0])
-X_test_b_ = np.c_[X_test_b_1, X_test_b]
-xtest_bt = np.ravel(np.dot(X_test_b_,np.transpose(bt)))
+# Resize train images.
+print('resize train images... ')
+sys.stdout.flush()
 
-[tn_u, fp_u, fn_u, tp_u] = Graph(y_test_undersample, xtest_bt)
+for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+    path = TRAIN_PATH + "/" + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    
+    train_images[n] = img
+    
+# Get and resize test images
+sizes_test = []
+print('resize test images ... ')
+sys.stdout.flush()
+
+for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
+    path = TEST_PATH + "/" + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    sizes_test.append([img.shape[0], img.shape[1]])
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    test_images[n] = img
+
+print('Done!')
 
 
-# - Dataset
-
-# In[ ]:
+# In[5]:
 
 
-models_list = [i-1 for i in results['Models'][0]]
-bt = results['Betas'][0]
-ind_best = models_list 
-X_test_b = X_test[:,ind_best]
-X_test_b_1 = np.array([1]*X_test_b.shape[0])
-X_test_b_ = np.c_[X_test_b_1, X_test_b]
-xtest_bt = np.ravel(np.dot(X_test_b_,np.transpose(bt)))
+def store_bounding_boxes(img, train_id, mask_id, rotby_90):
+    ret, thresh = cv2.threshold(img, 127, 255, 0)
+    contours = cv2.findContours(thresh.astype(np.uint8), 1, 2)
+    cnt = contours[0]
+        
+    x, y, w, h = cv2.boundingRect(cnt)    
+    
+    x = x * (IMG_WIDTH/img.shape[1])
+    w = w * (IMG_WIDTH/img.shape[1])
+    y = y * (IMG_WIDTH/img.shape[0])
+    h = h * (IMG_WIDTH/img.shape[0])
+    
+    if(x > IMG_WIDTH-1):
+        x = IMG_WIDTH-1
+    if(y > IMG_HEIGHT-1):
+        y = IMG_HEIGHT-1
+    if(x+w > IMG_WIDTH-1):
+        w = IMG_WIDTH-1 - x
+    if(y+h > IMG_HEIGHT-1):
+        h = IMG_HEIGHT-1 - y
+        
+    bbdict = { "train_id": train_id, "mask_id": mask_id, "rotby_90": rotby_90, "x": x, "y": y, "w": w, "h": h}
+    return bbdict
 
-[tn, fp, fn, tp]  = Graph(y_test, xtest_bt)
+
+# In[6]:
 
 
-# ### Conclusion 
-# The parsimony principle tells us to choose the simplest explanation that fits the evidence. In this work we used a Montecarlo method to find a model that can explain the target variable, proving that by selecting the appropriate features a model as simple as a Logistic Regression with 5 variables produces predictions that are as good as those coming from more complex models.
+path_bboxes_csv = "../input/data-science-bowl-2018-1/bboxes.csv"
+if not os.path.isfile(path_bboxes_csv):
+    bboxes = pd.DataFrame(columns=["train_id", "mask_id", "rotby_90", "x", "y", "w", "h"])
+    row_count = 1
+    for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+        path = TRAIN_PATH + "/" + id_
+        for mask_id, mask_file in enumerate(next(os.walk(path + '/masks/'))[2]):
+            mask_ = imread(path + '/masks/' + mask_file)
+            for r in range(4):
+                bboxes.loc[row_count] = store_bounding_boxes(np.rot90(mask_, r), id_, mask_id, r)
+                row_count += 1
+    bboxes.to_csv(path_bboxes_csv, index=False)
+else:
+    bboxes = pd.read_csv(path_bboxes_csv)
+
+
+# In[7]:
+
+
+GRID_DIM = 12
+GRID_PIX = IMG_WIDTH//GRID_DIM
+BATCH_SIZE = 14
+
+
+# In[8]:
+
+
+train_ids_df = pd.DataFrame(columns=["idx", "id_"])
+cnt = 0
+for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+    train_ids_df.loc[cnt] = { "idx": n, "id_": id_}
+    cnt += 1
+
+train_ids_df = train_ids_df.set_index(['idx'])
+
+
+# In[9]:
+
+
+bboxes['grid_row'] = bboxes['y']//GRID_PIX
+bboxes['grid_column'] = bboxes['x']//GRID_PIX
+
+bboxes['grid_center_x'] = bboxes['grid_column'] * GRID_PIX + GRID_PIX/2
+bboxes['grid_center_y'] = bboxes['grid_row'] * GRID_PIX + GRID_PIX/2
+
+bboxes['box_center_x'] = bboxes.x + bboxes['w']/2
+bboxes['box_center_y'] = bboxes.y + bboxes['h']/2
+
+bboxes['new_x'] = (bboxes.box_center_x - bboxes.grid_center_x)/(IMG_WIDTH)
+bboxes['new_y'] = (bboxes.box_center_y - bboxes.grid_center_y)/(IMG_HEIGHT)
+
+bboxes['new_w'] = np.sqrt(bboxes.w/(IMG_WIDTH))
+bboxes['new_h'] = np.sqrt(bboxes.h/(IMG_WIDTH))
+
+bboxes['confidence'] = 1
+
+bboxes['box_area'] = bboxes.new_w*bboxes.new_h
+
+
+# In[10]:
+
+
+mask_count = 1
+#Set maximum bounding boxes allowed per grid cell
+MAX_BB_CNT = 2
+
+
+# In[11]:
+
+
+def get_grid_info(tr_id, rotby_90):
+    df = bboxes.loc[(bboxes.train_id == tr_id) & (bboxes.rotby_90 == rotby_90), 'grid_row':'box_area']
+    df.drop(['grid_center_x', 'grid_center_y','box_center_x', 'box_center_y',], axis = 1, inplace=True)
+    df = df.sort_values(['grid_column', 'grid_row', 'box_area'], ascending=False)
+    #print(len(df))
+    global mask_count
+    mask_count += len(df)
+    label_info = np.zeros(shape=(GRID_DIM, GRID_DIM, MAX_BB_CNT, 5),  dtype=np.float32) + 0.000001
+    
+    for ind, row in df.iterrows():
+        i = int(row[0])
+        j = int(row[1])
+        for b in range(MAX_BB_CNT):
+            if(label_info[i, j, b][4] != 1.0):
+                label_info[i, j, b] = np.array(row[2:7])
+                break
+    return label_info
+
+
+# In[12]:
+
+
+def get_labels(counts, rotations):
+    grid_info = np.zeros(shape=(BATCH_SIZE, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5), dtype=np.float32)
+    for i, c in enumerate(counts):
+        tr_id = train_ids_df.loc[c, 'id_']
+        grid_info[i] = get_grid_info(tr_id, rotations[i])
+    grid_info = np.reshape(grid_info, newshape=[BATCH_SIZE, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
+    return grid_info
+
+
+# In[13]:
+
+
+def get_images(counts, rotations):
+    images = np.zeros(shape=(BATCH_SIZE, IMG_WIDTH, IMG_HEIGHT, IMG_CHANNELS), dtype=np.uint8)
+    for i, c in enumerate(counts):
+        images[i] = np.rot90(train_images[c], rotations[i])
+    return images
+
+
+# In[14]:
+
+
+def next_batch():
+    rotations = []
+    rand_counts = []
+    for i in range(BATCH_SIZE):
+        rotations.append(random.randint(0, 3))
+        rand_counts.append(random.randint(0, 669))
+    return get_images(rand_counts, rotations), get_labels(rand_counts, rotations)
+
+
+# In[15]:
+
+
+tf.reset_default_graph()
+X = tf.placeholder(tf.float32, [None, IMG_WIDTH, IMG_HEIGHT, 3])
+Y_ = tf.placeholder(tf.float32, [None, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
+lr = tf.placeholder(tf.float32)
+
+
+# In[16]:
+
+
+def process_logits(logits, name=None):
+    net = tf.reshape(logits, [-1, GRID_DIM*1, GRID_DIM*1, MAX_BB_CNT*5*16, 1])
+    net = tf.layers.average_pooling3d(net, [1, 1, 16], [1, 1, 16], padding="valid")
+
+    net = tf.reshape(net, [-1, GRID_DIM*GRID_DIM*MAX_BB_CNT, 5]) #GRID_DIM = 12
+    net = tf.transpose(net, [1, 2, 0])        
+
+    logits_tensor = tf.map_fn(lambda x:
+                            tf.stack([
+                                tf.tanh(x[0]),
+                                tf.tanh(x[1]),
+                                tf.sqrt(tf.sigmoid(x[2])),
+                                tf.sqrt(tf.sigmoid(x[3])),
+                                tf.sigmoid(x[4])
+                            ]), net)
+
+    logits_tensor = tf.transpose(logits_tensor, [2, 0, 1])
+    logits_tensor = tf.reshape(logits_tensor, [-1, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
+
+    return logits_tensor
+
+
+# In[17]:
+
+
+def normalize_yolo_loss(processed_logits, lambda_coords, lambda_noobj):
+    yolo_loss = tf.reduce_sum(tf.squared_difference(labels, processed_logits), axis=0)
+    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
+    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
+    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
+
+    yolo_loss = tf.stack([tf.multiply(lambda_coords, yolo_loss[0]), 
+                          tf.multiply(lambda_coords, yolo_loss[1]),
+                          yolo_loss[2],
+                          yolo_loss[3],
+                          tf.multiply(lambda_noobj,yolo_loss[4])])
+    yolo_loss = tf.reduce_sum(yolo_loss)
+
+    return  yolo_loss
+
+
+# In[18]:
+
+
+def l_relu(features):
+    return tf.nn.leaky_relu(features, 0.1)
+
+
+# In[19]:
+
+
+def squeeze_module(x, dim, idx):
+    name = 'conv_' + idx + '_sq'
+    return tf.layers.conv2d(x, filters=dim, kernel_size=1, strides=1, padding="same", 
+                           activation=l_relu, name=name)
+
+def expand_module(x, dim, idx):
+    name = 'conv_' + idx + '_ex_' + '0'
+    net1 = tf.layers.conv2d(x, filters=dim, kernel_size=1, strides=1, padding="same", 
+                           activation=l_relu, name=name)
+    name = 'conv_' + idx + '_ex_' + '1'
+    net2 = tf.layers.conv2d(x, filters=dim, kernel_size=3, strides=1, padding="same", 
+                           activation=l_relu, name=name) 
+    return tf.concat([net1, net2], 3)
+
+
+# In[20]:
+
+
+def fire_module(input_tensor, squeeze_dim, expand_dim, idx):
+    net = squeeze_module(input_tensor, squeeze_dim, idx)
+    net = expand_module(net, expand_dim, idx)
+    return net
+
+
+# In[21]:
+
+
+net = tf.layers.conv2d(X, filters=32, kernel_size=1, strides=1, padding="same", 
+                       activation=l_relu, name='conv0') #384 
+
+net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #192
+
+net = fire_module(net, 32, 64, '0')
+net = fire_module(net, 32, 64, '1')
+net = fire_module(net, 32, 64, '2')
+
+net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #96
+
+
+net = fire_module(net, 64, 96, '3')
+net = fire_module(net, 64, 96, '4')
+net = fire_module(net, 64, 96, '5')
+
+
+net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #48
+
+net = fire_module(net, 128, 160, '6')
+net = fire_module(net, 128, 160, '7') 
+net = fire_module(net, 128, 128, '8')
+
+
+net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #24
+
+net = fire_module(net, 256, 512, '9')
+net = fire_module(net, 256, 512, '10')
+net = fire_module(net, 256, 512, '11')
+
+net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #12
+
+net = fire_module(net, 512, 1024, '12')
+net = fire_module(net, 512, 1024, '13')
+net = fire_module(net, 512, 1024, '14')
+
+logits = tf.layers.conv2d(net, filters=MAX_BB_CNT*5*16, kernel_size=1, strides=1, padding="same",
+                       activation=None, name='conv40') #12
+
+processed_logits = process_logits(logits)
+
+labels = Y_
+
+lambda_coords = tf.constant(5.0)
+lambda_noobj = tf.constant(0.5)
+
+yolo_loss = normalize_yolo_loss(processed_logits, lambda_coords, lambda_noobj)
+
+train_op = tf.train.AdamOptimizer(lr).minimize(yolo_loss)
+
+
+# In[98]:
+
+
+start_training = False #using pretrained model as Kaggle server doesn't allow training time more than 6 hrs.
+if not start_training:
+    test_image_id = 1
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        saver.restore(sess, "../input/pre-trained-model/model.ckpt")
+        result = sess.run([processed_logits], {X: np.reshape(test_images[test_image_id], [1, 384, 384, 3])})
+
+
+# In[99]:
+
+
+if(start_training):
+    # initialize
+    init = tf.global_variables_initializer()
+    sess = tf.Session()
+    sess.run(init)
+
+    batch_count = 0
+    display_count = 1
+    global mask_count
+
+    for i in range(33000):
+        batch_X, batch_Y = next_batch()
+        batch_count += 1
+        train_loss, _ = sess.run([yolo_loss, train_op], {X: batch_X, Y_: batch_Y, lr: 0.0001})
+
+        if(i % 100 == 0):
+            print(str(display_count) + " training loss(" + str(mask_count) + "): " + str(train_loss))
+            display_count +=1
+        mask_count = 0
+    print("Done!")
+
+
+# In[100]:
+
+
+if(start_training):
+    test_image_id = 13
+    result = sess.run([processed_logits], {X: np.reshape(test_images[test_image_id], [1, 384, 384, 3])})
+
+
+# In[101]:
+
+
+boxes = result[0]
+print(boxes.shape)
+boxes = np.reshape(boxes, newshape=[GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
+bbs = []
+
+for i in range(GRID_DIM):
+    for j in range(GRID_DIM):
+        for b in range(MAX_BB_CNT):
+            if(boxes[i][j][b][4]> 0.1):
+                grid_center_x = ((j+0)*GRID_PIX + GRID_PIX/2)
+                grid_center_y = ((i+0)*GRID_PIX + GRID_PIX/2)
+                
+                new_box_center_x = boxes[i][j][b][0] * IMG_WIDTH + grid_center_x
+                new_box_center_y = boxes[i][j][b][1] * IMG_HEIGHT + grid_center_y
+
+                new_w = np.square(boxes[i][j][b][2]) * IMG_WIDTH
+                new_h = np.square(boxes[i][j][b][3]) * IMG_HEIGHT
+                
+                x1 = new_box_center_x - new_w/2
+                y1 = new_box_center_y - new_h/2
+
+                x2 = new_box_center_x + new_w/2
+                y2 = new_box_center_y + new_h/2
+
+                bbs.append((math.floor(x1), math.floor(y1), math.ceil(x2), math.ceil(y2)))
+
+
+# In[102]:
+
+
+img = test_images[test_image_id]
+f, axs = plt.subplots(1,2)
+axs[0].imshow(img)
+
+imshow(img)
+for i, b in enumerate(bbs):
+    cv2.rectangle(img,(b[0], b[1]),(b[2], b[3]),(0,255,0),2)
+
+axs[1].imshow(img)
+

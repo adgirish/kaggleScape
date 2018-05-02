@@ -1,163 +1,309 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# Modified from Bojan LGBM Script
+# Ensamble with Ridge and NN can reach my current LB position
 
+import pyximport
+pyximport.install()
+import pandas as pd
 import numpy as np
-from sklearn.base import BaseEstimator,TransformerMixin, ClassifierMixin
-from sklearn.preprocessing import LabelEncoder
-import xgboost as xgb
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.linear_model import ElasticNetCV, LassoLarsCV
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.pipeline import make_pipeline, make_union
-from sklearn.utils import check_array
-from sklearn.preprocessing import StandardScaler
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.random_projection import GaussianRandomProjection
-from sklearn.random_projection import SparseRandomProjection
-from sklearn.decomposition import PCA, FastICA
-from sklearn.decomposition import TruncatedSVD
-from sklearn.metrics import r2_score
+import os
+from scipy.sparse import csr_matrix, hstack
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import RepeatedKFold
+from sklearn.feature_extraction import stop_words
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer, normalize
+import lightgbm as lgb
+import time
+import gc
+import math
+import re
+import string
+from nltk.stem import WordNetLemmatizer
+lemma  = WordNetLemmatizer()
+
+class LemmaVectorizer(CountVectorizer):
+    def build_analyzer(self):
+        preprocess = self.build_preprocessor()
+        stop_words = self.get_stop_words()
+        tokenize = self.build_tokenizer()
+        l_adder = self.lemma_adder()
+        return lambda doc: self._word_ngrams(l_adder(tokenize(preprocess(self.decode(doc)))), stop_words)
+
+    def lemma_adder(self):
+        def lemmatizer(tokens):
+            return list(set([lemma.lemmatize(w) for w in tokens] + tokens))
+            
+        return lemmatizer
+
+    def build_tokenizer(self):
+        """Return a function that splits a string into a sequence of tokens"""
+        def tokenizer(doc):
+            token_pattern = re.compile(self.token_pattern)
+            return token_pattern.findall(doc)
+            
+        return tokenizer 
+
+def rmsle(y, h): 
+    return np.sqrt(np.square(np.log(h + 1) - np.log(y + 1)).mean())
+
+def rmse(y, h): 
+    return np.sqrt(np.square(h-y).mean())
 
 
-
-class StackingEstimator(BaseEstimator, TransformerMixin):
+def rmsle_lgb(preds, dtrain):
+    y = list(dtrain.get_label())
     
-    def __init__(self, estimator):
-        self.estimator = estimator
-
-    def fit(self, X, y=None, **fit_params):
-        self.estimator.fit(X, y, **fit_params)
-        return self
-    def transform(self, X):
-        X = check_array(X)
-        X_transformed = np.copy(X)
-        # add class probabilities as a synthetic feature
-        if issubclass(self.estimator.__class__, ClassifierMixin) and hasattr(self.estimator, 'predict_proba'):
-            X_transformed = np.hstack((self.estimator.predict_proba(X), X))
-
-        # add class prodiction as a synthetic feature
-        X_transformed = np.hstack((np.reshape(self.estimator.predict(X), (-1, 1)), X_transformed))
-
-        return X_transformed
+    y_pred = np.expm1(preds)
+    y_tar  = np.expm1(y)
+    
+    score = rmsle(y_tar, y_pred) 
+    return 'rmsle', score, False
 
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+def cleanName(text):
+    try:
+        textProc = text.lower()
+        textProc = " ".join(map(str.strip, re.split('(\d+)',textProc)))
+        regex = re.compile(u'[^A-Za-z0-9]+')
+        textProc = regex.sub(" ", textProc)
+        textProc = " ".join(textProc.split())
+        
+        return textProc
+    except: 
+        return "name error"
 
-for c in train.columns:
-    if train[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(train[c].values) + list(test[c].values))
-        train[c] = lbl.transform(list(train[c].values))
-        test[c] = lbl.transform(list(test[c].values))
+def getLastTwo(text):
+    try:
+        text = text.lower()
+        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
+        text = regex.sub(" ", text)
+        text = text.split()
+        
+        if len(text)==1:
+            return text[0]
+        
+        text = text[-2]+" "+text[-1]
+
+        return text
+    except: 
+
+        return " "
+
+def split_cat(text):
+    try: return text.split("/")
+    except: return ("None", "None", "None")
+
+NUM_BRANDS         = 5000
+DESC_MAX_FEAT      = 500000
+LGBM_NAME_MIN_DF   = 20
+NAME_MIN_DF        = 2
+DESC_MIN_DF        = 2
+
+print("Reading in Data")
+df     = pd.read_csv('../input/train.tsv', sep='\t')
+dfTest = pd.read_csv('../input/test.tsv', sep='\t')
+n_trains = df.shape[0]
+y = np.log1p(df["price"].values)
+submission: pd.DataFrame = dfTest[['test_id']]
+
+print(df.shape)
+
+print("Data Cleaning Training")
+
+# Clean all the mess
+df["brand_name"]        = df["brand_name"].fillna("unknown")
+df["item_description"]  = df["item_description"].fillna("None")
+df["name"]              = df["name"].fillna("None")
+df["item_condition_id"] = df["item_condition_id"].fillna(0)
+df["shipping"]          = df["shipping"].fillna(0)
+df['category_name']     = df['category_name'].fillna("None/None/None")    
+    
+pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
+df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
+
+df['general_cat'], df['subcat_1'], df['subcat_2'] = \
+zip(*df['category_name'].apply(lambda x: split_cat(x)))
+
+df['general_cat'].fillna(value='None', inplace=True)
+df['subcat_1'].fillna(value='None', inplace=True)
+df['subcat_2'].fillna(value='None', inplace=True)
+
+df['general_cat']        = df['general_cat'].astype('category')
+df['subcat_1']           = df['subcat_1'].astype('category')
+df['subcat_2']           = df['subcat_2'].astype('category')     
+df["item_condition_id"]  = df["item_condition_id"].astype("category")
+
+df['name']               = df['name'].apply(lambda x: cleanName(x))
+df["item_description"]   = df["item_description"].apply(lambda x: cleanName(x))
+df['category_name']      = df['category_name'].apply(lambda x: cleanName(x))
+df['object']             = df['name'].apply(lambda x: getLastTwo(x))
+
+print("Data Cleaning Testing")
+dfTest["brand_name"]        = dfTest["brand_name"].fillna("unknown")
+dfTest["item_description"]  = dfTest["item_description"].fillna("None")
+dfTest["name"]              = dfTest["name"].fillna("None")
+dfTest["item_condition_id"] = dfTest["item_condition_id"].fillna(0)
+dfTest["shipping"]          = dfTest["shipping"].fillna(0)
+dfTest['category_name']     = dfTest['category_name'].fillna("None/None/None")    
+    
+dfTest.loc[~dfTest["brand_name"].isin(pop_brands), "brand_name"] = "Other"
+
+dfTest['general_cat'], dfTest['subcat_1'], dfTest['subcat_2'] = \
+zip(*dfTest['category_name'].apply(lambda x: split_cat(x)))
+
+dfTest['general_cat'].fillna(value='None', inplace=True)
+dfTest['subcat_1'].fillna(value='None', inplace=True)
+dfTest['subcat_2'].fillna(value='None', inplace=True)
+
+dfTest['general_cat']        = dfTest['general_cat'].astype('category')
+dfTest['subcat_1']           = dfTest['subcat_1'].astype('category')
+dfTest['subcat_2']           = dfTest['subcat_2'].astype('category')     
+dfTest["item_condition_id"]  = dfTest["item_condition_id"].astype("category")
+
+dfTest['name']               = dfTest['name'].apply(lambda x: cleanName(x))
+dfTest["item_description"]   = dfTest["item_description"].apply(lambda x: cleanName(x))
+dfTest['category_name']      = dfTest['category_name'].apply(lambda x: cleanName(x))
+dfTest['object']             = dfTest['name'].apply(lambda x: getLastTwo(x))
+
+print("Name Features 1")
+count = LemmaVectorizer(min_df=LGBM_NAME_MIN_DF,
+                        decode_error = 'replace',
+                        ngram_range = (1,1),
+                        token_pattern = r"(?u)\b\w+\b",
+                        strip_accents = 'unicode')
+X_name_1 = count.fit_transform(df["name"])
+X_name_1_Test = count.transform(dfTest["name"])
+del count    
+
+print("category Features")
+count = CountVectorizer(ngram_range = (1,1),
+                        decode_error = 'replace',
+                        token_pattern = r"(?u)\b\w+\b",
+                        strip_accents = 'unicode')
+X_category = count.fit_transform(df["category_name"])
+X_category_Test = count.transform(dfTest["category_name"])
+del count    
+
+print('Object Features')
+df['object'] = df['name'].apply(lambda x: getLastTwo(x))
+count = CountVectorizer(min_df=LGBM_NAME_MIN_DF,decode_error = 'replace',)
+X_object = count.fit_transform(df["object"])
+X_object_Test = count.transform(dfTest["object"])
+del count 
+
+print("Brand Features")
+count = LemmaVectorizer(ngram_range = (1,1),
+                        decode_error = 'replace',
+                        token_pattern = r"(?u)\b\w+\b",
+                        strip_accents = 'unicode')
+X_brand = count.fit_transform(df["brand_name"])
+X_brand_Test = count.transform(dfTest["brand_name"])
+del count
+gc.collect()
+
+print("Item Cond & Shipping Features")
+ohe = OneHotEncoder(dtype=np.float32, handle_unknown='ignore')
+X_dummies = ohe.fit_transform(np.array([df["item_condition_id"].tolist(),df["shipping"].tolist()]).T)
+X_dummies_Test = ohe.transform(np.array([dfTest["item_condition_id"].tolist(),dfTest["shipping"].tolist()]).T)
+gc.collect()
+
+print("Description Features")
+count_descp = CountVectorizer(max_features = DESC_MAX_FEAT,
+                              decode_error = 'replace',
+                              min_df=LGBM_NAME_MIN_DF,
+                              ngram_range = (1,1),
+                              token_pattern = r"(?u)\b\w+\b",
+                              strip_accents = 'unicode')
+X_descp = count_descp.fit_transform(df["item_description"])
+X_descp_add = count_descp.transform(df["name"])
+X_descp = X_descp + X_descp_add
+
+X_descp_Test = count_descp.transform(dfTest["item_description"])
+X_descp_add_Test = count_descp.transform(dfTest["name"])
+X_descp_Test = X_descp_Test + X_descp_add_Test
+
+del count_descp
+del X_descp_add
+del X_descp_add_Test
+gc.collect()
+
+del df
+gc.collect()
+
+print("X_name_1 {}".format(X_name_1.shape)) 
+print("X_category {}".format(X_category.shape))    
+print("X_object {}".format(X_object.shape))    
+print("X_brand {}".format(X_brand.shape))    
+print("X_dummies {}".format(X_dummies.shape))    
+print("X_descp {}".format(X_descp.shape))    
 
 
+print("Concatenate X_1")
+X_1 = hstack((X_dummies,            
+              X_descp,
+              X_brand,              
+              X_category,
+              X_name_1,              
+              X_object,              
+              )).tocsr()
+X_1_Test = hstack((X_dummies_Test,            
+              X_descp_Test,
+              X_brand_Test,              
+              X_category_Test,
+              X_name_1_Test,              
+              X_object_Test,              
+              )).tocsr()
 
-n_comp = 12
+del X_dummies            
+del X_descp
+del X_brand              
+del X_category
+del X_object
+del X_name_1
+del X_dummies_Test            
+del X_descp_Test
+del X_brand_Test              
+del X_category_Test
+del X_object_Test
+del X_name_1_Test
 
-# tSVD
-tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
-tsvd_results_train = tsvd.fit_transform(train.drop(["y"], axis=1))
-tsvd_results_test = tsvd.transform(test)
+gc.collect()
 
-# PCA
-pca = PCA(n_components=n_comp, random_state=420)
-pca2_results_train = pca.fit_transform(train.drop(["y"], axis=1))
-pca2_results_test = pca.transform(test)
+X_1.data = X_1.data.astype(np.float32)
+X_1_Test.data = X_1_Test.data.astype(np.float32)
 
-# ICA
-ica = FastICA(n_components=n_comp, random_state=420)
-ica2_results_train = ica.fit_transform(train.drop(["y"], axis=1))
-ica2_results_test = ica.transform(test)
+print("X_1 {}".format(X_1.shape)) 
 
-# GRP
-grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
-grp_results_train = grp.fit_transform(train.drop(["y"], axis=1))
-grp_results_test = grp.transform(test)
+np.random.seed(0)
 
-# SRP
-srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
-srp_results_train = srp.fit_transform(train.drop(["y"], axis=1))
-srp_results_test = srp.transform(test)
+filterTrain     = np.where((np.expm1(y) > 1) )
+y     = y[filterTrain[0]]
+X_1   = X_1[filterTrain[0]]  
 
-#save columns list before adding the decomposition components
-
-usable_columns = list(set(train.columns) - set(['y']))
-
-# Append decomposition components to datasets
-for i in range(1, n_comp + 1):
-    train['pca_' + str(i)] = pca2_results_train[:, i - 1]
-    test['pca_' + str(i)] = pca2_results_test[:, i - 1]
-
-    train['ica_' + str(i)] = ica2_results_train[:, i - 1]
-    test['ica_' + str(i)] = ica2_results_test[:, i - 1]
-
-    train['tsvd_' + str(i)] = tsvd_results_train[:, i - 1]
-    test['tsvd_' + str(i)] = tsvd_results_test[:, i - 1]
-
-    train['grp_' + str(i)] = grp_results_train[:, i - 1]
-    test['grp_' + str(i)] = grp_results_test[:, i - 1]
-
-    train['srp_' + str(i)] = srp_results_train[:, i - 1]
-    test['srp_' + str(i)] = srp_results_test[:, i - 1]
-
-#usable_columns = list(set(train.columns) - set(['y']))
-
-y_train = train['y'].values
-y_mean = np.mean(y_train)
-id_test = test['ID'].values
-#finaltrainset and finaltestset are data to be used only the stacked model (does not contain PCA, SVD... arrays) 
-finaltrainset = train[usable_columns].values
-finaltestset = test[usable_columns].values
-
-
-'''Train the xgb model then predict the test data'''
-
-xgb_params = {
-    'n_trees': 520, 
-    'eta': 0.0045,
-    'max_depth': 4,
-    'subsample': 0.93,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'base_score': y_mean, # base prediction = mean(target)
-    'silent': 1
+print("Training LGBM")
+d_train = lgb.Dataset(X_1, label=y)
+params = {
+    'max_bin':255,
+    'min_data_in_leaf':1,
+    'learning_rate': 0.15,
+    'application': 'regression',
+    'max_depth': 20,
+    'num_leaves': 90,
+    'verbosity': -1,
+    'metric': 'RMSE',
+    'data_random_seed': 1,
+    'bagging_freq' : 0, 
+    'bagging_fraction' : 0.5,
+    'feature_fraction' : 1,
+    'lambda_l1' : 2, 
+    'lambda_l2' : 0,        
+    'nthread': 8,
+    'bin_construct_sample_cnt': 50000
 }
-# NOTE: Make sure that the class is labeled 'class' in the data file
 
-dtrain = xgb.DMatrix(train.drop('y', axis=1), y_train)
-dtest = xgb.DMatrix(test)
+model      = lgb.train(params, train_set=d_train, num_boost_round=2500) 
+y_pred_4   = model.predict(X_1_Test)    
 
-num_boost_rounds = 1250
-# train model
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
-y_pred = model.predict(dtest)
-
-'''Train the stacked models then predict the test data'''
-
-stacked_pipeline = make_pipeline(
-    StackingEstimator(estimator=LassoLarsCV(normalize=True)),
-    StackingEstimator(estimator=GradientBoostingRegressor(learning_rate=0.001, loss="huber", max_depth=3, max_features=0.55, min_samples_leaf=18, min_samples_split=14, subsample=0.7)),
-    LassoLarsCV()
-
-)
-
-
-stacked_pipeline.fit(finaltrainset, y_train)
-results = stacked_pipeline.predict(finaltestset)
-
-'''R2 Score on the entire Train data when averaging'''
-
-print('R2 score on train data:')
-print(r2_score(y_train,stacked_pipeline.predict(finaltrainset)*0.2855 + model.predict(dtrain)*0.7145))
-
-'''Average the preditionon test data  of both models then save it on a csv file'''
-
-sub = pd.DataFrame()
-sub['ID'] = id_test
-sub['y'] = y_pred*0.75 + results*0.25
-sub.to_csv('stacked-models.csv', index=False)
-
-
-# Any results you write to the current directory are saved as output.
+submission['price'] = np.clip(np.expm1(y_pred_4),0,10000)
+submission.to_csv("Submission_Single_LGBM.csv", index=False)

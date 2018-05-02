@@ -1,79 +1,200 @@
 
 # coding: utf-8
 
-# # Exercise Introduction
+# This notebook shows how to use LightGBM in a Regularized RandomForest fashion
+# Advantages of LightGBM are :
+# - a lot faster than the well-known scikit learn RandomForestClassifier
+# - it allows L1 and L2 regularization to achieve better performance
 # 
-# To build and test your intuition for convolutions, you will design a vertical line detector.  We'll apply it to each part of an image to create a new tensor showing where there are vertical lines.
-# 
-# ![Imgur](https://i.imgur.com/op9Maqr.png)
-# 
-# Follow these following 4 steps:
-# 1. **Fork this notebook**
-# 2. **Run this full notebook and scroll down to see the output**  You will see the original image, as well as an example of the image we get from applying our horizontal line detector to the image.
-# 3. **Fill in the code cell for `vertical_line_conv`.**  You will have to think about what numbers in the list will create a vertical line detector.  Run this cell.
-# 4. **Add `vertical_line_conv` to `conv_list`.  Run that cell.**  You will see the output of your vertical line filter underneath the horizontal line filter.  You will also see a printed hint indicating if you got this right.  
-# 
-# Once that's done, you are ready to learn about deep convolutional models, the key to modern computer vision breakthroughs.
-# 
-# ---
-# 
-# # Import Utility Functions
-# We'll use some small utilty functions to load raw image data, visualize the results and give hints on your answert, etc.  Don't worry about these, but execute the next cell to load the utility functions.
-# 
+# This notebook is not about finding the best parameters but focuses on using powerfull algos to find important features. 
 
 # In[ ]:
 
 
-import sys
-# Add directory holding utility functions to path to allow importing
-sys.path.append('/kaggle/input/python-utility-code-for-deep-learning-exercises/utils')
-from exercise_1 import load_my_image, apply_conv_to_image, show, print_hints
+from sklearn.model_selection import StratifiedKFold
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+import time
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+# do not display LGBM categorical override warning 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
-# # Example Convolution: Horizontal Line Detector
-# Here is the convolution you saw in the video.  It's provided here as an example, and you shouldn't need to change it.
-
-# In[ ]:
-
-
-# Detects bright pixels over dark pixels. 
-horizontal_line_conv = [[1, 1], 
-                        [-1, -1]]
-
-
-# # Your Turn: Vertical Line Detector
-# 
-# **Replace the question marks with numbers to make a vertical line detector and uncomment both lines of code in the cell below.**
+# ### Define Gini metrics 
+# Let's use the [Extremely Fast Gini Computation by @CPMP](http://www.kaggle.com/cpmpml/extremely-fast-gini-computation)
 
 # In[ ]:
 
 
-#vertical_line_conv = [[?, -?], 
-#                      [?, ?]]
+from numba import jit
+
+@jit
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
 
-# **Once you have created vertical_line_conv in the cell above, add it as an additional item to `conv_list` in the next cell. Then run that cell.**
+# ### Read data and target
 
 # In[ ]:
 
 
-conv_list = [horizontal_line_conv]
+trn_df = pd.read_csv("../input/train.csv", index_col=0)
 
-original_image = load_my_image()
-print("Original image")
-show(original_image)
-for conv in conv_list:
-    filtered_image = apply_conv_to_image(conv, original_image)
-    print("Output: ")
-    show(filtered_image)
+target = trn_df.target
+del trn_df["target"]
 
 
-# 
-# **Above, you'll see the output of the horizontal line filter as well as the filter you added. If you got it right, the output of your filter will looks like this.**
-# ![Imgur](https://i.imgur.com/uR2ngvK.png)
-# 
-# ---
-# # Keep Going
-# **Now you are ready to [combine convolutions into powerful models](https://www.kaggle.com/dansbecker/building-models-from-convolutions). These models are fun to work with, so keep going.**
-# 
-# **[Deep Learning Track Home](https://www.kaggle.com/education/deep-learning)**
+# ### Define LGBM Random Forest L1 regularizer
+
+# In[ ]:
+
+
+reg = lgb.LGBMClassifier(boosting_type="rf",
+                         num_leaves=165,
+                         colsample_bytree=.5,
+                         n_estimators=400,
+                         min_child_weight=5,
+                         min_child_samples=10,
+                         subsample=.632, # Standard RF bagging fraction
+                         subsample_freq=1,
+                         min_split_gain=0,
+                         reg_alpha=10, # Hard L1 regularization
+                         reg_lambda=0,
+                         n_jobs=3)
+
+
+# ### Run a 5 fold CV and display selected features
+
+# In[ ]:
+
+
+# do not display LGBM categorical override warning 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning) 
+
+imp_l1 = pd.DataFrame()
+imp_l1["feature"] = trn_df.columns
+
+folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=15)
+oof_1 = np.zeros(len(trn_df))
+start = time.time()
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(trn_df.values, target.values)):
+    reg.fit(
+        trn_df.iloc[trn_idx].values, target.iloc[trn_idx].values,
+        feature_name=list(trn_df.columns),
+        categorical_feature=[f for f in trn_df.columns if '_cat' in f],
+    )
+    trn_gini = eval_gini(target.iloc[trn_idx].values,
+                               reg.predict_proba(trn_df.iloc[trn_idx].values)[:, 1])
+    oof_1[val_idx] = reg.predict_proba(trn_df.iloc[val_idx])[:, 1]
+    val_gini = eval_gini(target.iloc[val_idx], oof_1[val_idx])
+    imp_l1["imp" + str(fold_ + 1)] = reg.feature_importances_
+    print("Gini score for fold %2d : TRN %.6f / VAL %.6f in [%5.1f]" 
+          % (fold_, trn_gini, val_gini, (time.time() - start) / 60))
+
+print("OOF score : %.6f in [%5.1f]"
+      % (eval_gini(target, oof_1), (time.time() - start) / 60))
+
+# Compute average importances
+imps = [f for f in imp_l1 if "imp" in f]
+imp_l1["score"] = imp_l1[imps].mean(axis=1)
+imp_l1["score"] = 100 * imp_l1["score"] / imp_l1["score"].max()
+imp_l1.sort_values("score", ascending=False, inplace=True)
+
+# Initialize the matplotlib figure
+f, ax = plt.subplots(figsize=(10, 8))
+
+# Plot the total crashes
+sns.set_color_codes("pastel")
+
+sns.barplot(x="score", y="feature", 
+            data=imp_l1[imp_l1["score"] > 0],
+            palette=mpl.cm.ScalarMappable(cmap='viridis_r').to_rgba((imp_l1["score"])))
+plt.xlabel("LGBM Importance score over 5 folds")
+plt.ylabel("Feature")
+plt.title("LGBM L1 Regularized Random Forest importances")
+
+
+# ### Define LGBM Random Forest L2 regularizer
+
+# In[ ]:
+
+
+reg = lgb.LGBMClassifier(boosting_type="rf",
+                         num_leaves=165,
+                         colsample_bytree=.5,
+                         n_estimators=400,
+                         min_child_weight=5,
+                         min_child_samples=10,
+                         subsample=.632,
+                         subsample_freq=1,
+                         min_split_gain=0,
+                         reg_alpha=0,
+                         reg_lambda=5, # L2 regularization
+                         n_jobs=3)
+
+
+# ### Run a 5 fold CV and display L2 selected features
+
+# In[ ]:
+
+
+imp_l2 = pd.DataFrame()
+imp_l2["feature"] = trn_df.columns
+
+folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=15)
+oof_1 = np.zeros(len(trn_df))
+start = time.time()
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(trn_df.values, target.values)):
+    reg.fit(
+        trn_df.iloc[trn_idx].values, target.iloc[trn_idx].values,
+        feature_name=list(trn_df.columns),
+        categorical_feature=[f for f in trn_df.columns if '_cat' in f],
+    )
+    trn_gini = eval_gini(target.iloc[trn_idx].values,
+                               reg.predict_proba(trn_df.iloc[trn_idx].values)[:, 1])
+    oof_1[val_idx] = reg.predict_proba(trn_df.iloc[val_idx])[:, 1]
+    val_gini = eval_gini(target.iloc[val_idx], oof_1[val_idx])
+    imp_l2["imp" + str(fold_ + 1)] = reg.feature_importances_
+    print("Gini score for fold %2d : TRN %.6f / VAL %.6f in [%5.1f]" 
+          % (fold_, trn_gini, val_gini, (time.time() - start) / 60))
+
+print("OOF score : %.6f in [%5.1f]"
+      % (eval_gini(target, oof_1), (time.time() - start) / 60))
+
+imps = [f for f in imp_l2.columns if "imp" in f]
+imp_l2["score"] = imp_l2[imps].mean(axis=1)
+imp_l2["score"] = 100 * imp_l2["score"] / imp_l2["score"].max()
+imp_l2.sort_values("score", ascending=False, inplace=True)
+
+# Initialize the matplotlib figure
+f, ax = plt.subplots(figsize=(10, 8))
+
+# Plot the total crashes
+sns.set_color_codes("pastel")
+
+sns.barplot(x="score", y="feature", 
+            data=imp_l2[imp_l2["score"] > 0],
+            palette=mpl.cm.ScalarMappable(cmap='viridis_r').to_rgba((imp_l2["score"])))
+plt.xlabel("LGBM Importance score over 5 folds")
+plt.ylabel("Feature")
+plt.title("LGBM L2 Regularized Random Forest importances")
+

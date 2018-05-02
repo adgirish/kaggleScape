@@ -1,337 +1,454 @@
 
 # coding: utf-8
 
-# Work in progress:
-# <br>-- add bf0 to data for all products NOT reordered to all orders after first ordered
-# <br>--  add the exponential time weighting - for model memory loss
-# <br>--  add new factors to model
-# <br>--  try flat Prior where p(reorder) is same for all products
-# 
-# This file uses p(reordered|product_id) derived from order_products__prior data as a **Prior**. This is to be used in Bayesian Updating of our Prior: our_products_prior['prob_reordered']. Can also use a flat Prior.
-# 
-# The notion is that after calculating Bayes Factors for each test product purchase the final probability that a product will be reordered is the **Posterior** probability.  Beginning when a product is first purchased (say order k of n total orders) then the **Posterior = BFn x BFn-1 x ... x BFk x Prior**.
-# 
-# Many others here have noticed the correlation between reordered and add_to_cart_order and aisle. I have added an engineered factor I call reorder_count (or count of reordered items in a cart). Using these three variables, I have derived a simple Augmented Naive Bayesian Network as a model to calculate the Bayes Factors for updating.
-# 
-# ![Bayesian Network model of reordered][1]
-# 
-# Thanks to Kareem Eissa, Nick Sarris and Paul Nguyen for code and inspiration. Thank you smalllebowski and Sagar M for your corrections! You are very generous.
 # 
 # 
-# 
-#   [1]: http://elmtreegarden.com/wp-content/uploads/2017/07/Augmented-Naive-Bayesian-Network.png
+# Version 24: Added Nikunj's features and retuned<br>
+# Version 25: Added more Nikunj features and retuned again. <br>
+# Version 26: Deleted some of Nikunj features and retuned again.<br>
+# Version 27: Remove Niknuj features and go to tuning that was optimal without them, as baseline<br>
+# Version 28: Same as version 27 but after having tested some Nikunj features individually<br>
+# Version 29: Add 2 best Nikunj features (zip_count, city_count)<br>
+# Version 30: Add 3rd feature (GarPoolAC), and some cleanup<br>
+# Version 32: Retune: colsample .7 -> .8<br>
+# Version 33: Retune: lambda=10, subsample=.55<br>
+# Version 34: Revert subsample=.5<br>
+# Version 35: Fine tune: lambda=9<br>
+# Version 36: Revert: colsample .7<br>
+# Version 37: Cleanup<br>
+# Version 38: Make boosting rounds and stopping rounds inversely proportional to learning rate<br>
+# Version 40: Add city_mean and zip_mean features<br>
+# Version 41: Fix comments (Previously mis-stated logerror as "sale price" in feature descriptions)<br>
+# Version 42: Fix bug in city_mean definition<br>
+# Version 43: Get rid of city_mean<br>
+# Version 44: Retune: alpha=0.5<br>
+# Version 45: fine tune: lambda=9.5<br>
+# Version 46: Roll back to version 39 model, because zip_mean had a data leak, and the corrected version doesn't help<br>
+# Version 47: Add additional aggregation features, including by neighborhood<br>
+# Verison 48: Put test set features in the correct order<br>
+# Version 49: Retune: lambda=5, colsample=.55<br>
+# Version 50: Retune: alpha=.65, colsample=.50<br>
+# Version 51: Retune: max_depth=7<br>
+# Version 52: Make it optional to generate submission file when running full notebook<br>
+# Version 53. Option to do validation only<br>
+# Version 54. Starting to clean up the code<br>
+# Version 55. Option to fit final model to full training set<br>
+# Version 56. Optimize fudge factor<br>
+# Version 57. Allow change to validation set cutoff date<br>
+# Version 59. Try September 15 as validation cutoff<br>
+# Version 62. Allow final fit on 2017 (no correction for data leak)<br>
+# Version 68. Add seasonal features<br>
+#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Turns out the seasonal features make the fudge factor largely irrelevant,<br>
+#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;but that's partly because I chose the basedate to fit the fudge factors.)<br>
+#  Version 71. Make separate predictions for 2017 using 2017 properties data<br>
+#  Version 72. Run with FIT_2017_TRAIN_SET = False<br>
+#  Version 73. Remove outliers from 2017 data and set FIT_2017_TRAIN_SET = True<br>
+#  Version 74. Set FIT_2017_TRAIN_SET = False again<br>
+#   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Removing outliers helps, but 2017 data still generate bad 2016 predictions.)<br>
+#   Version 76. Allow fitting combined training set<br>
 
 # In[ ]:
 
 
+MAKE_SUBMISSION = True          # Generate output file.
+CV_ONLY = False                 # Do validation only; do not generate predicitons.
+FIT_FULL_TRAIN_SET = True       # Fit model to full training set after doing validation.
+FIT_2017_TRAIN_SET = False      # Use 2017 training data for full fit (no leak correction)
+FIT_COMBINED_TRAIN_SET = True   # Fit combined 2016-2017 training set
+USE_SEASONAL_FEATURES = True
+VAL_SPLIT_DATE = '2016-09-15'   # Cutoff date for validation split
+LEARNING_RATE = 0.007           # shrinkage rate for boosting roudns
+ROUNDS_PER_ETA = 20             # maximum number of boosting rounds times learning rate
+OPTIMIZE_FUDGE_FACTOR = False   # Optimize factor by which to multiply predictions.
+FUDGE_FACTOR_SCALEDOWN = 0.3    # exponent to reduce optimized fudge factor for prediction
 
-import pandas as pd
+
+# In[ ]:
+
+
 import numpy as np
-import operator
-
-# special thanks to Nick Sarris who has written a similar notebook
-# reading data
-#mdf = 'c:/Users/John/Documents/Research/entropy/python/InstaCart/data/'
-mdf = '../input/'
-print('loading prior orders')
-prior_orders = pd.read_csv(mdf + 'order_products__prior.csv', dtype={
-        'order_id': np.int32,
-        'product_id': np.int32,
-        'add_to_cart_order': np.int16,
-        'reordered': np.int8})
-print('loading orders')
-orders = pd.read_csv(mdf + 'orders.csv', dtype={
-        'order_id': np.int32,
-        'user_id': np.int32,
-        'eval_set': 'category',
-        'order_number': np.int16,
-        'order_dow': np.int8,
-        'order_hour_of_day': np.int8,
-        'days_since_prior_order': np.float32})
-print('loading aisles info')
-aisles = pd.read_csv(mdf + 'products.csv', engine='c',
-                           usecols = ['product_id','aisle_id'],
-                       dtype={'product_id': np.int32, 'aisle_id': np.int32})
-pd.set_option('display.float_format', lambda x: '%.3f' % x)
-
-prior_orders.shape
-orders.shape
+import pandas as pd
+import xgboost as xgb
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import mean_absolute_error
+import datetime as dt
+from datetime import datetime
+import gc
+import patsy
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from statsmodels.regression.quantile_regression import QuantReg
 
 
 # In[ ]:
 
 
-# removing all user_ids not in the test set from both files to save memory
-# the test users present ample data to make models. (and saves space)
-test  = orders[orders['eval_set'] == 'test' ]
-user_ids = test['user_id'].values
-order_ids = test['order_id'].values
-orders = orders[orders['user_id'].isin(user_ids)]
+properties16 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
+properties17 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
 
-#del test
-test.shape
+# Number of properties in the zip
+zip_count = properties16['regionidzip'].value_counts().to_dict()
+# Number of properties in the city
+city_count = properties16['regionidcity'].value_counts().to_dict()
+# Median year of construction by neighborhood
+medyear = properties16.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
+# Mean square feet by neighborhood
+meanarea = properties16.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
+# Neighborhood latitude and longitude
+medlat = properties16.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
+medlong = properties16.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
 
-
-# In[ ]:
-
-
-
-# Calculate the Prior : p(reordered|product_id)
-prior = pd.DataFrame(prior_orders.groupby('product_id')['reordered']                     .agg([('number_of_orders',len),('sum_of_reorders','sum')]))
-#prior['prior_p'] = (prior['sum_of_reorders']+1)/(prior['number_of_orders']+2) # Informed Prior
-prior['prior_p'] = 1/2  # Flat Prior
-prior.drop(['number_of_orders','sum_of_reorders'], axis=1, inplace=True)
-print('Here is The Prior: our first guess of how probable it is that a product be reordered once it has been ordered.')
-
-prior.head(3)
-
-
-# In[ ]:
-
-
-# merge everything into one dataframe and save any memory space
-
-comb = pd.DataFrame()
-comb = pd.merge(prior_orders, orders, on='order_id', how='right')
-# slim down comb - 
-comb.drop(['eval_set','order_dow','order_hour_of_day'], axis=1, inplace=True)
-del prior_orders
-del orders
-comb = pd.merge(comb, aisles, on ='product_id', how = 'left')
-del aisles
-prior.reset_index(inplace = True)
-comb = pd.merge(comb, prior, on ='product_id', how = 'left')
-del prior
-print('combined data in DataFrame comb')
-comb.head(3)
+train = pd.read_csv("../input/train_2016_v2.csv")
+for c in properties16.columns:
+    properties16[c]=properties16[c].fillna(-1)
+    if properties16[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(properties16[c].values))
+        properties16[c] = lbl.transform(list(properties16[c].values))
 
 
 # In[ ]:
 
 
-
-# Build the factors needed for a model of probability of reordered. This model forms our
-# hypothesis H and allows the calculation of each Bayes Factor: BF = p(e|H)/(1-p(e|H))
-# where e is the test user product buying history. See DAG of model above.
-# discretize reorder count into categories, 9 buckets, being sure to include 0 as bucket
-# These bins maximize mutual information with ['reordered']. Done outside python
-recount = pd.DataFrame()
-recount['reorder_c'] = comb.groupby(comb.order_id)['reordered'].sum().fillna(0)
-bins = [-0.1, 0, 2,4,6,8,11,14,19,71]
-cat =  ['None','<=2','<=4','<=6','<=8','<=11','<=14','<=19','>19']
-recount['reorder_b'] = pd.cut(recount['reorder_c'], bins, labels = cat)
-recount.reset_index(inplace = True)
-comb = pd.merge(comb, recount, how = 'left', on = 'order_id')
-del recount
-
-# discretize 'add_to_cart_order' (atco) into categories, 8 buckets
-# These bins maximize mutual information with ['recount']. Done outside python
-bins = [0,2,3,5,7,9,12,17,80]
-cat = ['<=2','<=3','<=5','<=7','<=9','<=12','<=17','>17']
-comb['atco1'] = pd.cut(comb['add_to_cart_order'], bins, labels = cat)
-del comb['add_to_cart_order']
-print('comb ')
-comb.head(2)
+train_df = train.merge(properties16, how='left', on='parcelid')
+select_qtr4 = pd.to_datetime(train_df["transactiondate"]) >= VAL_SPLIT_DATE
+if USE_SEASONAL_FEATURES:
+    basedate = pd.to_datetime('2015-11-15').toordinal()
 
 
 # In[ ]:
 
 
-# these are the children Nodes of reordered:atco, aisle, recount. Build occurrence tables
-# first, then calculate probabilities. Then merge to add atco into comb.
-# 
-atco_fac = pd.DataFrame()
-atco_fac = comb.groupby(['reordered', 'atco1'])['atco1'].agg(np.count_nonzero).unstack('atco1')
-tot = pd.DataFrame()
-tot = np.sum(atco_fac,axis=1)
-atco_fac = atco_fac.iloc[:,:].div(tot, axis=0)
-atco_fac = atco_fac.stack('atco1')
-atco_fac = pd.DataFrame(atco_fac)
-atco_fac.reset_index(inplace = True)
-atco_fac.rename(columns = {0:'atco_fac_p'}, inplace = True)
-comb = pd.merge(comb, atco_fac, how='left', on=('reordered', 'atco1'))
+del train
+gc.collect()
 
-# calculate other two factors' probability tables, then probability
-# and merge into comb
 
-aisle_fac = pd.DataFrame()
-aisle_fac = comb.groupby(['reordered', 'atco1', 'aisle_id'])['aisle_id']                .agg(np.count_nonzero).unstack('aisle_id')
-tot = np.sum(aisle_fac,axis=1)
-aisle_fac = aisle_fac.iloc[:,:].div(tot, axis=0)
-aisle_fac = aisle_fac.stack('aisle_id')
-aisle_fac = pd.DataFrame(aisle_fac)
-aisle_fac.reset_index(inplace = True)
-aisle_fac.rename(columns = {0:'aisle_fac_p'}, inplace = True)
-comb = pd.merge(comb, aisle_fac, how = 'left', on = ('aisle_id','reordered','atco1'))
-# last factor is reorder_count_factor   
+# In[ ]:
+
+
+# Inputs to features that depend on target variable
+# (Ideally these should be recalculated, and the dependent features recalculated,
+#  when fitting to the full training set.  But I haven't implemented that yet.)
+
+# Standard deviation of target value for properties in the city/zip/neighborhood
+citystd = train_df[~select_qtr4].groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+zipstd = train_df[~select_qtr4].groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+hoodstd = train_df[~select_qtr4].groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
+
+
+# In[ ]:
+
+
+def calculate_features(df):
+    # Nikunj's features
+    # Number of properties in the zip
+    df['N-zip_count'] = df['regionidzip'].map(zip_count)
+    # Number of properties in the city
+    df['N-city_count'] = df['regionidcity'].map(city_count)
+    # Does property have a garage, pool or hot tub and AC?
+    df['N-GarPoolAC'] = ((df['garagecarcnt']>0) &                          (df['pooltypeid10']>0) &                          (df['airconditioningtypeid']!=5))*1 
+
+    # More features
+    # Mean square feet of neighborhood properties
+    df['mean_area'] = df['regionidneighborhood'].map(meanarea)
+    # Median year of construction of neighborhood properties
+    df['med_year'] = df['regionidneighborhood'].map(medyear)
+    # Neighborhood latitude and longitude
+    df['med_lat'] = df['regionidneighborhood'].map(medlat)
+    df['med_long'] = df['regionidneighborhood'].map(medlong)
+
+    df['zip_std'] = df['regionidzip'].map(zipstd)
+    df['city_std'] = df['regionidcity'].map(citystd)
+    df['hood_std'] = df['regionidneighborhood'].map(hoodstd)
     
-recount_fac = pd.DataFrame()
-recount_fac = comb.groupby(['reordered', 'atco1', 'reorder_b'])['reorder_b']                    .agg(np.count_nonzero).unstack('reorder_b')
-tot = pd.DataFrame()
-tot = np.sum(recount_fac,axis=1)
-recount_fac = recount_fac.iloc[:,:].div(tot, axis=0)
-recount_fac.stack('reorder_b')
-recount_fac = pd.DataFrame(recount_fac.unstack('reordered').unstack('atco1')).reset_index()
-recount_fac.rename(columns = {0:'recount_fac_p'}, inplace = True)
-comb = pd.merge(comb, recount_fac, how = 'left', on = ('reorder_b', 'reordered', 'atco1'))
-
-recount_fac.head(3)
+    if USE_SEASONAL_FEATURES:
+        df['cos_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.cos)
+        df['sin_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.sin)
 
 
 # In[ ]:
 
 
-
-# Use the factors in comb + the prior_p to update a posterior for each product purchased.
-p = pd.DataFrame()
-p = (comb.loc[:,'atco_fac_p'] * comb.loc[:,'aisle_fac_p'] * comb.loc[:,'recount_fac_p'])
-p.reset_index()
-comb['p'] = p
-
-comb.head(3)
+dropvars = ['airconditioningtypeid', 'buildingclasstypeid',
+            'buildingqualitytypeid', 'regionidcity']
+droptrain = ['parcelid', 'logerror', 'transactiondate']
+droptest = ['ParcelId']
 
 
 # In[ ]:
 
 
+calculate_features(train_df)
 
-# work in progress on beta
-# Use a test beta = 95% per month for memory retention function of users. Akin to Recency.
+x_valid = train_df.drop(dropvars+droptrain, axis=1)[select_qtr4]
+y_valid = train_df["logerror"].values.astype(np.float32)[select_qtr4]
 
+print('Shape full training set: {}'.format(train_df.shape))
+print('Dropped vars: {}'.format(len(dropvars+droptrain)))
+print('Shape valid X: {}'.format(x_valid.shape))
+print('Shape valid y: {}'.format(y_valid.shape))
 
-#split into three dataframes. Two are reordered == 1 and == 0
-# add third group when order_number > first_order & reordered <> 1
-# the trird group is when ordered=0 but we don't have data for order=0,
-# so we make it.It must be appended to comb_last
+train_df=train_df[ train_df.logerror > -0.4 ]
+train_df=train_df[ train_df.logerror < 0.419 ]
+print('\nFull training set after removing outliers, before dropping vars:')     
+print('Shape training set: {}\n'.format(train_df.shape))
 
-# Calculate bf0 for products when first purchased aka reordered=0
-comb0 = pd.DataFrame()
-comb0 = comb[comb['reordered']==0]
-comb0.loc[:,'first_order'] = comb0['order_number']
-# now every product that was ordered has a posterior in usr.
-comb0.loc[:,'beta'] = 1
-comb0.loc[:,'bf'] = (comb0.loc[:,'prior_p'] * comb0.loc[:,'p']/(1 - comb0.loc[:,'p'])) # bf1
-# Small 'slight of hand' here. comb0.bf is really the first posterior and second prior.
+if FIT_FULL_TRAIN_SET:
+    full_train = train_df.copy()
 
-# Calculate beta and BF1 for the reordered products
-comb1 = pd.DataFrame()
-comb1 = comb[comb['reordered']==1]
+train_df=train_df[~select_qtr4]
+x_train=train_df.drop(dropvars+droptrain, axis=1)
+y_train = train_df["logerror"].values.astype(np.float32)
+y_mean = np.mean(y_train)
+n_train = x_train.shape[0]
+print('Training subset after removing outliers:')     
+print('Shape train X: {}'.format(x_train.shape))
+print('Shape train y: {}'.format(y_train.shape))
 
-comb1.loc[:,'beta'] = (1 - .05*comb1.loc[:,'days_since_prior_order']/30)
-comb1.loc[:,'bf'] = (1 - comb1.loc[:,'p'])/comb1.loc[:,'p'] # bf0
-
-
-comb_last = pd.DataFrame()
-comb_last = pd.concat([comb0, comb1], axis=0).reset_index(drop=True)
-comb_last = comb_last[['reordered','user_id','product_id','reorder_c','order_number',
-                      'bf','beta','atco_fac_p', 'aisle_fac_p', 'recount_fac_p']]
-comb_last = comb_last.sort_values((['user_id', 'order_number', 'bf']))
-
-pd.set_option('display.float_format', lambda x: '%.6f' % x)
-comb_last.head(3)
-
-
-# In[ ]:
-
-
-first_order = pd.DataFrame()
-first_order = comb_last[comb_last.reordered == 0]
-first_order.rename(columns = {'order_number':'first_o'}, inplace = True)
-first_order.loc[:,'last_o'] = comb_last.groupby(['user_id'])['order_number'].transform(max)
-first_order = first_order[['user_id','product_id','first_o','last_o']]
-comb_last = pd.merge(comb_last, first_order, on = ('user_id', 'product_id'), how = 'left')
-
-#com = pd.DataFrame()
-#com = comb_last[(comb_last.user_id == 3) & (comb_last.first_o < comb_last.order_number)]
-#com.groupby([('order_id', 'product_id', 'order_number')])['bf'].agg(np.sum).head(50)
+if FIT_FULL_TRAIN_SET:
+    x_full = full_train.drop(dropvars+droptrain, axis=1)
+    y_full = full_train["logerror"].values.astype(np.float32)
+    n_full = x_full.shape[0]
+    print('\nFull trainng set:')     
+    print('Shape train X: {}'.format(x_train.shape))
+    print('Shape train y: {}'.format(y_train.shape))
 
 
 # In[ ]:
 
 
-# Calculate beta and bf0 for products not reordered after first order for all orders.
-# must not occur until reordered==0 (aka: when first ordered)
-# they do not exist in the data. there is no record of NOT Ordered.
-# we must produce these records and calculate p, bf0 & beta for each
-com = pd.DataFrame
+if not CV_ONLY:
+    # Generate test set data
+    
+    sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
+    
+    # Process properties for 2016
+    test_df = pd.merge( sample_submission[['ParcelId']], 
+                        properties16.rename(columns = {'parcelid': 'ParcelId'}), 
+                        how = 'left', on = 'ParcelId' )
+    if USE_SEASONAL_FEATURES:
+        test_df['transactiondate'] = '2016-10-31'
+        droptest += ['transactiondate']
+    calculate_features(test_df)
+    x_test = test_df.drop(dropvars+droptest, axis=1)
+    print('Shape test: {}'.format(x_test.shape))
 
-# replace nan with bf0 if first_o < order_number (after product is first ordered)
-com = pd.pivot_table(comb_last[(comb_last.user_id == 3) &                                (comb_last.first_o < comb_last.order_number)],
-                     values = 'bf', index = ['user_id', 'product_id'],
-                     columns = 'order_number', dropna=False)
-temp = pd.DataFrame()
-temp = com[(com.bf == 'nan')]
-p = pd.DataFrame()
-p.loc[:,'p'] = (temp.loc[:,'atco_fac_p'] * temp.loc[:,'aisle_fac_p'] * temp.loc[:,'recount_fac_p'])
-p.reset_index()
-temp.loc[:,'bf'] = (1 - temp.loc[:,p])/temp.loc[:,p]
-comb_last = pd.merge(comb_last, temp, on =[('order_id', 'product_id',
-                                            'order_number')]).reset_index()
-temp = comb_last[comb_last.beta == 'nan']
-temp.loc[:,'beta'] = (1 - .05*comb1.loc[:,'days_since_prior_order']/30)
-comb_last = pd.merge(comb_last, temp, on = [('order_id', 'product_id',
-                                             'order_number')]).reset_index()
+    # Process properties for 2017
+    for c in properties17.columns:
+        properties17[c]=properties17[c].fillna(-1)
+        if properties17[c].dtype == 'object':
+            lbl = LabelEncoder()
+            lbl.fit(list(properties17[c].values))
+            properties17[c] = lbl.transform(list(properties17[c].values))
+    zip_count = properties17['regionidzip'].value_counts().to_dict()
+    city_count = properties17['regionidcity'].value_counts().to_dict()
+    medyear = properties17.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
+    meanarea = properties17.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
+    medlat = properties17.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
+    medlong = properties17.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
 
-# replace nan with 1 if first_o > order number (before product has been ordered)
-com = pd.pivot_table(comb_last[(comb_last.user_id ==3) & (com.first_o < com.order_number)],
-                     values = 'beta', index = ['user_id', 'product_id'], 
-                     columns = 'order_number', dropna=False)
-# 
-temp = com[com.bf == 'nan']
-temp.loc[:,'bf'] = 1
-comb_last = pd.merge(comb_last, temp, on =[('order_id', 'product_id',
-                                            'order_number')]).reset_index()
-temp = comb_last[comb_last.beta == 'nan']
-temp.loc[:,'beta'] = 1
-comb_last = pd.merge(comb_last, temp, on = [('order_id', 'product_id',
-                                             'order_number')]).reset_index()
+    test_df = pd.merge( sample_submission[['ParcelId']], 
+                        properties17.rename(columns = {'parcelid': 'ParcelId'}), 
+                        how = 'left', on = 'ParcelId' )
+    if USE_SEASONAL_FEATURES:
+        test_df['transactiondate'] = '2017-10-31'
+    calculate_features(test_df)
+    x_test17 = test_df.drop(dropvars+droptest, axis=1)
 
-
-pd.pivot_table(comb_last[comb_last.user_id ==3], values = 'bf',
-               index = ['user_id', 'product_id'], columns = 'order_number', dropna=False).head(15)
-
-
-# In[ ]:
-
-
-# Find way to introduce beta to the update. ????
-##  update = lambda bf(n) ,bf(n-1), beta(n): bf(n) * bf(n-1)**beta(n);
-
-# finally, perform update of every product
-# Calculate the posterior for every product a user has purchased
-usr = pd.DataFrame()
-usr = comb_last[comb_last.order_number >= comb_last.first_o].groupby(['user_id',
-                                                                      'product_id'])['bf',
-                                                                                     'beta']\
-    .agg({['bf', 'beta']: lambda x,y: x**y}).reset_index() 
-
-# Calculate the average number of reordered products per cart for each user
-temp = pd.DataFrame()
-temp = comb_last[comb_last.order_number > 1].groupby(['user_id'])['reorder_c']    .agg(np.mean).reset_index()
-user = pd.merge(usr, temp, on = 'user_id', how = 'left')
-
-user.head(5)
+    del test_df
 
 
 # In[ ]:
 
 
-def f1(x):
-    return ' '.join([str(int(a)) for a in x])
-def f2(x):
-    return 'None'
+del train_df
+del select_qtr4
+gc.collect()
 
-u = user.reset_index().sort_values(((['user_id','bf'])), ascending=False)
-u['cumulative'] = u.groupby('user_id').cumcount()
-uu = u[(round(u.reorder_c) > u.cumulative)].groupby('user_id').agg({'product_id': f1})
-uu.reset_index(inplace=True)
-uuu = u[round(u.reorder_c) == 0].groupby('user_id').agg({'product_id': f2})
-uuu.reset_index(inplace=True)
 
-uuuu = pd.concat([uu, uuu], axis=0).reset_index()
-sub = pd.merge(uuuu, test, on='user_id', how ='left').sort_values('order_id')
+# In[ ]:
 
-sub.sort_values('order_id')
-sub[['order_id', 'product_id']].to_csv('bayesian.csv', index=False)
-sub[['order_id', 'product_id']].head(10)
+
+xgb_params = {  # best as of 2017-09-28 13:20 UTC
+    'eta': LEARNING_RATE,
+    'max_depth': 7, 
+    'subsample': 0.6,
+    'objective': 'reg:linear',
+    'eval_metric': 'mae',
+    'lambda': 5.0,
+    'alpha': 0.65,
+    'colsample_bytree': 0.5,
+    'base_score': y_mean,'taxdelinquencyyear'
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dvalid_x = xgb.DMatrix(x_valid)
+dvalid_xy = xgb.DMatrix(x_valid, y_valid)
+if not CV_ONLY:
+    dtest = xgb.DMatrix(x_test)
+    dtest17 = xgb.DMatrix(x_test17)
+    del x_test
+
+
+# In[ ]:
+
+
+del x_train
+gc.collect()
+
+
+# In[ ]:
+
+
+num_boost_rounds = round( ROUNDS_PER_ETA / xgb_params['eta'] )
+early_stopping_rounds = round( num_boost_rounds / 20 )
+print('Boosting rounds: {}'.format(num_boost_rounds))
+print('Early stoping rounds: {}'.format(early_stopping_rounds))
+
+
+# In[ ]:
+
+
+evals = [(dtrain,'train'),(dvalid_xy,'eval')]
+model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds,
+                  evals=evals, early_stopping_rounds=early_stopping_rounds, 
+                  verbose_eval=10)
+
+
+# In[ ]:
+
+
+valid_pred = model.predict(dvalid_x, ntree_limit=model.best_ntree_limit)
+print( "XGBoost validation set predictions:" )
+print( pd.DataFrame(valid_pred).head() )
+print("\nMean absolute validation error:")
+mean_absolute_error(y_valid, valid_pred)
+
+
+# In[ ]:
+
+
+if OPTIMIZE_FUDGE_FACTOR:
+    mod = QuantReg(y_valid, valid_pred)
+    res = mod.fit(q=.5)
+    print("\nLAD Fit for Fudge Factor:")
+    print(res.summary())
+
+    fudge = res.params[0]
+    print("Optimized fudge factor:", fudge)
+    print("\nMean absolute validation error with optimized fudge factor: ")
+    print(mean_absolute_error(y_valid, fudge*valid_pred))
+
+    fudge **= FUDGE_FACTOR_SCALEDOWN
+    print("Scaled down fudge factor:", fudge)
+    print("\nMean absolute validation error with scaled down fudge factor: ")
+    print(mean_absolute_error(y_valid, fudge*valid_pred))
+else:
+    fudge=1.0
+
+
+# In[ ]:
+
+
+if FIT_FULL_TRAIN_SET and not CV_ONLY:
+    if FIT_COMBINED_TRAIN_SET:
+        # Merge 2016 and 2017 data sets
+        train16 = pd.read_csv('../input/train_2016_v2.csv')
+        train17 = pd.read_csv('../input/train_2017.csv')
+        train16 = pd.merge(train16, properties16, how = 'left', on = 'parcelid')
+        train17 = pd.merge(train17, properties17, how = 'left', on = 'parcelid')
+        train17[['structuretaxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxvaluedollarcnt', 'taxamount']] = np.nan
+        train_df = pd.concat([train16, train17], axis = 0)
+        # Generate features
+        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
+        calculate_features(train_df)
+        # Remove outliers
+        train_df=train_df[ train_df.logerror > -0.4 ]
+        train_df=train_df[ train_df.logerror < 0.419 ]
+        # Create final training data sets
+        x_full = train_df.drop(dropvars+droptrain, axis=1)
+        y_full = train_df["logerror"].values.astype(np.float32)
+        n_full = x_full.shape[0]     
+    elif FIT_2017_TRAIN_SET:
+        train = pd.read_csv('../input/train_2017.csv')
+        train_df = train.merge(properties17, how='left', on='parcelid')
+        # Generate features
+        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
+        calculate_features(train_df)
+        # Remove outliers
+        train_df=train_df[ train_df.logerror > -0.4 ]
+        train_df=train_df[ train_df.logerror < 0.419 ]
+        # Create final training data sets
+        x_full = train_df.drop(dropvars+droptrain, axis=1)
+        y_full = train_df["logerror"].values.astype(np.float32)
+        n_full = x_full.shape[0]     
+    dtrain = xgb.DMatrix(x_full, y_full)
+    num_boost_rounds = int(model.best_ntree_limit*n_full/n_train)
+    full_model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds, 
+                           evals=[(dtrain,'train')], verbose_eval=10)
+
+
+# In[ ]:
+
+
+del properties16
+del properties17
+gc.collect()
+
+
+# In[ ]:
+
+
+if not CV_ONLY:
+    if FIT_FULL_TRAIN_SET:
+        pred = fudge*full_model.predict(dtest)
+        pred17 = fudge*full_model.predict(dtest17)
+    else:
+        pred = fudge*model.predict(dtest, ntree_limit=model.best_ntree_limit)
+        pred17 = fudge*model.predict(dtest17, ntree_limit=model.best_ntree_limit)
+        
+    print( "XGBoost test set predictions for 2016:" )
+    print( pd.DataFrame(pred).head() )
+    print( "XGBoost test set predictions for 2017:" )
+    print( pd.DataFrame(pred17).head() )    
+
+
+# In[ ]:
+
+
+if MAKE_SUBMISSION and not CV_ONLY:
+   y_pred=[]
+   y_pred17=[]
+
+   for i,predict in enumerate(pred):
+       y_pred.append(str(round(predict,4)))
+   for i,predict in enumerate(pred17):
+       y_pred17.append(str(round(predict,4)))
+   y_pred=np.array(y_pred)
+   y_pred17=np.array(y_pred17)
+
+   output = pd.DataFrame({'ParcelId': sample_submission['ParcelId'].astype(np.int32),
+           '201610': y_pred, '201611': y_pred, '201612': y_pred,
+           '201710': y_pred17, '201711': y_pred17, '201712': y_pred17})
+   # set col 'ParceID' to first col
+   cols = output.columns.tolist()
+   cols = cols[-1:] + cols[:-1]
+   output = output[cols]
+
+   output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
+
+
+# In[ ]:
+
+
+print("Mean absolute validation error without fudge factor: ", )
+print( mean_absolute_error(y_valid, valid_pred) )
+if OPTIMIZE_FUDGE_FACTOR:
+    print("Mean absolute validation error with fudge factor:")
+    print( mean_absolute_error(y_valid, fudge*valid_pred) )
 

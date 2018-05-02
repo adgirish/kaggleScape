@@ -1,278 +1,118 @@
 
 # coding: utf-8
 
-# use Keras pre-trained VGG16
-# ---------------------------
-# this is my first notebook. 
-# 
-# pre-trained VGG16 is quickly and good performance.
-# 
-# I learned from official Keras blog tutorial 
-# [Building powerful image classification models using very little data][1]
-# 
-# 
-#   [1]: https://blog.keras.io/building-powerful-image-classification-models-using-very-little-data.html
-
-# ## resize train data and test data ##
-
 # In[ ]:
 
 
-import matplotlib.pyplot as plt
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+# Get first 10000 rows and print some info about columns
+train = pd.read_csv("../input/train.csv", parse_dates=['srch_ci', 'srch_co'], nrows=10000)
+train.info()
+
+
+# In[ ]:
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+# preferred continent destinations
+sns.countplot(x='hotel_continent', data=train)
+
+
+# In[ ]:
+
+
+# most of people booking are from continent 3 I guess is one of the rich continent?
+sns.countplot(x='posa_continent', data=train)
+
+
+# In[ ]:
+
+
+# putting the two above together
+sns.countplot(x='hotel_continent', hue='posa_continent', data=train)
+
+
+# In[ ]:
+
+
+# how many people by continent are booking from mobile
+sns.countplot(x='posa_continent', hue='is_mobile', data = train)
+
+
+# In[ ]:
+
+
+# Difference between user and destination country
+sns.distplot(train['user_location_country'], label="User country")
+sns.distplot(train['hotel_country'], label="Hotel country")
+plt.legend()
+
+
+# In[ ]:
+
+
 import numpy as np
-import pandas as pd
-import cv2
-import math
-from glob import glob
-import os
-
-master = pd.read_csv("../input/train_labels.csv")
-master.head()
-
-
-# In[ ]:
-
-
-img_path = "../input/train/"
-
-y = []
-file_paths = []
-for i in range(len(master)):
-    file_paths.append( img_path + str(master.ix[i][0]) +'.jpg' )
-    y.append(master.ix[i][1])
-y = np.array(y)
+# get number of booked nights as difference between check in and check out
+hotel_nights = train['srch_co'] - train['srch_ci'] 
+hotel_nights = (hotel_nights / np.timedelta64(1, 'D')).astype(float) # convert to float to avoid NA problems
+train['hotel_nights'] = hotel_nights
+plt.figure(figsize=(11, 9))
+ax = sns.boxplot(x='hotel_continent', y='hotel_nights', data=train)
+lim = ax.set(ylim=(0, 15))
 
 
 # In[ ]:
 
 
-#image reseize & centering & crop 
-
-def centering_image(img):
-    size = [256,256]
-    
-    img_size = img.shape[:2]
-    
-    # centering
-    row = (size[1] - img_size[0]) // 2
-    col = (size[0] - img_size[1]) // 2
-    resized = np.zeros(list(size) + [img.shape[2]], dtype=np.uint8)
-    resized[row:(row + img.shape[0]), col:(col + img.shape[1])] = img
-
-    return resized
-
-
-x = []
-for i, file_path in enumerate(file_paths):
-    #read image
-    img = cv2.imread(file_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    #resize
-    if(img.shape[0] > img.shape[1]):
-        tile_size = (int(img.shape[1]*256/img.shape[0]),256)
-    else:
-        tile_size = (256, int(img.shape[0]*256/img.shape[1]))
-
-    #centering
-    img = centering_image(cv2.resize(img, dsize=tile_size))
-    
-    #out put 224*224px 
-    img = img[16:240, 16:240]
-    x.append(img)
-
-x = np.array(x)
+plt.figure(figsize=(11, 9))
+sns.countplot(x="hotel_nights", data=train)
 
 
 # In[ ]:
 
 
-sample_submission = pd.read_csv("../input/sample_submission.csv")
-img_path = "../input/test/"
-
-test_names = []
-file_paths = []
-
-for i in range(len(sample_submission)):
-    test_names.append(sample_submission.ix[i][0])
-    file_paths.append( img_path + str(int(sample_submission.ix[i][0])) +'.jpg' )
-    
-test_names = np.array(test_names)
+# distribution of the total number of people per cluster
+src_total_cnt = train.srch_adults_cnt + train.srch_children_cnt
+train['src_total_cnt'] = src_total_cnt
+ax = sns.kdeplot(train['hotel_cluster'], train['src_total_cnt'], cmap="Purples_d")
+lim = ax.set(ylim=(0.5, 4.5))
 
 
 # In[ ]:
 
 
-test_images = []
-for file_path in file_paths:
-    #read image
-    img = cv2.imread(file_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+# plot all columns countplots
+import numpy as np
+rows = train.columns.size//3 - 1
+fig, axes = plt.subplots(nrows=rows, ncols=3, figsize=(12,18))
+fig.tight_layout()
+i = 0
+j = 0
+for col in train.columns:
+    if j >= 3:
+        j = 0
+        i += 1
+    # avoid to plot by date    
+    if train[col].dtype == np.int64:
+        sns.countplot(x=col, data=train, ax=axes[i][j])
+        j += 1
 
-    #resize
-    if(img.shape[0] > img.shape[1]):
-        tile_size = (int(img.shape[1]*256/img.shape[0]),256)
-    else:
-        tile_size = (256, int(img.shape[0]*256/img.shape[1]))
-
-    #centering
-    img = centering_image(cv2.resize(img, dsize=tile_size))
-    
-    #out put 224*224px 
-    img = img[16:240, 16:240]
-    test_images.append(img)
-    
-    path, ext = os.path.splitext( os.path.basename(file_paths[0]) )
-
-test_images = np.array(test_images)
-
-
-# save numpy array.
-# 
-# Usually I separate code, data format and CNN.
-
-# In[ ]:
-
-
-#np.savez('224.npz', x=x, y=y, test_images=test_images, test_names=test_names)
-
-
-# ## split train data and validation data  ##
-
-# In[ ]:
-
-
-data_num = len(y)
-random_index = np.random.permutation(data_num)
-
-x_shuffle = []
-y_shuffle = []
-for i in range(data_num):
-    x_shuffle.append(x[random_index[i]])
-    y_shuffle.append(y[random_index[i]])
-    
-x = np.array(x_shuffle) 
-y = np.array(y_shuffle)
-
-
-# In[ ]:
-
-
-val_split_num = int(round(0.2*len(y)))
-x_train = x[val_split_num:]
-y_train = y[val_split_num:]
-x_test = x[:val_split_num]
-y_test = y[:val_split_num]
-
-print('x_train', x_train.shape)
-print('y_train', y_train.shape)
-print('x_test', x_test.shape)
-print('y_test', y_test.shape)
-
-
-# In[ ]:
-
-
-x_train = x_train.astype('float32')
-x_test = x_test.astype('float32')
-x_train /= 255
-x_test /= 255
-
-
-# use Keras pre-trained VGG16
-# ---------------------------
-# 
-# but kaggle karnel is not run
-
-# In[ ]:
-
-
-from keras.models import Sequential, Model, load_model
-from keras import applications
-from keras import optimizers
-from keras.layers import Dropout, Flatten, Dense
-
-img_rows, img_cols, img_channel = 224, 224, 3
-
-base_model = applications.VGG16(weights='imagenet', include_top=False, input_shape=(img_rows, img_cols, img_channel))
-
-
-# In[ ]:
-
-
-add_model = Sequential()
-add_model.add(Flatten(input_shape=base_model.output_shape[1:]))
-add_model.add(Dense(256, activation='relu'))
-add_model.add(Dense(1, activation='sigmoid'))
-
-model = Model(inputs=base_model.input, outputs=add_model(base_model.output))
-model.compile(loss='binary_crossentropy', optimizer=optimizers.SGD(lr=1e-4, momentum=0.9),
-              metrics=['accuracy'])
-
-model.summary()
-
-
-# In[ ]:
-
-
-from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import ModelCheckpoint
-
-batch_size = 32
-epochs = 50
-
-train_datagen = ImageDataGenerator(
-        rotation_range=30, 
-        width_shift_range=0.1,
-        height_shift_range=0.1, 
-        horizontal_flip=True)
-train_datagen.fit(x_train)
-
-
-history = model.fit_generator(
-    train_datagen.flow(x_train, y_train, batch_size=batch_size),
-    steps_per_epoch=x_train.shape[0] // batch_size,
-    epochs=epochs,
-    validation_data=(x_test, y_test),
-    callbacks=[ModelCheckpoint('VGG16-transferlearning.model', monitor='val_acc', save_best_only=True)]
-)
-
-
-# ## predict test data ##
-
-# In[ ]:
-
-
-test_images = test_images.astype('float32')
-test_images /= 255
-
-
-# In[ ]:
-
-
-predictions = model.predict(test_images)
-
-
-# In[ ]:
-
-
-sample_submission = pd.read_csv("../input/sample_submission.csv")
-
-for i, name in enumerate(test_names):
-    sample_submission.loc[sample_submission['name'] == name, 'invasive'] = predictions[i]
-
-sample_submission.to_csv("submit.csv", index=False)
-
-
-# What to do next?
-# ----------------
-# 
-# I will try pre-trained ResNet, fine tune ResNet.
-# 
-# This idea seems to be helpful.
-# 
-# [Dogs vs. Cats Redux Playground Competition, 3rd Place Interview][1]
-# 
-# 
-#   [1]: http://blog.kaggle.com/2017/04/20/dogs-vs-cats-redux-playground-competition-3rd-place-interview-marco-lugo/

@@ -1,91 +1,156 @@
-# coding=utf8
+'''This script was inspired by snowdog's R kernel that builds an old school neural network 
+   which scores quite well on the public LB relative to other NN approaches.
+   https://www.kaggle.com/snowdog/old-school-nnet
+
+   The idea is that after some pre-processing, a simpler network structure may generalize
+   much better than a deep, complicated one. The network in this script has only 1 hidden layer
+   with 35 neurons, uses some dropout, and trains for just 15 epochs. 
+   Upsampling is also used, which seems to improve NN results. 
+   
+   We'll do a 5-fold split on the data, train 3 times on each fold and bag the predictions, then average
+   the bagged predictions to get a submission. Increasing the number of training folds and the
+   number of runs per fold would likely improve the results.
+   
+   The LB score is approximate because I haven't been able to get random seeding to properly
+   make keras results consistent - any advice here would be much appreciated! 
+'''
+
 import numpy as np
+np.random.seed(20)
 import pandas as pd
-import lightgbm as lgb
-import matplotlib.pyplot as plt
 
-RS = 20170501
-np.random.seed(RS)
+from tensorflow import set_random_seed
+from keras.models import Sequential
+from keras.layers import Dense, Dropout
 
-ROUNDS = 450
-params = {
-	'objective': 'regression',
-    'metric': 'rmse',
-    'boosting': 'gbdt',
-    'learning_rate': 0.04,
-    'verbose': 0,
-    'num_leaves': 2 ** 5,
-    'bagging_fraction': 0.95,
-    'bagging_freq': 1,
-    'bagging_seed': RS,
-    'feature_fraction': 0.7,
-    'feature_fraction_seed': RS,
-    'max_bin': 100,
-    'max_depth': 5,
-    'num_rounds': ROUNDS
-}
+from sklearn.model_selection import StratifiedKFold
 
-print("Started")
-input_folder = '../input/'
-train_df = pd.read_csv(input_folder + 'train.csv', parse_dates=['timestamp'])
-test_df  = pd.read_csv(input_folder + 'test.csv' , parse_dates=['timestamp'])
-macro_df = pd.read_csv(input_folder + 'macro.csv', parse_dates=['timestamp'])
+'''Data loading & preprocessing
+'''
 
-#fix outlier
-train_df.drop(train_df[train_df["life_sq"] > 5000].index, inplace=True)
+X_train = pd.read_csv('../input/train.csv')
+X_test = pd.read_csv('../input/test.csv')
 
-train_y  = np.log(train_df['price_doc'].values)
-test_ids = test_df['id']
+X_train, y_train = X_train.iloc[:,2:], X_train.target
+X_test, test_id = X_test.iloc[:,1:], X_test.id
 
-train_df.drop(['id', 'price_doc'], axis=1, inplace=True)
-test_df.drop(['id'], axis=1, inplace=True)
-print("Data: X_train: {}, X_test: {}".format(train_df.shape, test_df.shape))
+#OHE / some feature engineering adapted from the1owl kernel at:
+#https://www.kaggle.com/the1owl/forza-baseline/code
 
-df = pd.concat([train_df, test_df])
+#excluded columns based on snowdog's old school nn kernel at:
+#https://www.kaggle.com/snowdog/old-school-nnet
 
-#Lets try using only those from https://www.kaggle.com/robertoruiz/sberbank-russian-housing-market/dealing-with-multicollinearity
-macro_cols = ["timestamp","balance_trade","balance_trade_growth","eurrub","average_provision_of_build_contract","micex_rgbi_tr","micex_cbi_tr","deposits_rate","mortgage_value","mortgage_rate","income_per_cap","museum_visitis_per_100_cap","apartment_build"]
-df = df.merge(macro_df[macro_cols], on='timestamp', how='left')
-print("Merged with macro: {}".format(df.shape))
+X_train['negative_one_vals'] = np.sum((X_train==-1).values, axis=1)
+X_test['negative_one_vals'] = np.sum((X_test==-1).values, axis=1)
 
-#Dates...
-df['year'] = df.timestamp.dt.year
-df['month'] = df.timestamp.dt.month
-df['dow'] = df.timestamp.dt.dayofweek
-df.drop(['timestamp'], axis=1, inplace=True)
+to_drop = ['ps_car_11_cat', 'ps_ind_14', 'ps_car_11', 'ps_car_14', 'ps_ind_06_bin', 
+           'ps_ind_09_bin', 'ps_ind_10_bin', 'ps_ind_11_bin', 'ps_ind_12_bin', 
+           'ps_ind_13_bin']
 
-#More featuers needed...
+cols_use = [c for c in X_train.columns if (not c.startswith('ps_calc_'))
+             & (not c in to_drop)]
+             
+X_train = X_train[cols_use]
+X_test = X_test[cols_use]
 
-df_num = df.select_dtypes(exclude=['object'])
-df_obj = df.select_dtypes(include=['object']).copy()
-for c in df_obj:
-    df_obj[c] = pd.factorize(df_obj[c])[0]
+one_hot = {c: list(X_train[c].unique()) for c in X_train.columns}
 
-df_values = pd.concat([df_num, df_obj], axis=1)
+#note that this encodes the negative_one_vals column as well
+for c in one_hot:
+    if len(one_hot[c])>2 and len(one_hot[c]) < 105:
+        for val in one_hot[c]:
+            newcol = c + '_oh_' + str(val)
+            X_train[newcol] = (X_train[c].values == val).astype(np.int)
+            X_test[newcol] = (X_test[c].values == val).astype(np.int)
+        X_train.drop(labels=[c], axis=1, inplace=True)
+        X_test.drop(labels=[c], axis=1, inplace=True)
+            
+X_train = X_train.replace(-1, np.NaN)  # Get rid of -1 while computing interaction col
+X_test = X_test.replace(-1, np.NaN)
 
-pos = train_df.shape[0]
-train_df = df_values[:pos]
-test_df  = df_values[pos:]
-del df, df_num, df_obj, df_values
+X_train['ps_car_13_x_ps_reg_03'] = X_train['ps_car_13'] * X_train['ps_reg_03']
+X_test['ps_car_13_x_ps_reg_03'] = X_test['ps_car_13'] * X_test['ps_reg_03']
 
-print("Training on: {}".format(train_df.shape, train_y.shape))
+X_train = X_train.fillna(-1)
+X_test = X_test.fillna(-1)
 
-train_lgb = lgb.Dataset(train_df, train_y)
-model = lgb.train(params, train_lgb, num_boost_round=ROUNDS)
-preds = model.predict(test_df)
-	
-print("Writing output...")
-out_df = pd.DataFrame({"id":test_ids, "price_doc":np.exp(preds)})
-out_df.to_csv("lgb_{}_{}.csv".format(ROUNDS, RS), index=False)
-print(out_df.head(3))
+'''Gini scoring function
+'''
 
-print("Features importance...")
-gain = model.feature_importance('gain')
-ft = pd.DataFrame({'feature':model.feature_name(), 'split':model.feature_importance('split'), 'gain':100 * gain / gain.sum()}).sort_values('gain', ascending=False)
-print(ft.head(25))
+#gini scoring function from kernel at: 
+#https://www.kaggle.com/tezdhar/faster-gini-calculation
+def ginic(actual, pred):
+    n = len(actual)
+    a_s = actual[np.argsort(pred)]
+    a_c = a_s.cumsum()
+    giniSum = a_c.sum() / a_c[-1] - (n + 1) / 2.0
+    return giniSum / n
+ 
+def gini_normalizedc(a, p):
+    return ginic(a, p) / ginic(a, a)
 
-plt.figure()
-ft[['feature','gain']].head(25).plot(kind='barh', x='feature', y='gain', legend=False, figsize=(10, 20))
-plt.gcf().savefig('features_importance.png')
+'''5-fold neural network training 
+'''
 
-print("Done.")
+K = 5 #number of folds
+runs_per_fold = 3 #bagging on each fold
+
+cv_ginis = []
+y_preds = np.zeros((np.shape(X_test)[0],K))
+
+kfold = StratifiedKFold(n_splits = K, 
+                            random_state = 100, 
+                            shuffle = True)    
+
+for i, (f_ind, outf_ind) in enumerate(kfold.split(X_train, y_train)):
+
+    X_train_f, X_val_f = X_train.loc[f_ind].copy(), X_train.loc[outf_ind].copy()
+    y_train_f, y_val_f = y_train[f_ind], y_train[outf_ind]
+          
+    #upsampling adapted from kernel: 
+    #https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283
+    pos = (pd.Series(y_train_f == 1))
+    
+    # Add positive examples
+    X_train_f = pd.concat([X_train_f, X_train_f.loc[pos]], axis=0)
+    y_train_f = pd.concat([y_train_f, y_train_f.loc[pos]], axis=0)
+    
+    # Shuffle data
+    idx = np.arange(len(X_train_f))
+    np.random.shuffle(idx)
+    X_train_f = X_train_f.iloc[idx]
+    y_train_f = y_train_f.iloc[idx]
+    
+    #track oof bagged prediction for cv scores
+    val_preds = 0
+    
+    for j in range(runs_per_fold):
+    
+        NN=Sequential()
+        NN.add(Dense(35,activation='relu',input_dim=np.shape(X_train_f)[1]))
+        NN.add(Dropout(0.3))
+        NN.add(Dense(1,activation='sigmoid'))
+        
+        NN.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+        
+        set_random_seed(1000*i+j)
+            
+        NN.fit(X_train_f.values, y_train_f.values, epochs=15, batch_size=2048, verbose=0)
+         
+        val_gini = gini_normalizedc(y_val_f.values, NN.predict(X_val_f.values)[:,0])   
+        print ('\nFold %d Run %d Results *****' % (i, j))
+        print ('Validation gini: %.5f\n' % (val_gini))
+        
+        val_preds += NN.predict(X_val_f.values)[:,0] / runs_per_fold
+        y_preds[:,i] += NN.predict(X_test.values)[:,0] / runs_per_fold
+        
+    cv_ginis.append(val_gini)
+    print ('\nFold %i prediction cv gini: %.5f\n' %(i,val_gini))
+    
+print('Mean out of fold gini: %.5f' % np.mean(cv_ginis))
+y_pred_final = np.mean(y_preds, axis=1)
+
+df_sub = pd.DataFrame({'id' : test_id, 
+                       'target' : y_pred_final},
+                       columns = ['id','target'])
+df_sub.to_csv('NNShallow_5fold_3runs_sub.csv', index=False)

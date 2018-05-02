@@ -1,159 +1,168 @@
-# Version 2 revised to retain original row order within categories
-# instad of sorting by time
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg") #Needed to save figures
+from sklearn import cross_validation
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
 
-# Based on Nathan Cohen's revision:
-#    https://www.kaggle.com/propanon/talkingdata-time-deltas-for-test
-# of my original for train:
-#    https://www.kaggle.com/aharless/talkingdata-time-deltas
-# using Alexander Firsov's mapping:
-#    https://www.kaggle.com/alexfir/mapping-between-test-supplement-csv-and-test-csv
+training = pd.read_csv("../input/train.csv", index_col=0)
+test = pd.read_csv("../input/test.csv", index_col=0)
 
+print(training.shape)
+print(test.shape)
 
-ONE_SECOND = 1000000000    # Number of time units in one second
-
-
-import pandas as pd
-import time
-import numpy as np
-import psutil
-import os
-import gc
-
-path = '../input/talkingdata-adtracking-fraud-detection/'
-mapping_file_path = '../input/mapping-between-test-supplement-csv-and-test-csv/mapping.csv'
-
-process = psutil.Process(os.getpid())
-print('Total memory in use before reading test: ', process.memory_info().rss/(2**30), ' GB\n')    
+# Replace -999999 in var3 column with most common value 2 
+# See https://www.kaggle.com/cast42/santander-customer-satisfaction/debugging-var3-999999
+# for details
+training = training.replace(-999999,2)
 
 
-#######  READ THE DATA  #######
-def get_time_delta(filename, save_click_id=True, save_is_attributed=False):
-    dtypes = {
-            'ip'            : 'uint32',
-            'app'           : 'uint16',
-            'device'        : 'uint16',
-            'os'            : 'uint16',
-            'channel'       : 'uint16',
-            'click_id'      : 'uint32'
-            }
-    print('\nLoading data...')
-    train_cols = ['ip','app','device','os', 'channel', 'click_time']
-    df = pd.read_csv(path+filename, dtype=dtypes, usecols=train_cols, parse_dates=['click_time'])
-    df['click_time'] = df.click_time.astype('int64').floordiv(ONE_SECOND).astype('int32')
-    print('Total memory in use after reading {} : '.format(filename), process.memory_info().rss/(2**30), ' GB\n') 
-    
-    
-    #######  GENERATE COMBINED CATEGORY FOR GROUPING  #######
-    
-    # Collapse all categorical features into a single feature
-    imax = df.ip.max()
-    amax = df.app.max()
-    dmax = df.device.max()
-    omax = df.os.max()
-    cmax = df.channel.max()
-    print( imax, amax, dmax, omax, cmax )
-    df['category'] = df.ip.astype('int64')
-    df.drop(['ip'], axis=1, inplace=True)
-    df['category'] *= amax
-    df['category'] += df.app
-    df.drop(['app'], axis=1, inplace=True)
-    df['category'] *= dmax
-    df['category'] += df.device
-    df.drop(['device'], axis=1, inplace=True)
-    df['category'] *= omax
-    df['category'] += df.os
-    df.drop(['os'], axis=1, inplace=True)
-    df['category'] *= cmax
-    df['category'] += df.channel
-    df.drop(['channel'], axis=1, inplace=True)
-    gc.collect()
-    
-    # Replace values for combined feature with a group ID, to make it smaller
-    print('\nGrouping by combined category...')
-    df['category'] = df.groupby(['category']).ngroup().astype('uint32')
-    gc.collect()
-    print('Total memory in use after categorizing {} : '.format(filename), process.memory_info().rss/(2**30), ' GB\n')
-    
-    
-    
-    #######  SORT BY CATEGORY AND INDEX  #######
-    
-    # Collapse category and index into a single column
-    df['category'] = df.category.astype('int64').multiply(2**32).add(df.index.values.astype('int32'))
-    gc.collect()
-    
-    # Sort by category+index (leaving each category separate, sorted by index)
-    print('\nSorting...')
-    df = df.sort_values(['category'])
-    gc.collect()
-    
-    # Retrieve category from combined column
-    df['category'] = df.category.floordiv(2**32).astype('int32')
-    gc.collect()
-    print('Total memory in use after sorting: ', process.memory_info().rss/(2**30), ' GB\n')
-    
-    
-    
-    #######  GENERATE TIME DELTAS  #######
-    
-    # Calculate time deltas, and replace first record for each category by NaN
-    df['catdiff'] = df.category.diff().fillna(1).astype('uint8')
-    df.drop(['category'],axis=1,inplace=True)
-    df['time_delta'] = df.click_time.diff().astype('float32')
-    df.loc[df.catdiff==1,'time_delta'] = np.nan
-    
-    # Re-sort time_delta back to the origial order
-    time_delta = df['time_delta'].sort_index()
-    del df
-    gc.collect()
-    print('Total memory in use after diffing: ', process.memory_info().rss/(2**30), ' GB\n')
-    
-    
-    
-    #######  ADD TIME DELTAS INTO ORIGINAL TRAINING DATA  #######
-    
-    # Reload full data
-    print('\nLoading {} again...'.format(filename))
-    cols = train_cols
-    if save_click_id:
-        cols += ['click_id']
-    if save_is_attributed:
-        cols += ['is_attributed']
-    df = pd.read_csv(path+filename, dtype=dtypes, usecols=cols, parse_dates=['click_time'])
-    print('Total memory in use after re-reading {} : '.format(filename), process.memory_info().rss/(2**30), ' GB\n')
-    
-    # Add time_delta to data
-    df['time_delta'] = time_delta
-    print('Total memory in use after adding time deltas: ', process.memory_info().rss/(2**30), ' GB\n')
-    
-    
-    
-    #######  RETURN DATA FRAME  #######
-    
-    # Clean up
-    del time_delta
-    gc.collect()
-    print('Total memory in use before writing result: ', process.memory_info().rss/(2**30), ' GB\n')
+# Replace 9999999999 with NaN
+# See https://www.kaggle.com/c/santander-customer-satisfaction/forums/t/19291/data-dictionary/111360#post111360
+# training = training.replace(9999999999, np.nan)
+# training.dropna(inplace=True)
+# Leads to validation_0-auc:0.839577
 
-    return( df )
-    print('Finished creating data frame')
-    
+X = training.iloc[:,:-1]
+y = training.TARGET
 
-df = get_time_delta('test_supplement.csv')
+# Add zeros per row as extra feature
+X['n0'] = (X == 0).sum(axis=1)
+# # Add log of var38
+# X['logvar38'] = X['var38'].map(np.log1p)
+# # Encode var36 as category
+# X['var36'] = X['var36'].astype('category')
+# X = pd.get_dummies(X)
 
-print( 'Mapping to official click_id values for test data...')
-mapping = pd.read_csv(mapping_file_path, dtype={'click_id': 'int32','old_click_id': 'int32'})
-df.rename(columns={'click_id': 'old_click_id'}, inplace=True)
-df = pd.merge(df, mapping, on=['old_click_id'], how='right')
-df.drop(['old_click_id'], axis=1, inplace=True)
-print( 'Missing IDs: ', df['click_id'].isnull().sum() )
-print( 'Shape of test file: ', df.shape )
-print( df.head() )
-df['click_id'] = df['click_id'].astype(np.int32)
+# Add PCA components as features
+from sklearn.preprocessing import normalize
+from sklearn.decomposition import PCA
 
-print('\nWriting...')
-df.to_pickle('test_with_time_deltas.pkl.gz')
-del df
-gc.collect()
-print( 'Done')
-    
+X_normalized = normalize(X, axis=0)
+pca = PCA(n_components=2)
+X_pca = pca.fit_transform(X_normalized)
+X['PCA1'] = X_pca[:,0]
+X['PCA2'] = X_pca[:,1]
+
+from sklearn.feature_selection import SelectPercentile
+from sklearn.feature_selection import f_classif,chi2
+from sklearn.preprocessing import Binarizer, scale
+
+p = 86 # 308 features validation_1-auc:0.848039
+p = 80 # 284 features validation_1-auc:0.848414
+p = 77 # 267 features validation_1-auc:0.848000
+p = 75 # 261 features validation_1-auc:0.848642
+# p = 73 # 257 features validation_1-auc:0.848338
+# p = 70 # 259 features validation_1-auc:0.848588
+# p = 69 # 238 features validation_1-auc:0.848547
+# p = 67 # 247 features validation_1-auc:0.847925
+# p = 65 # 240 features validation_1-auc:0.846769
+# p = 60 # 222 features validation_1-auc:0.848581
+
+X_bin = Binarizer().fit_transform(scale(X))
+selectChi2 = SelectPercentile(chi2, percentile=p).fit(X_bin, y)
+selectF_classif = SelectPercentile(f_classif, percentile=p).fit(X, y)
+
+chi2_selected = selectChi2.get_support()
+chi2_selected_features = [ f for i,f in enumerate(X.columns) if chi2_selected[i]]
+print('Chi2 selected {} features {}.'.format(chi2_selected.sum(),
+   chi2_selected_features))
+f_classif_selected = selectF_classif.get_support()
+f_classif_selected_features = [ f for i,f in enumerate(X.columns) if f_classif_selected[i]]
+print('F_classif selected {} features {}.'.format(f_classif_selected.sum(),
+   f_classif_selected_features))
+selected = chi2_selected & f_classif_selected
+print('Chi2 & F_classif selected {} features'.format(selected.sum()))
+features = [ f for f,s in zip(X.columns, selected) if s]
+print (features)
+
+X_sel = X[features]
+
+X_train, X_test, y_train, y_test = \
+  cross_validation.train_test_split(X_sel, y, random_state=1301, stratify=y, test_size=0.4)
+
+# xgboost parameter tuning with p = 75
+# recipe: https://www.kaggle.com/c/bnp-paribas-cardif-claims-management/forums/t/19083/best-practices-for-parameter-tuning-on-models/108783#post108783
+
+ratio = float(np.sum(y == 1)) / np.sum(y==0)
+# Initial parameters for the parameter exploration
+# clf = xgb.XGBClassifier(missing=9999999999,
+#                 max_depth = 10,
+#                 n_estimators=1000,
+#                 learning_rate=0.1, 
+#                 nthread=4,
+#                 subsample=1.0,
+#                 colsample_bytree=0.5,
+#                 min_child_weight = 5,
+#                 scale_pos_weight = ratio,
+#                 seed=4242)
+
+# gives : validation_1-auc:0.845644
+# max_depth=8 -> validation_1-auc:0.846341
+# max_depth=6 -> validation_1-auc:0.845738
+# max_depth=7 -> validation_1-auc:0.846504
+# subsample=0.8 -> validation_1-auc:0.844440
+# subsample=0.9 -> validation_1-auc:0.844746
+# subsample=1.0,  min_child_weight=8 -> validation_1-auc:0.843393
+# min_child_weight=3 -> validation_1-auc:0.848534
+# min_child_weight=1 -> validation_1-auc:0.846311
+# min_child_weight=4 -> validation_1-auc:0.847994
+# min_child_weight=2 -> validation_1-auc:0.847934
+# min_child_weight=3, colsample_bytree=0.3 -> validation_1-auc:0.847498
+# colsample_bytree=0.7 -> validation_1-auc:0.846984
+# colsample_bytree=0.6 -> validation_1-auc:0.847856
+# colsample_bytree=0.5, learning_rate=0.05 -> validation_1-auc:0.847347
+# max_depth=8 -> validation_1-auc:0.847352
+# learning_rate = 0.07 -> validation_1-auc:0.847432
+# learning_rate = 0.2 -> validation_1-auc:0.846444
+# learning_rate = 0.15 -> validation_1-auc:0.846889
+# learning_rate = 0.09 -> validation_1-auc:0.846680
+# learning_rate = 0.1 -> validation_1-auc:0.847432
+# max_depth=7 -> validation_1-auc:0.848534
+# learning_rate = 0.05 -> validation_1-auc:0.847347
+# 
+
+clf = xgb.XGBClassifier(missing=9999999999,
+                max_depth = 5,
+                n_estimators=1000,
+                learning_rate=0.1, 
+                nthread=4,
+                subsample=1.0,
+                colsample_bytree=0.5,
+                min_child_weight = 3,
+                scale_pos_weight = ratio,
+                reg_alpha=0.03,
+                seed=1301)
+                
+clf.fit(X_train, y_train, early_stopping_rounds=50, eval_metric="auc",
+        eval_set=[(X_train, y_train), (X_test, y_test)])
+        
+print('Overall AUC:', roc_auc_score(y, clf.predict_proba(X_sel, ntree_limit=clf.best_iteration)[:,1]))
+
+test['n0'] = (test == 0).sum(axis=1)
+# test['logvar38'] = test['var38'].map(np.log1p)
+# # Encode var36 as category
+# test['var36'] = test['var36'].astype('category')
+# test = pd.get_dummies(test)
+test_normalized = normalize(test, axis=0)
+pca = PCA(n_components=2)
+test_pca = pca.fit_transform(test_normalized)
+test['PCA1'] = test_pca[:,0]
+test['PCA2'] = test_pca[:,1]
+sel_test = test[features]    
+y_pred = clf.predict_proba(sel_test, ntree_limit=clf.best_iteration)
+
+submission = pd.DataFrame({"ID":test.index, "TARGET":y_pred[:,1]})
+submission.to_csv("submission.csv", index=False)
+
+mapFeat = dict(zip(["f"+str(i) for i in range(len(features))],features))
+ts = pd.Series(clf.booster().get_fscore())
+#ts.index = ts.reset_index()['index'].map(mapFeat)
+ts.sort_values()[-15:].plot(kind="barh", title=("features importance"))
+
+featp = ts.sort_values()[-15:].plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(6, 10))
+plt.title('XGBoost Feature Importance')
+fig_featp = featp.get_figure()
+fig_featp.savefig('feature_importance_xgb.png', bbox_inches='tight', pad_inches=1)

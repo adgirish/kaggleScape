@@ -1,478 +1,814 @@
 
 # coding: utf-8
 
-# # Detailed Data Cleaning/Visualization
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.naive_bayes import BernoulliNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
+
+import xgboost as xgb
+import lightgbm as lgb
+import time
+
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.max_colwidth', 500)
+pd.set_option('display.max_rows', 1000)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# ## Note to others
 # 
-# *A blog post about the final end-to-end solution (21st place) is available [here](http://alanpryorjr.com), and the source code is [on my github](https://github.com/apryor6/Kaggle-Competition-Santander)*
+# This is the second of a series of notebooks that I am working on for educational purpose, to demonstrate some run-of-the mill techniques we use on Kaggle for a student audience.
 # 
-# *This is a Python version of a kernel I wrote in R for this dataset found [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization). There are some slight differences between how missing values are treated in Python and R, so the two kernels are not exactly the same, but I have tried to make them as similar as possible. This was done as a convenience to anybody who wanted to use my cleaned data as a starting point but prefers Python to R. It also is educational to compare how the same task can be accomplished in either language.*
+# So when most folks here are competiting to overfit the LB, we are doing some small effort to fill our students with handy knowledge and the virtue of solid CV. 
 # 
-# The goal of this competition is to predict which new Santander products, if any, a customer will purchase in the following month. Here, I will do some data cleaning, adjust some features, and do some visualization to get a sense of what features might be important predictors. I won't be building a predictive model in this kernel, but I hope this gives you some insight/ideas and gets you excited to build your own model.
+# Anyhow, since our students are also competing as teams in this competition, we decided to use the kernel facility as a way to share knowledge. Nevertheless, all comments are welcome, and let's all enjoy the last days of this competition!
+
+# # Porto Seguo - End-to-end Ensemble
 # 
-# Let's get to it
+# In this competition we are tasked with making predictive models that can predict if a given driver will make insurance claim. In a ["previous kernel"](https://www.kaggle.com/yifanxie/porto-seguro-tutorial-simple-e2e-pipeline) we have breifly explored the data, did some useful categorical feature encoding, and presented a simple model building pipeline.
 # 
-# ## First Glance
-# Limit the number of rows read in to avoid memory crashes with the kernel
-
-# In[ ]:
-
-
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('pylab', 'inline')
-pylab.rcParams['figure.figsize'] = (10, 6)
-
-
-# In[ ]:
-
-
-limit_rows   = 7000000
-df           = pd.read_csv("../input/train_ver2.csv",dtype={"sexo":str,
-                                                    "ind_nuevo":str,
-                                                    "ult_fec_cli_1t":str,
-                                                    "indext":str}, nrows=limit_rows)
-unique_ids   = pd.Series(df["ncodpers"].unique())
-limit_people = 1.2e4
-unique_id    = unique_ids.sample(n=limit_people)
-df           = df[df.ncodpers.isin(unique_id)]
-df.describe()
-
-
-# We have a number of demographics for each individual as well as the products they currently own. To make a test set, I will separate the last month from this training data, and create a feature that indicates whether or not a product was newly purchased. First convert the dates. There's `fecha_dato`, the row-identifier date, and `fecha_alta`, the date that the customer joined.
-
-# In[ ]:
-
-
-df["fecha_dato"] = pd.to_datetime(df["fecha_dato"],format="%Y-%m-%d")
-df["fecha_alta"] = pd.to_datetime(df["fecha_alta"],format="%Y-%m-%d")
-df["fecha_dato"].unique()
-
-
-# I printed the values just to double check the dates were in standard Year-Month-Day format. I expect that customers will be more likely to buy products at certain months of the year (Christmas bonuses?), so let's add a month column. I don't think the month that they joined matters, so just do it for one.
-
-# In[ ]:
-
-
-df["month"] = pd.DatetimeIndex(df["fecha_dato"]).month
-df["age"]   = pd.to_numeric(df["age"], errors="coerce")
-
-
-# Are there any columns missing values?
-
-# In[ ]:
-
-
-df.isnull().any()
-
-
-# Definitely. Onto data cleaning.
+# In this kernel, we are going to progress a bit more on the model building aspect. Firstly, we will introduce the technique to generate out-out-fold train and test predictions for several models, we will then use these out-of-fold predictions to be  ensemble model. 
 # 
-# ## Data Cleaning
+# Strickly speaking, the ensemble method we use here is referred as **Stacked generalization** as very well ilustrated already by the following blog/articles:
+# * [*Kaggle Ensemble Guide*](https://mlwave.com/kaggle-ensembling-guide/) by [Triskelion](https://www.kaggle.com/triskelion)
+# * [*Stacking Made Easy: An Introduction to StackNet*](http://blog.kaggle.com/2017/06/15/stacking-made-easy-an-introduction-to-stacknet-by-competitions-grandmaster-marios-michailidis-kazanova/) by Competitions Grandmaster [Marios Michailidis (KazAnova)](https://www.kaggle.com/kazanova)
 # 
-# Going down the list, start with `age`
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(df["age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-
-
-# In addition to NA, there are people with very small and very high ages.
-# It's also interesting that the distribution is bimodal. There are a large number of university aged students, and then another peak around middle-age. Let's separate the distribution and move the outliers to the mean of the closest one.
-
-# In[ ]:
-
-
-df.loc[df.age < 18,"age"]  = df.loc[(df.age >= 18) & (df.age <= 30),"age"].mean(skipna=True)
-df.loc[df.age > 100,"age"] = df.loc[(df.age >= 30) & (df.age <= 100),"age"].mean(skipna=True)
-df["age"].fillna(df["age"].mean(),inplace=True)
-df["age"]                  = df["age"].astype(int)
-
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(df["age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-    plt.xlim((15,100))
-
-
-# Looks better.  
+# So without further ado, let's get technical.
 # 
-# Next `ind_nuevo`, which indicates whether a customer is new or not. How many missing values are there?
 
 # In[ ]:
 
 
-df["ind_nuevo"].isnull().sum()
+train=pd.read_csv('../input/train.csv')
+test=pd.read_csv('../input/test.csv')
+sample_submission=pd.read_csv('../input/sample_submission.csv')
 
 
-# Let's see if we can fill in missing values by looking how many months of history these customers have.
-
-# In[ ]:
-
-
-months_active = df.loc[df["ind_nuevo"].isnull(),:].groupby("ncodpers", sort=False).size()
-months_active.max()
-
-
-# Looks like these are all new customers, so replace accordingly.
-
-# In[ ]:
-
-
-df.loc[df["ind_nuevo"].isnull(),"ind_nuevo"] = 1
-
-
-# Now, `antiguedad`
-
-# In[ ]:
-
-
-df.antiguedad = pd.to_numeric(df.antiguedad,errors="coerce")
-np.sum(df["antiguedad"].isnull())
-
-
-# That number again. Probably the same people that we just determined were new customers. Double check.
-
-# In[ ]:
-
-
-df.loc[df["antiguedad"].isnull(),"ind_nuevo"].describe()
-
-
-# Yup, same people. Let's give them minimum seniority.
-
-# In[ ]:
-
-
-df.loc[df.antiguedad.isnull(),"antiguedad"] = df.antiguedad.min()
-df.loc[df.antiguedad <0, "antiguedad"]      = 0 # Thanks @StephenSmith for bug-find
-
-
-# Some entries don't have the date they joined the company. Just give them something in the middle of the pack
-
-# In[ ]:
-
-
-dates=df.loc[:,"fecha_alta"].sort_values().reset_index()
-median_date = int(np.median(dates.index.values))
-df.loc[df.fecha_alta.isnull(),"fecha_alta"] = dates.loc[median_date,"fecha_alta"]
-df["fecha_alta"].describe()
-
-
-# Next is `indrel`, which indicates:
 # 
-# > 1 (First/Primary), 99 (Primary customer during the month but not at the end of the month)
+# # 1. Categorical feature encoding and feature reduction
+# The following part is a strict copy & paste from the first kernel, so for detailed explaination please check it out there.
 # 
-# This sounds like a promising feature. I'm not sure if primary status is something the customer chooses or the company assigns, but either way it seems intuitive that customers who are dropping down are likely to have different purchasing behaviors than others.
+# ## 1.1 Frequency Encoding
 
 # In[ ]:
 
 
-pd.Series([i for i in df.indrel]).value_counts()
+# This function late in a list of features 'cols' from train and test dataset, 
+# and performing frequency encoding. 
+def freq_encoding(cols, train_df, test_df):
+    # we are going to store our new dataset in these two resulting datasets
+    result_train_df=pd.DataFrame()
+    result_test_df=pd.DataFrame()
+    
+    # loop through each feature column to do this
+    for col in cols:
+        
+        # capture the frequency of a feature in the training set in the form of a dataframe
+        col_freq=col+'_freq'
+        freq=train_df[col].value_counts()
+        freq=pd.DataFrame(freq)
+        freq.reset_index(inplace=True)
+        freq.columns=[[col,col_freq]]
+
+        # merge ths 'freq' datafarme with the train data
+        temp_train_df=pd.merge(train_df[[col]], freq, how='left', on=col)
+        temp_train_df.drop([col], axis=1, inplace=True)
+
+        # merge this 'freq' dataframe with the test data
+        temp_test_df=pd.merge(test_df[[col]], freq, how='left', on=col)
+        temp_test_df.drop([col], axis=1, inplace=True)
+
+        # if certain levels in the test dataset is not observed in the train dataset, 
+        # we assign frequency of zero to them
+        temp_test_df.fillna(0, inplace=True)
+        temp_test_df[col_freq]=temp_test_df[col_freq].astype(np.int32)
+
+        if result_train_df.shape[0]==0:
+            result_train_df=temp_train_df
+            result_test_df=temp_test_df
+        else:
+            result_train_df=pd.concat([result_train_df, temp_train_df],axis=1)
+            result_test_df=pd.concat([result_test_df, temp_test_df],axis=1)
+    
+    return result_train_df, result_test_df
 
 
-# Fill in missing with the more common status.
+# let's run the frequency encoding function
 
 # In[ ]:
 
 
-df.loc[df.indrel.isnull(),"indrel"] = 1
+cat_cols=['ps_ind_02_cat','ps_car_04_cat', 'ps_car_09_cat',
+          'ps_ind_05_cat', 'ps_car_01_cat', 'ps_car_11_cat']
+
+# generate dataframe for frequency features for the train and test dataset
+train_freq, test_freq=freq_encoding(cat_cols, train, test)
+
+# merge them into the original train and test dataset
+train=pd.concat([train, train_freq], axis=1)
+test=pd.concat([test,test_freq], axis=1)
 
 
-# > tipodom	- Addres type. 1, primary address
-#  cod_prov	- Province code (customer's address)
+# ## 1.2 Binary Encoding
+
+# In[ ]:
+
+
+# perform binary encoding for categorical variable
+# this function take in a pair of train and test data set, and the feature that need to be encode.
+# it returns the two dataset with input feature encoded in binary representation
+# this function assumpt that the feature to be encoded is already been encoded in a numeric manner 
+# ranging from 0 to n-1 (n = number of levels in the feature). 
+
+def binary_encoding(train_df, test_df, feat):
+    # calculate the highest numerical value used for numeric encoding
+    train_feat_max = train_df[feat].max()
+    test_feat_max = test_df[feat].max()
+    if train_feat_max > test_feat_max:
+        feat_max = train_feat_max
+    else:
+        feat_max = test_feat_max
+        
+    # use the value of feat_max+1 to represent missing value
+    train_df.loc[train_df[feat] == -1, feat] = feat_max + 1
+    test_df.loc[test_df[feat] == -1, feat] = feat_max + 1
+    
+    # create a union set of all possible values of the feature
+    union_val = np.union1d(train_df[feat].unique(), test_df[feat].unique())
+
+    # extract the highest value from from the feature in decimal format.
+    max_dec = union_val.max()
+    
+    # work out how the ammount of digtis required to be represent max_dev in binary representation
+    max_bin_len = len("{0:b}".format(max_dec))
+    index = np.arange(len(union_val))
+    columns = list([feat])
+    
+    # create a binary encoding feature dataframe to capture all the levels for the feature
+    bin_df = pd.DataFrame(index=index, columns=columns)
+    bin_df[feat] = union_val
+    
+    # capture the binary representation for each level of the feature 
+    feat_bin = bin_df[feat].apply(lambda x: "{0:b}".format(x).zfill(max_bin_len))
+    
+    # split the binary representation into different bit of digits 
+    splitted = feat_bin.apply(lambda x: pd.Series(list(x)).astype(np.uint8))
+    splitted.columns = [feat + '_bin_' + str(x) for x in splitted.columns]
+    bin_df = bin_df.join(splitted)
+    
+    # merge the binary feature encoding dataframe with the train and test dataset - Done! 
+    train_df = pd.merge(train_df, bin_df, how='left', on=[feat])
+    test_df = pd.merge(test_df, bin_df, how='left', on=[feat])
+    return train_df, test_df
+
+
+# let's run the binary encoding function
+
+# In[ ]:
+
+
+cat_cols=['ps_ind_02_cat','ps_car_04_cat', 'ps_car_09_cat',
+          'ps_ind_05_cat', 'ps_car_01_cat']
+
+train, test=binary_encoding(train, test, 'ps_ind_02_cat')
+train, test=binary_encoding(train, test, 'ps_car_04_cat')
+train, test=binary_encoding(train, test, 'ps_car_09_cat')
+train, test=binary_encoding(train, test, 'ps_ind_05_cat')
+train, test=binary_encoding(train, test, 'ps_car_01_cat')
+
+
+# optionally, you can also choose to drop the original categorical features. Shoud you do it? I say trust your CV :)
+# let's do this here jut for demonstration purpose
+
+# In[ ]:
+
+
+col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
+train.drop(col_to_drop, axis=1, inplace=True)  
+test.drop(col_to_drop, axis=1, inplace=True)  
+
+
+# ## 1.3 Feature Reduction
+# Let's now drop all the features with the wording "cal" - "Cal, you are FIRED" ^ ^
+
+# In[ ]:
+
+
+col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
+train.drop(col_to_drop, axis=1, inplace=True)  
+test.drop(col_to_drop, axis=1, inplace=True)
+
+
+# Right, after the above data manipulation, we can now take a brief look at our dataset.
+
+# In[ ]:
+
+
+train.head(5)
+
+
+# # 2. K-fold CV with Out-of-Fold Prediction
 # 
-# `tipodom` doesn't seem to be useful, and the province code is not needed because the name of the province exists in `nomprov`.
+# 
+# *Note: for demonstration purpose, I have dump down the parameters of the models to make them run faster, so please take time to find a good cominbation of parameter when you send them out to battle for real!*
+# 
+# ## 2.1 OOF utility functions
+# Firstly, let's write this handy function to convert AUC score into Gini Normalised Coeficient
 
 # In[ ]:
 
 
-df.drop(["tipodom","cod_prov"],axis=1,inplace=True)
+def auc_to_gini_norm(auc_score):
+    return 2*auc_score-1
 
 
-# Quick check back to see how we are doing on missing values
-
-# In[ ]:
-
-
-df.isnull().any()
-
-
-# Getting closer.
+# ### 2.1.1 Sklearn K-fold & OOF function
+# Next up next provide a K-fold function that generate out-of-fold predictions for train and test data.
 
 # In[ ]:
 
 
-np.sum(df["ind_actividad_cliente"].isnull())
+def cross_validate_sklearn(clf, x_train, y_train , x_test, kf,scale=False, verbose=True):
+    start_time=time.time()
+    
+    # initialise the size of out-of-fold train an test prediction
+    train_pred = np.zeros((x_train.shape[0]))
+    test_pred = np.zeros((x_test.shape[0]))
+
+    # use the kfold object to generate the required folds
+    for i, (train_index, test_index) in enumerate(kf.split(x_train, y_train)):
+        # generate training folds and validation fold
+        x_train_kf, x_val_kf = x_train.loc[train_index, :], x_train.loc[test_index, :]
+        y_train_kf, y_val_kf = y_train[train_index], y_train[test_index]
+
+        # perform scaling if required i.e. for linear algorithms
+        if scale:
+            scaler = StandardScaler().fit(x_train_kf.values)
+            x_train_kf_values = scaler.transform(x_train_kf.values)
+            x_val_kf_values = scaler.transform(x_val_kf.values)
+            x_test_values = scaler.transform(x_test.values)
+        else:
+            x_train_kf_values = x_train_kf.values
+            x_val_kf_values = x_val_kf.values
+            x_test_values = x_test.values
+        
+        # fit the input classifier and perform prediction.
+        clf.fit(x_train_kf_values, y_train_kf.values)
+        val_pred=clf.predict_proba(x_val_kf_values)[:,1]
+        train_pred[test_index] += val_pred
+
+        y_test_preds = clf.predict_proba(x_test_values)[:,1]
+        test_pred += y_test_preds
+
+        fold_auc = roc_auc_score(y_val_kf.values, val_pred)
+        fold_gini_norm = auc_to_gini_norm(fold_auc)
+
+        if verbose:
+            print('fold cv {} AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(i, fold_auc, fold_gini_norm))
+
+    test_pred /= kf.n_splits
+
+    cv_auc = roc_auc_score(y_train, train_pred)
+    cv_gini_norm = auc_to_gini_norm(cv_auc)
+    cv_score = [cv_auc, cv_gini_norm]
+    if verbose:
+        print('cv AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(cv_auc, cv_gini_norm))
+        end_time = time.time()
+        print("it takes %.3f seconds to perform cross validation" % (end_time - start_time))
+    return cv_score, train_pred,test_pred
 
 
-# By now you've probably noticed that this number keeps popping up. A handful of the entries are just bad, and should probably just be excluded from the model. But for now I will just clean/keep them.
-
-# In[ ]:
-
-
-df.loc[df.ind_actividad_cliente.isnull(),"ind_actividad_cliente"] = df["ind_actividad_cliente"].median()
-
-
-# In[ ]:
-
-
-df.nomprov.unique()
-
-
-# There was an issue with the unicode character ñ in [A Coruña](https://en.wikipedia.org/wiki/A_Coruña). I'll manually fix it, but if anybody knows a better way to catch cases like this I would be very glad to hear it in the comments.
-
-# In[ ]:
-
-
-df.loc[df.nomprov=="CORU\xc3\x91A, A","nomprov"] = "CORUNA, A"
-
-
-# There's some rows missing a city that I'll relabel
-
-# In[ ]:
-
-
-df.loc[df.nomprov.isnull(),"nomprov"] = "UNKNOWN"
-
-
-# Now for gross income, aka `renta`
-
-# In[ ]:
-
-
-df.renta.isnull().sum()
-
-
-# Here is a feature that is missing a lot of values. Rather than just filling them in with a median, it's probably more accurate to break it down region by region. To that end, let's take a look at the median income by region, and in the spirit of the competition let's color it like the Spanish flag.
-
-# In[ ]:
-
-
-#df.loc[df.renta.notnull(),:].groupby("nomprov").agg([{"Sum":sum},{"Mean":mean}])
-incomes = df.loc[df.renta.notnull(),:].groupby("nomprov").agg({"renta":{"MedianIncome":median}})
-incomes.sort_values(by=("renta","MedianIncome"),inplace=True)
-incomes.reset_index(inplace=True)
-incomes.nomprov = incomes.nomprov.astype("category", categories=[i for i in df.nomprov.unique()],ordered=False)
-incomes.head()
-
-
-# In[ ]:
-
-
-with sns.axes_style({
-        "axes.facecolor":   "#ffc400",
-        "axes.grid"     :    False,
-        "figure.facecolor": "#c60b1e"}):
-    h = sns.factorplot(data=incomes,
-                   x="nomprov",
-                   y=("renta","MedianIncome"),
-                   order=(i for i in incomes.nomprov),
-                   size=6,
-                   aspect=1.5,
-                   scale=1.0,
-                   color="#c60b1e",
-                   linestyles="None")
-plt.xticks(rotation=90)
-plt.tick_params(labelsize=16,labelcolor="#ffc400")#
-plt.ylabel("Median Income",size=32,color="#ffc400")
-plt.xlabel("City",size=32,color="#ffc400")
-plt.title("Income Distribution by City",size=40,color="#ffc400")
-plt.ylim(0,180000)
-plt.yticks(range(0,180000,40000))
-
-
-# There's a lot of variation, so I think assigning missing incomes by providence is a good idea. First group the data by city, and reduce to get the median. This intermediate data frame is joined by the original city names to expand the aggregated median incomes, ordered so that there is a 1-to-1 mapping between the rows, and finally the missing values are replaced.
+# ### 2.1.2 Xgboost K-fold & OOF function
+# In this part, we are going to use the native interface of XGB and LGB, so the following functions are tailor for this. For sure it would be easiler just to call the respective sklearn api, but the native interfaces provide some nice additional capability. For instance, the 'hist' option to use fast histogram in XGB is only available via the native interface as far as I know. 
+# 
+# Also, we need to provide the following function to convert probability into rank for these two OOF function. The needs to use normalised rank instead of predicted probabilities will become appearent later in this notebook :) 
 
 # In[ ]:
 
 
-grouped        = df.groupby("nomprov").agg({"renta":lambda x: x.median(skipna=True)}).reset_index()
-new_incomes    = pd.merge(df,grouped,how="inner",on="nomprov").loc[:, ["nomprov","renta_y"]]
-new_incomes    = new_incomes.rename(columns={"renta_y":"renta"}).sort_values("renta").sort_values("nomprov")
-df.sort_values("nomprov",inplace=True)
-df             = df.reset_index()
-new_incomes    = new_incomes.reset_index()
+def probability_to_rank(prediction, scaler=1):
+    pred_df=pd.DataFrame(columns=['probability'])
+    pred_df['probability']=prediction
+    pred_df['rank']=pred_df['probability'].rank()/len(prediction)*scaler
+    return pred_df['rank'].values
 
 
-# In[ ]:
-
-
-df.loc[df.renta.isnull(),"renta"] = new_incomes.loc[df.renta.isnull(),"renta"].reset_index()
-df.loc[df.renta.isnull(),"renta"] = df.loc[df.renta.notnull(),"renta"].median()
-df.sort_values(by="fecha_dato",inplace=True)
-
-
-# The next columns with missing data I'll look at are features, which are just a boolean indicator as to whether or not that product was owned that month. Starting with `ind_nomina_ult1`..
+# The following is the k-fold function for XGB to generate OOF predictions, this function is very much similar to its sklearn counter part. The difference is that we need to use the XGB interface to facilitate the classifer, also we provide an option cover probability into rank.
 
 # In[ ]:
 
 
-df.ind_nomina_ult1.isnull().sum()
+def cross_validate_xgb(params, x_train, y_train, x_test, kf, cat_cols=[], verbose=True, 
+                       verbose_eval=50, num_boost_round=4000, use_rank=True):
+    start_time=time.time()
+
+    train_pred = np.zeros((x_train.shape[0]))
+    test_pred = np.zeros((x_test.shape[0]))
+
+    # use the k-fold object to enumerate indexes for each training and validation fold
+    for i, (train_index, val_index) in enumerate(kf.split(x_train, y_train)): # folds 1, 2 ,3 ,4, 5
+        # example: training from 1,2,3,4; validation from 5
+        x_train_kf, x_val_kf = x_train.loc[train_index, :], x_train.loc[val_index, :]
+        y_train_kf, y_val_kf = y_train[train_index], y_train[val_index]
+        x_test_kf=x_test.copy()
+
+        d_train_kf = xgb.DMatrix(x_train_kf, label=y_train_kf)
+        d_val_kf = xgb.DMatrix(x_val_kf, label=y_val_kf)
+        d_test = xgb.DMatrix(x_test_kf)
+
+        bst = xgb.train(params, d_train_kf, num_boost_round=num_boost_round,
+                        evals=[(d_train_kf, 'train'), (d_val_kf, 'val')], verbose_eval=verbose_eval,
+                        early_stopping_rounds=50)
+
+        val_pred = bst.predict(d_val_kf, ntree_limit=bst.best_ntree_limit)
+        if use_rank:
+            train_pred[val_index] += probability_to_rank(val_pred)
+            test_pred+=probability_to_rank(bst.predict(d_test))
+        else:
+            train_pred[val_index] += val_pred
+            test_pred+=bst.predict(d_test)
+
+        fold_auc = roc_auc_score(y_val_kf.values, val_pred)
+        fold_gini_norm = auc_to_gini_norm(fold_auc)
+
+        if verbose:
+            print('fold cv {} AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(i, fold_auc, 
+                                                                                     fold_gini_norm))
+
+    test_pred /= kf.n_splits
+
+    cv_auc = roc_auc_score(y_train, train_pred)
+    cv_gini_norm = auc_to_gini_norm(cv_auc)
+    cv_score = [cv_auc, cv_gini_norm]
+    if verbose:
+        print('cv AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(cv_auc, cv_gini_norm))
+        end_time = time.time()
+        print("it takes %.3f seconds to perform cross validation" % (end_time - start_time))
+
+        return cv_score, train_pred,test_pred
 
 
-# I could try to fill in missing values for products by looking at previous months, but since it's such a small number of values for now I'll take the cheap way out.
-
-# In[ ]:
-
-
-df.loc[df.ind_nomina_ult1.isnull(), "ind_nomina_ult1"] = 0
-df.loc[df.ind_nom_pens_ult1.isnull(), "ind_nom_pens_ult1"] = 0
-
-
-# There's also a bunch of character columns that contain empty strings. In R, these are kept as empty strings instead of NA like in pandas. I originally worked through the data with missing values first in R, so if you are wondering why I skipped some NA columns here that's why. I'll take care of them now. For the most part, entries with NA will be converted to an unknown category.  
-# First I'll get only the columns with missing values. Then print the unique values to determine what I should fill in with.
-
-# In[ ]:
-
-
-string_data = df.select_dtypes(include=["object"])
-missing_columns = [col for col in string_data if string_data[col].isnull().any()]
-for col in missing_columns:
-    print("Unique values for {0}:\n{1}\n".format(col,string_data[col].unique()))
-del string_data
-
-
-# Okay, based on that and the definitions of each variable, I will fill the empty strings either with the most common value or create an unknown category based on what I think makes more sense.
-
-# In[ ]:
-
-
-df.loc[df.indfall.isnull(),"indfall"] = "N"
-df.loc[df.tiprel_1mes.isnull(),"tiprel_1mes"] = "A"
-df.tiprel_1mes = df.tiprel_1mes.astype("category")
-
-# As suggested by @StephenSmith
-map_dict = { 1.0  : "1",
-            "1.0" : "1",
-            "1"   : "1",
-            "3.0" : "3",
-            "P"   : "P",
-            3.0   : "3",
-            2.0   : "2",
-            "3"   : "3",
-            "2.0" : "2",
-            "4.0" : "4",
-            "4"   : "4",
-            "2"   : "2"}
-
-df.indrel_1mes.fillna("P",inplace=True)
-df.indrel_1mes = df.indrel_1mes.apply(lambda x: map_dict.get(x,x))
-df.indrel_1mes = df.indrel_1mes.astype("category")
-
-
-unknown_cols = [col for col in missing_columns if col not in ["indfall","tiprel_1mes","indrel_1mes"]]
-for col in unknown_cols:
-    df.loc[df[col].isnull(),col] = "UNKNOWN"
-
-
-# Let's check back to see if we missed anything
+# ### 2.1.3 LigthGBM K-fold & OOF function
+# The same function for LGB, this one is almost identifical to the one for XGB, apart from code that call the LightGBM interface
 
 # In[ ]:
 
 
-df.isnull().any()
+def cross_validate_lgb(params, x_train, y_train, x_test, kf, cat_cols=[],
+                       verbose=True, verbose_eval=50, use_cat=True, use_rank=True):
+    start_time = time.time()
+    train_pred = np.zeros((x_train.shape[0]))
+    test_pred = np.zeros((x_test.shape[0]))
+
+    if len(cat_cols)==0: use_cat=False
+
+    # use the k-fold object to enumerate indexes for each training and validation fold
+    for i, (train_index, val_index) in enumerate(kf.split(x_train, y_train)): # folds 1, 2 ,3 ,4, 5
+        # example: training from 1,2,3,4; validation from 5
+        x_train_kf, x_val_kf = x_train.loc[train_index, :], x_train.loc[val_index, :]
+        y_train_kf, y_val_kf = y_train[train_index], y_train[val_index]
+
+        if use_cat:
+            lgb_train = lgb.Dataset(x_train_kf, y_train_kf, categorical_feature=cat_cols)
+            lgb_val = lgb.Dataset(x_val_kf, y_val_kf, reference=lgb_train, categorical_feature=cat_cols)
+        else:
+            lgb_train = lgb.Dataset(x_train_kf, y_train_kf)
+            lgb_val = lgb.Dataset(x_val_kf, y_val_kf, reference=lgb_train)
+
+        gbm = lgb.train(params,
+                        lgb_train,
+                        num_boost_round=4000,
+                        valid_sets=lgb_val,
+                        early_stopping_rounds=30,
+                        verbose_eval=verbose_eval)
+
+        val_pred = gbm.predict(x_val_kf)
+
+        if use_rank:
+            train_pred[val_index] += probability_to_rank(val_pred)
+            test_pred += probability_to_rank(gbm.predict(x_test))
+            # test_pred += gbm.predict(x_test)
+        else:
+            train_pred[val_index] += val_pred
+            test_pred += gbm.predict(x_test)
+
+        # test_pred += gbm.predict(x_test)
+        fold_auc = roc_auc_score(y_val_kf.values, val_pred)
+        fold_gini_norm = auc_to_gini_norm(fold_auc)
+        if verbose:
+            print('fold cv {} AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(i, fold_auc, fold_gini_norm))
+
+    test_pred /= kf.n_splits
+
+    cv_auc = roc_auc_score(y_train, train_pred)
+    cv_gini_norm = auc_to_gini_norm(cv_auc)
+    cv_score = [cv_auc, cv_gini_norm]
+    if verbose:
+        print('cv AUC score is {:.6f}, Gini_Norm score is {:.6f}'.format(cv_auc, cv_gini_norm))
+        end_time = time.time()
+        print("it takes %.3f seconds to perform cross validation" % (end_time - start_time))
+    return cv_score, train_pred,test_pred
 
 
-# Convert the feature columns into integer values (you'll see why in a second), and we're done cleaning
-
-# In[ ]:
-
-
-feature_cols = df.iloc[:1,].filter(regex="ind_+.*ult.*").columns.values
-for col in feature_cols:
-    df[col] = df[col].astype(int)
-
-
-# Now for the main event. To study trends in customers adding or removing services, I will create a label for each product and month that indicates whether a customer added, dropped or maintained that service in that billing cycle. I will do this by assigning a numeric id to each unique time stamp, and then matching each entry with the one from the previous month. The difference in the indicator value for each product then gives the desired value.  
-
-# In[ ]:
-
-
-unique_months = pd.DataFrame(pd.Series(df.fecha_dato.unique()).sort_values()).reset_index(drop=True)
-unique_months["month_id"] = pd.Series(range(1,1+unique_months.size)) # start with month 1, not 0 to match what we already have
-unique_months["month_next_id"] = 1 + unique_months["month_id"]
-unique_months.rename(columns={0:"fecha_dato"},inplace=True)
-df = pd.merge(df,unique_months,on="fecha_dato")
-
-
-# Now I'll build a function that will convert differences month to month into a meaningful label. Each month, a customer can either maintain their current status with a particular product, add it, or drop it.
-
-# In[ ]:
-
-
-def status_change(x):
-    diffs = x.diff().fillna(0)# first occurrence will be considered Maintained, 
-    #which is a little lazy. A better way would be to check if 
-    #the earliest date was the same as the earliest we have in the dataset
-    #and consider those separately. Entries with earliest dates later than that have 
-    #joined and should be labeled as "Added"
-    label = ["Added" if i==1          else "Dropped" if i==-1          else "Maintained" for i in diffs]
-    return label
-
-
-# Now we can actually apply this function to each features using `groupby` followed by `transform` to broadcast the result back
-
-# In[ ]:
-
-
-# df.loc[:, feature_cols] = df..groupby("ncodpers").apply(status_change)
-df.loc[:, feature_cols] = df.loc[:, [i for i in feature_cols]+["ncodpers"]].groupby("ncodpers").transform(status_change)
-
-
-# I'm only interested in seeing what influences people adding or removing services, so I'll trim away any instances of "Maintained".
-
-# In[ ]:
-
-
-df = pd.melt(df, id_vars   = [col for col in df.columns if col not in feature_cols],
-            value_vars= [col for col in feature_cols])
-df = df.loc[df.value!="Maintained",:]
-df.shape
-
-
-# And we're done! I hope you found this useful, and if you want to checkout the rest of visualizations I made you can find them [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization).
+# # 3. Generate level 1 OOF predictions
+# Almost there to actually generate some level OOF output! last things to do is the prepare our train and test data for our dear machine learning algorithms, and create the StratifiedKFold object
 
 # In[ ]:
 
 
-# For thumbnail
-pylab.rcParams['figure.figsize'] = (6, 4)
-with sns.axes_style({
-        "axes.facecolor":   "#ffc400",
-        "axes.grid"     :    False,
-        "figure.facecolor": "#c60b1e"}):
-    h = sns.factorplot(data=incomes,
-                   x="nomprov",
-                   y=("renta","MedianIncome"),
-                   order=(i for i in incomes.nomprov),
-                   size=6,
-                   aspect=1.5,
-                   scale=0.75,
-                   color="#c60b1e",
-                   linestyles="None")
-plt.xticks(rotation=90)
-plt.tick_params(labelsize=12,labelcolor="#ffc400")#
-plt.ylabel("Median Income",size=32,color="#ffc400")
-plt.xlabel("City",size=32,color="#ffc400")
-plt.title("Income Distribution by City",size=40,color="#ffc400")
-plt.ylim(0,180000)
-plt.yticks(range(0,180000,40000))
+drop_cols=['id','target']
+y_train=train['target']
+x_train=train.drop(drop_cols, axis=1)
+x_test=test.drop(['id'], axis=1)
 
+
+# Here, I would like remind you that for stacking, you SHALL use consistent fold distribution at ALL level for ALL your model. The technical reaons for this had been discussed at length in this [forum thread](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43467)  by our right honourable fellow competitors
+
+# In[ ]:
+
+
+kf=StratifiedKFold(n_splits=5, shuffle=True, random_state=2017)
+
+
+# Right! next generate some level 1 model output...
+
+# ## 3.1 Random Forest
+# Let's use the old good random forest algorithm
+
+# In[ ]:
+
+
+rf=RandomForestClassifier(n_estimators=200, n_jobs=6, min_samples_split=5, max_depth=7,
+                          criterion='gini', random_state=0)
+
+outcomes =cross_validate_sklearn(rf, x_train, y_train ,x_test, kf, scale=False, verbose=True)
+
+rf_cv=outcomes[0]
+rf_train_pred=outcomes[1]
+rf_test_pred=outcomes[2]
+
+rf_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=rf_train_pred)
+rf_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=rf_test_pred)
+
+
+# ## 3.2 Extra Tree
+# We love tree! We love more trees, and therefore let's have extra tree :)
+
+# In[ ]:
+
+
+et=RandomForestClassifier(n_estimators=100, n_jobs=6, min_samples_split=5, max_depth=5,
+                          criterion='gini', random_state=0)
+
+outcomes =cross_validate_sklearn(et, x_train, y_train ,x_test, kf, scale=False, verbose=True)
+
+et_cv=outcomes[0]
+et_train_pred=outcomes[1]
+et_test_pred=outcomes[2]
+
+et_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=et_train_pred)
+et_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=et_test_pred)
+
+
+# ## 3.3 Logistic Regression
+# Let's now throw in our favourite linear friend - Logistic Regression
+
+# In[ ]:
+
+
+logit=LogisticRegression(random_state=0, C=0.5)
+
+outcomes = cross_validate_sklearn(logit, x_train, y_train ,x_test, kf, scale=True, verbose=True)
+
+logit_cv=outcomes[0]
+logit_train_pred=outcomes[1]
+logit_test_pred=outcomes[2]
+
+logit_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=logit_train_pred)
+logit_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=logit_test_pred)
+
+
+# ## 3.4 BernoulliNB
+# A little bit of diversity from Naive Bayes never heard, this one of those algorithms that normally don't generate sigle output that rival XGB/LGB, but nevertheless help to improve the overal stacking performance due the diversity it bring to the party
+
+# In[ ]:
+
+
+nb=BernoulliNB()
+
+outcomes =cross_validate_sklearn(nb, x_train, y_train ,x_test, kf, scale=True, verbose=True)
+
+nb_cv=outcomes[0]
+nb_train_pred=outcomes[1]
+nb_test_pred=outcomes[2]
+
+nb_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=nb_train_pred)
+nb_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=nb_test_pred)
+
+
+# ## 3.5 XGB
+# Now this is our go-to GBM Bazooka:
+
+# In[ ]:
+
+
+xgb_params = {
+    "booster"  :  "gbtree", 
+    "objective"         :  "binary:logistic",
+    "tree_method": "hist",
+    "eval_metric": "auc",
+    "eta": 0.1,
+    "max_depth": 5,
+    "min_child_weight": 10,
+    "gamma": 0.70,
+    "subsample": 0.76,
+    "colsample_bytree": 0.95,
+    "nthread": 6,
+    "seed": 0,
+    'silent': 1
+}
+
+outcomes=cross_validate_xgb(xgb_params, x_train, y_train, x_test, kf, use_rank=False, verbose_eval=False)
+
+xgb_cv=outcomes[0]
+xgb_train_pred=outcomes[1]
+xgb_test_pred=outcomes[2]
+
+xgb_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=xgb_train_pred)
+xgb_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=xgb_test_pred)
+
+
+# ## 3.6 LightGBM
+# There is a crack in everything, that's how the light gets in :) 
+
+# In[ ]:
+
+
+lgb_params = {
+    'task': 'train',
+    'boosting_type': 'dart',
+    'objective': 'binary',
+    'metric': {'auc'},
+    'num_leaves': 22,
+    'min_sum_hessian_in_leaf': 20,
+    'max_depth': 5,
+    'learning_rate': 0.1,  # 0.618580
+    'num_threads': 6,
+    'feature_fraction': 0.6894,
+    'bagging_fraction': 0.4218,
+    'max_drop': 5,
+    'drop_rate': 0.0123,
+    'min_data_in_leaf': 10,
+    'bagging_freq': 1,
+    'lambda_l1': 1,
+    'lambda_l2': 0.01,
+    'verbose': 1
+}
+
+
+cat_cols=['ps_ind_02_cat','ps_car_04_cat', 'ps_car_09_cat','ps_ind_05_cat', 'ps_car_01_cat']
+outcomes=cross_validate_lgb(lgb_params,x_train, y_train ,x_test,kf, cat_cols, use_cat=True, 
+                            verbose_eval=False, use_rank=False)
+
+lgb_cv=outcomes[0]
+lgb_train_pred=outcomes[1]
+lgb_test_pred=outcomes[2]
+
+lgb_train_pred_df=pd.DataFrame(columns=['prediction_probability'], data=lgb_train_pred)
+lgb_test_pred_df=pd.DataFrame(columns=['prediction_probability'], data=lgb_test_pred)
+
+
+# We now have our level 1 friends ready, lets proceed and send them into the stacking party!
+
+# # 4. Level 2 ensemble
+
+# ## 4.1 Generate L1 output dataframe
+# Let's group ouf level 1 OOF predictions output together to genenerate the input for level 2 stacking
+
+# In[ ]:
+
+
+columns=['rf','et','logit','nb','xgb','lgb']
+train_pred_df_list=[rf_train_pred_df, et_train_pred_df, logit_train_pred_df, nb_train_pred_df,
+                    xgb_train_pred_df, lgb_train_pred_df]
+
+test_pred_df_list=[rf_test_pred_df, et_test_pred_df, logit_test_pred_df, nb_test_pred_df,
+                    xgb_test_pred_df, lgb_test_pred_df]
+
+lv1_train_df=pd.DataFrame(columns=columns)
+lv1_test_df=pd.DataFrame(columns=columns)
+
+for i in range(0,len(columns)):
+    lv1_train_df[columns[i]]=train_pred_df_list[i]['prediction_probability']
+    lv1_test_df[columns[i]]=test_pred_df_list[i]['prediction_probability']
+
+
+
+# ## 4.2 Level 2 XGB
+# Back to XGB for level 2! everything shall be the same, paint old easy mdoel building, right? well..
+
+# In[ ]:
+
+
+xgb_lv2_outcomes=cross_validate_xgb(xgb_params, lv1_train_df, y_train, lv1_test_df, kf, 
+                                          verbose=True, verbose_eval=False, use_rank=False)
+
+xgb_lv2_cv=xgb_lv2_outcomes[0]
+xgb_lv2_train_pred=xgb_lv2_outcomes[1]
+xgb_lv2_test_pred=xgb_lv2_outcomes[2]
+
+
+# So what just happened there?  Our CV score for each training fold is pretty descent, but our overall training CV score just fell through the crack!  Well, it turns out since we are using AUC/Gini as metric which is ranking dependent, and it turns out that if you apply xgb and lgb at level 2 stacking, the ranking get messed up when each fold's prediction scores are put together.  And this goes back to why we implemented that function to convert probability into ranks earlier.
+# 
+# Now, let's use the *use_rank* option, and see what happens:
+
+# In[ ]:
+
+
+xgb_lv2_outcomes=cross_validate_xgb(xgb_params, lv1_train_df, y_train, lv1_test_df, kf, 
+                                          verbose=True, verbose_eval=False, use_rank=True)
+
+xgb_lv2_cv=xgb_lv2_outcomes[0]
+xgb_lv2_train_pred=xgb_lv2_outcomes[1]
+xgb_lv2_test_pred=xgb_lv2_outcomes[2]
+
+
+# Much better, the OOF score for train prediction looks great! and you can see the score here is better already than any of the level 1 OOF train score. The best score in level 1 comes from XGB with 0.282 region, and we are now on 0.284
+
+#  ## 4.3 Level 2 LightGBM
+# Same story for LightGBM at level 2, we need to use the *use_rank* option:
+
+# In[ ]:
+
+
+lgb_lv2_outcomes=cross_validate_lgb(lgb_params,lv1_train_df, y_train ,lv1_test_df,kf, [], use_cat=False, 
+                                    verbose_eval=False, use_rank=True)
+
+lgb_lv2_cv=xgb_lv2_outcomes[0]
+lgb_lv2_train_pred=lgb_lv2_outcomes[1]
+lgb_lv2_test_pred=lgb_lv2_outcomes[2]
+
+
+# No surprise here :)
+
+# ## 4.3 Level 2 Random Forest
+# Now let's try a few more algorithms on level 2, and let's revisit random forest again.
+
+# In[ ]:
+
+
+rf_lv2=RandomForestClassifier(n_estimators=200, n_jobs=6, min_samples_split=5, max_depth=7,
+                          criterion='gini', random_state=0)
+rf_lv2_outcomes = cross_validate_sklearn(rf_lv2, lv1_train_df, y_train ,lv1_test_df, kf, 
+                                            scale=True, verbose=True)
+rf_lv2_cv=rf_lv2_outcomes[0]
+rf_lv2_train_pred=rf_lv2_outcomes[1]
+rf_lv2_test_pred=rf_lv2_outcomes[2]
+
+
+# ## 4.4 Level 2 Logistic Regression
+# Logistic Regression, take 2
+
+# In[ ]:
+
+
+logit_lv2=LogisticRegression(random_state=0, C=0.5)
+logit_lv2_outcomes = cross_validate_sklearn(logit_lv2, lv1_train_df, y_train ,lv1_test_df, kf, 
+                                            scale=True, verbose=True)
+logit_lv2_cv=logit_lv2_outcomes[0]
+logit_lv2_train_pred=logit_lv2_outcomes[1]
+logit_lv2_test_pred=logit_lv2_outcomes[2]
+
+
+# Hopefully by now you can see that on level 2, models like random forest and logistic regression are now producing very competivie results thanks to the meta-features from the level 1 OOF output.
+# 
+# We are having fun! and why stop in level 2? let's bring on level 3 :)
+
+# # 5. Level 3 ensemble
+# On level 3, we follow simlar workflow as level 2. First we put the OOF output from level 2 together, and then send them to our chosen algorithms.
+# 
+# ## 5.1 Generate L2 output dataframe
+
+# In[ ]:
+
+
+lv2_columns=['rf_lf2', 'logit_lv2', 'xgb_lv2','lgb_lv2']
+train_lv2_pred_list=[rf_lv2_train_pred, logit_lv2_train_pred, xgb_lv2_train_pred, lgb_lv2_train_pred]
+
+test_lv2_pred_list=[rf_lv2_test_pred, logit_lv2_test_pred, xgb_lv2_test_pred, lgb_lv2_test_pred]
+
+lv2_train=pd.DataFrame(columns=lv2_columns)
+lv2_test=pd.DataFrame(columns=lv2_columns)
+
+for i in range(0,len(lv2_columns)):
+    lv2_train[lv2_columns[i]]=train_lv2_pred_list[i]
+    lv2_test[lv2_columns[i]]=test_lv2_pred_list[i]
+
+
+# ## 5.2 Level 3 XGB 
+# On this level, let's just stay with our trusted weapon XGB
+
+# In[ ]:
+
+
+xgb_lv3_params = {
+    "booster"  :  "gbtree", 
+    "objective"         :  "binary:logistic",
+    "tree_method": "hist",
+    "eval_metric": "auc",
+    "eta": 0.1,
+    "max_depth": 2,
+    "min_child_weight": 10,
+    "gamma": 0.70,
+    "subsample": 0.76,
+    "colsample_bytree": 0.95,
+    "nthread": 6,
+    "seed": 0,
+    'silent': 1
+}
+
+
+
+xgb_lv3_outcomes=cross_validate_xgb(xgb_lv3_params, lv2_train, y_train, lv2_test, kf, 
+                                          verbose=True, verbose_eval=False, use_rank=True)
+
+xgb_lv3_cv=xgb_lv3_outcomes[0]
+xgb_lv3_train_pred=xgb_lv3_outcomes[1]
+xgb_lv3_test_pred=xgb_lv3_outcomes[2]
+
+
+# This is slightly better than the XGB ouput at level 2, but not by much, as we are now seeing diminsing return as the level improve. Let's try tp pair this with something linear.
+
+# ## 5.3 Level 3 Logistic Regression
+# and of course that something linear is going to be Logistic Regression
+
+# In[ ]:
+
+
+logit_lv3=LogisticRegression(random_state=0, C=0.5)
+logit_lv3_outcomes = cross_validate_sklearn(logit_lv3, lv2_train, y_train ,lv2_test, kf, 
+                                            scale=True, verbose=True)
+logit_lv3_cv=logit_lv3_outcomes[0]
+logit_lv3_train_pred=logit_lv3_outcomes[1]
+logit_lv3_test_pred=logit_lv3_outcomes[2]
+
+
+# At this level, we don't see that much different between XGB and Logistic Regression anymore.
+
+# ## 5.4 Average L3 outputs & Submission Generation
+
+# We can always still do a simple weight average, to bring the two together and see if there any extra juice to be squeezed
+
+# In[ ]:
+
+
+weight_avg=logit_lv3_train_pred*0.5+ xgb_lv3_train_pred*0.5
+print(auc_to_gini_norm(roc_auc_score(y_train, weight_avg)))
+
+
+# Well, for training score, we manage to arravie at 0.28443.
+# We can now try to apply the same weight distribution to generate our submission.
+
+# In[ ]:
+
+
+submission=sample_submission.copy()
+submission['target']=logit_lv3_test_pred*0.5+ xgb_lv3_test_pred*0.5
+filename='stacking_demonstration.csv.gz'
+submission.to_csv(filename,compression='gzip', index=False)
+
+
+# # 6 After Thought
+
+# So I hope this three-level stacking guide is useful to demonstrate how you can capture more information from the training data, and hopefully this can generate to better test prediction. Well I use the word "hopefully" here as we all know the dataset in this competition is pretty noisy.   and in truth I am not sure if stacking beyong 2 level would bring much benefit, but then we will learn from the highflyers who survive the shake up!
+# 
+# My personal likely strategy to approach stacking is probably:
+# * go with a 2-level approach, and weight average on level 2
+# * applying the same stacking routine to several different random seed. 
+# * weigh average the above
+# 
+# I seriously think robust CV is the key for this competition, and always be suspicious of all things shared on kernel. Alternatively, perhaps with 1 day to go, someone will share a leak or a 0.291 script to send us into a frenzy? One can always hope...
+# 
+# Enjoy every bit of these last days - May all the insured drivers never have to claim! :)
+# 

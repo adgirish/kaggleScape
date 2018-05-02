@@ -1,777 +1,603 @@
 
 # coding: utf-8
 
-# I am predicting which employees are the most likely to change jobs, explore why, and come up with recommendations what employers can do to keep staff.
+# ### In this Notebook I  will Explore the UP elections 
+# 
+#  1. Thank Aaniket  for the dataset
+#  2. The Data will be explored in the following ways:-
+#     3. UP Analysis
+#     3. District Analysis
+#     3. Phase wise Analysis
+#     3. Party Analysis
+#     3.  Winner Analysis
+#     3. Region wise Analysis
+# 
+#  
+# 
+# 
+# **If u like it please up vote it **
 
 # In[ ]:
 
 
-# Import the modules
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import pandas as pd
-import numpy as np
-from scipy import stats
-import sklearn as sk
-import itertools
-import matplotlib.pyplot as plt
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import seaborn as sns
-import warnings 
-warnings.filterwarnings('ignore')
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-from sklearn import tree
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.linear_model import Perceptron
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import BaggingClassifier
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import VotingClassifier
-from sklearn import svm
-import xgboost as xgb
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import KFold
-from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import train_test_split 
-from sklearn.model_selection import GridSearchCV
-
-sns.set(style='white', context='notebook', palette='deep') 
-
-from sklearn import metrics
-from sklearn.metrics import accuracy_score
-
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-#Load data
-data = pd.read_csv('../input/HR_comma_sep.csv')
+#Import  input file
+Data = pd.read_csv("../input/up_res.csv")
 
-
-# # Data Inspection
-
-# The first step is to check for missing values in the data set. That's import so that we can put the summary statistics in context. Missing data can lead to a false impression of the data distribution and we need to be aware of that.
 
 # In[ ]:
 
 
-print(data.isnull().sum())
+# Lets see the Data 
+Data.head() # this will give us the top 5(by default ) rows of dataset
 
-
-# We got lucky and there are no missing data, which is usually not the case.
-
-# Next, let's check with what kind of variables we are dealing with, i.e. are the variables categorical, numerical etc.? 
 
 # In[ ]:
 
 
-data.dtypes
+Data.info() # it will give us the information about the data columns
 
 
-# So, **satisfaction_level** and **last_evaluation** are continuous numerical data but we need to confirm that. They could be misclassified and should really be integers. 
+# **Insights**
 # 
-# **sales** and **salary** are strings and probably categorical.
+#  1. First of all there is no missing values
+#  2. I do not understand what do mean by column seat allotment 
+#  3. Other column are as described in Data over view
 # 
-# The other variables are integers but it is not quite clear whether they are numerical or really categorical data.
+# **Let's Start the exploring the UP : - A Indian state which is bigger than many countries in the world**
 # 
-# Let's look at the first few lines of the dataset to get a fell for what the data looks like.
+# **UP Analysis**
 
 # In[ ]:
 
 
-data.head()
+# Now lets count total  number of votes
+print("The numbers of votes voted in UP election result are:",Data["votes"].sum() )
 
 
-# And now let's look at a brief summary of the data. The describe function only works on numerical data unfortunately. We will get to a summary of categorical variables shortly though.
-
-# In[ ]:
-
-
-data.describe()
-
-
-# Let's look at this visually.
+# **Insights**
+# 
+#  1. The number of Votes voted in UP is 86 Million, If we look at the world's Population Data  [link](https://www.infoplease.com/world/population-statistics/worlds-50-most-populous-countries-2016)
+# then the number of voters in UP are more than the population of Iran which is placed at the 16th in the list.
+# 
+# 2. FYI : In India the age eligibility for the vote is 18 years. 
 
 # In[ ]:
 
 
-#histograms
-warnings.filterwarnings('ignore')
-plt.figure(figsize=[12,10])
-
-plt.subplot(331)
-plt.xlabel('satisfaction_level', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['satisfaction_level'], kde=False)
-
-plt.subplot(332)
-plt.xlabel('last_evaluation', fontsize=12)
-#plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['last_evaluation'], kde=False)
-
-plt.subplot(333)
-plt.xlabel('number_project', fontsize=12)
-#plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['number_project'], kde=False)
-
-plt.subplot(334)
-plt.xlabel('average_montly_hours', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['average_montly_hours'], kde=False)
-
-plt.subplot(335)
-plt.xlabel('time_spend_company', fontsize=12)
-#plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['time_spend_company'], kde=False)
-
-plt.subplot(336)
-plt.xlabel('Work_accident', fontsize=12)
-#plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['Work_accident'], kde=False)
-
-plt.subplot(337)
-plt.xlabel('left', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['left'], kde=False)
-
-plt.subplot(338)
-plt.xlabel('promotion_last_5years', fontsize=12)
-#plt.ylabel('distribution', fontsize=12)
-sns.distplot(data['promotion_last_5years'], kde=False)
-
-
-# Now, we have a good idea of the distributions and what kind of data they are. 
-# **satisfaction_level**, **last_evaluation**, **number_project**, **average_montly_hours**, and **time_spend_company** are numerical variables.
-# **Work_accident**, **promotion_last_5_years**, and **left** are categorical data where 1 means *yes* and 0 means *no*.
-# We can also see some interesting bi-modal distribtuion and a very high number satisfaction levels of 0 but more of that in the next section.
-
-# Let's move on to the categorical variables we have not looked at yet.
-
-# In[ ]:
-
-
-data['sales'].value_counts()
+# Now lets count the number of districts in UP
+print(" The number of districts in UP is :" ,len(Data['district'].unique()))
+# in this the unique will give only unique values in district
+# len will count the number of unique values
 
 
 # In[ ]:
 
 
-count = data.groupby(data['sales']).count()
-count = pd.DataFrame(count.to_records())
-count = count.sort_values(by= 'left', ascending = False)
-count = count['sales']
+# Now lets count the number of constituencies in UP 
+# same as we did in the the district
+print(" The number of constituencies in UP is :" ,len(Data['ac'].unique()))
 
-sns.countplot(y='sales', data=data, order=count)
+
+# **2. District Analysis**
+
+# In[ ]:
+
+
+# there is 403 assembly consistuencies in UP within 75 districts
+# Lets Count How much Constituency in a disrict
+Data_districts= Data.groupby(["district"])["ac"].nunique()
+# In this we grouped the data by districs wise and then we counted the uniques values of constitutncy
+Data_districts=Data_districts.reset_index().sort_values(by="ac",ascending=False).reset_index(drop=True)
+# Now we sorted values on the basis of count of assembly seats
 
 
 # In[ ]:
 
 
-data['salary'].value_counts()
+# let see which districts are at the top
+Data_districts.head()
 
 
 # In[ ]:
 
 
-count = data.groupby(data['salary']).count()
-count = pd.DataFrame(count.to_records())
-count = count.sort_values(by= 'left', ascending = False)
-count = count['salary']
+# Allabhad is with the most number of Assembly seats 
+# Now look at the bottom who are down in the list
+Data_districts.tail(7)
+# here tail will give the bottom of Table
 
-sns.countplot(y='salary', data=data, order=count)
-
-
-# # Data Analysis
-
-# Let's first start off with calculating the baseline prediction, which is the proportion of leavers out of all employees. We will use this in the next section to compare against the predictive models. For now, it will be useful to check whether there are any types of jobs that are more risk of employees leaving etc. 
 
 # In[ ]:
 
 
-#Calculate the baseline prediction accuracy
-#colour code left
-left = data[data['left']==1]
-stayed = data[data['left']==0]
-left_col = 'blue'
-stayed_col = 'red'
-
-print('Left: %i (%.1f percent), Stayed: %i (%.1f percent), Total: %i'     %(len(left), 1.*len(left)/len(data)*100.0,      len(stayed), 1.*len(stayed)/len(data)*100.0, len(data)))
+# from this we can see that the there are district more than 12 Assembly seats and also with only 2 seats 
+# not fair distibution
+# lets see the mode of this 
+Data_districts.ac.value_counts() # this is to count the number of values
 
 
-# Let's compare leavers and stayers and plot them against each other.
+#  1. Here the 50 % district have the 5,4 and 3 number of Assembly seats
 
 # In[ ]:
 
 
-#plot the variables against their survival rates
-warnings.filterwarnings('ignore')
-plt.figure(figsize=[12,10])
+# Let's Count the number of votes per district
+Data_Districts_votes = Data.groupby("district")['votes'].sum().reset_index().sort_values(by="votes",ascending= False).reset_index(drop=True)
+# group by district and sum the number of votes
 
-plt.subplot(331)
-plt.xlabel('satisfaction_level', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.kdeplot(left['satisfaction_level'].dropna().values, color=left_col)
-sns.kdeplot(stayed['satisfaction_level'].dropna().values, color=stayed_col)
-plt.plot([0.5, 0.5], [3, 0], linewidth=2, color='black')
 
-plt.subplot(332)
-plt.xlabel('last_evaluation', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.kdeplot(left['last_evaluation'].dropna().values, color=left_col)
-sns.kdeplot(stayed['last_evaluation'].dropna().values, color=stayed_col)
-plt.plot([0.57, 0.57], [3, 0], linewidth=2, color='black')
-plt.plot([0.82, 0.82], [3, 0], linewidth=2, color='black')
+# In[ ]:
 
-plt.subplot(333)
-sns.barplot('number_project', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
 
-plt.subplot(334)
-plt.xlabel('average_montly_hours', fontsize=12)
-plt.ylabel('distribution', fontsize=12)
-sns.kdeplot(left['average_montly_hours'].dropna().values, color=left_col)
-sns.kdeplot(stayed['average_montly_hours'].dropna().values, color=stayed_col)
-plt.plot([160, 160], [0.012, 0], linewidth=2, color='black')
-plt.plot([240, 240], [0.012, 0], linewidth=2, color='black')
+Data_Districts_votes.head(10)
 
-plt.subplot(335)
-sns.barplot('time_spend_company', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
 
-plt.subplot(336)
-sns.barplot('Work_accident', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+# In[ ]:
 
-plt.subplot(337)
-sns.barplot('promotion_last_5years', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
 
-plt.subplot(338)
-sns.barplot('sales', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
+# Allahabad is at the top in both case so it may be due to a large number of assembly seats 
+# lest calculate the avearage number of votes per seat District wise
+
+
+# In[ ]:
+
+
+Data_districts= pd.merge(Data_districts,Data_Districts_votes,on="district")
+# in this we are merging two data set one contain the number of votes and one contain the number of Assembly seats
+
+
+# In[ ]:
+
+
+Data_districts.head()
+
+
+# In[ ]:
+
+
+Data_districts["Average Votes Per assembly"]= (Data_districts['votes']/Data_districts["ac"]).astype(int)
+# Making a new coloumn which contains the average number of votes per assembely Seats
+
+
+# In[ ]:
+
+
+Data_districts.sort_values(by="Average Votes Per assembly",ascending=False).reset_index(drop=True)
+
+
+#  1. Lalitpur is at the top 
+# 
+# 2. Allahabad moves to 61st position
+
+# In[ ]:
+
+
+# Lets Count the number of Candidate per assembly seat
+Data_Candidate= Data.groupby("ac")['candidate'].count().reset_index().sort_values(by="candidate",ascending=False).reset_index(drop=True)
+
+
+# In[ ]:
+
+
+Data_Candidate.head(15)
+
+
+# **3. Analysis of Phases**
+
+# In[ ]:
+
+
+# Let's explore the number of votes per phase 
+Votes_Phase= Data.groupby('phase')['votes'].sum().reset_index().sort_values(by="votes",ascending=False).reset_index(drop=True)
+Votes_Phase
+
+
+# In[ ]:
+
+
+sns.barplot(x='phase',y='votes',data=Votes_Phase) # to plot the votes in each phase
+plt.title("No. Of Votes In each Phase")
+
+
+#  1. No of votes are decreasing with the next phase it may be due to no of Assembly so lets count the number of assembly phase wise
+
+# In[ ]:
+
+
+Assembly_phase =  Data.groupby("phase")["ac"].count().reset_index().sort_values(by="ac",ascending=False).reset_index(drop=True)
+sns.barplot(x='phase',y='ac',data=Assembly_phase)
+
+
+#  1. oh ! The pattern is not same as the number of votes, means some phase have a better percentage of votes
+
+# **4.Party Analysis**
+
+# In[ ]:
+
+
+# Let's see which parties are there 
+Data.party.unique() # the parties which are participating in the elections
+
+
+# In[ ]:
+
+
+# Here none of the above means nothing we can convert them into also others 
+Data.party.replace("None of the Above","others",inplace=True)
+
+
+# In[ ]:
+
+
+Data.party.unique()
+
+
+# In[ ]:
+
+
+# Vote Distribution of Parties
+plt.figure(figsize=(10,8))
+sns.pointplot(x='party',y='votes',data=Data)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,8))
+sns.boxplot(x='party',y='votes',data=Data)
+
+
+#  1. Here is some insights from above two graphs
+#  2. First graph is known as Point plot [Pointplot](http://seaborn.pydata.org/generated/seaborn.pointplot.html). From this graph we can interpret the BJP is having the Highest mean number of votes (As expected) but surprise will be INC have more mean than BSP while BSP won more seat. It is due to INC and SP was in alliance so the INC had less number of seat.
+# 
+#  3. The Second graph is known as boxplot [Boxplot](http://seaborn.pydata.org/generated/seaborn.boxplot.html). By this graph same thing are here but here we can get the quratiles and outliers too . From this we observed that the independent and others having very less number of votes some of them are ouliers may be independent camdidate who won the election.
+# 
+#  4. There is one outlier for BJP that is nearby 250 thousand votes
+
+# In[ ]:
+
+
+# Let see the patteren of votes get by parties
+Votes_party=Data.groupby("party")['votes'].sum().reset_index().sort_values(by='votes',ascending=False).reset_index(drop=True)
+Votes_party
+
+
+# In[ ]:
+
+
+# lest plot the barplot of it 
+sns.barplot(x='party',y='votes',data=Votes_party)
+plt.title("No oF votes got by parties")
 plt.xticks(rotation=90)
 
-plt.subplot(339)
-sns.barplot('salary', 'left', data=data)
-plt.plot([-1, 10], [0.238, 0.238], linewidth=2, color='black')
 
-plt.subplots_adjust(top=0.92, bottom=0.08, left=0.10, right=0.95, hspace=0.25, wspace=0.35)
+#  1. As known BJP is leading in the table but surprise to see that the BSP is ahead of SP 
+#  2.  BJP got nearby double of the vote got by BSP
+#  3. This shows how much  they dominated in  Election of UP
+#  4. The INC is in very bad condition
+
+# In[ ]:
 
 
-# To summarise:
+# Let's see the number of votes get by parties phase wise
+No_of_phase= len(Data.phase.unique())
+fig=plt.subplots(figsize=(8,10*(No_of_phase+1)))
+for i in range(No_of_phase):
+    index_values= Data[Data["phase"]==i+1].index.values
+    phase_votes= Data.ix[index_values,:] # getting all the value by phase wise
+    votes_party_phase= phase_votes.groupby('party')['votes'].sum().reset_index().sort_values(by='votes',ascending=False).reset_index(drop=True)
+    plt.subplot(No_of_phase+1,1,i+1) # No of Phase +1 is for total no of plots 
+    sns.barplot(x='party',y='votes',data=votes_party_phase)
+    plt.subplots_adjust(hspace=.3)
+    plt.xticks(rotation=90)
+    plt.title("Phase {}".format(i+1))
+
+
+#  1. The pattern is same for parties other than SP and BSP in all phases.
+#  2. BJP is leading in all phase
+#  3. But for SP and BSP in 2nd and 3rd phase the SP is dominating BSP but BSP is dominating in all other phases
+#  4. In 1st Phase RLD perform better than the INC and acquired  4th position it may be due to the home districts (like as meerut, muzzafurnagar, shamli etc) of RLD are in 1st phase.
+
+# **5. Winner Analysis**
+
+# In[ ]:
+
+
+#Lets find the number of Assembly seats won by parties
+# This thing I am doing in my way other suggestion will be helpful
+# Please comment if you know any other way for it 
+Winner= Data.groupby(["ac"])['votes'].max().reset_index()
+# This will give us the maximum number of votes for every assembly seat
+Winner2=pd.merge(Winner,Data,on=['ac','votes'],how="left",copy=False)
+
+# Now I am merging the this data with the our original data to get all values
+
+winner_party=Winner2.groupby(['party'])['candidate'].count().reset_index() # Now counting the seats won by a party
+print(winner_party)
+sns.barplot(x='party',y='candidate',data=winner_party)
+
+
+#  1. Graph is telling the whole story about dominance of the BJP in the UP election
+
+# In[ ]:
+
+
+# We can see these for phase wise
+Winner2.groupby(['phase','party'])['candidate'].count()
+
+
+# In[ ]:
+
+
+# Let's do it for who are at the last Postion 
+Last_position= Data.groupby(["ac"])['votes'].min().reset_index().sort_values(by='votes').reset_index(drop=True)
+Last_position2=pd.merge(Last_position,Data,on="votes",how="left",copy=False)
+Last_position2=Last_position2.drop_duplicates('ac_x').reset_index(drop=True) # drop any duplicate if it is there
+
+
+# In[ ]:
+
+
+Last_position2[["ac_x",'candidate','party','votes']]
+
+
+#  1. This list shows the candidate getting votes less than 50 too.
+#  2. There is no main party in the list 
+
+# In[ ]:
+
+
+# Now lets Find who are at the second positions
+Second_place=Data.groupby("ac")['votes'].nlargest(2).reset_index() # nlargest(2) will give us the two largest value for each category
+Second_place1 = Second_place.groupby('ac')['votes'].min().reset_index().sort_values(by='votes',ascending=False).reset_index(drop=True) # from this we will get the miinimum of those two
+#print(second_place1) you can do it for your confirmation
+# Now we will merge it with our oringinal data so to get all the fields here
+
+Second_place2=pd.merge(Second_place1,Data,on=['ac','votes'],how="left",copy=False)
+#print(Second_place2) you can do it for your confirmation
+Second_party=Second_place2.groupby(['party'])['candidate'].count().reset_index() # Now counting the seats won by a party
+print(Second_party)
+sns.barplot(x='party',y='candidate',data=Second_party)
+ 
+
+
+#  1. BSP and SP are the Party who finished second most time so from this we conclude that the main parties of this election were BJP,SP and BSP 
+
+# In[ ]:
+
+
+# now I want to see the difference b/w candidate who won the election and the one who finished second
+winner= Winner2[['ac','votes']] # here we got the data of winners
+second_place= Second_place2[['ac','votes']] # here we got the data of second_place
+Winner_comparison= pd.merge(winner,second_place,on='ac')
+# Now get the difference b/w the these two position
+Winner_comparison["Difference"]=Winner_comparison['votes_x']-Winner_comparison['votes_y']
+Winner_comparison.sort_values(by="Difference",ascending=False).reset_index(drop=True)
+
+
+#  1. From this list we can see that the in some constituencies the difference is more than 100 thousands 
+# while in some it is only 100 or 200
+
+# In[ ]:
+
+
+#lets plot a graph for more information
+x=Winner_comparison["Difference"]
+sns.distplot(x)
+
+
+# In[ ]:
+
+
+# reduce the xlimit to clear view
+
+plt.figure(figsize=(12,10))
+plt.xlim(0,100000)
+sns.distplot(x)
+
+
+#  1. From here we get maximum time  the difference is nearby 20,000
+
+# **6. Region wise Analysis** 
 # 
-# **satisfaction_level**: If the satisfaction level is smaller than 0.5 employees almost without exception more likely to leave than to stay. There is an uptick in leavers at levl of around 0.8. These must the top performers who most likely have been poached by a competitor.
+#  1. In this we will divide the UP in four regions which are Harit Pardesh ( Western UP), Purvanchal (Eastern UP), Bundelkhand ( Central UP), Avadh Pardesh (Central UP) 
+#  2.  These divisions were suggested by the Mayawati the BSP president to divide UP in four states when she was chief minister of UP . fortunately it did not work out
+
+# In[ ]:
+
+
+# Let's divide UP In four regions
+# these list's name repersent the name the region and element repersent distric in them 
+# I know it all because I am from neighbouring state of UP
+Harit_Pardesh=['Saharanpur',
+'Shamli',
+'Muzaffarnagar',
+'Bijnor',
+'Moradabad',
+'Sambhal',
+'Rampur',
+'Amroha',
+'Meerut',
+'Baghpat',
+'Ghaziabad',
+'Hapur',
+'Gautam Buddha Nagar',
+'Bulandshahr',
+'Aligarh',
+'Hathras',
+'Mathura',
+'Agra',
+'Firozabad',
+'Kasganj',
+'Etah',
+'Mainpuri',
+'Budaun',
+'Bareilly',
+'Pilibhit',
+'Shahjahanpur'
+]
+
+Avadh_Pardesh=['Lakhimpur Kheri',
+'Sitapur',
+'Hardoi',
+'Unnao',
+'Lucknow',
+'Raebareli',
+'Farrukhabad',
+'Kannauj',
+'Etawah',
+'Auraiya',
+'Kanpur Dehat',
+'Kanpur Nagar',
+'Barabanki'
+]
+
+BundelKhand = ['Jalaun',
+'Jhansi',
+'Lalitpur',
+'Hamirpur',
+'Mahoba',
+'Banda',
+'Chitrakoot'
+]
+
+Purvanchal= ['Amethi',
+'Sultanpur',
+'Fatehpur',
+'Pratapgarh',
+'Kaushambi',
+'Allahabad',
+'Faizabad',
+'Ambedkar Nagar',
+'Bahraich',
+'Shravasti',
+'Balarampur',
+'Gonda',
+'Siddharthnagar',
+'Basti',
+'Sant Kabir Nagar',
+'Maharajganj',
+'Gorakhpur',
+'Kushinagar',
+'Deoria',
+'Azamgarh',
+'Mau',
+'Ballia',
+'Jaunpur',
+'Ghazipur',
+'Chandauli',
+'Varanasi',
+'Sant Ravidas Nagar',
+'Mirzapur',
+'Sonbhadra'
+]
+print("No of District in Harit Pardesh:",len(Harit_Pardesh))
+print("No of District in Purvanchal:",len(Purvanchal))
+print("No of District in Avadh Pardesh:",len(Avadh_Pardesh))
+print("No of District in BundelKhand:",len(BundelKhand))
+
+
+# In[ ]:
+
+
+mapper={} # now taking a empty dictonary
+for i in Harit_Pardesh: # Now iterating through list and adding districts as key and assigning them value Region
+    mapper[i]="Harit Pardesh"
+for i in Purvanchal: # Same as above
+    mapper[i]="Purvanchal"
+for i in Avadh_Pardesh:
+    mapper[i]="Avadh Pardesh"
+for i in BundelKhand:
+    mapper[i]="BundelKhand"
+    
+
+
+# In[ ]:
+
+
+Data['Region']=Data["district"].map(mapper)  # Now mapping districts to region using mapper dictonary
+
+
+# In[ ]:
+
+
+# Just rechecking the mapping is it correct or not so again counting the number of districts per region
+District_Region=Data.groupby("Region")["district"].nunique().reset_index()
+District_Region
+
+
+# In[ ]:
+
+
+# Let's Now see vote Per Region
+Region_Votes = Data.groupby("Region")["votes"].sum().reset_index().sort_values(by=['votes']).reset_index(drop=True)
+Region_Votes
+
+
+# In[ ]:
+
+
+# Lets plot a pie plot of it
+plt.figure(figsize=(8,8))
+plt.pie(Region_Votes["votes"],labels=Region_Votes["Region"] ,autopct='%1.1f%%',shadow=True,explode=[0.10,0.10,0.10,0.10])
+
+
+#  1. Here we can see that the Purvanchal and Harit Pardesh is having 75 % of votes that are voted in UP. 
+#  2. It may be due to they have more number of districts. so we will find their % of votes per districs 
+
+# In[ ]:
+
+
+Votes_Region_per_district = pd.merge(Region_Votes,District_Region,on="Region")
+Votes_Region_per_district["Votes_Per_District"]=(Votes_Region_per_district["votes"]/Votes_Region_per_district["district"])*100
+Votes_Region_per_district.Votes_Per_District=Votes_Region_per_district.Votes_Per_District.astype(int)
+Votes_Region_per_district.sort_values(by="Votes_Per_District",ascending=False).reset_index(drop=True)
+
+
+#  1. oh ! Avadh is at the top but Bundelkhand is still at low it is because BundelKhand Includes district which have only two or three ac like as lalitpur
+
+# In[ ]:
+
+
+# Now let's see the number of seat won by party resion wise
+Winner= Data.groupby(["ac"])['votes'].max().reset_index()
+Winner2=pd.merge(Winner,Data,on=['ac','votes'],how="left",copy=False)
+Winner_Region = Winner2.groupby(['Region','party'])['candidate'].count()
+Winner_Region
+
+
+#  1. BJP is leading in all Region but in BundelKhand BJP  did clean sweep it may be due to BundelKhand is near to state Madhya Pardesh and BJP has been ruling MP since last 15 years
+#  2. The Independent and others won only in Purvanchal 
+#  3.  BSP Won 14 seats in Purvanchal which is a large number compare to their seat number in other Regions. 
+#  4. INC is winning only  2 or 3 seats other than BundelKhand (FYI: INC is India's Most older Party which belong to Nehru and Gandhi )
+#  5.  SP who was the Ruling party before election is  better than other party. but in MODI STROM they are flown away too.
+#  6. RLD won only one seat and that is also in Harit_ Pardesh their own hometown
+
+#  1. Thank you for reading this 
+#  2. vote it if you liked it 
 # 
-# **last_evaluation**: Employees who have been evaluated recently or a long time ago are more likely to leave. Perhaps the recent evaluation made the employee realise that it's not the right job for them or they received poor feedback. An evaluation that happened long time ago could indicate that these employees have received any feedback or could make their voice heard in a long time and have become 'estranged' from the company.
 # 
-# **number_project**: Employees with few projections or very many are more likely to leave.
+# ----------
 # 
-# **average_montly_hours**: This is a similar story to number_projects. These two variables are probably correlated with each other.
-# 
-# **time_spend_company**: Once an employee has worked longer than 3 years, they are more likely to leave.
-# 
-# **Work_accident**: Interestingly, there is a higher proportion of employees to leave that had an accident than those who did not. This might be due to a very smaller number of accidents and thus a statistical fluke. 
-# 
-# **promotion_last_5_years**: It's not surprising to see that employees who have been promoted are more likely to stay.
-# 
-# **sales**: Management and R&D are more likely to stay than other job categories. On the other hand HR and Accounting are more likely to leave compared to the average.
-# 
-# **salary**: Not surprisingly employees with higher pay are more likely to stay.
-
-# Let's check the accidents quickly. 
-
-# In[ ]:
-
-
-accident = data[data['Work_accident']==1]
-no_accident = data[data['Work_accident']==0]
-
-print('Accident: %i (%.1f percent), No accident: %i (%.1f percent), Total: %i'     %(len(accident), 1.*len(accident)/len(data)*100.0,      len(no_accident), 1.*len(no_accident)/len(data)*100.0, len(data)))
-
-
-# Turns out there are actually quite a few accidents. It is an interesting observation but let's see if it really matters.
-
-# Next, let's find out if any of the variables are correlated with each other.
-
-# In[ ]:
-
-
-data.head()
-
-
-# In[ ]:
-
-
-#I need to drop the categorical varaibles as calculating their correlations doesn't make any sense.
-datacor = data.drop(['Work_accident', 'promotion_last_5years', 'sales', 'salary', 'left'], axis=1)
-
-plt.figure(figsize=(14,12))
-sns.heatmap(datacor.corr(), vmax=0.6, square=True, annot=True)
-
-
-# After we have looked at the variables individually, let's look at them in the context of other variables. First I want to find out whether salaries have anything to do with job categories having different probabilities of leaving. 
-# 
-# What really stands out is that there are proportionally a lot more highly paid positions in management. That could help explain the lower probability in leaving. The other job categories all look fairly similar.
-
-# In[ ]:
-
-
-#How do the salaries amongst different job categories look like?
-sns.factorplot("salary", col="sales", col_wrap=5,
-                   data=data,
-                    kind="count", size=2.5, aspect=.8, sharey = False)
-
-
-# In[ ]:
-
-
-#Where do accidents occur?
-sns.factorplot("Work_accident", col="sales", col_wrap=5,
-                   data=data,
-                    kind="count", size=2.5, aspect=.8, sharey = False)
-
-
-# This equally distributed across all job categories
-
-# In[ ]:
-
-
-#Who got the promotions?
-sns.factorplot("promotion_last_5years", col="sales", col_wrap=5,
-                   data=data,
-                    kind="count", size=2.5, aspect=.8, sharey = False)
-
-
-# Management (and Marketing + RandD) seem to have more promotions 
-
-# In[ ]:
-
-
-#Who is the most satisfied
-median = data.groupby(['sales']).median()
-median = pd.DataFrame(median.to_records())
-median = median.sort_values(by='satisfaction_level', ascending = False)
-median = median['sales']
-
-sns.boxplot('sales', 'satisfaction_level',order=median, data=data)
-
-
-# Satisfaction levels medians are almost the same across all job categories with the exception of accounting and HR.
-# 
-
-# In[ ]:
-
-
-#Who works the longest hours?
-
-
-median = data.groupby(['sales']).median()
-median = pd.DataFrame(median.to_records())
-median = median.sort_values(by='average_montly_hours', ascending = False)
-median = median['sales']
-
-sns.boxplot('sales', 'average_montly_hours',order=median, data=data)
-
-
-# In[ ]:
-
-
-#Is satisfaction level correlated with working hours?
-
-sns.jointplot(x='satisfaction_level', y='average_montly_hours', data=data, alpha=0.1)
-
-
-# In[ ]:
-
-
-#Satisfaction vs salary
-
-median = data.groupby(['salary']).median()
-median = pd.DataFrame(median.to_records())
-median = median.sort_values(by='satisfaction_level', ascending = False)
-median = median['salary']
-
-sns.violinplot('salary', 'satisfaction_level',order=median, data=data)
-
-
-# Satisfaction levels seem fairly equally distributed across the three salary categories but the mean of *low* is slightly lower than for the other two categories.
-
-# # Data Preprocessing
-
-# In this section I will one-hot encode **salary** and **sales** and create a training and testing set. 
-# 
-# One-hot encoding means that we create a new column for each type of **sales** - HR, accounting etc. will all have their own column with each cell containing either 1 or 0. Each column is now effectively a dummy variable. If an employee works in HR the corresponding cell will be filled with 1 and otherwise with 0.
-# 
-# One-hot encoding is important for categorical variables that contain values other than 1 and 0. If this isn't done, Python will convert Accounting, HR, Marketing et.c to the numbers 0, 1, 2... which will lead to misleading results.
-# 
-# Splitting the data into training and testing sets allows us to check how well the model performs on unseen data, the testing set.
-
-# In[ ]:
-
-
-#Select the variables to be one-hot encoded
-one_hot_features = ['salary', 'sales']
-
-# For each categorical column, find the unique number of categories. This tells us how many columns we are adding to the dataset.
-longest_str = max(one_hot_features, key=len)
-total_num_unique_categorical = 0
-for feature in one_hot_features:
-    num_unique = len(data[feature].unique())
-    print('{col:<{fill_col}} : {num:d} unique categorical values.'.format(col=feature, 
-                                                                          fill_col=len(longest_str),
-                                                                          num=num_unique))
-    total_num_unique_categorical += num_unique
-print('{total:d} columns will be added during one-hot encoding.'.format(total=total_num_unique_categorical))
-
-
-# In[ ]:
-
-
-# Convert categorical variables into dummy/indicator variables (i.e. one-hot encoding).
-one_hot_encoded = pd.get_dummies(data[one_hot_features])
-one_hot_encoded.info(verbose=True, memory_usage=True, null_counts=True)
-
-
-# In[ ]:
-
-
-#Let's check everything looks like as we were expecting
-one_hot_encoded.head()
-
-
-# In[ ]:
-
-
-#Delete the columns salary and sales...
-data = data.drop(['salary', 'sales'], 1)
-
-#...and add the new one-hot encoded variables
-data = pd.concat([data, one_hot_encoded], axis=1)
-data.head()
-
-
-# In[ ]:
-
-
-#Split data into training and testing set with 80% of the data going into training
-training, testing = train_test_split(data, test_size=0.2, random_state=0)
-print("Total sample size = %i; training sample size = %i, testing sample size = %i"     %(data.shape[0],training.shape[0],testing.shape[0]))
-
-
-# In[ ]:
-
-
-#This creates a list with all column names, which will be used to subset the tables 
-cols = ['satisfaction_level', 'last_evaluation', 'number_project', 'average_montly_hours', 'time_spend_company', 'Work_accident',
-'promotion_last_5years', 'salary_high', 'salary_low', 'salary_medium', 'sales_IT', 'sales_RandD', 'sales_accounting',
-'sales_hr', 'sales_management', 'sales_marketing', 'sales_product_mng', 'sales_sales', 'sales_support', 'sales_technical']
-tcols = np.append(['left'],cols)
-
-#X are the variables/features that help predict y, which tells us whether an employee left or stayed. This is done for both 
-#training and testing
-df = training.loc[:,tcols]
-X = df.loc[:,cols]
-y = np.ravel(df.loc[:,['left']])
-
-df_test = testing.loc[:,tcols]
-X_test = df_test.loc[:,cols]
-y_test = np.ravel(df_test.loc[:,['left']])
-
-
-# # Data Models
-
-# In this section I will first calculate the baseline, which is the accuracy of predicting the most frequent class, which is 76.2% for *stayed*.
-# 
-# I then run several models, which have to beat an accuracy of 76.2 in order to be an improvement to prediction. After I ran all models I collate the accuracy score and present my findings.
-
-# In[ ]:
-
-
-#Baseline
-print('Left: %i (%.1f percent), Stayed: %i (%.1f percent), Total: %i'     %(len(left), 1.*len(left)/len(data)*100.0,      len(stayed), 1.*len(stayed)/len(data)*100.0, len(data)))
-base_score = len(stayed)/len(data)
-print('This is the score to beat:', base_score)
-
-
-# In[ ]:
-
-
-#Logistic Regression
-clf_log = LogisticRegression()
-clf_log = clf_log.fit(X,y)
-score_log = cross_val_score(clf_log, X, y, cv=5).mean()
-print(score_log)
-
-
-# In[ ]:
-
-
-# Perceptron
-
-clf_pctr = Perceptron(
-    class_weight='balanced'
-    )
-clf_pctr = clf_pctr.fit(X,y)
-score_pctr = cross_val_score(clf_pctr, X, y, cv=5).mean()
-print(score_pctr)
-
-
-# In[ ]:
-
-
-k_range = range(1,26)
-scores=[]
-for k in k_range:
-    knn=KNeighborsClassifier(n_neighbors=k)
-    knn.fit(X,y)
-    y_pred=knn.predict(X_test)
-    scores.append(accuracy_score(y_test,y_pred))
-
-plt.plot(k_range,scores)
-plt.xlabel('Value of k for KNN')
-plt.ylabel('Testing accuracy')
-
-
-# In[ ]:
-
-
-# KNN - based on the graph n_neighbors should be 1 or 2 but 10 seems to give a better result
-
-clf_knn = KNeighborsClassifier(
-    n_neighbors=10,
-    weights='distance'
-    )
-clf_knn = clf_knn.fit(X,y)
-score_knn = cross_val_score(clf_knn, X, y, cv=5).mean()
-print(score_knn)
-
-
-# In[ ]:
-
-
-#SVM
-
-clf_svm = svm.SVC(
-    class_weight='balanced'
-    )
-clf_svm.fit(X, y)
-score_svm = cross_val_score(clf_svm, X, y, cv=5).mean()
-print(score_svm)
-
-
-# In[ ]:
-
-
-# Bagging
-
-bagging = BaggingClassifier(
-    KNeighborsClassifier(
-        n_neighbors=10,
-        weights='distance'
-        ),
-    oob_score=True,
-    max_samples=0.5,
-    max_features=1.0
-    )
-clf_bag = bagging.fit(X,y)
-score_bag = clf_bag.oob_score_
-print(score_bag)
-
-
-# In[ ]:
-
-
-# Decision Tree
-
-clf_tree = tree.DecisionTreeClassifier(
-    #max_depth=3,
-    class_weight="balanced",
-    min_weight_fraction_leaf=0.01
-    )
-clf_tree = clf_tree.fit(X,y)
-score_tree = cross_val_score(clf_tree, X, y, cv=5).mean()
-print(score_tree)
-
-
-# In[ ]:
-
-
-# Random Forest
-
-clf_rf = RandomForestClassifier(
-    n_estimators=1000, 
-    max_depth=None, 
-    min_samples_split=10 
-    #class_weight="balanced", 
-    #min_weight_fraction_leaf=0.02 
-    )
-clf_rf = clf_rf.fit(X,y)
-score_rf = cross_val_score(clf_rf, X, y, cv=5).mean()
-print(score_rf)
-
-
-# In[ ]:
-
-
-# Extremely Randomised Trees
-
-clf_ext = ExtraTreesClassifier(
-    max_features='auto',
-    bootstrap=True,
-    oob_score=True,
-    n_estimators=1000,
-    max_depth=None,
-    min_samples_split=10
-    #class_weight="balanced",
-    #min_weight_fraction_leaf=0.02
-    )
-clf_ext = clf_ext.fit(X,y)
-score_ext = cross_val_score(clf_ext, X, y, cv=5).mean()
-print(score_ext)
-
-
-# In[ ]:
-
-
-# Gradient Boosting
-
-clf_gb = GradientBoostingClassifier(
-            #loss='exponential',
-            n_estimators=1000,
-            learning_rate=0.1,
-            max_depth=3,
-            subsample=0.5,
-            random_state=0).fit(X, y)
-clf_gb.fit(X,y)
-score_gb = cross_val_score(clf_gb, X, y, cv=5).mean()
-print(score_gb)
-
-
-# In[ ]:
-
-
-# Ada Boost
-
-clf_ada = AdaBoostClassifier(n_estimators=400, learning_rate=0.1)
-clf_ada.fit(X,y)
-score_ada = cross_val_score(clf_ada, X, y, cv=5).mean()
-print(score_ada)
-
-
-# In[ ]:
-
-
-#eXtreme Gradient Boosting
-
-clf_xgb = xgb.XGBClassifier(
-    max_depth=2,
-    n_estimators=500,
-    subsample=0.5,
-    learning_rate=0.1
-    )
-clf_xgb.fit(X,y)
-score_xgb = cross_val_score(clf_xgb, X, y, cv=5).mean()
-print(score_xgb)
-
-
-# The results are in and tabulated below and shown graphically. We can boost prediction accuracy from 76.2% to 98% using Gradient Boosting or Random Forest, which is a significant increase. This is the cross-validation score using the training set only. In the next section I will test accuracy using the trained models on the unseen testing set.
-
-# In[ ]:
-
-
-models = pd.DataFrame({
-        'Model' : ['Baseline', 'Logistic Regression', 'Perceptron', 'KNN', 'SVM', 'Bagging', 'Decision Tree',
-                   'Random Forest', 'Extra Tree', 'Gradient Boosting', 'ADA Boosting', 'XGBoost'],
-        'Score' : [base_score, score_log, score_pctr, score_knn, score_svm, score_bag, score_tree, score_rf, score_ext, score_gb, 
-                    score_ada, score_xgb]  
-})
-
-models = models.sort_values(by='Score', axis=0, ascending=False, inplace=False, kind='quicksort', na_position='last')
-
-models
-
-
-# In[ ]:
-
-
-sns.barplot(y=models.Model, x=models.Score)
-
-
-# # Model Validation on test set
-
-# We get similar scores using the test set
-
-# In[ ]:
-
-
-score_log_test = clf_log.score(X_test, y_test)
-score_pctr_test = clf_pctr.score(X_test, y_test)
-score_knn_test = clf_knn.score(X_test, y_test)
-score_svm_test = clf_svm.score(X_test, y_test)
-score_bag_test = clf_bag.score(X_test, y_test)
-score_tree_test = clf_tree.score(X_test, y_test)
-score_rf_test = clf_rf.score(X_test, y_test)
-score_ext_test = clf_ext.score(X_test, y_test)
-score_gb_test = clf_gb.score(X_test, y_test)
-score_ada_test = clf_ada.score(X_test, y_test)
-score_xgb_test = clf_xgb.score(X_test, y_test)
-
-
-# In[ ]:
-
-
-models_test = pd.DataFrame({
-        'Model' : ['Baseline', 'Logistic Regression', 'Perceptron', 'KNN', 'SVM', 'Bagging', 'Decision Tree',
-                   'Random Forest', 'Extra Tree', 'Gradient Boosting', 'ADA Boosting', 'XGBoost'],
-        'Score' : [base_score, score_log_test, score_pctr_test, score_knn_test, score_svm_test, score_bag_test, score_tree_test,
-                   score_rf_test, score_ext_test, score_gb_test, 
-                    score_ada_test, score_xgb_test]  
-})
-
-models_test = models_test.sort_values(by='Score', axis=0, ascending=False, inplace=False, kind='quicksort', na_position='last')
-
-models_test
-
-
-# In[ ]:
-
-
-sns.barplot(y=models_test.Model, x=models_test.Score)
-
-
-# # Feature Importance using Random Forest as Example
-
-# The models are doing a great job at predicting who is going to leave or stay but they are a bit of a black box. So, what factors are influencing the decision of an employee to leave. This is useful information for the company so that they can tackle their turn-over and focus on the right factors.
-# 
-# As an example, I will investigate what factors were the most important in predicting the outcome in Random Forest.  
-
-# In[ ]:
-
-
-importance = pd.DataFrame(list(zip(X.columns, np.transpose(clf_rf.feature_importances_)))             ).sort_values(1, ascending=False)
-importance
-
-
-# In[ ]:
-
-
-importances = clf_rf.feature_importances_
-
-std = np.std([tree.feature_importances_ for tree in clf_rf.estimators_], axis=0)
-indices = np.argsort(importances)[::-1]
-
-# Plot the feature importances of the forest
-plt.figure()
-plt.title("Feature importances")
-plt.bar(range(X.shape[1]), importances[indices],  
-       color="r", yerr=std[indices], align="center")
-plt.xticks(range(X.shape[1]),X.columns[indices], rotation=90)
-plt.xlim([-1, X.shape[1]])
-plt.show()
-

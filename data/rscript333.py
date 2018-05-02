@@ -1,175 +1,199 @@
-import gc
-import numpy as np
 import pandas as pd
-import xgboost as xgb
-from sklearn.metrics import mean_absolute_error
-from sklearn.cross_validation import KFold
-from scipy.stats import skew, boxcox
-from sklearn.preprocessing import StandardScaler
-import itertools
+import numpy as np
+from scipy import sparse as ssp
+import pylab as plt
+from sklearn.preprocessing import LabelEncoder,LabelBinarizer,MinMaxScaler,OneHotEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer,CountVectorizer
+from sklearn.decomposition import TruncatedSVD,NMF,PCA,FactorAnalysis
+from sklearn.feature_selection import SelectFromModel,SelectPercentile,f_classif
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics import log_loss,roc_auc_score
+from sklearn.pipeline import Pipeline,make_pipeline
+from sklearn.cross_validation import StratifiedKFold,KFold
+from keras.preprocessing import sequence
+from keras.callbacks import ModelCheckpoint,Callback
+from keras import backend as K
+from keras.layers import Input, Embedding, LSTM, Dense,Flatten, Dropout, merge,Convolution1D,MaxPooling1D,Lambda,AveragePooling1D
+from keras.layers.normalization import BatchNormalization
+from keras.optimizers import SGD
+from keras.layers.advanced_activations import PReLU,LeakyReLU,ELU,SReLU
+from keras.models import Model
 
+seed = 1
+np.random.seed(seed)
+dim = 32
+hidden=64
 
-shift = 200
-COMB_FEATURE = 'cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,cat4,cat14,cat38,cat24,cat82,cat25'.split(',')
+path = "../input/"
 
-def encode(charcode):
-    r = 0
-    ln = len(charcode)
-    for i in range(ln):
-        r += (ord(charcode[i])-ord('A')+1)*26**(ln-i-1)
-    return r
-
-
-def logregobj(preds, dtrain):
-    labels = dtrain.get_label()
-    con = 2
-    x = preds-labels
-    grad = con*x / (np.abs(x)+con)
-    hess = con**2 / (np.abs(x)+con)**2
-    return grad, hess
-
-
-def xg_eval_mae(yhat, dtrain):
-    y = dtrain.get_label()
-    return 'mae', mean_absolute_error(np.exp(y)-shift,
-                                      np.exp(yhat)-shift)
-
-
-def mungeskewed(train, test, numeric_feats):
-    ntrain = train.shape[0]
-    test['loss'] = 0
-    train_test = pd.concat((train, test)).reset_index(drop=True)
-    # compute skew and do Box-Cox transformation (Tilli)
-    skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna()))
-    print("\nSkew in numeric features:")
-    print(skewed_feats)
-    skewed_feats = skewed_feats[skewed_feats > 0.25]
-    skewed_feats = skewed_feats.index
-
-    for feats in skewed_feats:
-        train_test[feats] = train_test[feats] + 1
-        train_test[feats], lam = boxcox(train_test[feats])
-    return train_test, ntrain
-
-
-if __name__ == "__main__":
-    print('Started')
-    directory = '../input/'
-    train = pd.read_csv(directory + 'train.csv')
-    test = pd.read_csv(directory + 'test.csv')
-    numeric_feats = [x for x in train.columns[1:-1] if 'cont' in x]
-    cats = [x for x in train.columns[1:-1] if 'cat' in x]
-    train_test, ntrain = mungeskewed(train, test, numeric_feats)
+class AucCallback(Callback):  #inherits from Callback
     
-    for comb in itertools.combinations(COMB_FEATURE, 2):
-        feat = comb[0] + "_" + comb[1]
-        train_test[feat] = train_test[comb[0]] + train_test[comb[1]]
-        train_test[feat] = train_test[feat].apply(encode)
-        print(feat)
+    def __init__(self, validation_data=(), patience=25,is_regression=True,best_model_name='best_keras.mdl',feval='roc_auc_score',batch_size=1024*8):
+        super(Callback, self).__init__()
+        
+        self.patience = patience
+        self.X_val, self.y_val = validation_data  #tuple of validation X and y
+        self.best = -np.inf
+        self.wait = 0  #counter for patience
+        self.best_model=None
+        self.best_model_name = best_model_name
+        self.is_regression = is_regression
+        self.y_val = self.y_val#.astype(np.int)
+        self.feval = feval
+        self.batch_size = batch_size
+    def on_epoch_end(self, epoch, logs={}):
+        p = self.model.predict(self.X_val,batch_size=self.batch_size, verbose=0)#.ravel()
+        if self.feval=='roc_auc_score':
+            current = roc_auc_score(self.y_val,p)
+
+        if current > self.best:
+            self.best = current
+            self.wait = 0
+            self.model.save_weights(self.best_model_name,overwrite=True)
+            
+
+        else:
+            if self.wait >= self.patience:
+                self.model.stop_training = True
+                print('Epoch %05d: early stopping' % (epoch))
+                
+                
+            self.wait += 1 #incremental the number of times without improvement
+        print('Epoch %d Auc: %f | Best Auc: %f \n' % (epoch,current,self.best))
+
+
+def make_batches(size, batch_size):
+    nb_batch = int(np.ceil(size/float(batch_size)))
+    return [(i*batch_size, min(size, (i+1)*batch_size)) for i in range(0, nb_batch)]
+
+
+
+def main():
+    train = pd.read_csv(path+'act_train.csv')
+    test = pd.read_csv(path+'act_test.csv')
+    people = pd.read_csv(path+'people.csv')
+    columns = people.columns
+    test['outcome'] = np.nan
+    data = pd.concat([train,test])
     
-    cats = [x for x in train.columns[1:-1] if 'cat' in x]
-    for col in cats:
-        train_test[col] = train_test[col].apply(encode)
-    train_test.loss = np.log(train_test.loss + shift)
-    ss = StandardScaler()
-    train_test[numeric_feats] = \
-        ss.fit_transform(train_test[numeric_feats].values)
-    train = train_test.iloc[:ntrain, :].copy()
-    test = train_test.iloc[ntrain:, :].copy()
-    test.drop('loss', inplace=True, axis=1)
+    data = pd.merge(data,people,how='left',on='people_id').fillna('missing')
+    train = data[:train.shape[0]]
+    test = data[train.shape[0]:]
 
-    print('Median Loss:', train.loss.median())
-    print('Mean Loss:', train.loss.mean())
-    xgb_params = {
-        'seed': 0,
-        'colsample_bytree': 0.7,
-        'silent': 1,
-        'subsample': 0.7,
-        'learning_rate': 0.03,
-        'objective': 'reg:linear',
-        'max_depth': 12,
-        'min_child_weight': 100,
-        'booster': 'gbtree',
-    }
 
-    # dtrain = xgb.DMatrix(train[train.columns[1:-1]].values,
-    #                      label=train.loss)
-    # res = xgb.cv(xgb_params, dtrain, num_boost_round=2500, nfold=10,
-    #              seed=1, stratified=False,
-    #              early_stopping_rounds=25,
-    #              obj=logregobj,
-    #              feval=xg_eval_mae, maximize=False,
-    #              verbose_eval=50, show_stdv=True)
 
-    # best_nrounds = res.shape[0] - 1
-    # cv_mean = res.iloc[-1, 0]
-    # cv_std = res.iloc[-1, 1]
+    columns = train.columns.tolist()
+    columns.remove('activity_id')
+    columns.remove('outcome')
+    data = pd.concat([train,test])
+    for c in columns:
+        data[c] = LabelEncoder().fit_transform(data[c].values)
 
-    # print('Ensemble-CV: {0}+{1}'.format(cv_mean, cv_std))
-    # print('Best Round: {0}'.format(best_nrounds))
-    # del dtrain
-    # del res
-    # gc.collect()
-    # exit(0)
+    train = data[:train.shape[0]]
+    test = data[train.shape[0]:]
+    
+    data = pd.concat([train,test])
+    columns = train.columns.tolist()
+    columns.remove('activity_id')
+    columns.remove('outcome')
+    flatten_layers = []
+    inputs = []
+    for c in columns:
+        
+        inputs_c = Input(shape=(1,), dtype='int32')
 
-    best_nrounds = 20000  # 640 score from above commented out code (Faron)
-    allpredictions = pd.DataFrame()
-    kfolds = 1  # 10 folds is better!
-    if kfolds > 1:
-        kf = KFold(train.shape[0], n_folds=kfolds)
-        for i, (train_index, test_index) in enumerate(kf):
-            dtest = xgb.DMatrix(test[test.columns[1:]])
-            print('Fold {0}'.format(i + 1))
-            X_train, X_val = train.iloc[train_index], train.iloc[test_index]
-            dtrain = \
-                xgb.DMatrix(X_train[X_train.columns[1:-1]],
-                            label=X_train.loss)
-            dvalid = \
-                xgb.DMatrix(X_val[X_val.columns[1:-1]],
-                            label=X_val.loss)
-            watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+        num_c = len(np.unique(data[c].values))
 
-            gbdt = xgb.train(xgb_params, dtrain, best_nrounds, watchlist,
-                             obj=logregobj,
-                             feval=xg_eval_mae, maximize=False,
-                             verbose_eval=50,
-                             early_stopping_rounds=25)
-            del dtrain
-            del dvalid
-            gc.collect()
-            allpredictions['p'+str(i)] = \
-                gbdt.predict(dtest, ntree_limit=gbdt.best_ntree_limit)
-            del dtest
-            del gbdt
-            gc.collect()
-    else:
-        dtest = xgb.DMatrix(test[test.columns[1:]].values)
-        dtrain = \
-            xgb.DMatrix(train[train.columns[1:-1]].values,
-                        label=train.loss)
-        watchlist = [(dtrain, 'train'), (dtrain, 'eval')]
-        gbdt = xgb.train(xgb_params, dtrain, best_nrounds, watchlist,
-                         obj=logregobj,
-                         feval=xg_eval_mae, maximize=False,
-                         verbose_eval=50, early_stopping_rounds=25)
-        allpredictions['p1'] = \
-            gbdt.predict(dtest, ntree_limit=gbdt.best_ntree_limit)
-        del dtrain
-        del dtest
-        del gbdt
-        gc.collect()
+        embed_c = Embedding(
+                        num_c,
+                        dim,
+                        dropout=0.2,
+                        input_length=1
+                        )(inputs_c)
+        flatten_c= Flatten()(embed_c)
 
-    print(allpredictions.head())
+        inputs.append(inputs_c)
+        flatten_layers.append(flatten_c)
 
-    submission = pd.read_csv(directory + 'sample_submission.csv')
-    if(kfolds > 1):
-        submission.iloc[:, 1] = \
-            np.exp(allpredictions.mean(axis=1).values)-shift
-        submission.to_csv('xgbmeansubmission.csv', index=None)
-        submission.iloc[:, 1] = \
-            np.exp(allpredictions.median(axis=1).values)-shift
-        submission.to_csv('xgbmediansubmission.csv', index=None)
-    else:
-        submission.iloc[:, 1] = np.exp(allpredictions.p1.values)-shift
-        submission.to_csv('xgbsubmission.csv', index=None)
-    print('Finished')
+    flatten = merge(flatten_layers,mode='concat')
+    
+    fc1 = Dense(hidden,activation='relu')(flatten)
+    dp1 = Dropout(0.5)(fc1)
+
+    outputs = Dense(1,activation='sigmoid')(dp1)
+
+    model = Model(input=inputs, output=outputs)
+    model.compile(
+                optimizer='adam',
+                loss='binary_crossentropy',
+              )
+
+    del data
+
+    X = train[columns].values
+    X_t = test[columns].values
+    y = train["outcome"].values
+    people_id = train["people_id"].values
+    activity_id = test['activity_id']
+    del train
+    del test
+
+    skf = StratifiedKFold(y, n_folds=4, shuffle=True, random_state=seed)
+    for ind_tr, ind_te in skf:
+        X_train = X[ind_tr]
+        X_test = X[ind_te]
+
+        y_train = y[ind_tr]
+        y_test = y[ind_te]
+        break
+    
+    X_train = [X_train[:,i] for i in range(X.shape[1])]
+    X_test = [X_test[:,i] for i in range(X.shape[1])]
+    
+    del X
+
+    model_name = 'mlp_residual_%s_%s.hdf5'%(dim,hidden)
+    model_checkpoint = ModelCheckpoint(model_name, monitor='val_loss', save_best_only=True)
+    auc_callback = AucCallback(validation_data=(X_test,y_test), patience=5,is_regression=True,best_model_name=path+'best_keras.mdl',feval='roc_auc_score')
+    
+    nb_epoch = 10
+
+    batch_size = 1024*8
+    load_model = False
+    
+    if load_model:
+        print('Load Model')
+        model.load_weights(path+model_name)
+        # model.load_weights(path+'best_keras.mdl')
+
+    model.fit(
+        X_train, 
+        y_train,
+        batch_size=batch_size, 
+        nb_epoch=nb_epoch, 
+        verbose=1, 
+        shuffle=True,
+        validation_data=[X_test,y_test],
+        # callbacks = [
+            # model_checkpoint,
+            # auc_callback,
+            # ],
+        )
+    
+    # model.load_weights(model_name)
+    # model.load_weights(path+'best_keras.mdl')
+    
+    y_preds = model.predict(X_test,batch_size=1024*8)
+    # print('auc',roc_auc_score(y_test,y_preds))
+    
+    # print('Make submission')
+    X_t = [X_t[:,i] for i in range(X_t.shape[1])]
+    outcome = model.predict(X_t,batch_size=1024*8)
+    submission = pd.DataFrame()
+    submission['activity_id'] = activity_id
+    submission['outcome'] = outcome
+    submission.to_csv('submission_residual_%s_%s.csv'%(dim,hidden),index=False)
+
+main()
+
+

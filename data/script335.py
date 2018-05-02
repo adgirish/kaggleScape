@@ -1,282 +1,323 @@
 
 # coding: utf-8
 
-# # High level insight on genetic variations
-# Note: As this is my first published Kernel, am open to suggestions. If this helped you, some upvotes would be very much appreciated.
-# 
-# ### Library and Settings
-# Import required library and define constants
+# **Cluster Visualization - Assets based on Structural NAN values**
 
-# In[1]:
+# In[ ]:
 
 
-import os
-import math
-import numpy as np
-import pandas as pd
-import seaborn as sns
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 import matplotlib.pyplot as plt
-from sklearn.feature_extraction.text import TfidfVectorizer
 
-
-# ### Files
-
-# In[2]:
-
-
-for f in os.listdir('../input'):
-    size_bytes = round(os.path.getsize('../input/' + f)/ 1000, 2)
-    size_name = ["KB", "MB"]
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    print(f.ljust(20) + str(s).ljust(7) + size_name[i])
-
-
-# Training data size is smaller than testing counterpart. 
-
-# ###Sneak Peak of data
-# Load training and testing data. Have a quick look at columns, its shape and values
-
-# In[3]:
-
-
-train_variants_df = pd.read_csv("../input/training_variants")
-test_variants_df = pd.read_csv("../input/test_variants")
-train_text_df = pd.read_csv("../input/training_text", sep="\|\|", engine="python", skiprows=1, names=["ID", "Text"])
-test_text_df = pd.read_csv("../input/test_text", sep="\|\|", engine="python", skiprows=1, names=["ID", "Text"])
-print("Train Variant".ljust(15), train_variants_df.shape)
-print("Train Text".ljust(15), train_text_df.shape)
-print("Test Variant".ljust(15), test_variants_df.shape)
-print("Test Text".ljust(15), test_text_df.shape)
-
-
-# We have more samples of test data than training data. As mentioned in data introduction, some of the test data is machine-generated to prevent hand labelling.
-
-# In[ ]:
-
-
-train_variants_df.head()
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-print("For training data, there are a total of", len(train_variants_df.ID.unique()), "IDs,", end='')
-print(len(train_variants_df.Gene.unique()), "unique genes,", end='')
-print(len(train_variants_df.Variation.unique()), "unique variations and ", end='')
-print(len(train_variants_df.Class.unique()),  "classes")
+#load the data. It comes in train.h5 so we need to us HDFStore
+df = pd.HDFStore("../input/train.h5", "r").get("train")
 
-
-# There are 9 classes into which data has to be classified. Lets get the frequency of each class.
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8))
-sns.countplot(x="Class", data=train_variants_df, palette="Blues_d")
-plt.ylabel('Frequency', fontsize=14)
-plt.xlabel('Class', fontsize=14)
-plt.title("Distribution of genetic mutation classes", fontsize=18)
+# I make vectors that hold the ratio of NAN values for a given id in a given column
+unique_ids = pd.unique(df.id)
+len(unique_ids)
+NaN_vectors = np.zeros(shape=(len(unique_ids), df.shape[1]))
+
+for i, i_id in enumerate(unique_ids):
+    data_sub = df[df.id ==i_id]
+    NaN_vectors[i,:] = np.sum(data_sub.isnull(),axis=0) /float(data_sub.shape[0])
+    
+NaN_vectors
+
+
+# In[ ]:
+
+
+# get all the NaN vectors in which every collumn for that ID is NaN. What we are looking for 
+#is collumns in which the features fundamentally do not exist. 
+bin_NaN = 1*(NaN_vectors==1)
+print("Still has the shape of {} by {}".format(bin_NaN.shape[0],bin_NaN.shape[1]))
+
+
+# In[ ]:
+
+
+# we now have a vector of things that are either 1 where nothing exists in teh column or zero something
+#exists Now we take a covariance over these bins to see which ones move togehter. we are looking only based on columns
+bin_cov=np.corrcoef(bin_NaN.T)
+bin_cov.shape[1]
+
+
+# In[ ]:
+
+
+# plot bin_cov
+plt.matshow(bin_cov)
+
+#if you think abou what this shows it is show the probability that when an entire column is missing what
+# is the probability that another column will be completely missing. 
+
+
+# In[ ]:
+
+
+# In this graph i make the matrix sparse by considering only things that have perfect correlation. This
+# gives us insight into the relationship of the pairs.
+plt.matshow(bin_cov == 1) 
+
+
+# In[ ]:
+
+
+# What we are doing here is looking at all the column pairs that when they are missing  they are always
+# missing together. ie they have a corralation of 1. We also get the count. it stands to reason that
+# if this happens in only one or two id's out of 1400 then perhaps it is a statistical anomoly or could be 
+# reflective of a non structural issue. This is actually very enlightening and we see there are 60
+# some odd pairs that satisfy this criteria. More importantly is that it happens for lots of tickers.
+# Maybe we have soemthing here.
+bin_NaN
+edges = []
+count =np.dot(bin_NaN.T,bin_NaN)
+for i in range(bin_cov.shape[0]):
+    for j in range(bin_cov.shape[0]-i):
+        if i!=i+j and bin_cov[i,i+j]==1:
+            edges.append([i,i+j,count[i,i+j]])
+print(edges)
+
+
+# In[ ]:
+
+
+#lets see how many unique counts there are. it looks like a few of these counts happen multiple times.
+# this is interesting and could imply some structural issue.
+ucount = [i[2] for i in edges]
+print(np.unique(ucount))
+
+
+# In[ ]:
+
+
+print('rows: {}'.format(bin_NaN.shape[0]))
+print('cols: {}'.format(len(edges)))
+
+# the idea here is that we create a feature vector. We look at all the ids which have all their data
+# missing in a certain collumn. above we found that if all the data is missing in a certain collumn it
+# would be missing in another collumn as well. so we look at all these pairs (shown as edges) and we 
+# then create a matrix of id x edges. We then put a 0 or a 1 in the collumn to indicate that the pair of 
+# data is missing or not. This serves as a feature. I will then go on to cluster over these features. 
+
+nan_features = np.zeros((bin_NaN.shape[0],len(edges)))
+for i in range(bin_NaN.shape[0]):
+    for j, edge in enumerate(edges):
+        nan_features[i,j] = 1*(bin_NaN[i,edge[0]] & bin_NaN[i,edge[1]])
+
+print('this is just a check that indexing is correct: {}'.format(np.sum(nan_features,axis=1).shape[0]))
+
+
+# In[ ]:
+
+
+# we take a look at the silouette score as we increase the number of clusters to understand the optimal
+#number of clusters. We see here that it continues to increase which we would expect. I chose to cut it
+# off around 12
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+#Range for k
+kmin = 2
+kmax = 25
+sil_scores = []
+
+#Compute silouhette scoeres
+for k in range(kmin,kmax):
+    km = KMeans(n_clusters=k, n_init=20).fit(nan_features)
+    sil_scores.append(silhouette_score(nan_features, km.labels_))
+
+#Plot
+plt.plot(range(kmin,kmax), sil_scores)
+plt.title('KMeans Results')
+plt.xlabel('Number of Clusters')
+plt.ylabel('Silhouette Score')
 plt.show()
 
 
 # In[ ]:
 
 
-gene_group = train_variants_df.groupby("Gene")['Gene'].count()
-minimal_occ_genes = gene_group.sort_values(ascending=True)[:10]
-print("Genes with maximal occurences\n", gene_group.sort_values(ascending=False)[:10])
-print("\nGenes with minimal occurences\n", minimal_occ_genes)
+# DBSCAN The only thing that is important from here is the labels. 
+# the way that DB scan works is that you give it eps and min_samples and it
+# finds core groups. eps is the distance cut off and min is how many elements
+# at minimum you need to define a cluster
 
+from sklearn.cluster import DBSCAN
+from sklearn import metrics
+from sklearn.preprocessing import StandardScaler
 
-# Lets have a look at some genes that has highest number of occurrences in each class. 
+X = nan_features
 
-# In[ ]:
+db = DBSCAN(eps=0.3, min_samples=10).fit(X)
+core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+core_samples_mask[db.core_sample_indices_] = True
+labels = db.labels_
 
+# Number of clusters in labels, ignoring noise if present.
+n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
 
-fig, axs = plt.subplots(ncols=3, nrows=3, figsize=(15,15))
-
-for i in range(3):
-    for j in range(3):
-        gene_count_grp = train_variants_df[train_variants_df["Class"]==((i*3+j)+1)].groupby('Gene')["ID"].count().reset_index()
-        sorted_gene_group = gene_count_grp.sort_values('ID', ascending=False)
-        sorted_gene_group_top_7 = sorted_gene_group[:7]
-        sns.barplot(x="Gene", y="ID", data=sorted_gene_group_top_7, ax=axs[i][j])
-
-
-# Some points we can conclude from these graphs:
-#  1. BRCA1 is highly dominating Class 5 
-#  2. SF3B1 is highly dominating Class 9
-#  3. BRCA1 and BRCA2 are dominating Class 6
-
-# ## Lets get some insight on text data
-
-# In[ ]:
-
-
-train_text_df.head()
-
-
-# In[4]:
-
-
-train_text_df.loc[:, 'Text_count']  = train_text_df["Text"].apply(lambda x: len(x.split()))
-train_text_df.head()
-
-
-# Let us combine both dataframes for further use
-
-# In[5]:
-
-
-train_full = train_variants_df.merge(train_text_df, how="inner", left_on="ID", right_on="ID")
-train_full[train_full["Class"]==1].head()
-
-
-# There are multiple rows with similar texts let us check how many of them are unique and whether all similar texts belongs to same class
-
-# In[ ]:
-
-
-count_grp = train_full.groupby('Class')["Text_count"]
-count_grp.describe()
-
-
-# We can see there are some entries with text count of 1. Lets have a look at those entries
-
-# In[ ]:
-
-
-train_full[train_full["Text_count"]==1.0]
+print('Estimated number of clusters: %d' % n_clusters_)
 
 
 # In[ ]:
 
 
-train_full[train_full["Text_count"]<500.0]
+#COLOR MAPPING - we run a kmeans cluster but we need to decide how many
+#clusters we want to use. This is another way for us to cluster. Here we use 
+k=12
+km = KMeans(n_clusters=k, n_init=20).fit(nan_features)
+colors=km.labels_
 
-
-# As we can see there are some entries without any text data. 
-# Now let us get distribution of text count for each class
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8))
-gene_count_grp = train_full.groupby('Gene')["Text_count"].sum().reset_index()
-sns.violinplot(x="Class", y="Text_count", data=train_full, inner=None)
-sns.swarmplot(x="Class", y="Text_count", data=train_full, color="w", alpha=.5);
-plt.ylabel('Text Count', fontsize=14)
-plt.xlabel('Class', fontsize=14)
-plt.title("Text length distribution", fontsize=18)
-plt.show()
+#now we try to visualize the data of these features.
+# WOW LOOK AT THESE RESULTS. THAT IS BEAUTIFUL!!
 
+from sklearn.manifold import TSNE
+from time import time
 
-# Distribution looks quite interesting and now I am in love with violin plots.
-# All classes have most counts in between 0 to 20000. Just as expected. 
-# There should be some 
+n_iter = 5000
 
-# In[ ]:
+for i in [2, 5, 30, 50, 100]:
+    t0 = time()
+    model = TSNE(n_components=2, n_iter = n_iter,random_state=0, perplexity =i)
+    np.set_printoptions(suppress=True)
+    Y = model.fit_transform(nan_features)
+    t1 =time()
 
-
-fig, axs = plt.subplots(ncols=3, nrows=3, figsize=(15,15))
-
-for i in range(3):
-    for j in range(3):
-        gene_count_grp = train_full[train_full["Class"]==((i*3+j)+1)].groupby('Gene')["Text_count"].mean().reset_index()
-        sorted_gene_group = gene_count_grp.sort_values('Text_count', ascending=False)
-        sorted_gene_group_top_7 = sorted_gene_group[:7]
-        sns.barplot(x="Gene", y="Text_count", data=sorted_gene_group_top_7, ax=axs[i][j])
-
-
-# Frequently occurring terms for each class
-
-# We need to know more about text. Tf-idf is known as one good technique to use for text transformation and get good features out of text for training our machine learning model. [Here][1] you can find more details about tf-idf and some useful code snippets. 
-# 
-# 
-#   [1]: https://buhrmann.github.io/tfidf-analysis.html
-
-# In[ ]:
-
-
-def top_tfidf_feats(row, features, top_n=10):
-    topn_ids = np.argsort(row)[::-1][:top_n]
-    top_feats = [(features[i], row[i]) for i in topn_ids]
-    df = pd.DataFrame(top_feats)
-    df.columns = ['feature', 'tfidf']
-    return df
-
-def top_feats_in_doc(Xtr, features, row_id, top_n=10):
-    row = np.squeeze(Xtr[row_id].toarray())
-    return top_tfidf_feats(row, features, top_n)
-
-def top_mean_feats(Xtr, features, grp_ids=None, min_tfidf=0.1, top_n=10):
-    if grp_ids:
-        D = Xtr[grp_ids].toarray()
-    else:
-        D = Xtr.toarray()
-
-    D[D < min_tfidf] = 0
-    tfidf_means = np.mean(D, axis=0)
-    return top_tfidf_feats(tfidf_means, features, top_n)
-
-def top_feats_by_class(Xtr, y, features, min_tfidf=0.1, top_n=10):
-    dfs = []
-    labels = np.unique(y)
-    for label in labels:
-        ids = np.where(y==label)
-        feats_df = top_mean_feats(Xtr, features, ids, min_tfidf=min_tfidf, top_n=top_n)
-        feats_df.label = label
-        dfs.append(feats_df)
-    return dfs
-
-def plot_tfidf_classfeats_h(dfs):
-    fig = plt.figure(figsize=(12, 100), facecolor="w")
-    x = np.arange(len(dfs[0]))
-    for i, df in enumerate(dfs):
-        #z = int(str(int(i/3)+1) + str((i%3)+1))
-        ax = fig.add_subplot(9, 1, i+1)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.set_frame_on(False)
-        ax.get_xaxis().tick_bottom()
-        ax.get_yaxis().tick_left()
-        ax.set_xlabel("Mean Tf-Idf Score", labelpad=16, fontsize=16)
-        ax.set_ylabel("Gene", labelpad=16, fontsize=16)
-        ax.set_title("Class = " + str(df.label), fontsize=18)
-        ax.ticklabel_format(axis='x', style='sci', scilimits=(-2,2))
-        ax.barh(x, df.tfidf, align='center')
-        ax.set_yticks(x)
-        ax.set_ylim([-1, x[-1]+1])
-        yticks = ax.set_yticklabels(df.feature)
-        plt.subplots_adjust(bottom=0.09, right=0.97, left=0.15, top=0.95, wspace=0.52)
+    print( "t-SNE: %.2g sec" % (t1 -t0))
+    plt.scatter(Y[:, 0], Y[:, 1], c= colors)
+    plt.title('t-SNE with perplexity = {}'.format(i))
     plt.show()
 
 
-# Lets plot out some top features we got using Tf-Idf for each class
+# In[ ]:
+
+
+# Now i do the same in 3d to try to better understand these clusters
+from mpl_toolkits.mplot3d import Axes3D
+
+
+n_iter = 5000
+
+for i in [2, 5, 30, 50, 100]:
+    fig = plt.figure(1, figsize=(8, 6))
+    ax = Axes3D(fig, elev=-150, azim=110)
+    t0 = time()
+    model = TSNE(n_components=3, random_state=0, perplexity=i, n_iter=n_iter)
+    np.set_printoptions(suppress=True)
+
+    Y = model.fit_transform(nan_features)
+    t1 =time()
+
+    print( "t-SNE: %.2g sec" % (t1 -t0))
+
+    ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2],c=db.labels_,
+               cmap=plt.cm.Paired)
+    ax.set_title("3D T-SNE - Perplexity = {}".format(i))
+    ax.set_xlabel("1st dim")
+    ax.w_xaxis.set_ticklabels([])
+    ax.set_ylabel("2nd dim")
+    ax.w_yaxis.set_ticklabels([])
+    ax.set_zlabel("3rd dim")
+    ax.w_zaxis.set_ticklabels([])
+    plt.show()
+
 
 # In[ ]:
 
 
-tfidf = TfidfVectorizer(
-	min_df=5, max_features=16000, strip_accents='unicode',lowercase =True,
-	analyzer='word', token_pattern=r'\w+', use_idf=True, 
-	smooth_idf=True, sublinear_tf=True, stop_words = 'english').fit(train_full["Text"])
+# I will use PCA now to plot
+from sklearn import decomposition
 
-Xtr = tfidf.fit_transform(train_full["Text"])
-y = train_full["Class"]
-features = tfidf.get_feature_names()
-top_dfs = top_feats_by_class(Xtr, y, features)
+# I chose this number pretty much at random, you can change it. using 22 features to describe
+# something with 110 x variables still seems high.
+n_eigens = 22
+# Creating PCA object
+pca = decomposition.PCA(n_components=n_eigens, svd_solver ='randomized', whiten=True)
+X_pca =pca.fit_transform(nan_features)
+X_pca
+
+
+# **2D -PCA Plot**
+
+# In[ ]:
+
+
+# This is a 2D pca plot... mehhhh
+plt.scatter(X_pca[:,0],X_pca[:,1],c=colors)
 
 
 # In[ ]:
 
 
-plot_tfidf_classfeats_h(top_dfs)
+# To getter a better understanding of interaction of the dimensions
+# plot the first three PCA dimensions
+from mpl_toolkits.mplot3d import Axes3D
+fig = plt.figure(1, figsize=(8, 6))
+ax = Axes3D(fig, elev=-150, azim=110)
+X_reduced = decomposition.PCA(n_components=3).fit_transform(nan_features)
+ax.scatter(X_reduced[:, 0], X_reduced[:, 1], X_reduced[:, 2],c=colors,
+           cmap=plt.cm.Paired)
+ax.set_title("First three PCA directions")
+ax.set_xlabel("1st eigenvector")
+ax.w_xaxis.set_ticklabels([])
+ax.set_ylabel("2nd eigenvector")
+ax.w_yaxis.set_ticklabels([])
+ax.set_zlabel("3rd eigenvector")
+ax.w_zaxis.set_ticklabels([])
+
+plt.show()
 
 
-# 
-# To be continued...
+# In[ ]:
+
+
+# here we plot a graph that looks at how many PCA components explain the variation
+n_eigens=10
+X_reduced = decomposition.PCA(n_components=n_eigens).fit(nan_features)
+with plt.style.context('fivethirtyeight'):
+    plt.figure(figsize=(8, 5));
+    plt.title('Explained Variance Ratio over Component');
+    plt.plot(X_reduced.explained_variance_ratio_);
+
+
+# In[ ]:
+
+
+with plt.style.context('fivethirtyeight'):
+    plt.figure(figsize=(8, 5));
+    plt.title('Cumulative Explained Variance over EigenFace');
+    plt.plot(X_reduced.explained_variance_ratio_.cumsum());
+
+
+# In[ ]:
+
+
+print('PCA captures {:.2f} percent of the variance in the dataset'.format(X_reduced.explained_variance_ratio_.sum() * 100))
+print('PCA components have dimensions {} by {}'.format(*X_reduced.components_.shape))
+

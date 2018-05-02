@@ -1,311 +1,367 @@
 
 # coding: utf-8
 
+# # Intro
+# This kernel is **not for beginners** but for those who are already familiar with Titanic dataset. Maybe some day I'll write a kernel for beginners, but not now.
+# 
+# Now I'd like to point something out. Keep in mind that I'm talking just from *my experience on Titanic* so the following may not be true for you, so be cautious.
+# 
+#  - "Has_Cabin" feature does not help. I engineered a feature with 0 if a passenger has no Cabin (NaN) and 1 if he got one may make sense as cabin data of 1st class passengers was found (IRL) on the body of steward Herbert Cave, so I tried it. But that doesn't seem to help.
+#  - "Deck" feature does not help. Based on letters found in Cabin column we may engineer a Deck feature, indicating which deck (A - G, T or U for Unknown) the passenger was on. But it's rather noisy, it doesn't help the score.
+#  - "Embarked" does not help, I have no idea why people even include it in their kernels. It has no impact on survival chances.
+#  - *Edit*: actually certain algorithms may perform better if you turn categorical features into ordinal ones (like turning Pclass to Pclass_1, Pclass_2 and Pclass_3 features with possible values {0, 1}). Pros are higher accuracy in certain cases, cons are - you lose relation between Pclasses (meaning the algorithm will think those are independent, unordered classes, when in fact they are ordered - Pclass=1 is "better" than Pclass=3) and you add dimensions which is not always good because of the curse of dimensionality. In my specific case turning Pclass into 3 features did not help, but as I learned it's a good idea to try both approaches and see what's better in your case.
+#  - Making Bins in Fare and Age helps a little bit.
+#  - Standard Scaler is our friend. It helps to boost the score. Scaling features is helpful for many ML algorithms like KNN for example, it really boosts their score. This kind of scaler may assume normal distribution of the features and sometimes MinMaxScaler may be better, but from what I've tried, the standard one leads to better results in this case.
+#  - I don't know about feature scaling in R, maybe R methods scale them by default? If not, and if you're using R, try scaling, it may help.
+#  - There is not much sence in scaling features that are already 0 or 1 like Sex, but for now I scale them all. You can try to pick features for scaling. If you don't use bins (if you use Age or Fare "as is"), scaling may help to boost your score a bit, try it.
+# 
+# # About Kaggle scoring
+# I've spent a lot of time doggedly fighting to improve my score by even the tiny bit and got from 0.72 to 0.82-0.83 (as of now), but that was out of interest - just to see if it's possible and if I can do it. To tell you the truth, I think that all the models within 0.80-0.85 public score interval are really close and, almost equal.
+# MLA builds and "returns" you a specific mathematical function, the "final hypothesis" g(x). I think that models within 0.80-0.85 interval return very similar functions, it just so happens that some of them yield a public score of 0.81 and others 0.82, this does really does not mean that the 0.82 one is better. On the private dataset, the first model of those two may prove to be better actually.
+# So I think models with public scores of 0.80-0.85 (maybe even starting from 0.79) are more or less the same.
+# 
+# Don't try to chase the Public score too eagerly. As Kaggle states:
+# 
+# > Your final score may not be based on the same exact subset of data as the public leaderboard, but rather a different private data subset of your full submission — your public score is only a rough indication of what your final score is. You should thus choose submissions that will most likely be best overall, and not necessarily on the public subset.
+# 
+# Look at competitions where you've got 20% of data as public, and the rest is private. You see the guy on, say, the first place? Well, come the end of competition and private scoring starts, he may find himself in 12th position, while the 12th guy may become the best :)
+# 
+# Moreover, if you submit your results too many times, you subconsciously "bleed" public test set data into your models, and your models adapt to the public test set a little more. They may tend to overfit to the public test set, meaning your score on a private test set may drop significantly. In this kernel I'm trying to get the highest public score that I can, but again, you can say that in a way I'm overfitting my data to the test set.
+# 
+# So generally your aim should be constructing the most robust and generalizable model with a solid public score, but not necessarily the best score. On private dataset your model may actually turn out to be the best, keep that in mind.
+# 
+# Now let's roll.
+
+# ## Loading a bunch of stuff
+# Imports are from my Jupyter notebooks on my PC, in those notebooks I import 'em all so that later I don't have to bother with importing things.
+
 # In[ ]:
 
 
-import pandas as pd
+# NumPy
 import numpy as np
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
+
+# Dataframe operations
+import pandas as pd
+
+# Data visualization
 import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Scalers
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.utils import shuffle
+
+# Models
+from sklearn.linear_model import LogisticRegression #logistic regression
+from sklearn.linear_model import Perceptron
+from sklearn import svm #support vector Machine
+from sklearn.ensemble import RandomForestClassifier #Random Forest
+from sklearn.neighbors import KNeighborsClassifier #KNN
+from sklearn.naive_bayes import GaussianNB #Naive bayes
+from sklearn.tree import DecisionTreeClassifier #Decision Tree
+from sklearn.model_selection import train_test_split #training and testing data split
+from sklearn import metrics #accuracy measure
+from sklearn.metrics import confusion_matrix #for confusion matrix
+from sklearn.ensemble import VotingClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.neural_network import MLPClassifier
+
+# Cross-validation
+from sklearn.model_selection import KFold #for K-fold cross validation
+from sklearn.model_selection import cross_val_score #score evaluation
+from sklearn.model_selection import cross_val_predict #prediction
+from sklearn.model_selection import cross_validate
+
+# GridSearchCV
+from sklearn.model_selection import GridSearchCV
+
+#Common Model Algorithms
+from sklearn import svm, tree, linear_model, neighbors, naive_bayes, ensemble, discriminant_analysis, gaussian_process
+
+#Common Model Helpers
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+from sklearn import feature_selection
+from sklearn import model_selection
+from sklearn import metrics
+
+#Visualization
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.pylab as pylab
+import seaborn as sns
+from pandas.tools.plotting import scatter_matrix
 
 
-# # Read Data
-
-# In[ ]:
-
-
-df_all = pd.concat((pd.read_csv('../input/train.csv'), pd.read_csv('../input/train.csv')))
-
-
-# In[ ]:
-
-
-df_all['pickup_datetime'] = df_all['pickup_datetime'].apply(pd.Timestamp)
-df_all['dropoff_datetime'] = df_all['dropoff_datetime'].apply(pd.Timestamp)
-
-
-# In[ ]:
-
-
-df_all['trip_duration_log'] = df_all['trip_duration'].apply(np.log)
-
-
-# # Feature Extraction
-
-# ## PCA
-# lets use PCA just to rotate NYC to align with axes (lets help those trees...)
-
-# In[ ]:
-
-
-from sklearn.decomposition import PCA
-
-
-# In[ ]:
-
-
-X = np.vstack((df_all[['pickup_latitude', 'pickup_longitude']], 
-               df_all[['dropoff_latitude', 'dropoff_longitude']]))
-
-# Remove abnormal locations
-min_lat, min_lng = X.mean(axis=0) - X.std(axis=0)
-max_lat, max_lng = X.mean(axis=0) + X.std(axis=0)
-X = X[(X[:,0] > min_lat) & (X[:,0] < max_lat) & (X[:,1] > min_lng) & (X[:,1] < max_lng)]
-
-
-# In[ ]:
-
-
-pca = PCA().fit(X)
-X_pca = pca.transform(X)
-
+# ## Loading datasets
 
 # In[ ]:
 
 
-_, (ax1, ax2) = plt.subplots(2, 1, figsize=(16,9))
-
-sample_ind = np.random.permutation(len(X))[:10000]
-
-ax1.scatter(X[sample_ind,0], X[sample_ind,1], s=1, lw=0)
-ax1.set_title('Original')
-
-ax2.scatter(X_pca[sample_ind,0], X_pca[sample_ind,1], s=1, lw=0)
-ax2.set_title('Rotated')
+train_df = pd.read_csv("../input/train.csv")
+test_df = pd.read_csv("../input/test.csv")
+data_df = train_df.append(test_df) # The entire data: train + test.
 
 
-# In[ ]:
-
-
-df_all['pickup_pca0'] = pca.transform(df_all[['pickup_latitude', 'pickup_longitude']])[:,0]
-df_all['pickup_pca1'] = pca.transform(df_all[['pickup_latitude', 'pickup_longitude']])[:,1]
-
-df_all['dropoff_pca0'] = pca.transform(df_all[['dropoff_latitude', 'dropoff_longitude']])[:,0]
-df_all['dropoff_pca1'] = pca.transform(df_all[['dropoff_latitude', 'dropoff_longitude']])[:,1]
-
-
-# ## Distances
+# # Engineering features
+# 
+#  - **Imputing Age**
+#  
+# I make a Title feature for imputing ages more precisely. Median is used because ages distribution is not always normal, so it's generally preferred over mean. But I don't think this matters a lot, you can use mean too.
+# I don't use Title feature for fitting models so it's discarded.
 
 # In[ ]:
 
 
-df_all['pca_manhattan'] =     (df_all['dropoff_pca0'] - df_all['pickup_pca0']).abs() +     (df_all['dropoff_pca1'] - df_all['pickup_pca1']).abs()
+data_df['Title'] = data_df['Name']
+# Cleaning name and extracting Title
+for name_string in data_df['Name']:
+    data_df['Title'] = data_df['Name'].str.extract('([A-Za-z]+)\.', expand=True)
 
-
-# In[ ]:
-
-
-def arrays_haversine(lats1, lngs1, lats2, lngs2, R=6371):
-    lats1_rads = np.radians(lats1)
-    lats2_rads = np.radians(lats2)
-    lats_delta_rads = np.radians(lats2 - lats1)
-    lngs_delta_rads = np.radians(lngs2 - lngs1)
+# Replacing rare titles with more common ones
+mapping = {'Mlle': 'Miss', 'Major': 'Mr', 'Col': 'Mr', 'Sir': 'Mr', 'Don': 'Mr', 'Mme': 'Miss',
+          'Jonkheer': 'Mr', 'Lady': 'Mrs', 'Capt': 'Mr', 'Countess': 'Mrs', 'Ms': 'Miss', 'Dona': 'Mrs'}
+data_df.replace({'Title': mapping}, inplace=True)
+titles = ['Dr', 'Master', 'Miss', 'Mr', 'Mrs', 'Rev']
+for title in titles:
+    age_to_impute = data_df.groupby('Title')['Age'].median()[titles.index(title)]
+    data_df.loc[(data_df['Age'].isnull()) & (data_df['Title'] == title), 'Age'] = age_to_impute
     
-    a = np.sin(lats_delta_rads / 2)**2 + np.cos(lats1) * np.cos(lats2) * np.sin(lngs_delta_rads / 2)**2
-    c = 2 * np.arcsin(a**0.5)
+# Substituting Age values in TRAIN_DF and TEST_DF:
+train_df['Age'] = data_df['Age'][:891]
+test_df['Age'] = data_df['Age'][891:]
+
+# Dropping Title feature
+data_df.drop('Title', axis = 1, inplace = True)
+
+
+#  - **Adding Family_Size**
+#  
+# That's just Parch + SibSp.
+
+# In[ ]:
+
+
+data_df['Family_Size'] = data_df['Parch'] + data_df['SibSp']
+
+# Substituting Age values in TRAIN_DF and TEST_DF:
+train_df['Family_Size'] = data_df['Family_Size'][:891]
+test_df['Family_Size'] = data_df['Family_Size'][891:]
+
+
+#  - **Adding Family_Survival**
+#  
+#  This feature is from [S.Xu's kernel](https://www.kaggle.com/shunjiangxu/blood-is-thicker-than-water-friendship-forever), he groups families and people with the same tickets togerher and researches the info. I've cleaned the code a bit but it still does the same, I left it as is. For comments see the original kernel.
+
+# In[ ]:
+
+
+data_df['Last_Name'] = data_df['Name'].apply(lambda x: str.split(x, ",")[0])
+data_df['Fare'].fillna(data_df['Fare'].mean(), inplace=True)
+
+DEFAULT_SURVIVAL_VALUE = 0.5
+data_df['Family_Survival'] = DEFAULT_SURVIVAL_VALUE
+
+for grp, grp_df in data_df[['Survived','Name', 'Last_Name', 'Fare', 'Ticket', 'PassengerId',
+                           'SibSp', 'Parch', 'Age', 'Cabin']].groupby(['Last_Name', 'Fare']):
     
-    return R * c
+    if (len(grp_df) != 1):
+        # A Family group is found.
+        for ind, row in grp_df.iterrows():
+            smax = grp_df.drop(ind)['Survived'].max()
+            smin = grp_df.drop(ind)['Survived'].min()
+            passID = row['PassengerId']
+            if (smax == 1.0):
+                data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 1
+            elif (smin==0.0):
+                data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 0
+
+print("Number of passengers with family survival information:", 
+      data_df.loc[data_df['Family_Survival']!=0.5].shape[0])
 
 
 # In[ ]:
 
 
-df_all['haversine'] = arrays_haversine(
-    df_all['pickup_latitude'], df_all['pickup_longitude'], 
-    df_all['dropoff_latitude'], df_all['dropoff_longitude'])
+for _, grp_df in data_df.groupby('Ticket'):
+    if (len(grp_df) != 1):
+        for ind, row in grp_df.iterrows():
+            if (row['Family_Survival'] == 0) | (row['Family_Survival']== 0.5):
+                smax = grp_df.drop(ind)['Survived'].max()
+                smin = grp_df.drop(ind)['Survived'].min()
+                passID = row['PassengerId']
+                if (smax == 1.0):
+                    data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 1
+                elif (smin==0.0):
+                    data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 0
+                        
+print("Number of passenger with family/group survival information: " 
+      +str(data_df[data_df['Family_Survival']!=0.5].shape[0]))
+
+# # Family_Survival in TRAIN_DF and TEST_DF:
+train_df['Family_Survival'] = data_df['Family_Survival'][:891]
+test_df['Family_Survival'] = data_df['Family_Survival'][891:]
 
 
-# In[ ]:
-
-
-def arrays_bearing(lats1, lngs1, lats2, lngs2, R=6371):
-    lats1_rads = np.radians(lats1)
-    lats2_rads = np.radians(lats2)
-    lngs1_rads = np.radians(lngs1)
-    lngs2_rads = np.radians(lngs2)
-    lngs_delta_rads = np.radians(lngs2 - lngs1)
-    
-    y = np.sin(lngs_delta_rads) * np.cos(lats2_rads)
-    x = np.cos(lats1_rads) * np.sin(lats2_rads) - np.sin(lats1_rads) * np.cos(lats2_rads) * np.cos(lngs_delta_rads)
-    
-    return np.degrees(np.arctan2(y, x))
-
-
-# In[ ]:
-
-
-df_all['bearing'] = arrays_bearing(
-    df_all['pickup_latitude'], df_all['pickup_longitude'], 
-    df_all['dropoff_latitude'], df_all['dropoff_longitude'])
-
-
-# ## Date-Time
+#  - **Making FARE BINS**
+#  
+# It's ordinal. FareBin = 3 is indeed greater than FareBin = 1. I've seen people turning it into dummies for some reason...
 
 # In[ ]:
 
 
-df_all['pickup_time_delta'] = (df_all['pickup_datetime'] -                                df_all['pickup_datetime'].min()).dt.total_seconds()
+data_df['Fare'].fillna(data_df['Fare'].median(), inplace = True)
+
+# Making Bins
+data_df['FareBin'] = pd.qcut(data_df['Fare'], 5)
+
+label = LabelEncoder()
+data_df['FareBin_Code'] = label.fit_transform(data_df['FareBin'])
+
+train_df['FareBin_Code'] = data_df['FareBin_Code'][:891]
+test_df['FareBin_Code'] = data_df['FareBin_Code'][891:]
+
+train_df.drop(['Fare'], 1, inplace=True)
+test_df.drop(['Fare'], 1, inplace=True)
 
 
-# In[ ]:
-
-
-df_all['month'] = df_all['pickup_datetime'].dt.month
-df_all['weekofyear'] = df_all['pickup_datetime'].dt.weekofyear
-df_all['weekday'] = df_all['pickup_datetime'].dt.weekday
-df_all['hour'] = df_all['pickup_datetime'].dt.hour
-
-
-# In[ ]:
-
-
-df_all['week_delta'] =     df_all['pickup_datetime'].dt.weekday +     ((df_all['pickup_datetime'].dt.hour + (df_all['pickup_datetime'].dt.minute / 60.0)) / 24.0)
-
-
-# In[ ]:
-
-
-# Make time features cyclic
-df_all['week_delta_sin'] = np.sin((df_all['week_delta'] / 7) * np.pi)**2
-df_all['hour_sin'] = np.sin((df_all['hour'] / 24) * np.pi)**2
-
-
-# ## Traffic
+#  - **Making AGE BINS**
+#  
+# Note here that it is better to use the entire dataset for mean/median/mode calculation, otherwise we will miss out useful information. 
 
 # In[ ]:
 
 
-# Count trips over 60min
-df_counts = df_all.set_index('pickup_datetime')[['id']].sort_index()
-df_counts['count_60min'] = df_counts.isnull().rolling('60min').count()['id']
-df_all = df_all.merge(df_counts, on='id', how='left')
+data_df['AgeBin'] = pd.qcut(data_df['Age'], 4)
+
+label = LabelEncoder()
+data_df['AgeBin_Code'] = label.fit_transform(data_df['AgeBin'])
+
+train_df['AgeBin_Code'] = data_df['AgeBin_Code'][:891]
+test_df['AgeBin_Code'] = data_df['AgeBin_Code'][891:]
+
+train_df.drop(['Age'], 1, inplace=True)
+test_df.drop(['Age'], 1, inplace=True)
 
 
-# ## Clusters Info
-
-# cluster trips in order to aggregate information about them
-
-# In[ ]:
-
-
-from sklearn.cluster import MiniBatchKMeans
-
+#  - **Mapping SEX and cleaning data (dropping garbage) **
 
 # In[ ]:
 
 
-kmeans = MiniBatchKMeans(n_clusters=8**2, batch_size=32**3).fit(X)
+train_df['Sex'].replace(['male','female'],[0,1],inplace=True)
+test_df['Sex'].replace(['male','female'],[0,1],inplace=True)
+
+train_df.drop(['Name', 'PassengerId', 'SibSp', 'Parch', 'Ticket', 'Cabin',
+               'Embarked'], axis = 1, inplace = True)
+test_df.drop(['Name','PassengerId', 'SibSp', 'Parch', 'Ticket', 'Cabin',
+              'Embarked'], axis = 1, inplace = True)
 
 
-# In[ ]:
-
-
-sample_ind = np.random.permutation(len(X))[:10000]
-plt.scatter(X[sample_ind,0], X[sample_ind,1], s=1, lw=0, 
-            c=kmeans.predict(X[sample_ind]), cmap='tab20')
-
-
-# In[ ]:
-
-
-df_all['pickup_cluster'] = kmeans.predict(df_all[['pickup_latitude', 'pickup_longitude']])
-df_all['dropoff_cluster'] = kmeans.predict(df_all[['dropoff_latitude', 'dropoff_longitude']])
-
+# So now our datasets look like this:
 
 # In[ ]:
 
 
-# Count how many trips are going to each cluster over time
-group_freq = '60min'
-
-df_dropoff_counts = df_all     .set_index('pickup_datetime')     .groupby([pd.TimeGrouper(group_freq), 'dropoff_cluster'])     .agg({'id': 'count'})     .reset_index().set_index('pickup_datetime')     .groupby('dropoff_cluster').rolling('240min').mean()     .drop('dropoff_cluster', axis=1)     .reset_index().set_index('pickup_datetime').shift(freq='-120min').reset_index()     .rename(columns={'pickup_datetime': 'pickup_datetime_group', 'id': 'dropoff_cluster_count'})
-    
-df_all['pickup_datetime_group'] = df_all['pickup_datetime'].dt.round(group_freq)
-
-df_all['dropoff_cluster_count'] =     df_all[['pickup_datetime_group', 'dropoff_cluster']].merge(df_dropoff_counts, 
-        on=['pickup_datetime_group', 'dropoff_cluster'], how='left')['dropoff_cluster_count'].fillna(0)
+train_df.head(3)
 
 
-# ## Features Correlations
+# # Training
+# 
+#  - **Creating X and y**
 
 # In[ ]:
 
 
-plt.figure(figsize=(16,9))
-sns.heatmap(df_all.corr()[['trip_duration_log']].sort_values('trip_duration_log'), annot=True)
+X = train_df.drop('Survived', 1)
+y = train_df['Survived']
+X_test = test_df.copy()
 
 
-# In[ ]:
-
-
-features = [
-    'vendor_id', 'passenger_count',
-    'pickup_latitude', 'pickup_longitude', 'dropoff_latitude', 'dropoff_longitude',
-    'pickup_pca0', 'pickup_pca1', 'dropoff_pca0', 'dropoff_pca1',
-    'haversine', 'bearing', 'pca_manhattan',
-    'pickup_time_delta', 'month', 'weekofyear', 'weekday', 'hour', 
-    'week_delta', 'week_delta_sin', 'hour_sin',
-    'count_60min', 'dropoff_cluster_count'
-]
-
-
-# # Train Models
+#  - **Scaling features**
 
 # In[ ]:
 
 
-from xgboost import XGBRegressor
-from sklearn.model_selection import KFold
+std_scaler = StandardScaler()
+X = std_scaler.fit_transform(X)
+X_test = std_scaler.transform(X_test)
 
 
-# In[ ]:
-
-
-X_train = df_all[df_all['trip_duration'].notnull()][features].values
-y_train = df_all[df_all['trip_duration'].notnull()]['trip_duration_log'].values
-
-X_test = df_all[df_all['trip_duration'].isnull()][features].values
-
-
-# Do 2 splits CV and predict the average of the two for the test data
+#  - **Grid Search CV**
+#  
+#  Here I use KNN.
 
 # In[ ]:
 
 
-xgb = XGBRegressor(n_estimators=1000, max_depth=12, min_child_weight=150, 
-                   subsample=0.7, colsample_bytree=0.3)
-
-y_test = np.zeros(len(X_test))
-
-for i, (train_ind, val_ind) in enumerate(KFold(n_splits=2, shuffle=True, 
-                                               random_state=1989).split(X_train)):
-    print('----------------------')
-    print('Training model #%d' % i)
-    print('----------------------')
-    
-    xgb.fit(X_train[train_ind], y_train[train_ind],
-            eval_set=[(X_train[val_ind], y_train[val_ind])],
-            early_stopping_rounds=10, verbose=25)
-    
-    y_test += xgb.predict(X_test, ntree_limit=xgb.best_ntree_limit)
-    
-y_test /= 2
+n_neighbors = [6,7,8,9,10,11,12,14,16,18,20,22]
+algorithm = ['auto']
+weights = ['uniform', 'distance']
+leaf_size = list(range(1,50,5))
+hyperparams = {'algorithm': algorithm, 'weights': weights, 'leaf_size': leaf_size, 
+               'n_neighbors': n_neighbors}
+gd=GridSearchCV(estimator = KNeighborsClassifier(), param_grid = hyperparams, verbose=True, 
+                cv=10, scoring = "roc_auc")
+gd.fit(X, y)
+print(gd.best_score_)
+print(gd.best_estimator_)
 
 
-# # Submission
+# 
+# 
+# In case you get a different result here (result may vary), what I got was:
+# 
+# > KNeighborsClassifier(algorithm='auto', leaf_size=26, metric='minkowski', metric_params=None, n_jobs=1, n_neighbors=18, p=2, weights='uniform')
+# 
+# This gave 0.884103388207 ROC_AUC score (not accuracy score!). I had a ton of models with roc_auc around 0.93-0.94 but when tested, they mostly showed lower results. Doesn't mean they are worse though.
 
-# In[ ]:
-
-
-df_sub = pd.DataFrame({
-    'id': df_all[df_all['trip_duration'].isnull()]['id'].values,
-    'trip_duration': np.exp(y_test)}).set_index('id')
-
+#  - **Using a model found by grid searching**
 
 # In[ ]:
 
 
-df_sub.to_csv('subs/sub001.csv')
+gd.best_estimator_.fit(X, y)
+y_pred = gd.best_estimator_.predict(X_test)
 
+
+# When I submitted the result, the model I've specified above yielded [0.82775] public score.
+
+# - **Using another K**
+# 
+# This guy comes from empirical messing around with amount of neighbors in KNN. It's the same as the above one, but with another n:
+
+# In[ ]:
+
+
+knn = KNeighborsClassifier(algorithm='auto', leaf_size=26, metric='minkowski', 
+                           metric_params=None, n_jobs=1, n_neighbors=6, p=2, 
+                           weights='uniform')
+knn.fit(X, y)
+y_pred = knn.predict(X_test)
+
+
+# Being a fan of simple models there's no way I couldn't try playing with n_neighbors lowering it (the lower it is --> the less complex the model is, though too simple model is bad news too).
+
+# - **Making submission**
+
+# In[ ]:
+
+
+temp = pd.DataFrame(pd.read_csv("../input/test.csv")['PassengerId'])
+temp['Survived'] = y_pred
+temp.to_csv("../working/submission.csv", index = False)
+
+
+#  ## Result
+#  So when I submitted the score I got 0.83253.
+
+# # Conclusion
+# A couple of points here too.
+#  - Of course KNN is not the only model I used. I used SVMs, AdaBoosting, GradientBoosting, RandomForests etc. etc., many many various models, all this is omited here. But KNN shows solid results on all my latest engineered datasets so I preferred it for simplicity. Feel free to try the dataset with other estimators, on particular you can try XGBoost with tuned hyperparams. There's a chance you may achieve a higher score on the same features as described in this kernel.
+#  - If you engineer Family groups further, I think you may get better results. Check out [Finding the 'real' families on the Titanic by Eric Bruin](https://www.kaggle.com/erikbruin/finding-the-real-families-on-the-titanic) to gain insight into families.
+#  - Generally, grouping passengers is a good way to improve your score. Try searching for groups.
+#  - You can use interesting features like [SLogL in Oscar's kernel](https://www.kaggle.com/pliptor/divide-and-conquer-0-82296), give it a try.
+# 
+# However, do be prepared to invest a lot of time for only a small revenue. Oscar's 0.82296 score appears to be pretty much the limit, I think that's as far as we can get; if you get a score above that but below 0.86 or so, that means your model is more or less the same as mine or as Oscar's or as Erik's. The truly better model would yield 86-88+, but it's very tough to get there.

@@ -1,313 +1,478 @@
 
 # coding: utf-8
 
-# # Plotting with seaborn
+# # Detailed Data Cleaning/Visualization
 # 
-# <table>
-# <tr>
-# <td><img src="https://i.imgur.com/3cYy56H.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/V9jAreo.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/5a6dwtm.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/ZSsHzrA.png" width="350px"/></td>
-# </tr>
-# <tr>
-# <td style="font-weight:bold; font-size:16px;">Count (Bar) Plot</td>
-# <td style="font-weight:bold; font-size:16px;">KDE Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Joint (Hex) Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Violin Plot</td>
-# </tr>
-# <tr>
-# <td>sns.countplot()</td>
-# <td>sns.kdeplot()</td>
-# <td>sns.jointplot()</td>
-# <td>sns.violinplot()</td>
-# </tr>
-# <tr>
-# <td>Good for nominal and small ordinal categorical data.</td>
-# <td>Good for interval data.</td>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for interval data and some nominal categorical data.</td>
-# </tr>
-# </table>
+# *A blog post about the final end-to-end solution (21st place) is available [here](http://alanpryorjr.com), and the source code is [on my github](https://github.com/apryor6/Kaggle-Competition-Santander)*
 # 
-# In the previous two sections we explored data visualization using the `pandas` built-in plotting tools. In this section, we'll do the same with `seaborn`.
+# *This is a Python version of a kernel I wrote in R for this dataset found [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization). There are some slight differences between how missing values are treated in Python and R, so the two kernels are not exactly the same, but I have tried to make them as similar as possible. This was done as a convenience to anybody who wanted to use my cleaned data as a starting point but prefers Python to R. It also is educational to compare how the same task can be accomplished in either language.*
 # 
-# `seaborn` is a standalone data visualization package that provides many extremely valuable data visualizations in a single package. It is generally a much more powerful tool than `pandas`; let's see why.
+# The goal of this competition is to predict which new Santander products, if any, a customer will purchase in the following month. Here, I will do some data cleaning, adjust some features, and do some visualization to get a sense of what features might be important predictors. I won't be building a predictive model in this kernel, but I hope this gives you some insight/ideas and gets you excited to build your own model.
+# 
+# Let's get to it
+# 
+# ## First Glance
+# Limit the number of rows read in to avoid memory crashes with the kernel
 
-# In[2]:
+# In[ ]:
 
 
+import numpy as np
 import pandas as pd
-reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
 import seaborn as sns
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('pylab', 'inline')
+pylab.rcParams['figure.figsize'] = (10, 6)
 
 
-# ## Countplot
+# In[ ]:
+
+
+limit_rows   = 7000000
+df           = pd.read_csv("../input/train_ver2.csv",dtype={"sexo":str,
+                                                    "ind_nuevo":str,
+                                                    "ult_fec_cli_1t":str,
+                                                    "indext":str}, nrows=limit_rows)
+unique_ids   = pd.Series(df["ncodpers"].unique())
+limit_people = 1.2e4
+unique_id    = unique_ids.sample(n=limit_people)
+df           = df[df.ncodpers.isin(unique_id)]
+df.describe()
+
+
+# We have a number of demographics for each individual as well as the products they currently own. To make a test set, I will separate the last month from this training data, and create a feature that indicates whether or not a product was newly purchased. First convert the dates. There's `fecha_dato`, the row-identifier date, and `fecha_alta`, the date that the customer joined.
+
+# In[ ]:
+
+
+df["fecha_dato"] = pd.to_datetime(df["fecha_dato"],format="%Y-%m-%d")
+df["fecha_alta"] = pd.to_datetime(df["fecha_alta"],format="%Y-%m-%d")
+df["fecha_dato"].unique()
+
+
+# I printed the values just to double check the dates were in standard Year-Month-Day format. I expect that customers will be more likely to buy products at certain months of the year (Christmas bonuses?), so let's add a month column. I don't think the month that they joined matters, so just do it for one.
+
+# In[ ]:
+
+
+df["month"] = pd.DatetimeIndex(df["fecha_dato"]).month
+df["age"]   = pd.to_numeric(df["age"], errors="coerce")
+
+
+# Are there any columns missing values?
+
+# In[ ]:
+
+
+df.isnull().any()
+
+
+# Definitely. Onto data cleaning.
 # 
-# The `pandas` bar chart becomes a `seaborn` `countplot`.
-
-# In[3]:
-
-
-sns.countplot(reviews['points'])
-
-
-# Comparing this chart with the bar chart from two notebooks ago, we find that, unlike `pandas`, `seaborn` doesn't require us to shape the data for it via `value_counts`; the `countplot` (true to its name) aggregates the data for us!
+# ## Data Cleaning
 # 
-# `seaborn` doesn't have a direct analogue to the line or area chart. Instead, the package provides a `kdeplot`:
+# Going down the list, start with `age`
 
-# ## KDE Plot
-
-# In[4]:
+# In[ ]:
 
 
-sns.kdeplot(reviews.query('price < 200').price)
+with sns.plotting_context("notebook",font_scale=1.5):
+    sns.set_style("whitegrid")
+    sns.distplot(df["age"].dropna(),
+                 bins=80,
+                 kde=False,
+                 color="tomato")
+    sns.plt.title("Age Distribution")
+    plt.ylabel("Count")
 
 
-# KDE, short for "kernel density estimate", is a statistical technique for smoothing out data noise. It addresses an important fundamental weakness of a line chart: it will buff out outlier or "in-betweener" values which would cause a line chart to suddenly dip.
+# In addition to NA, there are people with very small and very high ages.
+# It's also interesting that the distribution is bimodal. There are a large number of university aged students, and then another peak around middle-age. Let's separate the distribution and move the outliers to the mean of the closest one.
+
+# In[ ]:
+
+
+df.loc[df.age < 18,"age"]  = df.loc[(df.age >= 18) & (df.age <= 30),"age"].mean(skipna=True)
+df.loc[df.age > 100,"age"] = df.loc[(df.age >= 30) & (df.age <= 100),"age"].mean(skipna=True)
+df["age"].fillna(df["age"].mean(),inplace=True)
+df["age"]                  = df["age"].astype(int)
+
+
+# In[ ]:
+
+
+with sns.plotting_context("notebook",font_scale=1.5):
+    sns.set_style("whitegrid")
+    sns.distplot(df["age"].dropna(),
+                 bins=80,
+                 kde=False,
+                 color="tomato")
+    sns.plt.title("Age Distribution")
+    plt.ylabel("Count")
+    plt.xlim((15,100))
+
+
+# Looks better.  
 # 
-# For example, suppose that there was just one wine priced 19.93\$, but several hundred prices 20.00\$. If we were to plot the value counts in a line chart, our line would dip very suddenly down to 1 and then back up to around 1000 again, creating a strangely "jagged" line. The line chart with the same data, shown below for the purposes of comparison, has exactly this problem!
+# Next `ind_nuevo`, which indicates whether a customer is new or not. How many missing values are there?
 
-# In[5]:
-
-
-reviews[reviews['price'] < 200]['price'].value_counts().sort_index().plot.line()
+# In[ ]:
 
 
-# A KDE plot is better than a line chart for getting the "true shape" of interval data. In fact, I recommend always using it instead of a line chart for such data.
+df["ind_nuevo"].isnull().sum()
+
+
+# Let's see if we can fill in missing values by looking how many months of history these customers have.
+
+# In[ ]:
+
+
+months_active = df.loc[df["ind_nuevo"].isnull(),:].groupby("ncodpers", sort=False).size()
+months_active.max()
+
+
+# Looks like these are all new customers, so replace accordingly.
+
+# In[ ]:
+
+
+df.loc[df["ind_nuevo"].isnull(),"ind_nuevo"] = 1
+
+
+# Now, `antiguedad`
+
+# In[ ]:
+
+
+df.antiguedad = pd.to_numeric(df.antiguedad,errors="coerce")
+np.sum(df["antiguedad"].isnull())
+
+
+# That number again. Probably the same people that we just determined were new customers. Double check.
+
+# In[ ]:
+
+
+df.loc[df["antiguedad"].isnull(),"ind_nuevo"].describe()
+
+
+# Yup, same people. Let's give them minimum seniority.
+
+# In[ ]:
+
+
+df.loc[df.antiguedad.isnull(),"antiguedad"] = df.antiguedad.min()
+df.loc[df.antiguedad <0, "antiguedad"]      = 0 # Thanks @StephenSmith for bug-find
+
+
+# Some entries don't have the date they joined the company. Just give them something in the middle of the pack
+
+# In[ ]:
+
+
+dates=df.loc[:,"fecha_alta"].sort_values().reset_index()
+median_date = int(np.median(dates.index.values))
+df.loc[df.fecha_alta.isnull(),"fecha_alta"] = dates.loc[median_date,"fecha_alta"]
+df["fecha_alta"].describe()
+
+
+# Next is `indrel`, which indicates:
 # 
-# However, it's a worse choice for ordinal categorical data. A KDE plot expects that if there are 200 wine rated 85 and 400 rated 86, then the values in between, like 85.5, should smooth out to somewhere in between (say, 300). However, if the value in between can't occur (wine ratings of 85.5 are not allowed), then the KDE plot is fitting to something that doesn't exist. In these cases, use a line chart instead.
+# > 1 (First/Primary), 99 (Primary customer during the month but not at the end of the month)
 # 
-# KDE plots can also be used in two dimensions.
+# This sounds like a promising feature. I'm not sure if primary status is something the customer chooses or the company assigns, but either way it seems intuitive that customers who are dropping down are likely to have different purchasing behaviors than others.
 
-# In[6]:
-
-
-sns.kdeplot(reviews[reviews['price'] < 200].loc[:, ['price', 'points']].dropna().sample(5000))
+# In[ ]:
 
 
-# Bivariate KDE plots like this one are a great alternative to scatter plots and hex plots. They solve the same data overplotting issue that scatter plots suffer from and hex plots address, in a different but similarly visually appealing. However, note that bivariate KDE plots are very computationally intensive. We took a sample of 5000 points in this example to keep compute time reasonable.
+pd.Series([i for i in df.indrel]).value_counts()
 
-# ## Distplot
+
+# Fill in missing with the more common status.
+
+# In[ ]:
+
+
+df.loc[df.indrel.isnull(),"indrel"] = 1
+
+
+# > tipodom	- Addres type. 1, primary address
+#  cod_prov	- Province code (customer's address)
 # 
-# The `seaborn` equivalent to a `pandas` histogram is the `distplot`. Here's an example:
+# `tipodom` doesn't seem to be useful, and the province code is not needed because the name of the province exists in `nomprov`.
 
-# In[7]:
+# In[ ]:
 
 
-sns.distplot(reviews['points'], bins=10, kde=False)
+df.drop(["tipodom","cod_prov"],axis=1,inplace=True)
 
 
-# The `distplot` is a composite plot type. In the example above we've turned off the `kde` that's included by default, and manually set the number of bins to 10 (two possible ratings per bin), to get a clearer picture.
+# Quick check back to see how we are doing on missing values
 
-# ## Scatterplot and hexplot
+# In[ ]:
 
-# To plot two variables against one another in `seaborn`, we use `jointplot`.
 
-# In[8]:
+df.isnull().any()
 
 
-sns.jointplot(x='price', y='points', data=reviews[reviews['price'] < 100])
+# Getting closer.
 
+# In[ ]:
 
-# Notice that this plot comes with some bells and whistles: a correlation coefficient is provided, along with histograms on the sides. These kinds of composite plots are a recurring theme in `seaborn`. Other than that, the `jointplot` is just like the `pandas` scatter plot.
-# 
-# As in `pandas`, we can use a hex plot (by simply passing `kind='hex'`) to deal with overplotting:
 
-# In[9]:
+np.sum(df["ind_actividad_cliente"].isnull())
 
 
-sns.jointplot(x='price', y='points', data=reviews[reviews['price'] < 100], kind='hex', 
-              gridsize=20)
+# By now you've probably noticed that this number keeps popping up. A handful of the entries are just bad, and should probably just be excluded from the model. But for now I will just clean/keep them.
 
+# In[ ]:
 
-# ## Boxplot and violin plot
-# 
-# `seaborn` provides a boxplot function. It creates a statistically useful plot that looks like this:
 
-# In[10]:
+df.loc[df.ind_actividad_cliente.isnull(),"ind_actividad_cliente"] = df["ind_actividad_cliente"].median()
 
-
-df = reviews[reviews.variety.isin(reviews.variety.value_counts().head(5).index)]
 
-sns.boxplot(
-    x='variety',
-    y='points',
-    data=df
-)
-
-
-# The center of the distributions shown above is the "box" in boxplot. The top of the box is the 75th percentile, while the bottom is the 25th percentile. In other words, half of the data is distributed within the box! The green line in the middle is the median.
-# 
-# The other part of the plot, the "whiskers", shows the extent of the points beyond the center of the distribution. Individual circles beyond *that* are outliers.
-# 
-# This boxplot shows us that although all five wines recieve broadly similar ratings, Bordeaux-style wines tend to be rated a little higher than a Chardonnay.
-# 
-# Boxplots are great for summarizing the shape of many datasets. They also don't have a limit in terms of numeracy: you can place as many boxes in the plot as you feel comfortable squeezing onto the page.
-# 
-# However, they only work for interval variables and nominal variables with a large number of possible values; they assume your data is roughly normally distributed (otherwise their design doesn't make much sense); and they don't carry any information about individual values, only treating the distribution as a whole.
-# 
-# I find the slightly more advanced `violinplot` to be more visually enticing, in most cases:
-
-# In[11]:
-
-
-sns.violinplot(
-    x='variety',
-    y='points',
-    data=reviews[reviews.variety.isin(reviews.variety.value_counts()[:5].index)]
-)
+# In[ ]:
 
 
-# A `violinplot` cleverly replaces the box in the boxplot with a kernel density estimate for the data. It shows basically the same data, but is harder to misinterpret and much prettier than the utilitarian boxplot.
+df.nomprov.unique()
 
-# ## Why seaborn?
-# 
-# Having now seen both `pandas` plotting and the `seaborn` library in action, we are now in a position to compare the two and decide when to use which for what.
-# 
-# Recall the data we've been working with in this tutorial is in:
 
-# In[12]:
+# There was an issue with the unicode character ñ in [A Coruña](https://en.wikipedia.org/wiki/A_Coruña). I'll manually fix it, but if anybody knows a better way to catch cases like this I would be very glad to hear it in the comments.
 
+# In[ ]:
 
-reviews.head()
 
+df.loc[df.nomprov=="CORU\xc3\x91A, A","nomprov"] = "CORUNA, A"
 
-# This data is in a "record-oriented" format. Each individual row is a single record (a review); in aggregate, the list of all rows is the list of all records (all reviews). This is the format of choice for the most kinds of data: data corresponding with individual, unit-identifiable "things" ("records"). The majority of the simple data that gets generated is created in this format, and data that isn't can almost always be converted over. This is known as a "tidy data" format.
-# 
-# `seaborn` is designed to work with this kind of data out-of-the-box, for all of its plot types, with minimal fuss. This makes it an incredibly convenient workbench tool.
-# 
-# `pandas` is not designed this way. In `pandas`, every plot we generate is tied very directly to the input data. In essence, `pandas` expects your data being in exactly the right *output* shape, regardless of what the input is.
-# 
-# <!--
-# In the previous section of this tutorial, we purposely evaded this issue by using supplemental datasets in a "just right" shape. Starting from the data that we already have, here's what it would take to generate a simple histogram:
-# 
-# ```python
-# import numpy as np
-# top_five_wines_scores = (
-#     reviews
-#         .loc[np.where(reviews.variety.isin(reviews.variety.value_counts().head(5).index))]
-#         .loc[:, ['variety', 'points']]
-#         .groupby('variety')
-#         .apply(lambda df: pd.Series(df.points.values))
-#         .unstack()
-#         .T
-# )
-# top_five_wines_scores.plot.hist()
-# ```
-# 
-# As we demonstrated above, to do the same thing in `seaborn`, all we need is:
-# 
-# ```python
-# sns.distplot(reviews.points, bins=10, kde=False)
-# ```
-# 
-# The difference is stark!
-# -->
-# 
-# Hence, in practice, despite its simplicity, the `pandas` plotting tools are great for the initial stages of exploratory data analytics, but `seaborn` really becomes your tool of choice once you start doing more sophisticated explorations.
-# 
-# <!--
-# My recommendations are:
-# * Bar plot: 
-#   * `pd.Series.plot.bar`
-#   * `sns.countplot`
-# * Scatter plot:
-#   * `pd.Series.plot.scatter`
-#   * `sns.jointplot`
-# * Hex plot:
-#   * `pd.Series.plot.hex`
-#   * `sns.jointplot`
-# * Line/KDE plot:
-#   * `pd.Series.plot.line` for nominal categorical variables
-#   * `sns.kdeplot` for interval variables
-# * Box/Violin plot:
-#   * `sns.boxplot`
-#   * `sns.violinplot`
-# * Histogram:
-#    * `sns.distplot`
-# -->
 
-# # Examples
-# 
-# As in previous notebooks, let's now test ourselves by answering some questions about the plots we've used in this section. Once you have your answers, click on "Output" button below to show the correct answers.
-# 
-# 1. A `seaborn` `countplot` is equivalent to what in `pandas`?
-# 2. A `seaborn` `jointplot` is equivalent to a what in `pandas`?
-# 3. Why might a `kdeplot` not work very well for ordinal categorical data?
-# 4. What does the "box" in a `boxplot` represent?
+# There's some rows missing a city that I'll relabel
 
-# In[13]:
+# In[ ]:
 
 
-from IPython.display import HTML
-HTML("""
-<ol>
-<li>A seaborn countplot is like a pandas bar plot.</li>
-<li>A seaborn jointplot is like a pandas hex plot.</li>
-<li>KDEPlots work by aggregating data into a smooth curve. This is great for interval data but doesn't always work quite as well for ordinal categorical data.</li>
-<li>The top of the box is the 75th percentile. The bottom of the box is the 25th percentile. The median, the 50th percentile, is the line in the center of the box. So 50% of the data in the distribution is located within the box!</li>
-</ol>
-""")
+df.loc[df.nomprov.isnull(),"nomprov"] = "UNKNOWN"
 
 
-# Next, try forking this kernel, and see if you can replicate the following plots. To see the answers, click the "Input" button to unhide the code and see the answers. Here's the dataset we've been working with:
+# Now for gross income, aka `renta`
 
-# In[14]:
+# In[ ]:
 
 
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
-pokemon.head()
+df.renta.isnull().sum()
 
 
-# And now, the plots:
+# Here is a feature that is missing a lot of values. Rather than just filling them in with a median, it's probably more accurate to break it down region by region. To that end, let's take a look at the median income by region, and in the spirit of the competition let's color it like the Spanish flag.
 
-# In[15]:
+# In[ ]:
 
 
-sns.countplot(pokemon['Generation'])
+#df.loc[df.renta.notnull(),:].groupby("nomprov").agg([{"Sum":sum},{"Mean":mean}])
+incomes = df.loc[df.renta.notnull(),:].groupby("nomprov").agg({"renta":{"MedianIncome":median}})
+incomes.sort_values(by=("renta","MedianIncome"),inplace=True)
+incomes.reset_index(inplace=True)
+incomes.nomprov = incomes.nomprov.astype("category", categories=[i for i in df.nomprov.unique()],ordered=False)
+incomes.head()
 
 
-# In[16]:
+# In[ ]:
 
 
-sns.distplot(pokemon['HP'])
+with sns.axes_style({
+        "axes.facecolor":   "#ffc400",
+        "axes.grid"     :    False,
+        "figure.facecolor": "#c60b1e"}):
+    h = sns.factorplot(data=incomes,
+                   x="nomprov",
+                   y=("renta","MedianIncome"),
+                   order=(i for i in incomes.nomprov),
+                   size=6,
+                   aspect=1.5,
+                   scale=1.0,
+                   color="#c60b1e",
+                   linestyles="None")
+plt.xticks(rotation=90)
+plt.tick_params(labelsize=16,labelcolor="#ffc400")#
+plt.ylabel("Median Income",size=32,color="#ffc400")
+plt.xlabel("City",size=32,color="#ffc400")
+plt.title("Income Distribution by City",size=40,color="#ffc400")
+plt.ylim(0,180000)
+plt.yticks(range(0,180000,40000))
 
 
-# In[17]:
+# There's a lot of variation, so I think assigning missing incomes by providence is a good idea. First group the data by city, and reduce to get the median. This intermediate data frame is joined by the original city names to expand the aggregated median incomes, ordered so that there is a 1-to-1 mapping between the rows, and finally the missing values are replaced.
 
+# In[ ]:
 
-sns.jointplot(x='Attack', y='Defense', data=pokemon)
 
+grouped        = df.groupby("nomprov").agg({"renta":lambda x: x.median(skipna=True)}).reset_index()
+new_incomes    = pd.merge(df,grouped,how="inner",on="nomprov").loc[:, ["nomprov","renta_y"]]
+new_incomes    = new_incomes.rename(columns={"renta_y":"renta"}).sort_values("renta").sort_values("nomprov")
+df.sort_values("nomprov",inplace=True)
+df             = df.reset_index()
+new_incomes    = new_incomes.reset_index()
 
-# In[18]:
 
+# In[ ]:
 
-sns.jointplot(x='Attack', y='Defense', data=pokemon, kind='hex')
 
+df.loc[df.renta.isnull(),"renta"] = new_incomes.loc[df.renta.isnull(),"renta"].reset_index()
+df.loc[df.renta.isnull(),"renta"] = df.loc[df.renta.notnull(),"renta"].median()
+df.sort_values(by="fecha_dato",inplace=True)
 
-# Hint: for the next exercise, use the variables `HP` and `Attack`.
 
-# In[22]:
+# The next columns with missing data I'll look at are features, which are just a boolean indicator as to whether or not that product was owned that month. Starting with `ind_nomina_ult1`..
 
+# In[ ]:
 
-sns.kdeplot(pokemon['HP'], pokemon['Attack'])
 
+df.ind_nomina_ult1.isnull().sum()
 
-# In[20]:
 
+# I could try to fill in missing values for products by looking at previous months, but since it's such a small number of values for now I'll take the cheap way out.
 
-sns.boxplot(x='Legendary', y='Attack', data=pokemon)
+# In[ ]:
 
 
-# In[21]:
+df.loc[df.ind_nomina_ult1.isnull(), "ind_nomina_ult1"] = 0
+df.loc[df.ind_nom_pens_ult1.isnull(), "ind_nom_pens_ult1"] = 0
 
 
-sns.violinplot(x='Legendary', y='Attack', data=pokemon)
+# There's also a bunch of character columns that contain empty strings. In R, these are kept as empty strings instead of NA like in pandas. I originally worked through the data with missing values first in R, so if you are wondering why I skipped some NA columns here that's why. I'll take care of them now. For the most part, entries with NA will be converted to an unknown category.  
+# First I'll get only the columns with missing values. Then print the unique values to determine what I should fill in with.
 
+# In[ ]:
 
-# ## Conclusion
-# 
-# `seaborn` is one of the most important, if not *the* most important, data visualization tool in the Python data viz ecosystem. In this notebook we looked at what features and capacities `seaborn` brings to the table. There's plenty more that you can do with the library that we won't cover here or elsewhere in the tutorial; I highly recommend browsing the terrific `seaborn` [Gallery page](https://seaborn.pydata.org/examples/index.html) to see more beautiful examples of the library in action.
-# 
-# [Click here to go to the next section, "Faceting with seaborn"](https://www.kaggle.com/residentmario/faceting-with-seaborn).
+
+string_data = df.select_dtypes(include=["object"])
+missing_columns = [col for col in string_data if string_data[col].isnull().any()]
+for col in missing_columns:
+    print("Unique values for {0}:\n{1}\n".format(col,string_data[col].unique()))
+del string_data
+
+
+# Okay, based on that and the definitions of each variable, I will fill the empty strings either with the most common value or create an unknown category based on what I think makes more sense.
+
+# In[ ]:
+
+
+df.loc[df.indfall.isnull(),"indfall"] = "N"
+df.loc[df.tiprel_1mes.isnull(),"tiprel_1mes"] = "A"
+df.tiprel_1mes = df.tiprel_1mes.astype("category")
+
+# As suggested by @StephenSmith
+map_dict = { 1.0  : "1",
+            "1.0" : "1",
+            "1"   : "1",
+            "3.0" : "3",
+            "P"   : "P",
+            3.0   : "3",
+            2.0   : "2",
+            "3"   : "3",
+            "2.0" : "2",
+            "4.0" : "4",
+            "4"   : "4",
+            "2"   : "2"}
+
+df.indrel_1mes.fillna("P",inplace=True)
+df.indrel_1mes = df.indrel_1mes.apply(lambda x: map_dict.get(x,x))
+df.indrel_1mes = df.indrel_1mes.astype("category")
+
+
+unknown_cols = [col for col in missing_columns if col not in ["indfall","tiprel_1mes","indrel_1mes"]]
+for col in unknown_cols:
+    df.loc[df[col].isnull(),col] = "UNKNOWN"
+
+
+# Let's check back to see if we missed anything
+
+# In[ ]:
+
+
+df.isnull().any()
+
+
+# Convert the feature columns into integer values (you'll see why in a second), and we're done cleaning
+
+# In[ ]:
+
+
+feature_cols = df.iloc[:1,].filter(regex="ind_+.*ult.*").columns.values
+for col in feature_cols:
+    df[col] = df[col].astype(int)
+
+
+# Now for the main event. To study trends in customers adding or removing services, I will create a label for each product and month that indicates whether a customer added, dropped or maintained that service in that billing cycle. I will do this by assigning a numeric id to each unique time stamp, and then matching each entry with the one from the previous month. The difference in the indicator value for each product then gives the desired value.  
+
+# In[ ]:
+
+
+unique_months = pd.DataFrame(pd.Series(df.fecha_dato.unique()).sort_values()).reset_index(drop=True)
+unique_months["month_id"] = pd.Series(range(1,1+unique_months.size)) # start with month 1, not 0 to match what we already have
+unique_months["month_next_id"] = 1 + unique_months["month_id"]
+unique_months.rename(columns={0:"fecha_dato"},inplace=True)
+df = pd.merge(df,unique_months,on="fecha_dato")
+
+
+# Now I'll build a function that will convert differences month to month into a meaningful label. Each month, a customer can either maintain their current status with a particular product, add it, or drop it.
+
+# In[ ]:
+
+
+def status_change(x):
+    diffs = x.diff().fillna(0)# first occurrence will be considered Maintained, 
+    #which is a little lazy. A better way would be to check if 
+    #the earliest date was the same as the earliest we have in the dataset
+    #and consider those separately. Entries with earliest dates later than that have 
+    #joined and should be labeled as "Added"
+    label = ["Added" if i==1          else "Dropped" if i==-1          else "Maintained" for i in diffs]
+    return label
+
+
+# Now we can actually apply this function to each features using `groupby` followed by `transform` to broadcast the result back
+
+# In[ ]:
+
+
+# df.loc[:, feature_cols] = df..groupby("ncodpers").apply(status_change)
+df.loc[:, feature_cols] = df.loc[:, [i for i in feature_cols]+["ncodpers"]].groupby("ncodpers").transform(status_change)
+
+
+# I'm only interested in seeing what influences people adding or removing services, so I'll trim away any instances of "Maintained".
+
+# In[ ]:
+
+
+df = pd.melt(df, id_vars   = [col for col in df.columns if col not in feature_cols],
+            value_vars= [col for col in feature_cols])
+df = df.loc[df.value!="Maintained",:]
+df.shape
+
+
+# And we're done! I hope you found this useful, and if you want to checkout the rest of visualizations I made you can find them [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization).
+
+# In[ ]:
+
+
+# For thumbnail
+pylab.rcParams['figure.figsize'] = (6, 4)
+with sns.axes_style({
+        "axes.facecolor":   "#ffc400",
+        "axes.grid"     :    False,
+        "figure.facecolor": "#c60b1e"}):
+    h = sns.factorplot(data=incomes,
+                   x="nomprov",
+                   y=("renta","MedianIncome"),
+                   order=(i for i in incomes.nomprov),
+                   size=6,
+                   aspect=1.5,
+                   scale=0.75,
+                   color="#c60b1e",
+                   linestyles="None")
+plt.xticks(rotation=90)
+plt.tick_params(labelsize=12,labelcolor="#ffc400")#
+plt.ylabel("Median Income",size=32,color="#ffc400")
+plt.xlabel("City",size=32,color="#ffc400")
+plt.title("Income Distribution by City",size=40,color="#ffc400")
+plt.ylim(0,180000)
+plt.yticks(range(0,180000,40000))
+

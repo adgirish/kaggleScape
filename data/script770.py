@@ -1,325 +1,200 @@
 
 # coding: utf-8
 
-# # Donated to Cancer Treatment Too
+# It seems the current [high scoring script][1] is written in R using H2O. So let us do one in python using XGBoost. 
+# 
+# Thanks to [this script][2] for feature engineering ideas. 
+# 
+# We shall start with importing the necessary modules
+# 
+# 
+#   [1]: https://www.kaggle.com/gospursgo/two-sigma-connect-rental-listing-inquiries/h2o-starter-pack/run/835757
+#   [2]: https://www.kaggle.com/aikinogard/two-sigma-connect-rental-listing-inquiries/random-forest-starter-with-numerical-features
 
-# * Note: As this is my first public Kernel and I'm still in learning NLP, please feel free to comment if you have any questions.
-# * This Kernel is modified from [the1owl: Redefining Treatment](https://www.kaggle.com/the1owl/redefining-treatment-0-57456), really thanks!
-# * I will highlight the main differences from the original.
-# * Finnally, donated to cancer treatment too.
-
-# In[1]:
+# In[ ]:
 
 
-from sklearn import preprocessing, pipeline, feature_extraction, decomposition, model_selection, metrics, cross_validation, svm
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier, BaggingClassifier
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_selection import SelectKBest, chi2
-from sklearn.preprocessing import normalize, Imputer
-from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import SGDClassifier
-from sklearn.naive_bayes import MultinomialNB
-
-import sklearn
-import pandas as pd
+import os
+import sys
+import operator
 import numpy as np
+import pandas as pd
+from scipy import sparse
 import xgboost as xgb
-
-import datetime
-
-
-# In[2]:
+from sklearn import model_selection, preprocessing, ensemble
+from sklearn.metrics import log_loss
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 
 
-train = pd.read_csv('../input/training_variants')
-test = pd.read_csv('../input/test_variants')
-trainx = pd.read_csv('../input/training_text', sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-testx = pd.read_csv('../input/test_text', sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-
-train = pd.merge(train, trainx, how='left', on='ID').fillna('')
-y = train['Class'].values
-train = train.drop(['Class'], axis=1)
-
-test = pd.merge(test, testx, how='left', on='ID').fillna('')
-pid = test['ID'].values
-
-
-# In[3]:
-
-
-train.head()
-
-
-# In[4]:
-
-
-y
-
-
-# In[5]:
-
-
-test.head()
-
-
-# In[6]:
-
-
-pid
-
-
-# ### 1. Not use the codes below.
-# ***
-# Not used in this Kernel.
-# 
-# ```python
-# # commented for Kaggle Limits
-# for i in range(56):
-#     df_all['Gene_'+str(i)] = df_all['Gene'].map(lambda x: str(x[i]) if len(x)>i else '')
-#     df_all['Variation'+str(i)] = df_all['Variation'].map(lambda x: str(x[i]) if len(x)>i else '')
-# ```
-
-# In[7]:
-
-
-df_all = pd.concat((train, test), axis=0, ignore_index=True)
-df_all['Gene_Share'] = df_all.apply(lambda r: sum([1 for w in r['Gene'].split(' ') if w in r['Text'].split(' ')]), axis=1)
-df_all['Variation_Share'] = df_all.apply(lambda r: sum([1 for w in r['Variation'].split(' ') if w in r['Text'].split(' ')]), axis=1)
-
-
-# In[8]:
-
-
-df_all.head()
-
-
-# In[9]:
-
-
-gen_var_lst = sorted(list(train.Gene.unique()) + list(train.Variation.unique()))
-print(len(gen_var_lst))
-
-
-# In[10]:
-
-
-gen_var_lst = [x for x in gen_var_lst if len(x.split(' '))==1]
-print(len(gen_var_lst))
-i_ = 0
-
-#commented for Kaggle Limits
-# for gen_var_lst_itm in gen_var_lst:
-#     if i_ % 100 == 0: print(i_)
-#     df_all['GV_'+str(gen_var_lst_itm)] = df_all['Text'].map(lambda x: str(x).count(str(gen_var_lst_itm)))
-#     i_ += 1
-
-
-# In[11]:
-
-
-for c in df_all.columns:
-    if df_all[c].dtype == 'object':
-        if c in ['Gene','Variation']:
-            lbl = preprocessing.LabelEncoder()
-            df_all[c+'_lbl_enc'] = lbl.fit_transform(df_all[c].values)  
-            df_all[c+'_len'] = df_all[c].map(lambda x: len(str(x)))
-            df_all[c+'_words'] = df_all[c].map(lambda x: len(str(x).split(' ')))
-        elif c != 'Text':
-            lbl = preprocessing.LabelEncoder()
-            df_all[c] = lbl.fit_transform(df_all[c].values)
-        if c=='Text': 
-            df_all[c+'_len'] = df_all[c].map(lambda x: len(str(x)))
-            df_all[c+'_words'] = df_all[c].map(lambda x: len(str(x).split(' '))) 
-
-train = df_all.iloc[:len(train)]
-test = df_all.iloc[len(train):]
-
-
-# In[12]:
-
-
-train.head()
-
-
-# In[13]:
-
-
-test.head()
-
-
-# In[14]:
-
-
-train.shape
-
-
-# In[15]:
-
-
-test.shape
-
+# Now let us write a custom function to run the xgboost model.
 
 # In[ ]:
 
 
-class cust_regression_vals(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def fit(self, x, y=None):
-        return self
-    def transform(self, x):
-        x = x.drop(['Gene', 'Variation','ID','Text'],axis=1).values
-        return x
+def runXGB(train_X, train_y, test_X, test_y=None, feature_names=None, seed_val=0, num_rounds=1000):
+    param = {}
+    param['objective'] = 'multi:softprob'
+    param['eta'] = 0.1
+    param['max_depth'] = 6
+    param['silent'] = 1
+    param['num_class'] = 3
+    param['eval_metric'] = "mlogloss"
+    param['min_child_weight'] = 1
+    param['subsample'] = 0.7
+    param['colsample_bytree'] = 0.7
+    param['seed'] = seed_val
+    num_rounds = num_rounds
 
-class cust_txt_col(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def __init__(self, key):
-        self.key = key
-    def fit(self, x, y=None):
-        return self
-    def transform(self, x):
-        return x[self.key].apply(str)
+    plst = list(param.items())
+    xgtrain = xgb.DMatrix(train_X, label=train_y)
 
-
-# ### 2. Main difference
-# ***
-# #### 1. Pipeline Changed
-# 
-# The original Kernel uses the pipeline with these codes below for 'Text' feature extraction:
-# ```python
-# #commented for Kaggle Limits
-# ('pi3', pipeline.Pipeline([('Text', cust_txt_col('Text')), 
-#                            ('tfidf_Text', feature_extraction.text.TfidfVectorizer(ngram_range=(1, 2))), 
-#                            ('tsvd3', decomposition.TruncatedSVD(n_components=50, n_iter=25, random_state=12))]))
-# ```
-# Unfortunately, it can not fit my memory of 8GB + 2GB(swap). And without these features, I can only get nearly 0.7xxx on PL.
-# 
-# So, I try to use **HashingVectorizer + TfidfTransformer** instead of **TfidfVectorizer**. [Reference](http://scikit-learn.org/stable/modules/feature_extraction.html#vectorizing-a-large-text-corpus-with-the-hashing-trick)
-# 
-# #### 2. Parameter Tuning
-# 
-# For HashingVectorizer saved my memory, I try to use **ngram_range=(1, 3)** with HashingVectorizer. 
-# 
-# And **n_components=300** with **TruncatedSVD**.
-# 
-# #### 3. Batch Transform
-# 
-# With these codes, I can fit_transform the **train**, but still out of memory if transform **test**.
-# 
-# So, I try to use batch transform of test data step by step, and vstack all. 
-# 
-# And, it works!
-
-# In[ ]:
-
-
-print('Pipeline...')
-fp = pipeline.Pipeline([
-    ('union', pipeline.FeatureUnion(
-        n_jobs = -1,
-        transformer_list = [
-            ('standard', cust_regression_vals()),
-            ('pi1', pipeline.Pipeline([('Gene', cust_txt_col('Gene')), 
-                                       ('count_Gene', feature_extraction.text.CountVectorizer(analyzer=u'char', ngram_range=(1, 8))), 
-                                       ('tsvd1', decomposition.TruncatedSVD(n_components=20, n_iter=25, random_state=12))])),
-            ('pi2', pipeline.Pipeline([('Variation', cust_txt_col('Variation')), 
-                                       ('count_Variation', feature_extraction.text.CountVectorizer(analyzer=u'char', ngram_range=(1, 8))), 
-                                       ('tsvd2', decomposition.TruncatedSVD(n_components=20, n_iter=25, random_state=12))])),
-            #commented for Kaggle Limits
-#             ('pi3', pipeline.Pipeline([('Text', cust_txt_col('Text')), 
-#                                        ('hv', feature_extraction.text.HashingVectorizer(decode_error='ignore', n_features=2 ** 16, non_negative=True, ngram_range=(1, 3))),
-#                                        ('tfidf_Text', feature_extraction.text.TfidfTransformer()), 
-#                                        ('tsvd3', decomposition.TruncatedSVD(n_components=300, n_iter=25, random_state=12))]))
-
-        
-        ])
-    )])
-
-
-train = fp.fit_transform(train)
-print (train.shape)
-
-test_t = np.empty([0, train.shape[1]])
-step = 200
-for i in range(0, len(test), step):
-    step_end = i+step
-    step_end = step_end if step_end < len(test) else len(test)
-    _test = fp.transform(test.iloc[i:step_end])
-    test_t = np.vstack((test_t, _test))
-test = test_t
-print (test.shape)
-
-
-# ### 3. Xgboost Parameter Tuning
-# ***
-# #### 1. eta 0.03333 -> 0.02 
-# 
-# I like small learning rate.
-# 
-# #### 2. max_depth 4 -> 6 
-# 
-# Bigger means higher risk of overfitting. But, since we got more features, maybe it could be better for this big data?! I'm not sure yet.
-# 
-# #### 3. test_size 0.18 -> 0.15
-# 
-# With slightly more data to train.
-
-# In[ ]:
-
-
-y = y - 1 #fix for zero bound array
-
-
-# In[ ]:
-
-
-file_pre = datetime.datetime.now().strftime('%m_%d_%H_%M_%S')
-
-denom = 0
-fold = 1 #Change to 5, 1 for Kaggle Limits
-for i in range(fold):
-    params = {
-#         'eta': 0.03333,
-        'eta': 0.02,
-#         'max_depth': 4,
-        'max_depth': 6,
-        'objective': 'multi:softprob',
-        'eval_metric': 'mlogloss',
-        'num_class': 9,
-        'seed': i,
-        'silent': True
-    }
-    x1, x2, y1, y2 = model_selection.train_test_split(train, y, test_size=0.15, random_state=i)
-    watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-    model = xgb.train(params, xgb.DMatrix(x1, y1), 1000,  watchlist, verbose_eval=50, early_stopping_rounds=100)
-    score1 = metrics.log_loss(y2, model.predict(xgb.DMatrix(x2), ntree_limit=model.best_ntree_limit), labels = list(range(9)))
-    print(score1)
-    #if score < 0.9:
-    if denom != 0:
-        pred = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit+80)
-        preds += pred
+    if test_y is not None:
+        xgtest = xgb.DMatrix(test_X, label=test_y)
+        watchlist = [ (xgtrain,'train'), (xgtest, 'test') ]
+        model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=20)
     else:
-        pred = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit+80)
-        preds = pred.copy()
-    denom += 1
-#     submission = pd.DataFrame(pred, columns=['class'+str(c+1) for c in range(9)])
-#     submission['ID'] = pid
-#     submission.to_csv('./result/submission_xgb_fold_'  + str(i) + '_' + file_pre + '.csv', index=False)
-preds /= denom
-submission = pd.DataFrame(preds, columns=['class'+str(c+1) for c in range(9)])
-submission['ID'] = pid
-submission.to_csv('./result/submission_xgb_' + file_pre + '.csv', index=False)
+        xgtest = xgb.DMatrix(test_X)
+        model = xgb.train(plst, xgtrain, num_rounds)
 
+    pred_test_y = model.predict(xgtest)
+    return pred_test_y, model
+
+
+# Let us read the train and test files and store it.
 
 # In[ ]:
 
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+data_path = "../input/"
+train_file = data_path + "train.json"
+test_file = data_path + "test.json"
+train_df = pd.read_json(train_file)
+test_df = pd.read_json(test_file)
+print(train_df.shape)
+print(test_df.shape)
 
-plt.rcParams['figure.figsize'] = (7.0, 7.0)
-xgb.plot_importance(booster=model,); plt.show()
+
+# We do not need any pre-processing for numerical features and so create a list with those features.
+
+# In[ ]:
 
 
-# ### References
-# * [Redefining Treatment](https://www.kaggle.com/the1owl/redefining-treatment-0-57456)
-# * [Vectorizing a large text corpus with the hashing trick](http://scikit-learn.org/stable/modules/feature_extraction.html#vectorizing-a-large-text-corpus-with-the-hashing-trick)
-# * [HashingVectorizer](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.HashingVectorizer.html)
+features_to_use  = ["bathrooms", "bedrooms", "latitude", "longitude", "price"]
+
+
+# Now let us create some new features from the given features.
+
+# In[ ]:
+
+
+# count of photos #
+train_df["num_photos"] = train_df["photos"].apply(len)
+test_df["num_photos"] = test_df["photos"].apply(len)
+
+# count of "features" #
+train_df["num_features"] = train_df["features"].apply(len)
+test_df["num_features"] = test_df["features"].apply(len)
+
+# count of words present in description column #
+train_df["num_description_words"] = train_df["description"].apply(lambda x: len(x.split(" ")))
+test_df["num_description_words"] = test_df["description"].apply(lambda x: len(x.split(" ")))
+
+# convert the created column to datetime object so as to extract more features 
+train_df["created"] = pd.to_datetime(train_df["created"])
+test_df["created"] = pd.to_datetime(test_df["created"])
+
+# Let us extract some features like year, month, day, hour from date columns #
+train_df["created_year"] = train_df["created"].dt.year
+test_df["created_year"] = test_df["created"].dt.year
+train_df["created_month"] = train_df["created"].dt.month
+test_df["created_month"] = test_df["created"].dt.month
+train_df["created_day"] = train_df["created"].dt.day
+test_df["created_day"] = test_df["created"].dt.day
+train_df["created_hour"] = train_df["created"].dt.hour
+test_df["created_hour"] = test_df["created"].dt.hour
+
+# adding all these new features to use list #
+features_to_use.extend(["num_photos", "num_features", "num_description_words","created_year", "created_month", "created_day", "listing_id", "created_hour"])
+
+
+# We have 4 categorical features in our data
+# 
+#  - display_address
+#  - manager_id
+#  - building_id
+#  - listing_id
+# 
+# So let us label encode these features.
+
+# In[ ]:
+
+
+categorical = ["display_address", "manager_id", "building_id", "street_address"]
+for f in categorical:
+        if train_df[f].dtype=='object':
+            #print(f)
+            lbl = preprocessing.LabelEncoder()
+            lbl.fit(list(train_df[f].values) + list(test_df[f].values))
+            train_df[f] = lbl.transform(list(train_df[f].values))
+            test_df[f] = lbl.transform(list(test_df[f].values))
+            features_to_use.append(f)
+
+
+# We have features column which is a list of string values. So we can first combine all the strings together to get a single string and then apply count vectorizer on top of it.
+
+# In[ ]:
+
+
+train_df['features'] = train_df["features"].apply(lambda x: " ".join(["_".join(i.split(" ")) for i in x]))
+test_df['features'] = test_df["features"].apply(lambda x: " ".join(["_".join(i.split(" ")) for i in x]))
+print(train_df["features"].head())
+tfidf = CountVectorizer(stop_words='english', max_features=200)
+tr_sparse = tfidf.fit_transform(train_df["features"])
+te_sparse = tfidf.transform(test_df["features"])
+
+
+# Now let us stack both the dense and sparse features into a single dataset and also get the target variable.
+
+# In[ ]:
+
+
+train_X = sparse.hstack([train_df[features_to_use], tr_sparse]).tocsr()
+test_X = sparse.hstack([test_df[features_to_use], te_sparse]).tocsr()
+
+target_num_map = {'high':0, 'medium':1, 'low':2}
+train_y = np.array(train_df['interest_level'].apply(lambda x: target_num_map[x]))
+print(train_X.shape, test_X.shape)
+
+
+# Now let us do some cross validation to check the scores. 
+# 
+# Please run it in local to get the cv scores. I am commenting it out here for time.
+
+# In[ ]:
+
+
+cv_scores = []
+kf = model_selection.KFold(n_splits=5, shuffle=True, random_state=2016)
+for dev_index, val_index in kf.split(range(train_X.shape[0])):
+        dev_X, val_X = train_X[dev_index,:], train_X[val_index,:]
+        dev_y, val_y = train_y[dev_index], train_y[val_index]
+        preds, model = runXGB(dev_X, dev_y, val_X, val_y)
+        cv_scores.append(log_loss(val_y, preds))
+        print(cv_scores)
+        break
+
+
+# Now let us build the final model and get the predictions on the test set.
+
+# In[ ]:
+
+
+preds, model = runXGB(train_X, train_y, test_X, num_rounds=400)
+out_df = pd.DataFrame(preds)
+out_df.columns = ["high", "medium", "low"]
+out_df["listing_id"] = test_df.listing_id.values
+out_df.to_csv("xgb_starter2.csv", index=False)
+
+
+# 
+# Hope this helps the python users as a good starting point.

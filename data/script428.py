@@ -1,315 +1,182 @@
 
 # coding: utf-8
 
-# A simple exploration notebook to get some insights about the data.
-# 
-# As per NDA, sample photos are confidential and also it says you cannot disclose confidential information without written consent from the Sponsors. More about NDA on this forum post. Thank you Alan for pointing it out to me.
-# 
-# So here is the revised version of the exploration notebook where the animation part is commented. 
-# 
-# **Please uncomment the Animation part of the notebook and then run it in the local for animation**
-# 
-# **Objective:**
-# 
-# In this competition, The Nature Conservancy asks you to help them detect which species of fish appears on a fishing boat, based on images captured from boat cameras of various angles.  
-# 
-# Your goal is to predict the likelihood of fish species in each picture.
-# 
-# As mentioned in the data page, there are eight target categories available in the dataset.
-# 
-#  1. Albacore tuna
-#  2. Bigeye tuna
-#  3. Yellowfin tuna
-#  4. Mahi Mahi
-#  5. Opah
-#  6. Sharks
-#  7. Other (meaning that there are fish present but not in the above categories)
-#  8. No Fish (meaning that no fish is in the picture)
-# 
-# **Important points to note:**
-# 
-#  1. Pre-trained models and external data are allowed in the competition, but need to be posted on this [official forum thread][1]
-#  2. The competition comprises of two stages. Test data for second stage will be released in the last week.   
-# 
-# First let us see the number of image files present for each of the species
-# 
-# 
-#   [1]: https://www.kaggle.com/c/the-nature-conservancy-fisheries-monitoring/forums/t/25428/official-pre-trained-model-and-data-thread/144487#post144487
-
-# In[ ]:
+# In[1]:
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
 # It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
 # For example, here's several helpful packages to load in 
 
+import os
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from scipy.misc import imread
 import matplotlib.pyplot as plt
+import skimage.io
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
 from subprocess import check_output
-print(check_output(["ls", "../input/train/"]).decode("utf8"))
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# So there are 8 folders present inside the train folder, one for each species.
-# 
-# Now let us check the number of files present in each of these sub folders. 
-
-# In[ ]:
+# In[2]:
 
 
-sub_folders = check_output(["ls", "../input/train/"]).decode("utf8").strip().split('\n')
-count_dict = {}
-for sub_folder in sub_folders:
-    num_of_files = len(check_output(["ls", "../input/train/"+sub_folder]).decode("utf8").strip().split('\n'))
-    print("Number of files for the species",sub_folder,":",num_of_files)
-    count_dict[sub_folder] = num_of_files
+input_dir = '../input'
+train_dir = '../input/stage1_train'
+
+
+# In[3]:
+
+
+df_labels = pd.read_csv(os.path.join(input_dir, 'stage1_train_labels.csv'))
+
+
+# # visualize random image
+
+# In[4]:
+
+
+def show_images(image_ids):
+  plt.close('all')
+  fig, ax = plt.subplots(nrows=len(image_ids),ncols=3, figsize=(50,50))
+
+  for image_idx, image_id in enumerate(image_ids):
+    image_path = os.path.join(train_dir, image_id, 'images', '{}.png'.format(image_id))
+    mask_paths = os.path.join(train_dir, image_id, 'masks', '*.png')
+  
+    image = skimage.io.imread(image_path)
+    masks = skimage.io.imread_collection(mask_paths).concatenate()
+    mask = np.zeros(image.shape[:2], np.uint16)
+    for mask_idx in range(masks.shape[0]):
+      mask[masks[mask_idx] > 0] = mask_idx + 1
+    other = mask == 0
     
-plt.figure(figsize=(12,4))
-sns.barplot(list(count_dict.keys()), list(count_dict.values()), alpha=0.8)
-plt.xlabel('Fish Species', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
-plt.show()
-    
+    if len(image_ids) > 1:
+      ax[image_idx, 0].imshow(image)
+      ax[image_idx, 1].imshow(mask)
+      ax[image_idx, 2].imshow(np.expand_dims(other, axis=2) * image)
+    else:
+      ax[0].imshow(image)
+      ax[1].imshow(mask)
+      ax[2].imshow(np.expand_dims(other, axis=2) * image)
 
 
-# So the number of files for species ALB (Albacore tuna) is much higher than other species. 
-# 
-# Let us look at the number of files present in the test folder.
-
-# In[ ]:
+# In[5]:
 
 
-num_test_files = len(check_output(["ls", "../input/test_stg1/"]).decode("utf8").strip().split('\n'))
-print("Number of test files present :", num_test_files)
+sample_image = df_labels.sample(n=1).iloc[0]
+show_images([sample_image['ImageId']])
 
 
-# **Image Size:**
-# 
-# Now let us look at the image size of each of the files and see what different sizes are available.
+# # Statistics
 
-# In[ ]:
+# In[6]:
 
 
-train_path = "../input/train/"
-sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-for sub_folder in sub_folders:
-    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-    for file_name in file_names:
-        im_array = imread(train_path+sub_folder+"/"+file_name)
-        size = "_".join(map(str,list(im_array.shape)))
-        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
-
-plt.figure(figsize=(12,4))
-sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
-plt.xlabel('Image size', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
-plt.title("Image size present in train dataset")
-plt.xticks(rotation='vertical')
-plt.show()
+def get_nuclei_sizes():
+  image_ids = list(df_labels.drop_duplicates(subset='ImageId')['ImageId'])
+  def nuclei_size_stats(image_id):
+    mask_paths = os.path.join(train_dir, image_id, 'masks', '*.png')
+    masks = skimage.io.imread_collection(mask_paths).concatenate()
+    masks = (masks > 0).astype(np.uint16)
+    nuclei_sizes = np.sum(masks, axis=(1,2))
+    return {'nuclei_size_min': np.min(nuclei_sizes),
+            'nuclei_size_max': np.max(nuclei_sizes),
+            'nuclei_size_mean': np.mean(nuclei_sizes),
+            'nuclei_size_std': np.std(nuclei_sizes)}
+  return pd.DataFrame.from_dict({image_id: nuclei_size_stats(image_id) for image_id in image_ids}, orient='index')
 
 
-# So 720_1280_3 is the most common image size available in the train data and 10 different sizes are available. 
-# 
-# 720_1244_3 is the smallest size of the available images in train set and 974_1732_3 is the largest one.
-# 
-# Now let us look at the distribution in test dataset as well.
-
-# In[ ]:
+# In[7]:
 
 
-test_path = "../input/test_stg1/"
-file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-for file_name in file_names:
-        size = "_".join(map(str,list(imread(test_path+file_name).shape)))
-        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
-
-plt.figure(figsize=(12,4))
-sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
-plt.xlabel('File size', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Image size present in test dataset")
-plt.show()
+df_nuclei_sizes = get_nuclei_sizes()
 
 
-# Test set also has a very similar distribution.
-# 
-# **Animation:**
-# 
-# Let us try to have some animation on the available images.  Not able to embed the video in the notebook.
-# 
-# **Please uncomment the following part of the code and run it in local for animation**
-
-# In[ ]:
+# In[8]:
 
 
-"""
-import random
-import matplotlib.animation as animation
-from matplotlib import animation, rc
-from IPython.display import HTML
-
-random.seed(12345)
-train_path = "../input/train/"
-sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-all_files = []
-for sub_folder in sub_folders:
-    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-    selected_files = random.sample(file_names, 10)
-    for file_name in selected_files:
-        all_files.append([sub_folder,file_name])
-
-fig = plt.figure()
-sns.set_style("whitegrid", {'axes.grid' : False})
-img_file = "".join([train_path, sub_folder, "/", file_name])
-im = plt.imshow(imread(img_file), vmin=0, vmax=255)
-
-def updatefig(ind):
-    sub_folder = all_files[ind][0]
-    file_name = all_files[ind][1]
-    img_file = "".join([train_path, sub_folder, "/", file_name])
-    im.set_array(imread(img_file))
-    plt.title("Species : "+sub_folder, fontsize=15)
-    return im,
-
-ani = animation.FuncAnimation(fig, updatefig, frames=len(all_files))
-ani.save('lb.gif', fps=1, writer='imagemagick')
-#rc('animation', html='html5')
-#HTML(ani.to_html5_video())
-plt.show()
-"""
+def plot_stats(df):
+  fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(64,64))
+  def plot_with_set_font_size(key, ax):
+    p = sns.distplot(df_stats[key], kde=False, rug=False, ax=ax)
+    p.tick_params(labelsize=50)
+    p.set_xlabel(key, fontsize=50)
+  
+  plot_with_set_font_size('mask_counts', axs[0,0])
+  plot_with_set_font_size('nuclei_size_min', axs[1,0])
+  plot_with_set_font_size('nuclei_size_max', axs[1,1])
+  plot_with_set_font_size('nuclei_size_mean', axs[2,0])
+  plot_with_set_font_size('nuclei_size_std', axs[2,1])
 
 
-# **Basic CNN Model using Keras:**
-# 
-# Now let us try to build a CNN model on the dataset. Due to the memory constraints of the kernels, let us take only (500,500,3) array from top left corner of each image and then try to classify based on that portion.
-# 
-# Kindly note that running it offline with the full image will give much better results. This is just a started script I tried and I am a newbie for image classification problems. 
-
-# In[ ]:
+# In[9]:
 
 
-import random
-from subprocess import check_output
-from scipy.misc import imread
-import numpy as np
-np.random.seed(2016)
-from keras.datasets import mnist
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation, Flatten
-from keras.layers import Convolution2D, MaxPooling2D
-from keras.utils import np_utils
-from keras import backend as K
+df_mask_counts = df_labels.groupby(['ImageId']).count()
+df_mask_counts.columns = ['mask_counts']
+df_stats = df_mask_counts.join(df_nuclei_sizes)
 
-batch_size = 1
-nb_classes = 8
-nb_epoch = 1
-
-img_rows, img_cols, img_rgb = 500, 500, 3
-nb_filters = 4
-pool_size = (2, 2)
-kernel_size = (3, 3)
-input_shape = (img_rows, img_cols, 3)
-
-species_map_dict = {
-'ALB':0,
-'BET':1,
-'DOL':2,
-'LAG':3,
-'NoF':4,
-'OTHER':5,
-'SHARK':6,
-'YFT':7
-}
-
-def batch_generator_train(sample_size):
-	train_path = "../input/train/"
-	all_files = []
-	y_values = []
-	sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-	for sub_folder in sub_folders:
-		file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-		for file_name in file_names:
-			all_files.append([sub_folder, '/', file_name])
-			y_values.append(species_map_dict[sub_folder])
-	number_of_images = range(len(all_files))
-
-	counter = 0
-	while True:
-		image_index = random.choice(number_of_images)
-		file_name = "".join([train_path] + all_files[image_index])
-		print(file_name)
-		y = [0]*8
-		y[y_values[image_index]] = 1
-		y = np.array(y).reshape(1,8)
-		
-		im_array = imread(file_name)
-		X = np.zeros([1, img_rows, img_cols, img_rgb])
-		#X[:im_array.shape[0], :im_array.shape[1], 3] = im_array.copy().astype('float32')
-		X[0, :, :, :] = im_array[:500,:500,:].astype('float32')
-		X /= 255.
-        
-		print(X.shape)
-		yield X,y
-		
-		counter += 1
-		#if counter == sample_size:
-		#	break
-
-def batch_generator_test(all_files):
-	for file_name in all_files:
-		file_name = test_path + file_name
-		
-		im_array = imread(file_name)
-		X = np.zeros([1, img_rows, img_cols, img_rgb])
-		X[0,:, :, :] = im_array[:500,:500,:].astype('float32')
-		X /= 255.
-
-		yield X
+display(df_stats.describe())
+plot_stats(df_stats)
 
 
-def keras_cnn_model():
-	model = Sequential()
-	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1],
-                        border_mode='valid',
-                        input_shape=input_shape))
-	model.add(Activation('relu'))
-	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1]))
-	model.add(Activation('relu'))
-	model.add(MaxPooling2D(pool_size=pool_size))
-	model.add(Dropout(0.25))	
-	model.add(Flatten())
-	model.add(Dense(128))
-	model.add(Activation('relu'))
-	model.add(Dropout(0.5))
-	model.add(Dense(nb_classes))
-	model.add(Activation('softmax'))
-	model.compile(loss='categorical_crossentropy', optimizer='adadelta')
-	return model
+# ## lower percentile of mask counts
 
-model = keras_cnn_model()
-fit= model.fit_generator(
-	generator = batch_generator_train(100),
-	nb_epoch = 1,
-	samples_per_epoch = 100
-)
+# In[10]:
 
-test_path = "../input/test_stg1/"
-all_files = []
-file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
-for file_name in file_names:
-	all_files.append(file_name)
-#preds = model.predict_generator(generator=batch_generator_test(all_files), val_samples=len(all_files))
 
-#out_df = pd.DataFrame(preds)
-#out_df.columns = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
-#out_df['image'] = all_files
-#out_df.to_csv("sample_sub_keras.csv", index=False)
+lower_percentile_stats = df_stats.query('mask_counts < 15.25')
+display(lower_percentile_stats.describe())
+plot_stats(lower_percentile_stats)
+
+
+# In[11]:
+
+
+samples = lower_percentile_stats.sample(n=5)
+display(samples)
+show_images(list(samples.index))
+
+
+# ## middle percentile of mask counts
+
+# In[12]:
+
+
+middle_percentile_stats = df_stats.query('mask_counts > 15.25 and mask_counts < 54.0')
+display(middle_percentile_stats.describe())
+plot_stats(middle_percentile_stats)
+
+
+# In[13]:
+
+
+samples = middle_percentile_stats.sample(n=5)
+display(samples)
+show_images(list(samples.index))
+
+
+# ## upper percentile of mask counts
+
+# In[14]:
+
+
+upper_percentile_stats = df_stats.query('mask_counts > 54.0')
+display(upper_percentile_stats.describe())
+plot_stats(upper_percentile_stats)
+
+
+# In[15]:
+
+
+samples = upper_percentile_stats.sample(n=5)
+display(samples)
+show_images(list(samples.index))
 

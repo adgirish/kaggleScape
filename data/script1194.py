@@ -1,324 +1,357 @@
 
 # coding: utf-8
 
-# **Introduction**
+# <h2 style="font-size:2.25em; font-family:Verdana" align="center"> NEW YORK CITY TAXI TRIP DURATION </h2>
+# <h2 style="font-size:2em; font-family:Verdana" align="center"> Exploratory Data Analysis &amp; Feature Engineering</h2>
+# <img src="http://erigoshop.ru/d/132830/d/5--503.jpg" width="75%"/>
+# <h4 style="font-size:18px; font-family:Verdana" align="right"> by Fred Navruzov <br> <pre>    2017-07-21</pre> </h4>
+
+# Hi, Kagglers!
+# <br>Hereinafter I am going to conduct **Expronatory Data Analysis** as well as make some **Feature Engineering**
+# <br>to reveal interesting patterns in NYC Taxi Trip Duration Dataset
+# <br>Stay tuned for the future updates!
+# <br>**P.s.** Comments/Suggestions/Upvotes are always welcomed :)
+
+# # 1. Library / Data Import
+
+# In[1]:
+
+
+# library import
+import pandas as pd # DataFrame support
+import numpy as np # algebra / computations
+
+import matplotlib.pyplot as plt # plotting
+import seaborn as sns # fancier plotting
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# **Data Fields**
 # 
-# This will be a short exploratory analysis with the goal of becoming more familiar with the 2018 Data Science Bowl dataset and identifying some possible hurdles that could have a negative effect on model performance.
-# 
-# **Contents:**
-# - Importing and processing image data
-# - Looking at the image metadata summary statistics
-# - Plotting image width, height and area distributions
-# - Plotting number of nuclei per image distribution
-# - Plotting images with the most and fewest nuclei
-# - Plotting the smallest and largest nuclei
-# - Plotting a sample of images
-# - Conclusion
+# * **id** - a unique identifier for each trip
+# * **vendor_id** - a code indicating the provider associated with the trip record
+# * **pickup_datetime** - date and time when the meter was engaged
+# * **dropoff_datetime** - date and time when the meter was disengaged
+# * **passenger_count** - the number of passengers in the vehicle (driver entered value)
+# * **pickup_longitude** - the longitude where the meter was engaged
+# * **pickup_latitude** - the latitude where the meter was engaged
+# * **dropoff_longitude** - the longitude where the meter was disengaged
+# * **dropoff_latitude** - the latitude where the meter was disengaged
+# * **store_and_fwd_flag** - This flag indicates whether the trip record was held in vehicle memory before sending to the vendor because the vehicle did not have a connection to the server - Y=store and forward; N=not a store and forward trip
+# * **trip_duration** - duration of the trip in seconds, **target variable**
 
 # In[2]:
 
 
-import os
-import sys
-import random
-import warnings
+# load train data
+df_train = pd.read_csv(filepath_or_buffer='../input/train.csv', 
+                       engine='c', 
+                       infer_datetime_format=True, # to speed-up datetime parsing
+                       parse_dates=[2,3] # specify datetime columns
+                      )
 
-import numpy as np
-import pandas as pd
-import math
+df_train.store_and_fwd_flag = df_train.store_and_fwd_flag.astype('category')
+# check data usage
+print('Memory usage, Mb: {:.2f}\n'.format(df_train.memory_usage().sum()/2**20))
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set(color_codes=True)
-import cv2
+# overall df info
+print('DataFrame Info: ---------------------')
+print(df_train.info())
 
-from tqdm import tqdm
-from itertools import chain
-from skimage.io import imread, imshow, imread_collection, concatenate_images
-from skimage.transform import resize
-from skimage.morphology import label
+# optimize dtypes
+df_train.passenger_count = df_train.passenger_count.astype(np.uint8)
+df_train.vendor_id = df_train.vendor_id.astype(np.uint8)
+df_train.trip_duration = df_train.trip_duration.astype(np.uint32)
+for c in [c for c in df_train.columns if c.endswith('tude')]:
+    df_train.loc[:, c] = df_train[c].astype(np.float32)
 
-TRAIN_PATH = '../input/stage1_train/'
-TEST_PATH = '../input/stage1_test/'
+# now memory usage is cut by 50%
+print('\nMemory usage (optimized), Mb: {:.2f}\n'.format(df_train.memory_usage().sum()/2**20))
 
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
+# check sample output
+df_train.head()
 
-# Get train and test IDs
-train_ids = next(os.walk(TRAIN_PATH))[1]
-test_ids = next(os.walk(TEST_PATH))[1]
 
+# # 2. Check for N/A values, outliers etc.
 
 # In[3]:
 
 
-# sys.stdout.flush()
-# These lists will be used to store the images.
-imgs = []
-masks = []
+print(df_train.isnull().sum()) # nice, no N/A values
 
-# These lists will be used to store the image metadata that will then be used to create
-# pandas dataframes.
-img_data = []
-mask_data = []
-print('Processing images ... ')
-
-# Loop over the training images. tqdm is used to display progress as reading
-# all the images can take about 1 - 2 minutes.
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    path = TRAIN_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')
-    
-    # Get image.
-    imgs.append(img)
-    img_height = img.shape[0]
-    img_width = img.shape[1]
-    img_area = img_width * img_height
-
-    # Initialize counter. There is one mask for each annotated nucleus.
-    nucleus_count = 1
-    
-    # Loop over the mask ids, read the images and gather metadata from them.
-    for mask_file in next(os.walk(path + '/masks/'))[2]:
-        mask = imread(path + '/masks/' + mask_file)
-        masks.append(mask)
-        mask_height = mask.shape[0]
-        mask_width = mask.shape[1]
-        mask_area = mask_width * img_height
-        
-        # Sum and divide by 255 to get the number
-        # of pixels for the nucleus. Masks are grayscale.
-        nucleus_area = (np.sum(mask) / 255)
-        
-        mask_to_img_ratio = nucleus_area / mask_area
-        
-        # Append to masks data list that will be used to create a pandas dataframe.
-        mask_data.append([n, mask_height, mask_width, mask_area, nucleus_area, mask_to_img_ratio])
-        
-        # Increment nucleus count.
-        nucleus_count = nucleus_count + 1
-    
-    # Build image info list that will be used to create dataframe. This is done after the masks loop
-    # because we want to store the number of nuclei per image in the img_data list.
-    img_data.append([img_height, img_width, img_area, nucleus_count])
-
-
-# **Create Images Metadata Dataframe**
-# 
-# Create a pandas data frame from the list of image metadata that was created in the loop above. This will make the data easier to manipulate and plot.
-# 
-# After creating the data frame we can take a look at its summary stats along with the first five and last five rows to make sure it looks ok and get familiar with it.
 
 # In[4]:
 
 
-# Create dataframe for images
-df_img = pd.DataFrame(img_data, columns=['height', 'width', 'area', 'nuclei'])
+# check for duplicate ids - nice, no duplicates
+print('No of Duplicates, Trip IDs: {}'.format(len(df_train) - 
+                                              len(df_train.drop_duplicates(subset='id'))))
+
+# check latitude/longitude bounds, Latitude: -85 to +85, Longitude: -180 to +180
+print('Latitude bounds: {} to {}'.format(
+    max(df_train.pickup_latitude.min(), df_train.dropoff_latitude.min()),
+    max(df_train.pickup_latitude.max(), df_train.dropoff_latitude.max())
+))
+print('Longitude bounds: {} to {}'.format(
+    max(df_train.pickup_longitude.min(), df_train.dropoff_longitude.min()),
+    max(df_train.pickup_longitude.max(), df_train.dropoff_longitude.max())
+))
+
+# check trip duration - oops, looks like:
+# 1) someone was on the road for 3526282sec ~ 40 days and forget to switch-off the counter, he-he
+# 2) someone has invented quantum teleportation and made trips in 1-2 sec
+# more closer look reveals some consecutive measurements, say, distance = 33ft, time=1sec
+print('Trip duration in seconds: {} to {}'.format(
+    df_train.trip_duration.min(), df_train.trip_duration.max()
+))
+# let's also check that trip_duration == drop-off time - pick-up time, nice, no errors
+print("Incorrect trip duration's calculations: {}".format(
+    (df_train.trip_duration != df_train.dropoff_datetime.sub(df_train.pickup_datetime, axis=0) 
+     / np.timedelta64(1, 's')).sum())
+)
+
+# vendors cnt, only 2
+print('Vendors cnt: {}'.format(len(df_train.vendor_id.unique())))
+# datetime range - 6 full months, from January 2016 to June 2016
+print('Datetime range: {} to {}'.format(df_train.pickup_datetime.min(), 
+                                        df_train.dropoff_datetime.max()))
+
+# passenger count - the common sense implies values between 1 and 10(Ford Transit), let's check
+# zeroes, hmm...
+print('Passengers: {} to {}'.format(df_train.passenger_count.min(), 
+                                        df_train.passenger_count.max()))
 
 
-# In[ ]:
+# ### Some Preprocessing / Cleaning
+
+# In[5]:
 
 
-df_img.describe()
+# Since there are less than 10k rows with anomalies in trip_duration (in common sense), 
+# we can safely remove them
+duration_mask = ((df_train.trip_duration < 60) | # < 1 min
+             (df_train.trip_duration > 3600*2)) # > 2 hours
+print('Anomalies in trip duration, %: {:.2f}'.format(
+    df_train[duration_mask].shape[0] / df_train.shape[0] * 100
+))
+df_train = df_train[~duration_mask]
+df_train.trip_duration = df_train.trip_duration.astype(np.uint16)
+# let's see range now
+print('Trip duration in seconds: {} to {}'.format(
+    df_train.trip_duration.min(), df_train.trip_duration.max()
+))
+
+# let's also drop trips with passenger count = 0, since there are only 17 of them
+print('Empty trips: {}'.format(df_train[df_train.passenger_count == 0].shape[0]))
+df_train = df_train[df_train.passenger_count > 0]
 
 
-# In[ ]:
+# # 3. Visualizations
 
-
-df_img.head()
-
-
-# In[ ]:
-
-
-df_img.tail()
-
-
-# **Create Image Masks Metadata Dataframe**
-# 
-# Let's create another data frame for the masks metadata.
+# ##  Pick-ups
 
 # In[6]:
 
 
-# Create dataframe for masks
-df_mask = pd.DataFrame(mask_data, columns=['img_index', 'height', 'width', 'area', 'nucleus_area', 'mask_to_img_ratio'])
+# Let's add some additional columns to speed-up calculations
+# dow names for plot mapping
+dow_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+# mm names for plot mapping
+mm_names = [
+    'January', 'February', 'March', 'April', 'May', 'June', 
+    'July', 'August', 'September', 'October', 'November', 'December'
+]
+
+# month (pickup and dropoff)
+df_train['mm_pickup'] = df_train.pickup_datetime.dt.month.astype(np.uint8)
+df_train['mm_dropoff'] = df_train.dropoff_datetime.dt.month.astype(np.uint8)
+# day of week
+df_train['dow_pickup'] = df_train.pickup_datetime.dt.weekday.astype(np.uint8)
+df_train['dow_dropoff'] = df_train.dropoff_datetime.dt.weekday.astype(np.uint8)
+# day hour
+df_train['hh_pickup'] = df_train.pickup_datetime.dt.hour.astype(np.uint8)
+df_train['hh_dropoff'] = df_train.dropoff_datetime.dt.hour.astype(np.uint8)
 
 
-# In[ ]:
+# In[7]:
 
 
-df_mask.describe()
+# pickup time distribution, hour-of-day
+plt.figure(figsize=(12,2))
+
+data = df_train.groupby('hh_pickup').aggregate({'id':'count'}).reset_index()
+sns.barplot(x='hh_pickup', y='id', data=data)
+
+plt.title('Pick-ups Hour Distribution')
+plt.xlabel('Hour of Day, 0-23')
+plt.ylabel('No of Trips made')
+pass
 
 
-# In[ ]:
+# In[8]:
 
 
-df_mask.head()
+# pickup distribution, by weekday
+plt.figure(figsize=(12,2))
 
+data = df_train.groupby('dow_pickup').aggregate({'id':'count'}).reset_index()
+sns.barplot(x='dow_pickup', y='id', data=data)
 
-# In[ ]:
+plt.title('Pick-ups Weekday Distribution')
+plt.xlabel('Trip Duration, minutes')
+plt.xticks(range(0,7), dow_names, rotation='horizontal')
+plt.ylabel('No of Trips made')
+pass
 
-
-df_mask.tail()
-
-
-# **Plot some of the metadata distributions**
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(1, 3, figsize=(10,5))
-width_plt = sns.distplot(df_img['width'].values, ax=ax[0])
-width_plt.set(xlabel='width (px)')
-width_plt.set(ylim=(0, 0.01))
-height_plt = sns.distplot(df_img['height'].values, ax=ax[1])
-height_plt.set(xlabel='height (px)')
-height_plt.set(ylim=(0, 0.015))
-area_plt = sns.distplot(df_img['area'].values)
-area_plt.set(xlabel="area (px)")
-fig.show()
-plt.tight_layout()
-
-
-# The image dimensions do not appear to be equally distributed and have a somewhat bimodal distribution. This issue will need to be addressed before feeding the images to our model. The images could be resized to squares but this will cause images to be squashed either vertically or horizontally and would result in a loss of information. Most of the images look like they are 256x256 so the squashing/stretching might not be an issue. Scaling the smaller images up might be a better option than scaling the larger images down as this would also result in a loss of information. Different strategies should be tried here to see what works best. 
-
-# In[ ]:
-
-
-sns.distplot(df_img['nuclei'].values)
-plt.xlabel("nuclei")
-plt.show()
-
-
-# The distribution of nuclei (masks) per image appears to be skewed to the right. There is quite a large range in the number of nuclei per image. 
-
-# In[ ]:
-
-
-plt.figure(figsize=(18, 18))
-much_nuclei = df_img['nuclei'].argmax()
-print(much_nuclei)
-plt.grid(None)
-plt.imshow(imgs[much_nuclei])
-
-
-# There are 198 annotated nuclei in this image. It's an interesting structure, possibly some kind of creature!
-
-# In[ ]:
-
-
-plt.figure(figsize=(18, 18))
-not_much_nuclei = df_img['nuclei'].argmin()
-print(df_img['nuclei'].min())
-plt.grid(None)
-plt.imshow(imgs[not_much_nuclei])
-
-
-# There appears to be a lot going on in this image but there are only two annotated nuclei.
-
-# **Nuclei Sizes**
-# 
-# Let's take a look at some differently sized nuclei in the training set. 
-
-# In[ ]:
-
-
-smallest_mask_index = df_mask['mask_to_img_ratio'].argmin()
-
-fig, ax = plt.subplots(1, 2, figsize=(16, 16))
-ax[0].grid(None)
-ax[0].imshow(masks[smallest_mask_index])
-ax[1].grid(None)
-ax[1].imshow(imgs[df_mask.iloc[[smallest_mask_index], [0]].values[0][0]])
-plt.tight_layout()
-
-
-# Wow! This nucleus is either very small or very far away! This makes me concerned about scaling down some of the larger images as some of these small nuclei could become undetectable or a least much more difficult to detect.
-
-# In[ ]:
-
-
-smallest_mask_resized_128 = resize(masks[smallest_mask_index], (128, 128))
-smallest_mask_resized_256 = resize(masks[smallest_mask_index], (256, 256))
-smallest_mask_resized_512 = resize(masks[smallest_mask_index], (512, 512))
-print(np.sum(smallest_mask_resized_128))
-print(np.sum(smallest_mask_resized_256))
-print(np.sum(smallest_mask_resized_512))
-fig, ax = plt.subplots(1, 3, figsize=(14, 14))
-ax[0].grid(None)
-ax[1].grid(None)
-ax[2].grid(None)
-ax[0].imshow(smallest_mask_resized_128)
-ax[1].imshow(smallest_mask_resized_256)
-ax[2].imshow(smallest_mask_resized_512)
-
-
-# As you can see above, the nucleus mask completely disappears when the image is scaled down to 128x128 pixels.
 
 # In[9]:
 
 
-biggest_mask_index = df_mask['mask_to_img_ratio'].argmax()
-biggest_mask_img_index = df_mask.iloc[[biggest_mask_index], [0]].values[0][0]
+# pickup distribution, by months
+plt.figure(figsize=(12,2))
 
-fig, ax = plt.subplots(1, 2, figsize=(12, 12))
-ax[0].grid(None)
-ax[1].grid(None)
-ax[0].imshow(masks[biggest_mask_index])
-ax[1].imshow(imgs[biggest_mask_img_index])
-plt.tight_layout()
+data = df_train.groupby('mm_pickup').aggregate({'id':'count'}).reset_index()
+sns.barplot(x='mm_pickup', y='id', data=data)
 
+plt.title('Pick-up Month Distribution')
+plt.xlabel('Trip Duration, minutes')
+plt.xticks(range(0,7), mm_names[:6], rotation='horizontal')
+plt.ylabel('No of Trips made')
+pass
 
-# In the image on the right, the nuclei appear to overlap each other. Let's see what the masks look like when stacked on top of each other.
 
 # In[10]:
 
 
-big_nuclei = df_mask.index[df_mask['img_index'] == biggest_mask_img_index]
-plt.figure(figsize=(18, 18))
-for i, mask_id in enumerate(big_nuclei):
-    plt.grid(None)
-    plt.imshow(masks[mask_id], interpolation='none', alpha=0.1)
+# Pickup heatmap, dow vs hour
+plt.figure(figsize=(12,2))
+sns.heatmap(data=pd.crosstab(df_train.dow_pickup, 
+                             df_train.hh_pickup, 
+                             values=df_train.vendor_id, 
+                             aggfunc='count',
+                             normalize='index'))
+
+plt.title('Pickup heatmap, Day-of-Week vs. Day Hour')
+plt.ylabel('Weekday') ; plt.xlabel('Day Hour, 0-23')
+plt.yticks(range(0,7), dow_names[::-1], rotation='horizontal')
+pass
 
 
-# Whereas the nuclei in the image overlap the masks do not appear to do so. 
-
-# In[14]:
+# In[11]:
 
 
-sample_nuclei = df_img.sample(36).index
-fig, ax = plt.subplots(9, 4, figsize=(16, 16))
-row = 0
-col = 0
-for i, img_id in enumerate(sample_nuclei):
-    ax[row, col].grid(False)
-    ax[row, col].imshow(imgs[img_id])
-    
-    # Increment col index and reset each time
-    # it gets to 4 to start a new row
-    col = col + 1
-    if(col == 4):
-        col = 0
-    
-    # Increment row index every 4 items
-    if((i + 1) % 4 == 0):
-        row = row + 1
-plt.tight_layout()
+# Pickup heatmap, month vs hour
+plt.figure(figsize=(12,2))
+sns.heatmap(data=pd.crosstab(df_train.mm_pickup, 
+                             df_train.hh_pickup, 
+                             values=df_train.vendor_id, 
+                             aggfunc='count',
+                             normalize='index'))
+
+plt.title('Pickup heatmap, Month vs. Day Hour')
+plt.ylabel('Month') ; plt.xlabel('Day Hour, 0-23')
+plt.yticks(range(0,7), mm_names[:7][::-1], rotation='horizontal')
+pass
 
 
-# There is a wide range of different nuclei sizes and shapes.
+# In[12]:
 
-# **Conclusion**
-# 
-# There is a large range of image dimensions in the dataset and not all of the images are square. The smallest image was 256x256 and the largest was 1040x1388 pixels. The smallest nucleus was only a few pixels in size and was found in one of the larger images (1000x1000), resizing this image caused the tiny nucleus to disappear so resizing images should be approached with great caution. The size of nuclei vary a lot throughout the images in the training set and is likely to make detection more challenging. 
-# 
-# I have only scratched the surface of this dataset and there is much more to explore. A few more things I would like to look into are the distribution of color in the images, identifying different nuclei groups/clusters and taking a look at the test set.
-# 
-# *Any suggestions for improvements would be very helpful. Also, please don't hesitate to point out any mistakes I might have made (there are probably a lot of them!).*
 
-# I adapted various parts of the following kernels while putting this together:
-# - https://www.kaggle.com/jerrythomas/exploratory-analysis
-# - https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277
+# Pickup heatmap, month vs dow
+plt.figure(figsize=(12,2))
+sns.heatmap(data=pd.crosstab(df_train.mm_pickup, 
+                             df_train.dow_pickup, 
+                             values=df_train.vendor_id, 
+                             aggfunc='count',
+                             normalize='index'))
+
+plt.title('Pickup heatmap, Month vs. Day-of-Week')
+plt.ylabel('Month') ; plt.xlabel('Weekday')
+plt.xticks(range(0,7), dow_names, rotation='vertical')
+plt.yticks(range(0,7), mm_names[:7][::-1], rotation='horizontal')
+pass
+
+
+# In[13]:
+
+
+# vendor pick-up hours density by weekdays
+plt.figure(figsize=(12,6))
+sns.violinplot(x=df_train.dow_pickup, 
+               y=df_train.hh_pickup, 
+               hue=df_train.vendor_id, 
+               split=True)
+
+plt.title('Vendor pick-up hours density, by weekday')
+plt.xlabel('Weekday') ; plt.ylabel('Day Hour, 0-23')
+plt.xticks(range(0,7), dow_names, rotation='horizontal')
+pass
+
+
+# ## Trip Duration
+
+# In[17]:
+
+
+# trip duration distribution, minutes
+plt.figure(figsize=(12,3))
+plt.title('Trip Duration Distribution')
+plt.xlabel('Trip Duration, minutes')
+plt.ylabel('No of Trips made')
+plt.hist(df_train.trip_duration/60, bins=100)
+pass
+
+
+# In[18]:
+
+
+# trip duration, based on hour-of-day vs. weekday
+# Pickup heatmap, dow vs hour
+plt.figure(figsize=(12,2))
+sns.heatmap(data=pd.crosstab(df_train.dow_pickup, 
+                             df_train.hh_pickup, 
+                             values=df_train.trip_duration/60, 
+                             aggfunc='mean',
+                             ))
+
+plt.title('Trip duration heatmap (Minutes), Day-of-Week vs. Day Hour')
+plt.ylabel('Weekday') ; plt.xlabel('Day Hour, 0-23')
+plt.yticks(range(0,7), dow_names[::-1], rotation='horizontal')
+pass
+
+
+# In[19]:
+
+
+# trip duration time-series by day, mean vs. median
+data = df_train.groupby(df_train.pickup_datetime.dt.date).aggregate({'trip_duration':['mean', 'median']})/60
+plt.figure(figsize=(12,4))
+plt.title('Trip Duration Over Time (Mean vs. Median)')
+plt.ylabel('Trip Duration, minutes') ; plt.xlabel('Timeline')
+plt.plot(data)
+plt.legend(['Mean', 'Median'])
+pass
+
+
+# In[20]:
+
+
+# trip duration over time, vendors comparison
+# seems like they are almost equal
+data = pd.crosstab(index=df_train.pickup_datetime.dt.date, 
+                   columns=df_train.vendor_id, 
+                   values=df_train.trip_duration/60, 
+                   aggfunc='mean')
+plt.figure(figsize=(12,4))
+plt.title('Mean Trip Duration Over Time (by Vendors)')
+plt.ylabel('Trip Duration, minutes') ; plt.xlabel('Timeline')
+plt.plot(data)
+plt.legend(['Vendor 1', 'Vendor 2'])
+pass
+
+
+# In[21]:
+
+
+# To BE CONTINUED ...
+

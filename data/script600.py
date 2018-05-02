@@ -1,605 +1,362 @@
 
 # coding: utf-8
 
+# 
+# Based on work done on this notebook, https://www.kaggle.com/sudosudoohio/stratified-kfold-xgboost-eda-tutorial-0-281.
+# Filled in missing values with Median and  the public score increased from 0.281 to 0.285 after training with new data. 
+# Also, custom weights are given to the labels to tackle imbalanced labels in the data. However, performance hasn't improved.
+# 
+# Hope you will find the notebook helpful! .
+# 
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+## Importing Requried Libraries
+import numpy as np
+import subprocess
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from IPython.display import Image
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-import os
+from collections import Counter
 import seaborn as sns
 import matplotlib.pyplot as plt
-color = sns.color_palette()
-print(os.listdir("../input"))
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Any results you write to the current directory are saved as output.
+from sklearn.model_selection import StratifiedKFold
+import xgboost as xgb
 
+from sklearn.datasets import make_classification
+from sklearn.cross_validation import train_test_split
+from sklearn.metrics import log_loss, accuracy_score
 
-# **Load training data and see what's inside.**
+# classifiers
+from sklearn.ensemble import GradientBoostingClassifier
 
-# In[ ]:
-
-
-train_df = pd.read_csv('../input/train.csv',nrows=10000)
-train_df.info(memory_usage='deep')
-
-
-# In[ ]:
-
-
-test_df = pd.read_csv('../input/test.csv',nrows=10000)
-test_df.info(memory_usage='deep')
+# reproducibility
+seed = 123
 
 
 # In[ ]:
 
 
-test_df['click_time'] = pd.to_datetime(test_df['click_time'])
-test_df['day'] = test_df['click_time'].dt.day
-test_df['day'].value_counts()
+#### LOADING DATA ####
+### TRAIN DATA
+train_data = pd.read_csv("../input/train.csv", na_values='-1')
+cor_data = train_data.copy()
+                        
+## Filling the missing data NAN with median of the column
+train_data_nato_median = pd.DataFrame()
+for column in train_data.columns:
+    train_data_nato_median[column] = train_data[column].fillna(train_data[column].median())
 
+train_data = train_data_nato_median.copy()
 
-# * We have 6 parameters types as int64 and 2  parameters types as object in training data, and 6 parameters types as int64 and 1  parameters types as object in testing data.
-# * The parameter, attributed_time, is not in the testing data, so let's drop it to save memory.
-# * ** Because we have only one day of test data, I using chunk to get one day of training data.**
-
-# In[ ]:
-
-
-del train_df
-del test_df
-df = pd.read_csv('../input/train.csv', iterator=True, chunksize=10000,nrows= 3700000, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
-train_df = pd.concat([chunk[chunk['click_time'].str.contains("2017-11-06")] for chunk in df])
-train_df.info(memory_usage='deep')
-
-
-# In[ ]:
-
-
-train_df.head()
-
-
-# * Now, let's take a look at the distribution of target (is_attributed).
-
-# In[ ]:
-
-
-group_df = train_df.is_attributed.value_counts().reset_index()
-k = group_df['is_attributed'].sum()
-plt.figure(figsize = (12,8))
-sns.barplot(group_df['index'], (group_df.is_attributed/k), alpha=0.8, color=color[0])
-print((group_df.is_attributed/k))
-plt.ylabel('Frequency', fontsize = 12)
-plt.xlabel('Attributed', fontsize = 12)
-plt.title('Frequency of Attributed', fontsize = 16)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# In[ ]:
-
-
-print(train_df.ip.describe())
-plt.figure(figsize=(12, 8))
-sns.kdeplot(train_df.ip, shade=True)
-plt.title('IP distribution', fontsize = 15)
-plt.xlabel('IP', fontsize = 12)
-plt.ylabel('Percent', fontsize = 12)
-plt.show()
-
-
-# * **The distribution of IP data is average.**
-# * **After the int64 type parameters have been processed, we need to process the object type parameters.**
-
-# In[ ]:
-
-
-train_df['click_time'] = pd.to_datetime(train_df['click_time'])
-train_df['hour'] = train_df['click_time'].dt.hour
-train_df['minute'] = train_df['click_time'].dt.minute
-train_df['second'] = train_df['click_time'].dt.second
-train_df=train_df.drop(['click_time'], axis =1)
-
-
-# In[ ]:
-
-
-train_df.info(memory_usage='deep')
-
-
-# In[ ]:
-
-
-import gc
-del df
-gc.collect()
-
-
-# In[ ]:
-
-
-colormap = plt.cm.viridis
-plt.figure(figsize=(16,16))
-plt.title(' The Absolute Correlation Coefficient of Features', y=1.05, size=15)
-sns.heatmap(abs(train_df.astype(float).corr()),linewidths=0.1,vmax=1.0, square=True, cmap=colormap, linecolor='white', annot=True, )
-plt.show()
-
-
-# * **From the picture.**
-# *  **We can know more important influence on is_attributed parameter is weekday, hour, ip, and app parameter.**
-# * **Thanks for Bryan Arnold, perhaps using the correlation coefficient is not the best way to express the method of targeting non-continuous data.**
-
-# **Let's group by some parameters**
-
-# In[ ]:
-
-
-#The frequency of each parameter (hours)
-def group_by(lis_p, select_p, data, Agg=''):
-    print('group by...')
-    newname = '{}'.format('_'.join(lis_p))
-    all_p = lis_p[:]
-    all_p.append(select_p)
-    if Agg=='':
-        gp = data[all_p].groupby(by=lis_p)
-        gp = gp[select_p].count().reset_index().rename(index=str, columns={select_p: newname})
-    else:
-        gp = data[all_p].groupby(by=lis_p).agg(Agg)
-        gp = gp[select_p].reset_index().rename(index=str, columns={select_p: newname})
-    print('merge...')
-    data = data.merge(gp, on=lis_p, how='left')
-    return data, newname
-#The frequency of each parameter with IP (hours)
-train_df, tmp1 = group_by(['ip', 'hour'], 'channel', train_df, 'count')
-train_df, tmp2 = group_by(['ip', 'hour', 'device'], 'channel', train_df, 'count')
-train_df, tmp3 = group_by(['ip', 'hour', 'app'], 'channel', train_df, 'count')                  
-train_df, tmp4 = group_by(['ip', 'hour', 'channel'], 'os', train_df, 'count')
-train_df, tmp5 = group_by(['ip', 'hour', 'os'], 'channel', train_df, 'count')
-parameter_with_IP = [tmp1,tmp2,tmp3,tmp4,tmp5]
-del tmp1
-del tmp2
-del tmp3
-del tmp4
-del tmp5
-#train_df = train_df.drop( ['ip'], axis=1)
-gc.collect()
-
-
-# In[ ]:
-
-
-def calc_iv(df, feature, target, pr=False):
-    """
-    Set pr=True to enable printing of output.
+### TEST DATA
+test_data = pd.read_csv("../input/test.csv", na_values='-1')
+## Filling the missing data NAN with mean of the column
+test_data_nato_median = pd.DataFrame()
+for column in test_data.columns:
+    test_data_nato_median[column] = test_data[column].fillna(test_data[column].median())
     
-    Output: 
-      * iv: float,
-      * data: pandas.DataFrame|
+test_data = test_data_nato_median.copy()
+test_data_id = test_data.pop('id')
+
+
+# In[ ]:
+
+
+## Identifying Categorical data
+column_names = train_data.columns
+categorical_column = column_names[column_names.str[10] == 'c']
+
+## Changing categorical columns to category data type
+def int_to_categorical(data):
+    """ 
+    changing columns to catgorical data type
     """
-
-    lst = []
-
-    df[feature] = df[feature].fillna("NULL")
-
-    for i in range(df[feature].nunique()):
-        val = list(df[feature].unique())[i]
-        lst.append([feature,                                                        # Variable
-                    val,                                                            # Value
-                    df[df[feature] == val].count()[feature],                        # All
-                    df[(df[feature] == val) & (df[target] == 0)].count()[feature],  # Good (think: Fraud == 0)
-                    df[(df[feature] == val) & (df[target] == 1)].count()[feature]]) # Bad (think: Fraud == 1)
-
-    data = pd.DataFrame(lst, columns=['Variable', 'Value', 'All', 'Good', 'Bad'])
-
-    data['Share'] = data['All'] / data['All'].sum()
-    data['Bad Rate'] = data['Bad'] / data['All']
-    data['Distribution Good'] = (data['All'] - data['Bad']) / (data['All'].sum() - data['Bad'].sum())
-    data['Distribution Bad'] = data['Bad'] / data['Bad'].sum()
-    data['WoE'] = np.log(data['Distribution Good'] / data['Distribution Bad'])
-
-    data = data.replace({'WoE': {np.inf: 0, -np.inf: 0}})
-
-    data['IV'] = data['WoE'] * (data['Distribution Good'] - data['Distribution Bad'])
-    data['abs_WoE'] = abs(data['WoE'])
-    data = data.sort_values(by=['Variable', 'Value'], ascending=[True, True])
-    data.index = range(len(data.index))
-
-    if pr:
-        print(data)
-        print('IV = ', data['IV'].sum())
-    return data
-def loop_iv(lis_val, train_df):
-    dic_val = {}
-    for i in lis_val:
-        data = calc_iv(train_df, i, 'is_attributed')
-        dic_val[i] = data
-        print("Done {0}".format(i))
-    return dic_val
+    for column in categorical_column:
+        data[column] =  data[column].astype('category')
 
 
 # In[ ]:
 
 
-lis=list(train_df.columns)
-lis.remove('is_attributed')
-lis.remove('ip')
-lis.remove('hour')
-lis.remove('minute')
-lis.remove('second')
-dic=loop_iv(lis, train_df)
+## Creating list of train and test data and converting columns of interest to categorical type
+datas = [train_data,test_data]
+
+for data in datas:
+    int_to_categorical(data)
+
+#print(test_data.dtypes)
 
 
 # In[ ]:
 
 
-dic_num = {}
-for i in lis:
-    nr_woe = dic[i]['WoE'].argmax()
-    nr_iv = dic[i]['IV'].argmax()
-    dic_num[i] = [nr_woe, nr_iv]
+## Decribing categorical variables
+# def decribe_Categorical(x):
+#     """ 
+#     Function to decribe Categorical data
+#     """
+#     from IPython.display import display, HTML
+#     display(HTML(x[x.columns[x.dtypes =="category"]].describe().to_html))
+
+# decribe_Categorical(train_data)
 
 
 # In[ ]:
 
 
-sum_iV={}
-for i in lis:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-plt.figure(figsize = (16,8))
-m_colors=[]
-k_num=0
-for num in range(len(lis)):
-    if (num//len(color))>k_num:
-        k_num+=1
-    t = num - k_num*len(color)
-    m_colors.append(color[t])
-sns.barplot(list(sum_iV.keys()), list(sum_iV.values()), alpha=0.8, palette = m_colors)
-plt.ylabel('IV value', fontsize = 12)
-plt.xlabel('Parameters', fontsize = 12)
-plt.title("Each parameter's IV", fontsize = 16)
-plt.xticks(rotation='vertical')
+### FUNCTION TO CREATE DUMMIES COLUMNS FOR CATEGORICAL VARIABLES
+def creating_dummies(data):
+    """creating dummies columns categorical varibles
+    """
+    for column in categorical_column:
+        dummies = pd.get_dummies(data[column],prefix=column)
+        data = pd.concat([data,dummies],axis =1)
+        ## dropping the original columns ##
+        data.drop([column],axis=1,inplace= True)
+
+
+# In[ ]:
+
+
+### CREATING DUMMIES FOR CATEGORICAL VARIABLES  
+for column in categorical_column:
+        dummies = pd.get_dummies(train_data[column],prefix=column)
+        train_data = pd.concat([train_data,dummies],axis =1)
+        train_data.drop([column],axis=1,inplace= True)
+
+
+for column in categorical_column:
+        dummies = pd.get_dummies(test_data[column],prefix=column)
+        test_data = pd.concat([test_data,dummies],axis =1)
+        test_data.drop([column],axis=1,inplace= True)
+
+print(train_data.shape)
+print(test_data.shape)
+
+
+# In[ ]:
+
+
+#Define covariates in X and dependent variable in y
+features = train_data.iloc[:,2:] ## FEATURE DATA
+targets= train_data.target ### LABEL DATA
+
+### CHECKING DIMENSIONS
+print(features.shape)
+print(targets.shape)
+
+
+# In[ ]:
+
+
+ax = sns.countplot(x = targets ,palette="Set2")
+sns.set(font_scale=1.5)
+ax.set_xlabel(' ')
+ax.set_ylabel(' ')
+fig = plt.gcf()
+fig.set_size_inches(10,5)
+ax.set_ylim(top=700000)
+for p in ax.patches:
+    ax.annotate('{:.2f}%'.format(100*p.get_height()/len(targets)), (p.get_x()+ 0.3, p.get_height()+10000))
+
+plt.title('Distribution of 595212 Targets')
+plt.xlabel('Initiation of Auto Insurance Claim Next Year')
+plt.ylabel('Frequency [%]')
 plt.show()
 
 
 # In[ ]:
 
 
-train_df, tmp1 = group_by(['ip','app'], 'channel', train_df, 'count')
-train_df, tmp2 = group_by(['ip', 'app', 'os'], 'channel', train_df, 'count')
-train_df, tmp3 = group_by(['ip', 'device'], 'channel', train_df, 'count')                  
-train_df, tmp4 = group_by(['app', 'channel'], 'os', train_df, 'count')
-parameter_IA_IAO_ID_AC = [tmp1,tmp2,tmp3,tmp4]
-dic.update(loop_iv(parameter_IA_IAO_ID_AC, train_df))
+sns.set(style="white")
 
 
-# In[ ]:
+# Compute the correlation matrix
+corr = cor_data.corr()
 
 
-for i in parameter_IA_IAO_ID_AC:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(11, 9))
 
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
 
-# In[ ]:
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, cmap=cmap, vmax=.3, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5})
 
-
-#train_df = train_df.drop( parameter_with_IP, axis=1)
-#The frequency of each parameter with IP (minute)
-train_df, tmp1 = group_by(['ip', 'hour','minute'], 'channel', train_df, 'count')
-train_df, tmp2 = group_by(['ip', 'hour', 'device','minute'], 'channel', train_df, 'count')
-#train_df, tmp3 = group_by(['ip', 'hour', 'app','minute'], 'channel', train_df, 'count')                  
-#train_df, tmp4 = group_by(['ip', 'hour', 'channel','minute'], 'os', train_df, 'count')
-#train_df, tmp5 = group_by(['ip', 'hour', 'os','minute'], 'channel', train_df, 'count')
-train_df, tmp3 = group_by(['ip', 'hour', 'os','minute'], 'channel', train_df, 'count')
-#parameter_with_IP_minute = [tmp1,tmp2,tmp3,tmp4,tmp5]
-parameter_with_IP_minute = [tmp1,tmp2,tmp3]
-dic.update(loop_iv(parameter_with_IP_minute, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_IP_minute:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-##train_df = train_df.drop( parameter_with_IP_minute, axis=1)
-##The frequency of each parameter with IP (second)
-#train_df, tmp1 = group_by(['ip', 'hour','minute','second'], 'channel', train_df, 'count')
-#train_df, tmp2 = group_by(['ip', 'hour', 'device','minute','second'], 'channel', train_df, 'count')
-#train_df, tmp3 = group_by(['ip', 'hour', 'app','minute','second'], 'channel', train_df, 'count')                  
-#train_df, tmp4 = group_by(['ip', 'hour', 'channel','minute','second'], 'os', train_df, 'count')
-#train_df, tmp5 = group_by(['ip', 'hour', 'os','minute','second'], 'channel', train_df, 'count')
-#parameter_with_IP_second = [tmp1,tmp2,tmp3,tmp4,tmp5]
-#dic.update(loop_iv(parameter_with_IP_second, train_df))
-
-
-# In[ ]:
-
-
-#for i in parameter_with_IP_second:
-#    sum_num = dic[i]['IV'].sum()
-#    sum_iV[i] = sum_num
-#    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-#train_df = train_df.drop( parameter_with_IP_second, axis=1)
-#The frequency of each parameter with IP and channel (hours)
-train_df, tmp1 = group_by(['ip', 'app', 'hour', 'channel'], 'os', train_df, 'count')
-#train_df, tmp2 = group_by(['ip', 'app','minute','second', 'hour', 'channel'], 'os', train_df, 'count')
-#train_df, tmp3 = group_by(['ip', 'device', 'hour', 'channel'], 'os', train_df, 'count')
-#train_df, tmp4 = group_by(['ip', 'os', 'hour', 'channel'], 'app', train_df, 'count')
-train_df, tmp2 = group_by(['ip', 'device', 'hour', 'channel'], 'os', train_df, 'count')
-parameter_with_IP_channel = [tmp1,tmp2,tmp3,tmp4]
-parameter_with_IP_channel = [tmp1,tmp2]
-dic.update(loop_iv(parameter_with_IP_channel, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_IP_channel:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-#train_df = train_df.drop( parameter_with_IP_channel, axis=1)
-#The frequency of each parameter with IP and app (hours)
-train_df, tmp1 = group_by(['ip', 'app', 'hour', 'device'], 'os', train_df, 'count')
-train_df, tmp2 = group_by(['ip', 'os', 'hour', 'app'], 'device', train_df, 'count')
-#The frequency of each parameter with IP and device (hours)
-train_df, tmp3 = group_by(['ip', 'os', 'hour', 'device'], 'app', train_df, 'count')
-parameter_with_IP_app = [tmp1,tmp2,tmp3]
-dic.update(loop_iv(parameter_with_IP_app, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_IP_app:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-#train_df = train_df.drop( parameter_with_IP_app, axis=1)
-#The frequency of each parameter with app (IP)
-train_df, tmp1 = group_by(['ip', 'app', 'channel'], 'os', train_df)
-train_df, tmp2 = group_by(['ip', 'device', 'app'], 'os', train_df)
-train_df, tmp3 = group_by(['ip', 'os', 'app'], 'channel', train_df)
-parameter_with_app = [tmp1,tmp2,tmp3]
-dic.update(loop_iv(parameter_with_app, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_app:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-#train_df = train_df.drop( parameter_with_app, axis=1)
-#The frequency of each parameter with app and device(IP)
-train_df, tmp1 = group_by(['ip', 'app', 'device','channel'], 'os', train_df)
-train_df, tmp2 = group_by(['ip', 'device', 'app', 'os'], 'channel', train_df)
-#The frequency of each parameter with app and channel(IP)
-#train_df, tmp3 = group_by(['ip', 'app', 'os','channel'], 'device', train_df)
-#train_df, tmp4 = group_by(['app','channel', 'hour','minute','second' ], 'device', train_df, 'count')
-train_df, tmp3 = group_by(['app','channel', 'hour','minute','second' ], 'device', train_df, 'count')
-#parameter_with_app_device = [tmp1,tmp2,tmp3,tmp4]
-parameter_with_app_device = [tmp1,tmp2,tmp3]
-dic.update(loop_iv(parameter_with_app_device, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_app_device:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-
-
-# In[ ]:
-
-
-#train_df = train_df.drop( parameter_with_app_device, axis=1)
-#The frequency of each parameter with device (IP)
-train_df, tmp1 = group_by(['ip', 'device', 'channel'], 'os', train_df)
-train_df, tmp2 = group_by(['ip', 'os', 'device'], 'channel', train_df)
-#The frequency of each parameter with device and channel (IP)
-#train_df, tmp3 = group_by(['ip', 'device', 'channel', 'os'], 'app', train_df)
-##The frequency of each parameter with channel (IP)
-#train_df, tmp4 = group_by(['ip', 'os', 'channel'], 'app', train_df)
-#parameter_with_device = [tmp1,tmp2,tmp3,tmp4]
-parameter_with_device = [tmp1,tmp2]
-dic.update(loop_iv(parameter_with_device, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_device:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-#train_df = train_df.drop( parameter_with_device, axis=1)
-
-
-# In[ ]:
-
-
-v=list(sum_iV.values())
-v_m = list(sum_iV.values())
-v_n = list(sum_iV.keys())
-v.sort()
-kv = []
-for i in range(len(v)):
-    vv = v_m.index(v[i])
-    kv.append(v_n[vv])
-print('The Top ten IV parameters-----------------------')
-for i in range(1, 11):
-    print('The {0} big IV paramter is {1}.....'.format(i, kv[-i]))
-
-
-# **Now, let's add the time interval parameters. **
-
-# In[ ]:
-
-
-def group_by_click(lis_p, data):
-    print('group by...')
-    newname = '{}_click_time_gap'.format('_'.join(lis_p))
-    all_p = lis_p[:]
-    all_p.append('click_time')
-    data[newname] = data[all_p].groupby(by=lis_p).click_time.transform(lambda x: x.diff().shift(-1)).dt.seconds
-    data[newname] = data[newname].fillna(-1)
-    print('merge...')
-    return data, newname
-
-
-# In[ ]:
-
-
-df = pd.read_csv('../input/train.csv', iterator=True, chunksize=10000,nrows= 3500000, usecols=['click_time'])
-tmp_train_df = pd.concat([chunk[chunk['click_time'].str.contains("2017-11-06")] for chunk in df])
-
-
-# In[ ]:
-
-
-train_df['index'] = train_df.index
-tmp_train_df['index'] = tmp_train_df.index
-train_df = train_df.merge(tmp_train_df, on=['index'], how='left')
-train_df = train_df.drop( ['index'], axis=1)
-train_df['click_time'] = pd.to_datetime(train_df['click_time'])
-del df
-del tmp_train_df
-gc.collect()
-
-
-# In[ ]:
-
-
-train_df, tmp1 = group_by_click(['ip'], train_df)
-train_df, tmp2 = group_by_click(['ip', 'app'],train_df)
-train_df, tmp3 = group_by_click(['ip', 'channel'],train_df)
-train_df, tmp4 = group_by_click(['ip', 'device'],train_df)
-parameter_with_ip_next = [tmp1,tmp2,tmp3, tmp4]
-dic.update(loop_iv(parameter_with_ip_next, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_ip_next:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-#train_df = train_df.drop( parameter_with_ip_next, axis=1)
-
-
-# In[ ]:
-
-
-train_df, tmp1 = group_by_click(['ip', 'device', 'channel'],train_df)
-train_df, tmp2 = group_by_click(['ip', 'device', 'app'],train_df)
-train_df, tmp3 = group_by_click(['ip', 'channel', 'app'],train_df)
-parameter_with_ip2_next = [tmp1,tmp2,tmp3]
-dic.update(loop_iv(parameter_with_ip2_next, train_df))
-
-
-# In[ ]:
-
-
-for i in parameter_with_ip2_next:
-    sum_num = dic[i]['IV'].sum()
-    sum_iV[i] = sum_num
-    print("The sum of IV parameter in {0} : {1}".format(i, sum_num))
-#train_df = train_df.drop( parameter_with_ip2_next, axis=1)
-
-
-# In[ ]:
-
-
-v=list(sum_iV.values())
-v_m = list(sum_iV.values())
-v_n = list(sum_iV.keys())
-v.sort()
-kv = []
-for i in range(len(v)):
-    vv = v_m.index(v[i])
-    kv.append(v_n[vv])
-print('The Top 25 IV parameters-----------------------')
-top_25 = {}
-for i in range(1, 26):
-    print('The {0} big IV paramter is {1}.....'.format(i, kv[-i]))
-    top_25[kv[-i]] = sum_iV[kv[-i]]
-
-plt.figure(figsize = (22,8))
-m_colors=[]
-k_num=0
-for num in range(len(top_25)):
-    if (num//len(color))>k_num:
-        k_num+=1
-    t = num - k_num*len(color)
-    m_colors.append(color[t])
-sns.barplot(list(top_25.keys()),list(top_25.values()), alpha=0.8, palette = m_colors)
-plt.ylabel('IV value', fontsize = 12)
-plt.xlabel('Parameters', fontsize = 12)
-plt.title("TOP 20 parameter's IV", fontsize = 16)
-plt.xticks(rotation='vertical')
 plt.show()
 
 
-# * **From the above result, we can know  the is_attributed parameter is closely related to time interval.**
+# In[ ]:
+
+
+# Define the gini metric - from https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703#5897
+def gini(actual, pred, cmpcol = 0, sortcol = 1):
+    assert( len(actual) == len(pred) )
+    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
+    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
+    totalLosses = all[:,0].sum()
+    giniSum = all[:,0].cumsum().sum() / totalLosses
+    
+    giniSum -= (len(actual) + 1) / 2.
+    return giniSum / len(actual)
+ 
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
+
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = gini_normalized(labels, preds)
+    return 'gini', gini_score
+
 
 # In[ ]:
 
 
-tmp = pd.DataFrame()
-sns.set(font_scale=1.2)
-for i in top_25:
-    tmp[i] = train_df[i]
-del train_df
-gc.collect()
-colormap = plt.cm.viridis
-plt.figure(figsize=(26,26))
-plt.title(' The Absolute Correlation Coefficient of Features', y=1.05, size=15)
-sns.heatmap(abs(tmp.astype(float).corr()),linewidths=0.1,vmax=1.0, square=True, cmap=colormap, linecolor='white', annot=True, )
-plt.show()
-plt.savefig('feature_Correlation_Coefficient.png')
+unwanted = features.columns[features.columns.str.startswith('ps_calc_')]
+print(unwanted)
 
 
-# *  **From the above result, we can choose to avoid parameters that have similar information.**
+# In[ ]:
+
+
+train = features.drop(unwanted, axis=1)  
+test = test_data.drop(unwanted, axis=1)  
+
+print(train.shape)
+print(test.shape)
+
+
+# In[ ]:
+
+
+## Spliting train data 
+kfold = 2 ## I used 5 Kfolds. In interest of computational time using 2
+skf = StratifiedKFold(n_splits=kfold, random_state=42)
+
+
+# In[ ]:
+
+
+## Specifiying parameters
+params = {
+    'min_child_weight': 10.0,
+    'objective': 'binary:logistic',
+    'max_depth': 7,
+    'max_delta_step': 1.8,
+    'colsample_bytree': 0.4,
+    'subsample': 0.8,
+    'eta': 0.025,
+    'gamma': 0.65,
+    'num_boost_round' : 700
+    }
+
+
+# In[ ]:
+
+
+# Converting pandas series to numpy array to be fed to XGBoost package
+X= train.values
+y = targets.values
+
+type(X),type(y)
+
+
+# In[ ]:
+
+
+# Submission data frame
+sub = pd.DataFrame()
+sub['id'] = test_data_id
+sub['target'] = np.zeros_like(test_data_id)
+sub.shape
+
+
+# We are providing custom weights to the labels in the data. Here I used two ways to do it,
+# 1. Manually assigning weights to the label as by numpy array 'weights' in the code
+# 2. using 'scale_pos_weights' parameter
+
+# In[ ]:
+
+
+## Model fitting
+# THis is where the magic happens
+
+for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+    print('[Fold %d/%d]' % (i + 1, kfold))
+    X_train, X_valid = X[train_index], X[test_index]
+    y_train, y_valid = y[train_index], y[test_index]
+    ### Custom weights: To deal with imbalanced label
+    #weights = np.zeros(len(y_train))
+    #weights[y_train == 0] = 1
+    #weights[y_train == 1] = 9            
+    #d_train = xgb.DMatrix(X_train, label = y_train, weight = weights)
+    
+    
+    d_train = xgb.DMatrix(X_train, label = y_train)
+    d_valid = xgb.DMatrix(X_valid, y_valid)
+    d_test = xgb.DMatrix(test.values)
+    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
+    
+    ### USing Scale_pos_weights parameter
+    ## In this case we are splitting giving weights to the label according 
+    # to their relative ratio's in the data
+    
+   # train_labels = d_train.get_label()
+   # ratio = float(np.sum(train_labels == 0))/ np.sum(train_labels == 1)
+   # params['scale_pos_weight'] = ratio
+
+    # Train the model! We pass in a max of 1,600 rounds (with early stopping after 70)
+    # and the custom metric (maximize=True tells xgb that higher metric is better)
+    mdl = xgb.train(params, d_train, 1600, watchlist, early_stopping_rounds=70, 
+                    feval=gini_xgb, maximize=True, verbose_eval=100)
+
+    print('[Fold %d/%d Prediciton:]' % (i + 1, kfold))
+    # Predict on our test data
+    p_test = mdl.predict(d_test, ntree_limit=mdl.best_ntree_limit)
+    sub['target'] += p_test/kfold
+
+
+# *OUTPUT*
+# Adding each layer of topic of the other:
+# 1. Base XGBoost: 0.281
+# 2. XGBoost with missing values filled with Median(equal class weights): 0.285
+# 3. XGbosot with custom weight: 0.282
+# 4. XGboost with scale_pos_weights parameter: 0.280
+
+# In[ ]:
+
+
+#sub.to_csv("ModifiedXGBOOST.csv",index =  False)
+
+
+# **FUTURE WORK:**
+# 1. Planning on using Gridsearch 
+# 2. Dealing with Imbalanced data such as this,
+#     For class imbalance, we have many methods that could deal with the problem. There is no one method that could essentially solve the issue every single time. Here are few methods that we could use to deal with Class imbalance.
+# 
+# 1. Weighted loss functions: Giving higher weights to minority class(in this case, class 1). For example, Logistic regression model has inbuilt parameter 'class_weights' which can used to assign weights to the class labels as per choice.
+# 2. Random Undersampling: As the name suggests, randomly undersample examples from majority class
+# 3. NEARMISS-1 : Retain points from majority class whose mean distance to the K nearest points in S is lowest
+# 4. NEARMISS-2: Keep points from majority class whose mean distance to the K farthest points in minority class is lowest
+# 5. NEARMISS-3: Select K nearest neighbours In majority class for every point in minority class
+# 6. Condensed Nearest Neighbour(CNN)
+# 7. Edited Nearest Neighbour(ENN)
+# 8. Repeated Edited Nearest Neighbour
+# 9. TOMEK LINK REMOVAL
+# 10. Random Oversampling
+# 11. Synthetic Minority Oversampling Technique(SMOTE)
+# 12. SMOTE + Tomek Link Removal
+# 13. SMOTE + ENN
+# 14. EASYENSEMBLE
+# 15. BALANCECASCADE and many more
+# 
+# Reference: 
+# 1. https://www.youtube.com/watch?v=-Z1PaqYKC1w
+# 2. https://www.youtube.com/watch?v=32tXCJP0HYc&list=PLZnYQQzkMilqTC12LmnN4WpQexB9raKQG&index=13

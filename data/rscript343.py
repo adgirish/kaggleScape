@@ -1,235 +1,275 @@
-# part of 2nd place solution NN, public lb 0.284  private lb 0.29008
-from keras.layers import Dense, Dropout, Embedding, Flatten, Input, merge
-from keras.layers.normalization import BatchNormalization
-from keras.layers.advanced_activations import PReLU
-from time import time
-import datetime
-from keras.models import Model
-from sklearn.model_selection import StratifiedKFold
-import numpy as np
+# Version 5 of this kernel is a Python version of Pranav Pandya's R LightGBM:
+#    https://www.kaggle.com/pranav84/single-lightgbm-in-r-with-75-mln-rows-lb-0-9690
+
+# Version 6 increases MAX_ROUNDS to get early stopping
+# Version 7 runs without validation based on the result of version 6
+# Version 9 (still trying to run full training)
+#           gets rid of AUC evals, to maybe speed it up
+# Version 10 runs validation with shuffle=False
+#            (since there is a relevant time element
+#             which will leak in shuffled validation)
+# Version 11 runs without validation based on result of version 11
+# Version 12 adds 'day' restriction to all aggregations
+#            (to make train and test sets more comparable)
+# Version 13 attempts to expand the data back by 25 million records
+# Version 14 runs without validation based on result of version 13
+# Version 15 even more records
+# Version 16 OK, not quite so many records
+# Version 17 reverts to version 14 (LB=.9694)
+
+VALIDATE = False
+
+MAX_ROUNDS = 1000
+EARLY_STOP = 50
+OPT_ROUNDS = 680
+
+FULL_OUTFILE = 'sub_lgbm_r_to_python_nocv.csv'
+VALID_OUTFILE = 'sub_lgbm_r_to_python_withcv.csv'
+
 import pandas as pd
-from util import Gini, interaction_features
-from itertools import combinations
-from util import proj_num_on_cat
-from scipy import sparse
-from sklearn.preprocessing import StandardScaler
-import pickle
-from sklearn.preprocessing import LabelEncoder
+import time
+import numpy as np
+from sklearn.model_selection import train_test_split 
+import lightgbm as lgb
 
-cv_only = True
-save_cv = True
+path = '../input/'
 
-NFOLDS = 5
-kfold = StratifiedKFold(n_splits=NFOLDS, shuffle=True, random_state=218)
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        'is_attributed' : 'uint8',
+        'click_id'      : 'uint32'
+        }
 
-train = pd.read_csv("../input/train.csv")
-train_label = train['target']
-train_id = train['id']
-del train['target'], train['id']
+print('load train...')
+train_cols = ['ip','app','device','os', 'channel', 'click_time', 'is_attributed']
+train_df = pd.read_csv(path+"train.csv", skiprows=range(1,84903891), nrows=100000000,dtype=dtypes, usecols=train_cols)
 
-test = pd.read_csv("../input/test.csv")
-test_id = test['id']
-del test['id']
+import gc
 
-cat_fea = [x for x in list(train) if 'cat' in x]
-bin_fea = [x for x in list(train) if 'bin' in x]
+len_train = len(train_df)
 
-train['missing'] = (train==-1).sum(axis=1).astype(float)
-test['missing'] = (test==-1).sum(axis=1).astype(float)
+gc.collect()
 
-# include interactions
-for e, (x, y) in enumerate(combinations(['ps_car_13', 'ps_ind_03', 'ps_reg_03', 'ps_ind_15', 'ps_reg_01', 'ps_ind_01'], 2)):
-    train, test = interaction_features(train, test, x, y, e)
+print('data prep...')
 
-num_features = [c for c in list(train) if ('cat' not in c and 'calc' not in c)]
-num_features.append('missing')
-inter_fea = [x for x in list(train) if 'inter' in x]
-
-feature_names = list(train)
-ind_features = [c for c in feature_names if 'ind' in c]
-count = 0
-for c in ind_features:
-    if count == 0:
-        train['new_ind'] = train[c].astype(str)
-        count += 1
-    else:
-        train['new_ind'] += '_' + train[c].astype(str)
-
-ind_features = [c for c in feature_names if 'ind' in c]
-count = 0
-for c in ind_features:
-    if count == 0:
-        test['new_ind'] = test[c].astype(str)
-        count += 1
-    else:
-        test['new_ind'] += '_' + test[c].astype(str)
-
-reg_features = [c for c in feature_names if 'reg' in c]
-count = 0
-for c in reg_features:
-    if count == 0:
-        train['new_reg'] = train[c].astype(str)
-        count += 1
-    else:
-        train['new_reg'] += '_' + train[c].astype(str)
-
-reg_features = [c for c in feature_names if 'reg' in c]
-count = 0
-for c in reg_features:
-    if count == 0:
-        test['new_reg'] = test[c].astype(str)
-        count += 1
-    else:
-        test['new_reg'] += '_' + test[c].astype(str)
-
-car_features = [c for c in feature_names if 'car' in c]
-count = 0
-for c in car_features:
-    if count == 0:
-        train['new_car'] = train[c].astype(str)
-        count += 1
-    else:
-        train['new_car'] += '_' + train[c].astype(str)
-
-car_features = [c for c in feature_names if 'car' in c]
-count = 0
-for c in car_features:
-    if count == 0:
-        test['new_car'] = test[c].astype(str)
-        count += 1
-    else:
-        test['new_car'] += '_' + test[c].astype(str)
-
-train_cat = train[cat_fea]
-train_num = train[[x for x in list(train) if x in num_features]]
-test_cat = test[cat_fea]
-test_num = test[[x for x in list(train) if x in num_features]]
-
-max_cat_values = []
-for c in cat_fea:
-    le = LabelEncoder()
-    x = le.fit_transform(pd.concat([train_cat, test_cat])[c])
-    train_cat[c] = le.transform(train_cat[c])
-    test_cat[c] = le.transform(test_cat[c])
-    max_cat_values.append(np.max(x))
-
-# xgboost prediction
-train_fea0, test_fea0 = pickle.load(open("../input/fea0.pk"))
-
-cat_count_features = []
-for c in cat_fea + ['new_ind','new_reg','new_car']:
-    d = pd.concat([train[c],test[c]]).value_counts().to_dict()
-    train['%s_count'%c] = train[c].apply(lambda x:d.get(x,0))
-    test['%s_count'%c] = test[c].apply(lambda x:d.get(x,0))
-    cat_count_features.append('%s_count'%c)
+most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
+least_freq_hours_in_test_data = [6, 11, 15]
 
 
-print(train_num.dtypes)
-train_list = [train_num.replace([np.inf, -np.inf, np.nan], 0), train[cat_count_features], train_fea0]
-test_list = [test_num.replace([np.inf, -np.inf, np.nan], 0), test[cat_count_features], test_fea0]
+def prep_data( df ):
+    
+    df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
+    df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
+    df.drop(['click_time'], axis=1, inplace=True)
+    gc.collect()
+    
+    df['in_test_hh'] = (   3 
+                         - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
+                         - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
+    print( df.info() )
 
-#feature aggregation
-for t in ['ps_car_13', 'ps_ind_03', 'ps_reg_03', 'ps_ind_15', 'ps_reg_01', 'ps_ind_01']:
-    for g in ['ps_car_13', 'ps_ind_03', 'ps_reg_03', 'ps_ind_15', 'ps_reg_01', 'ps_ind_01', 'ps_ind_05_cat']:
-        if t != g:
-            s_train, s_test = proj_num_on_cat(train, test, target_column=t, group_column=g)
-            train_list.append(s_train)
-            test_list.append(s_test)
-X = sparse.hstack(train_list).tocsr()
-X_test = sparse.hstack(test_list).tocsr()
+    print('group by : ip_day_test_hh')
+    gp = df[['ip', 'day', 'in_test_hh', 'channel']].groupby(by=['ip', 'day',
+             'in_test_hh'])[['channel']].count().reset_index().rename(index=str, 
+             columns={'channel': 'nip_day_test_hh'})
+    df = df.merge(gp, on=['ip','day','in_test_hh'], how='left')
+    del gp
+    df.drop(['in_test_hh'], axis=1, inplace=True)
+    print( "nip_day_test_hh max value = ", df.nip_day_test_hh.max() )
+    df['nip_day_test_hh'] = df['nip_day_test_hh'].astype('uint32')
+    gc.collect()
+    print( df.info() )
 
-all_data = np.vstack([X.toarray(), X_test.toarray()])
-scaler = StandardScaler()
-scaler.fit(all_data)
-X = scaler.transform(X.toarray())
-X_test = scaler.transform(X_test.toarray())
-print(X.shape, X_test.shape)
+    print('group by : ip_day_hh')
+    gp = df[['ip', 'day', 'hour', 'channel']].groupby(by=['ip', 'day', 
+             'hour'])[['channel']].count().reset_index().rename(index=str, 
+             columns={'channel': 'nip_day_hh'})
+    df = df.merge(gp, on=['ip','day','hour'], how='left')
+    del gp
+    print( "nip_day_hh max value = ", df.nip_day_hh.max() )
+    df['nip_day_hh'] = df['nip_day_hh'].astype('uint16')
+    gc.collect()
+    print( df.info() )
 
+    print('group by : ip_hh_os')
+    gp = df[['ip', 'day', 'os', 'hour', 'channel']].groupby(by=['ip', 'os', 'day',
+             'hour'])[['channel']].count().reset_index().rename(index=str, 
+             columns={'channel': 'nip_hh_os'})
+    df = df.merge(gp, on=['ip','os','hour','day'], how='left')
+    del gp
+    print( "nip_hh_os max value = ", df.nip_hh_os.max() )
+    df['nip_hh_os'] = df['nip_hh_os'].astype('uint16')
+    gc.collect()
+    print( df.info() )
 
-cv_train = np.zeros(len(train_label))
-cv_pred = np.zeros(len(test_id))
+    print('group by : ip_hh_app')
+    gp = df[['ip', 'app', 'hour', 'day', 'channel']].groupby(by=['ip', 'app', 'day',
+             'hour'])[['channel']].count().reset_index().rename(index=str, 
+             columns={'channel': 'nip_hh_app'})
+    df = df.merge(gp, on=['ip','app','hour','day'], how='left')
+    del gp
+    print( "nip_hh_app max value = ", df.nip_hh_app.max() )
+    df['nip_hh_app'] = df['nip_hh_app'].astype('uint16')
+    gc.collect()
+    print( df.info() )
 
-X_cat = train_cat.as_matrix()
-X_test_cat = test_cat.as_matrix()
+    print('group by : ip_hh_dev')
+    gp = df[['ip', 'device', 'hour', 'day', 'channel']].groupby(by=['ip', 'device', 'day',
+             'hour'])[['channel']].count().reset_index().rename(index=str, 
+             columns={'channel': 'nip_hh_dev'})
+    df = df.merge(gp, on=['ip','device','day','hour'], how='left')
+    del gp
+    print( "nip_hh_dev max value = ", df.nip_hh_dev.max() )
+    df['nip_hh_dev'] = df['nip_hh_dev'].astype('uint32')
+    gc.collect()
+    print( df.info() )
 
-x_test_cat = []
-for i in xrange(X_test_cat.shape[1]):
-    x_test_cat.append(X_test_cat[:, i].reshape(-1, 1))
-x_test_cat.append(X_test)
+    df.drop( ['ip','day'], axis=1, inplace=True )
+    gc.collect()
+    print( df.info() )
+    
+    return( df )
 
-def nn_model():
-    inputs = []
-    flatten_layers = []
-    for e, c in enumerate(cat_fea):
-        input_c = Input(shape=(1, ), dtype='int32')
-        num_c = max_cat_values[e]
-        embed_c = Embedding(
-            num_c,
-            6,
-            input_length=1
-        )(input_c)
-        embed_c = Dropout(0.25)(embed_c)
-        flatten_c = Flatten()(embed_c)
+#---------------------------------------------------------------------------------
 
-        inputs.append(input_c)
-        flatten_layers.append(flatten_c)
+print( "Train info before: ")
+print( train_df.info() )
+train_df = prep_data( train_df )
+gc.collect()
+print( "Train info after: ")
+print( train_df.info() )
 
-    input_num = Input(shape=(X.shape[1],), dtype='float32')
-    flatten_layers.append(input_num)
-    inputs.append(input_num)
+print("vars and data type: ")
+train_df.info()
 
-    flatten = merge(flatten_layers, mode='concat')
+metrics = 'auc'
+lgb_params = {
+        'boosting_type': 'gbdt',
+        'objective': 'binary',
+        'metric':metrics,
+        'learning_rate': 0.1,
+        'num_leaves': 7,  # we should let it be smaller than 2^(max_depth)
+        'max_depth': 4,  # -1 means no limit
+        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
+        'max_bin': 100,  # Number of bucketed bin for feature values
+        'subsample': 0.7,  # Subsample ratio of the training instance.
+        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
+        'colsample_bytree': 0.7,  # Subsample ratio of columns when constructing each tree.
+        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
+        'nthread': 8,
+        'verbose': 0,
+        'scale_pos_weight':99.7, # because training data is extremely unbalanced 
+        'metric':metrics
+}
 
-    fc1 = Dense(512, init='he_normal')(flatten)
-    fc1 = PReLU()(fc1)
-    fc1 = BatchNormalization()(fc1)
-    fc1 = Dropout(0.75)(fc1)
+target = 'is_attributed'
+predictors = ['app','device','os', 'channel', 'hour', 'nip_day_test_hh', 'nip_day_hh',
+              'nip_hh_os', 'nip_hh_app', 'nip_hh_dev']
+categorical = ['app', 'device', 'os', 'channel', 'hour']
 
-    fc1 = Dense(64, init='he_normal')(fc1)
-    fc1 = PReLU()(fc1)
-    fc1 = BatchNormalization()(fc1)
-    fc1 = Dropout(0.5)(fc1)
+print(train_df.head(5))
 
-    outputs = Dense(1, init='he_normal', activation='sigmoid')(fc1)
+if VALIDATE:
 
-    model = Model(input = inputs, output = outputs)
-    model.compile(loss='binary_crossentropy', optimizer='adam')
-    return (model)
+    train_df, val_df = train_test_split( train_df, train_size=.95, shuffle=False )
 
-num_seeds = 5
-begintime = time()
-if cv_only:
-    for s in xrange(num_seeds):
-        np.random.seed(s)
-        for (inTr, inTe) in kfold.split(X, train_label):
-            xtr = X[inTr]
-            ytr = train_label[inTr]
-            xte = X[inTe]
-            yte = train_label[inTe]
+    print(train_df.info())
+    print(val_df.info())
 
-            xtr_cat = X_cat[inTr]
-            xte_cat = X_cat[inTe]
+    print("train size: ", len(train_df))
+    print("valid size: ", len(val_df))
 
-            # get xtr xte cat
-            xtr_cat_list, xte_cat_list = [], []
-            for i in xrange(xtr_cat.shape[1]):
-                xtr_cat_list.append(xtr_cat[:, i].reshape(-1, 1))
-                xte_cat_list.append(xte_cat[:, i].reshape(-1, 1))
+    gc.collect()
 
-            xtr_cat_list.append(xtr)
-            xte_cat_list.append(xte)
+    print("Training...")
 
-            model = nn_model()
-            def get_rank(x):
-                return pd.Series(x).rank(pct=True).values
-            model.fit(xtr_cat_list, ytr, epochs=20, batch_size=512, verbose=2, validation_data=[xte_cat_list, yte])
-            cv_train[inTe] += get_rank(model.predict(x=xte_cat_list, batch_size=512, verbose=0)[:, 0])
-            print(Gini(train_label[inTe], cv_train[inTe]))
-            cv_pred += get_rank(model.predict(x=x_test_cat, batch_size=512, verbose=0)[:, 0])
-        print(s)
-        print(Gini(train_label, cv_train / (1. * (s + 1))))
-        print(str(datetime.timedelta(seconds=time() - begintime)))
-    if save_cv:
-        pd.DataFrame({'id': test_id, 'target': get_rank(cv_pred * 1./ (NFOLDS * num_seeds))}).to_csv('../model/keras5_pred.csv', index=False)
-        pd.DataFrame({'id': train_id, 'target': get_rank(cv_train * 1. / num_seeds)}).to_csv('../model/keras5_cv.csv', index=False)
+    num_boost_round=MAX_ROUNDS
+    early_stopping_rounds=EARLY_STOP
 
+    xgtrain = lgb.Dataset(train_df[predictors].values, label=train_df[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical
+                          )
+    del train_df
+    gc.collect()
+
+    xgvalid = lgb.Dataset(val_df[predictors].values, label=val_df[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical
+                          )
+    del val_df
+    gc.collect()
+
+    evals_results = {}
+
+    bst = lgb.train(lgb_params, 
+                     xgtrain, 
+                     valid_sets= [xgvalid], 
+                     valid_names=['valid'], 
+                     evals_result=evals_results, 
+                     num_boost_round=num_boost_round,
+                     early_stopping_rounds=early_stopping_rounds,
+                     verbose_eval=10, 
+                     feval=None)
+
+    n_estimators = bst.best_iteration
+
+    print("\nModel Report")
+    print("n_estimators : ", n_estimators)
+    print(metrics+":", evals_results['valid'][metrics][n_estimators-1])
+    
+    outfile = VALID_OUTFILE
+    
+    del xgvalid
+
+else:
+
+    print(train_df.info())
+
+    print("train size: ", len(train_df))
+
+    gc.collect()
+
+    print("Training...")
+
+    num_boost_round=OPT_ROUNDS
+
+    xgtrain = lgb.Dataset(train_df[predictors].values, label=train_df[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical
+                          )
+    del train_df
+    gc.collect()
+
+    bst = lgb.train(lgb_params, 
+                     xgtrain, 
+                     num_boost_round=num_boost_round,
+                     verbose_eval=10, 
+                     feval=None)
+                     
+    outfile = FULL_OUTFILE
+
+del xgtrain
+gc.collect()
+
+print('load test...')
+test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
+test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=test_cols)
+
+test_df = prep_data( test_df )
+gc.collect()
+
+sub = pd.DataFrame()
+sub['click_id'] = test_df['click_id']
+
+print("Predicting...")
+sub['is_attributed'] = bst.predict(test_df[predictors])
+print("writing...")
+sub.to_csv(outfile, index=False, float_format='%.9f')
+print("done...")
+print(sub.info())

@@ -1,167 +1,433 @@
 
 # coding: utf-8
 
-# This notebook is based on sample version with first 10,000,000 rows.<br><br>
-# It contains two main parts:<br>
-# 1. Exploration by country<br>
-# 2. Exploration by State for USA data<br>
+# # Introduction
 # 
-# Any comments and improvements are welcome!
+# In this notebook, I go over some visualizations of the iceberg data. My purpose here is not to set up a classifier, but rather to try to get some sense of what types of features might be most useful.
+# 
+# As usual, we first have to import some packages.
 
-# ### Load "Page view" sample data
-
-# In[ ]:
+# In[1]:
 
 
 import pandas as pd
-import warnings
-warnings.filterwarnings('ignore')
-
-page_views_sample_df = pd.read_csv("../input/page_views_sample.csv", usecols=['uuid', 'geo_location'])
-# Drop NAs
-page_views_sample_df.dropna(inplace=True)
-# Drop EU code
-page_views_sample_df = page_views_sample_df.loc[~page_views_sample_df.geo_location.isin(['EU', '--']), :]
-# Drop duplicates
-page_views_sample_df = page_views_sample_df.drop_duplicates('uuid', keep='first')
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# # Exploration by Country
+# I'll now read in the file. It is in a .json format rather than the .csv format that seems to be most common on Kaggle. It also turns out that "inc_angle" has some bad values, so I will convert it to a floating point format with the NaN values left in.
 
-# At the beginning let see distribution by country.
-
-# In[ ]:
+# In[2]:
 
 
-country = page_views_sample_df.copy()
-country.columns = ['uuid', 'Country']
-country.Country = country.Country.str[:2]
-country.loc[:, 'UserCount'] = country.groupby('Country')['Country'].transform('count')
-country = country.loc[:, ['Country', 'UserCount']].drop_duplicates('Country', keep='first')
-country.sort_values('UserCount', ascending=False, inplace=True)
-country.head(10)
+train = pd.read_json('../input/train.json')
+train['inc_angle'] = pd.to_numeric(train['inc_angle'],errors='coerce')
 
 
-# Adding country names to show data in a beautiful way, to generate dictionary with Country names I've used **pycountry** library.
+# # Global Image Stats
+# 
+# Now, I will look at some global properties of the images. These are things like the minimum and maximum values, the means, medians, and the 50% mid range of the signal values. There are two different bands used in the file, so I'll do this separately for each band.
 
-# In[ ]:
-
-
-countryCode2Name = {u'BD': u'Bangladesh', u'BE': u'Belgium', u'BF': u'Burkina Faso', u'BG': u'Bulgaria', u'BA': u'Bosnia and Herzegovina', u'BB': u'Barbados', u'WF': u'Wallis and Futuna', u'BL': u'Saint Barth\xe9lemy', u'BM': u'Bermuda', u'BN': u'Brunei Darussalam', u'BO': u'Bolivia, Plurinational State of', u'BH': u'Bahrain', u'BI': u'Burundi', u'BJ': u'Benin', u'BT': u'Bhutan', u'JM': u'Jamaica', u'BV': u'Bouvet Island', u'BW': u'Botswana', u'WS': u'Samoa', u'BQ': u'Bonaire, Sint Eustatius and Saba', u'BR': u'Brazil', u'BS': u'Bahamas', u'JE': u'Jersey', u'BY': u'Belarus', u'BZ': u'Belize', u'RU': u'Russian Federation', u'RW': u'Rwanda', u'RS': u'Serbia', u'TL': u'Timor-Leste', u'RE': u'R\xe9union', u'TM': u'Turkmenistan', u'TJ': u'Tajikistan', u'RO': u'Romania', u'TK': u'Tokelau', u'GW': u'Guinea-Bissau', u'GU': u'Guam', u'GT': u'Guatemala', u'GS': u'South Georgia and the South Sandwich Islands', u'GR': u'Greece', u'GQ': u'Equatorial Guinea', u'GP': u'Guadeloupe', u'JP': u'Japan', u'GY': u'Guyana', u'GG': u'Guernsey', u'GF': u'French Guiana', u'GE': u'Georgia', u'GD': u'Grenada', u'GB': u'United Kingdom', u'GA': u'Gabon', u'GN': u'Guinea', u'GM': u'Gambia', u'GL': u'Greenland', u'GI': u'Gibraltar', u'GH': u'Ghana', u'OM': u'Oman', u'TN': u'Tunisia', u'JO': u'Jordan', u'HR': u'Croatia', u'HT': u'Haiti', u'HU': u'Hungary', u'HK': u'Hong Kong', u'HN': u'Honduras', u'HM': u'Heard Island and McDonald Islands', u'VE': u'Venezuela, Bolivarian Republic of', u'PR': u'Puerto Rico', u'PS': u'Palestine, State of', u'PW': u'Palau', u'PT': u'Portugal', u'KN': u'Saint Kitts and Nevis', u'PY': u'Paraguay', u'IQ': u'Iraq', u'PA': u'Panama', u'PF': u'French Polynesia', u'PG': u'Papua New Guinea', u'PE': u'Peru', u'PK': u'Pakistan', u'PH': u'Philippines', u'PN': u'Pitcairn', u'PL': u'Poland', u'PM': u'Saint Pierre and Miquelon', u'ZM': u'Zambia', u'EH': u'Western Sahara', u'EE': u'Estonia', u'EG': u'Egypt', u'ZA': u'South Africa', u'EC': u'Ecuador', u'IT': u'Italy', u'VN': u'Viet Nam', u'SB': u'Solomon Islands', u'ET': u'Ethiopia', u'SO': u'Somalia', u'ZW': u'Zimbabwe', u'SA': u'Saudi Arabia', u'ES': u'Spain', u'ER': u'Eritrea', u'ME': u'Montenegro', u'MD': u'Moldova, Republic of', u'MG': u'Madagascar', u'MF': u'Saint Martin (French part)', u'MA': u'Morocco', u'MC': u'Monaco', u'UZ': u'Uzbekistan', u'MM': u'Myanmar', u'ML': u'Mali', u'MO': u'Macao', u'MN': u'Mongolia', u'MH': u'Marshall Islands', u'MK': u'Macedonia, Republic of', u'MU': u'Mauritius', u'MT': u'Malta', u'MW': u'Malawi', u'MV': u'Maldives', u'MQ': u'Martinique', u'MP': u'Northern Mariana Islands', u'MS': u'Montserrat', u'MR': u'Mauritania', u'IM': u'Isle of Man', u'UG': u'Uganda', u'TZ': u'Tanzania, United Republic of', u'MY': u'Malaysia', u'MX': u'Mexico', u'IL': u'Israel', u'FR': u'France', u'AW': u'Aruba', u'SH': u'Saint Helena, Ascension and Tristan da Cunha', u'SJ': u'Svalbard and Jan Mayen', u'FI': u'Finland', u'FJ': u'Fiji', u'FK': u'Falkland Islands (Malvinas)', u'FM': u'Micronesia, Federated States of', u'FO': u'Faroe Islands', u'NI': u'Nicaragua', u'NL': u'Netherlands', u'NO': u'Norway', u'NA': u'Namibia', u'VU': u'Vanuatu', u'NC': u'New Caledonia', u'NE': u'Niger', u'NF': u'Norfolk Island', u'NG': u'Nigeria', u'NZ': u'New Zealand', u'NP': u'Nepal', u'NR': u'Nauru', u'NU': u'Niue', u'CK': u'Cook Islands', u'CI': u"C\xf4te d'Ivoire", u'CH': u'Switzerland', u'CO': u'Colombia', u'CN': u'China', u'CM': u'Cameroon', u'CL': u'Chile', u'CC': u'Cocos (Keeling) Islands', u'CA': u'Canada', u'CG': u'Congo', u'CF': u'Central African Republic', u'CD': u'Congo, The Democratic Republic of the', u'CZ': u'Czech Republic', u'CY': u'Cyprus', u'CX': u'Christmas Island', u'CR': u'Costa Rica', u'CW': u'Cura\xe7ao', u'CV': u'Cape Verde', u'CU': u'Cuba', u'SZ': u'Swaziland', u'SY': u'Syrian Arab Republic', u'SX': u'Sint Maarten (Dutch part)', u'KG': u'Kyrgyzstan', u'KE': u'Kenya', u'SS': u'South Sudan', u'SR': u'Suriname', u'KI': u'Kiribati', u'KH': u'Cambodia', u'SV': u'El Salvador', u'KM': u'Comoros', u'ST': u'Sao Tome and Principe', u'SK': u'Slovakia', u'KR': u'Korea, Republic of', u'SI': u'Slovenia', u'KP': u"Korea, Democratic People's Republic of", u'KW': u'Kuwait', u'SN': u'Senegal', u'SM': u'San Marino', u'SL': u'Sierra Leone', u'SC': u'Seychelles', u'KZ': u'Kazakhstan', u'KY': u'Cayman Islands', u'SG': u'Singapore', u'SE': u'Sweden', u'SD': u'Sudan', u'DO': u'Dominican Republic', u'DM': u'Dominica', u'DJ': u'Djibouti', u'DK': u'Denmark', u'DE': u'Germany', u'YE': u'Yemen', u'DZ': u'Algeria', u'US': u'United States', u'UY': u'Uruguay', u'YT': u'Mayotte', u'UM': u'United States Minor Outlying Islands', u'LB': u'Lebanon', u'LC': u'Saint Lucia', u'LA': u"Lao People's Democratic Republic", u'TV': u'Tuvalu', u'TW': u'Taiwan, Province of China', u'TT': u'Trinidad and Tobago', u'TR': u'Turkey', u'LK': u'Sri Lanka', u'LI': u'Liechtenstein', u'LV': u'Latvia', u'TO': u'Tonga', u'LT': u'Lithuania', u'LU': u'Luxembourg', u'LR': u'Liberia', u'LS': u'Lesotho', u'TH': u'Thailand', u'TF': u'French Southern Territories', u'TG': u'Togo', u'TD': u'Chad', u'TC': u'Turks and Caicos Islands', u'LY': u'Libya', u'VA': u'Holy See (Vatican City State)', u'VC': u'Saint Vincent and the Grenadines', u'AE': u'United Arab Emirates', u'AD': u'Andorra', u'AG': u'Antigua and Barbuda', u'AF': u'Afghanistan', u'AI': u'Anguilla', u'IS': u'Iceland', u'IR': u'Iran, Islamic Republic of', u'AM': u'Armenia', u'AL': u'Albania', u'AO': u'Angola', u'AQ': u'Antarctica', u'AS': u'American Samoa', u'AR': u'Argentina', u'AU': u'Australia', u'AT': u'Austria', u'IO': u'British Indian Ocean Territory', u'IN': u'India', u'AX': u'\xc5land Islands', u'AZ': u'Azerbaijan', u'IE': u'Ireland', u'ID': u'Indonesia', u'UA': u'Ukraine', u'QA': u'Qatar', u'MZ': u'Mozambique', u'FX': u'France, Metropolitan', u'AN': u'Netherlands Antilles', u'A1': u'Anguilla'}
-country['CountryName'] = country['Country'].map(countryCode2Name)
-
-# Drop NAs
-country.dropna(inplace=True)
-
-country['CumulativePercentage'] = 100 * country.UserCount.cumsum()/country.UserCount.sum()
-country.reset_index(drop=True, inplace=True)
-country[['CountryName', 'UserCount', 'CumulativePercentage']].head(10)
+# In[3]:
 
 
-# Show data on the world map
+def get_stats(train,label=1):
+    train['max'+str(label)] = [np.max(np.array(x)) for x in train['band_'+str(label)] ]
+    train['maxpos'+str(label)] = [np.argmax(np.array(x)) for x in train['band_'+str(label)] ]
+    train['min'+str(label)] = [np.min(np.array(x)) for x in train['band_'+str(label)] ]
+    train['minpos'+str(label)] = [np.argmin(np.array(x)) for x in train['band_'+str(label)] ]
+    train['med'+str(label)] = [np.median(np.array(x)) for x in train['band_'+str(label)] ]
+    train['std'+str(label)] = [np.std(np.array(x)) for x in train['band_'+str(label)] ]
+    train['mean'+str(label)] = [np.mean(np.array(x)) for x in train['band_'+str(label)] ]
+    train['p25_'+str(label)] = [np.sort(np.array(x))[int(0.25*75*75)] for x in train['band_'+str(label)] ]
+    train['p75_'+str(label)] = [np.sort(np.array(x))[int(0.75*75*75)] for x in train['band_'+str(label)] ]
+    train['mid50_'+str(label)] = train['p75_'+str(label)]-train['p25_'+str(label)]
 
-# In[ ]:
-
-
-import plotly.offline as py
-py.offline.init_notebook_mode()
-
-data = [ dict(
-        type = 'choropleth',
-        locations = country['CountryName'],
-        z = country['UserCount'],
-        locationmode = 'country names',
-        text = country['CountryName'],
-        colorscale = [[0,"rgb(153, 241, 243)"],[0.005,"rgb(16, 64, 143)"],[1,"rgb(0, 0, 0)"]],
-        autocolorscale = False,
-        marker = dict(
-            line = dict(color = 'rgb(58,100,69)', width = 0.6)),
-            colorbar = dict(autotick = True, tickprefix = '', title = '# of Users')
-            )
-       ]
-
-layout = dict(
-    title = 'Total number of users by country',
-    geo = dict(
-        showframe = False,
-        showcoastlines = True,
-        projection = dict(
-        type = 'equirectangular'
-        ),
-    margin = dict(b = 0, t = 0, l = 0, r = 0)
-            )
-    )
-
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='worldmap')
+    return train
+train = get_stats(train,1)
+train = get_stats(train,2)
 
 
-# As we can see more than 81% of all Users are from USA. Lets see distribution by States for USA.
+# ## Plotting the Statistics
+# 
+# Now, we can make some histograms of these variables. I'll make histograms of both classes to see if there are any differences.
 
-# # Exploration by State for USA data
-
-# Doing the same things, that I have done for countries
-
-# In[ ]:
+# In[4]:
 
 
-usa = page_views_sample_df.loc[page_views_sample_df.geo_location.str[:2] == 'US', :]
-usa.columns = ['uuid', 'State']
-
-usa.State = usa.State.str[3:5]
-
-# Drop Data with missing state info
-usa = usa.loc[usa.State != '', :]
-
-usa.loc[:, 'UserCount'] = usa.groupby('State')['State'].transform('count')
-usa.loc[:, ['State', 'UserCount']] = usa.loc[:, ['State', 'UserCount']].drop_duplicates('State', keep='first')
-usa.sort_values('UserCount', ascending=False, inplace=True)
-
-
-# In[ ]:
+def plot_var(name,nbins=50):
+    minval = train[name].min()
+    maxval = train[name].max()
+    plt.hist(train.loc[train.is_iceberg==1,name],range=[minval,maxval],
+             bins=nbins,color='b',alpha=0.5,label='Boat')
+    plt.hist(train.loc[train.is_iceberg==0,name],range=[minval,maxval],
+             bins=nbins,color='r',alpha=0.5,label='Iceberg')
+    plt.legend()
+    plt.xlim([minval,maxval])
+    plt.xlabel(name)
+    plt.ylabel('Number')
+    plt.show()
 
 
-stateCode2Name = {'AK': 'Alaska', 'AL': 'Alabama', 'AR': 'Arkansas', 'AS': 'American Samoa', 'AZ': 'Arizona', 'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DC': 'District of Columbia', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia', 'GU': 'Guam', 'HI': 'Hawaii', 'IA': 'Iowa', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'MA': 'Massachusetts', 'MD': 'Maryland', 'ME': 'Maine', 'MI': 'Michigan', 'MN':'Minnesota', 'MO': 'Missouri', 'MP': 'Northern Mariana Islands', 'MS': 'Mississippi', 'MT': 'Montana', 'NA': 'National', 'NC': 'North Carolina', 'ND': 'North Dakota', 'NE':'Nebraska', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NV': 'Nevada', 'NY': 'New York', 'OH': 'Ohio', 'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'PR': 'Puerto Rico', 'RI': 'Rhode Island', 'SC': 'South Carolina', 'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VA': 'Virginia', 'VI': 'Virgin Islands', 'VT': 'Vermont', 'WA': 'Washington', 'WI': 'Wisconsin', 'WV': 'West Virginia', 'WY': 'Wyoming'}
-usa['StateName'] = usa['State'].map(stateCode2Name)
-# Drop NAs
-usa.dropna(inplace=True)
-
-usa['CumulativePercentage'] = 100 * usa.UserCount.cumsum()/usa.UserCount.sum()
-usa.reset_index(drop=True, inplace=True)
-usa[['StateName', 'UserCount', 'CumulativePercentage']].head(50)
+# In[5]:
 
 
-# ## Show USA map
+for col in ['inc_angle','min1','max1','std1','med1','mean1','mid50_1']:
+    plot_var(col)
 
-# In[ ]:
+
+# For the first band, we see that there are some significant differences. The middle 50% range has around the same size for both, but the minimum, maximum, standard deviation, median, and mean all show noticeable differences in some range of the values. Evidently, these basic variables seem to have some sensitivity to what we are trying to measure. We might expect this if, for example, icebergs are much larger than ships and thus cover more pixels.
+
+# In[6]:
 
 
-import plotly.offline as py
-py.offline.init_notebook_mode()
+for col in ['min2','max2','std2','med2','mean2','mid50_2']:
+    plot_var(col)
 
-data = [ dict(
-        type = 'choropleth',
-        locations = usa['State'],
-        z = usa['UserCount'],
-        locationmode = 'USA-states',
-        text = usa['StateName'],
-        colorscale = [[0,"rgb(153, 241, 243)"],[0.33,"rgb(16, 64, 143)"],[1,"rgb(0, 0, 0)"]],
-        autocolorscale = False,
-        marker = dict(
-            line = dict(color = 'rgb(58,100,69)', width = 0.6)),
-            colorbar = dict(autotick = True, tickprefix = '', title = '# of Users')
-            )
-       ]
 
-layout = dict(
-    title = 'Total number of users by state',
-    geo = dict(
-        scope='usa',
-        projection=dict( type='albers usa' ),
-        showlakes = True,
-        lakecolor = 'rgb(255, 255, 255)'),
-    )
+# We get similar results for the second band.
+# 
+# ## Correlations Between Features
+# 
+# Now that we've established that these variables may have some use, we should look at the correlations between them. For this, I'll just plot the correlation matrix. It would also be good to look at scatter plots of each pair of variables (this can be done easily in Seaborn), but i won't do that here.
 
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='USmap')
+# In[7]:
 
+
+train_stats = train.drop(['id','is_iceberg','band_1','band_2'],axis=1)
+
+
+# In[8]:
+
+
+corr = train_stats.corr()
+fig = plt.figure(1, figsize=(10,10))
+plt.imshow(corr,cmap='inferno')
+labels = np.arange(len(train_stats.columns))
+plt.xticks(labels,train_stats.columns,rotation=90)
+plt.yticks(labels,train_stats.columns)
+plt.title('Correlation Matrix of Global Variables')
+cbar = plt.colorbar(shrink=0.85,pad=0.02)
+plt.show()
+
+
+# We see that there are large correlations between some of the variables. In particular, the mean, median, 25% signal, and 75% signal are all closely related, with nearly 75% correlation. The min and max are also pretty highly correlated for band 1, as are the min and median for both bands, suggesting that the signals have maybe been scaled in some way to force this correlation. There are also some correlations between the two bands. Finally, we see an anticorrelation of around -0.5 between the mean of band 2 and the angle, with a weaker correlation for band 1.
+# 
+# # Plotting Some Images
+# 
+# It's good to plot some images before we do too much analysis. That way, we can get some sense of what we're looking at. The images are 75 x 75 pixels each with two bands.
+
+# In[9]:
+
+
+icebergs = train[train.is_iceberg==1].sample(n=9,random_state=123)
+ships = train[train.is_iceberg==0].sample(n=9,random_state=456)
+
+
+# ## Raw Images
+# 
+# The first set show 9 random icebergs using band 1.
+
+# In[10]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = np.reshape(np.array(icebergs.iloc[i,0]),(75,75))
+    ax.imshow(arr,cmap='inferno')
+    
+plt.show()
+
+
+# The second set shows ships in band 1.
+
+# In[11]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = np.reshape(np.array(ships.iloc[i,0]),(75,75))
+    ax.imshow(arr,cmap='inferno')
+    
+plt.show()
+
+
+# The next set show the same set of icebergs in band 2.
+
+# In[12]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = np.reshape(np.array(icebergs.iloc[i,1]),(75,75))
+    ax.imshow(arr,cmap='inferno')
+    
+plt.show()
+
+
+# Finally, the last set are the same ship images as before, but for band 2.
+
+# In[13]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = np.reshape(np.array(ships.iloc[i,1]),(75,75))
+    ax.imshow(arr,cmap='inferno')
+    
+plt.show()
+
+
+# So, we see that everything looks pretty blob-like. It also appears that the background is not really random noise but rather has some spatial correlations. If the background is dominated by things like waves rather than noise, then spatial correlations would clearly be expected. The ships seem to have a more regular structure, with a pronounced skewness in the blobs for larger signals.
+# 
+# Some of these blobs are not that high above noise, and in the last set there are even two images where the signal cannot even be seen by eye, so it may be advantageous to first transform the images in some way to enhance the contrast between the signals and the background.
+# 
+# # Transforming the Images
+# 
+# I'll look at a few types of basic transforms that can be easily defined by FIR filters. The scipy convolve2d function will run a convolution of two arrays, so we just need to define the kernels. I have not optimized the kernels here, and there are many other choices of types of kernels, so you should try out different options to see what they do.
+
+# In[14]:
+
+
+from scipy import signal
+
+xder = np.array([[-1,0,1],[-2,0,2],[-1,0,1]])
+yder = np.array([[1,2,1],[0,0,0],[-1,-2,-1]])
+smooth = np.array([[1,1,1],[1,5,1],[1,1,1]])
+xder2 = np.array([[-1,2,-1],[-3,6,-3],[-1,2,-1]])
+yder2 = np.array([[-1,-3,-1],[2,6,2],[-1,-3,-1]])
+
+
+# ### Smoothing
+# 
+# First, let's try smoothing the images. The kernel here just has all positive values and is symmetric in both directions.
+# 
+# I'll first plot the icebergs and then the ships. These are all for Band 1.
+
+# In[15]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),smooth,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title('Smoothed')
+    
+plt.show()
+
+
+# In[16]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),smooth,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title('Smoothed')
+    
+plt.show()
+
+
+# As we might expect, smoothing blurs the features. However, it also enhances the contrast between bright and dark regions, so it may be quite useful if we want to use it to seed some clusters in a cluster/peak finder.
+# 
+# ### Derivative with Respect to X
+# 
+# An X-derivative will typically be antisymmetric with respect to reversing the values around the x-axis. This will provide some level of edge detection in the x-direction. I will take the derivatives of the original images.
+
+# In[17]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),xder,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title('X-derivative')
+    
+plt.show()
+
+
+# In[18]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),xder,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title('X-derivative')
+    
+plt.show()
+
+
+# Note that you should see a dark region on the left side of a peak and a bright region on the right. If you look closely enough, you should see that the positions may have changed in all of these transformations. This is because I have chosen not to zero-pad the arrays. The resulting transformed arrays are slightly smaller than the input.
+# 
+# ### Gradient Magnitude
+# 
+# It should also be trivial to see how to do a y-derivative. Rather than that, we can look at the magnitude of the gradient. That is, treat the x and y derivatives as a gradient vector at each position and then take the magnitude at each point.
+
+# In[19]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),xder,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),yder,mode='valid')
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Gradient Magnitude')
+    
+plt.show()
+
+
+# In[20]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),xder,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),yder,mode='valid')
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Gradient Magnitude')
+    
+plt.show()
+
+
+# We see interesting circular shapes everywhere in these images. But, the signals look fairly strong. The ships, in particular, show fairly bright edges and most create nice loops. This sort of operator might be useful to put into a more advanced model like a neural net. At the very least, it would be good to compare the results using this against things like the raw and smoothed data. 
+# 
+# ### Second Derivatives
+# 
+# We can also define a simple second-derivative operator. A 3x3 second derivative should do less smoothing than a 3x3 first derivative, so we might see less contrast between the signal and the background.
+
+# In[21]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),xder2,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title(r'Second X derivative')
+    
+plt.show()
+
+
+# In[22]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arr = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),xder2,mode='valid')
+    ax.imshow(arr,cmap='inferno')
+    ax.set_title(r'Second X derivative')
+    
+plt.show()
+
+
+# Here, we do see that the signals are not particularly obvious. The ships are a bit more visible, but the noise looks like it may be quite problematic here unless we do more smoothing.
+# 
+# ### Laplacian
+# 
+# The Laplacian operator is just the sum of second derivatives, or the divergence of the gradient.
+
+# In[23]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),xder2,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),yder2,mode='valid')
+
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Laplacian')
+    
+plt.show()
+
+
+# In[24]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),xder2,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),yder2,mode='valid')
+
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Laplacian')
+    
+plt.show()
+
+
+# We see interesting vertical and horizontal line features in the Laplacian images, but the signals are mostly difficult to see and split into many small clusters. Again, second derivatives probably require more smoothing to be useful.
+# 
+# ### Magnitude of the Curl of Gradient
+# 
+# There are many other things that we can look at. The last one I'll do is the magnitude of the curl of the gradient. For a differentiable function, this actually is supposed to be exactly 0, but for our discrete images, this likely isn't the case. I wouldn't expect this to be useful though.
+
+# In[25]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),xder,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(icebergs.iloc[i,0]),(75,75)),yder,mode='valid')
+    arrx = signal.convolve2d(arrx,yder,mode='valid')
+    arry = signal.convolve2d(arry,xder,mode='valid')
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Curl of Gradient Magnitude')
+    
+plt.show()
+
+
+# In[26]:
+
+
+# Plot band_1
+fig = plt.figure(1,figsize=(15,15))
+for i in range(9):
+    ax = fig.add_subplot(3,3,i+1)
+    arrx = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),xder,mode='valid')
+    arry = signal.convolve2d(np.reshape(np.array(ships.iloc[i,0]),(75,75)),yder,mode='valid')
+    arrx = signal.convolve2d(arrx,yder,mode='valid')
+    arry = signal.convolve2d(arry,xder,mode='valid')
+    ax.imshow(np.hypot(arrx,arry),cmap='inferno')
+    ax.set_title('Curl of Gradient Magnitude')
+    
+plt.show()
+
+
+# We can see that as expected, it will at best be of limited usefulness. However, we do get some nice looking images. we see a number of small, separated tiles. Even if it's not useful for analysis, we get some nice textures by transforming the images with this particular transformation.
+
+# # Conclusions
+# 
+# We've constructed some global features from the images and found that there are some noticeable differences between icebergs and ships even just from those. However, I would expect that a classifier based only on global statistics will not be very effective.
+# 
+# We've also looked at a number of transformations of the images. Edge detection (gradient)-based methods seem to get some nice features, and smoothing may help out with images with small signal size.

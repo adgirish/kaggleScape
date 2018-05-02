@@ -1,156 +1,242 @@
-'''This script was inspired by snowdog's R kernel that builds an old school neural network 
-   which scores quite well on the public LB relative to other NN approaches.
-   https://www.kaggle.com/snowdog/old-school-nnet
-
-   The idea is that after some pre-processing, a simpler network structure may generalize
-   much better than a deep, complicated one. The network in this script has only 1 hidden layer
-   with 35 neurons, uses some dropout, and trains for just 15 epochs. 
-   Upsampling is also used, which seems to improve NN results. 
-   
-   We'll do a 5-fold split on the data, train 3 times on each fold and bag the predictions, then average
-   the bagged predictions to get a submission. Increasing the number of training folds and the
-   number of runs per fold would likely improve the results.
-   
-   The LB score is approximate because I haven't been able to get random seeding to properly
-   make keras results consistent - any advice here would be much appreciated! 
-'''
+import os
+import sys
+import random
+import warnings
 
 import numpy as np
-np.random.seed(20)
 import pandas as pd
 
-from tensorflow import set_random_seed
-from keras.models import Sequential
-from keras.layers import Dense, Dropout
+import matplotlib.pyplot as plt
 
-from sklearn.model_selection import StratifiedKFold
+from tqdm import tqdm
+from itertools import chain
+from skimage.io import imread, imshow, imread_collection, concatenate_images
+from skimage.transform import resize
+from skimage.morphology import label
 
-'''Data loading & preprocessing
-'''
+from keras.models import Model, load_model
+from keras.layers import Input
+from keras.layers.core import Lambda
+from keras.layers.convolutional import Conv2D, Conv2DTranspose
+from keras.layers.pooling import MaxPooling2D
+from keras.layers.merge import concatenate
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras import backend as K
 
-X_train = pd.read_csv('../input/train.csv')
-X_test = pd.read_csv('../input/test.csv')
+import tensorflow as tf
 
-X_train, y_train = X_train.iloc[:,2:], X_train.target
-X_test, test_id = X_test.iloc[:,1:], X_test.id
+# Set some parameters
+IMG_WIDTH = 128
+IMG_HEIGHT = 128
+IMG_CHANNELS = 3
+TRAIN_PATH = '../input/stage1_train/'
+TEST_PATH = '../input/stage1_test/'
 
-#OHE / some feature engineering adapted from the1owl kernel at:
-#https://www.kaggle.com/the1owl/forza-baseline/code
+warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
+seed = 42
+random.seed = seed
+np.random.seed = seed
 
-#excluded columns based on snowdog's old school nn kernel at:
-#https://www.kaggle.com/snowdog/old-school-nnet
 
-X_train['negative_one_vals'] = np.sum((X_train==-1).values, axis=1)
-X_test['negative_one_vals'] = np.sum((X_test==-1).values, axis=1)
+# Get train and test IDs
+train_ids = next(os.walk(TRAIN_PATH))[1]
+test_ids = next(os.walk(TEST_PATH))[1]
 
-to_drop = ['ps_car_11_cat', 'ps_ind_14', 'ps_car_11', 'ps_car_14', 'ps_ind_06_bin', 
-           'ps_ind_09_bin', 'ps_ind_10_bin', 'ps_ind_11_bin', 'ps_ind_12_bin', 
-           'ps_ind_13_bin']
 
-cols_use = [c for c in X_train.columns if (not c.startswith('ps_calc_'))
-             & (not c in to_drop)]
-             
-X_train = X_train[cols_use]
-X_test = X_test[cols_use]
+# Get and resize train images and masks
+X_train = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
+Y_train = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
+print('Getting and resizing train images and masks ... ')
+sys.stdout.flush()
+for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+    path = TRAIN_PATH + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    X_train[n] = img
+    mask = np.zeros((IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
+    for mask_file in next(os.walk(path + '/masks/'))[2]:
+        mask_ = imread(path + '/masks/' + mask_file)
+        mask_ = np.expand_dims(resize(mask_, (IMG_HEIGHT, IMG_WIDTH), mode='constant', 
+                                      preserve_range=True), axis=-1)
+        mask = np.maximum(mask, mask_)
+    Y_train[n] = mask
 
-one_hot = {c: list(X_train[c].unique()) for c in X_train.columns}
+# Get and resize test images
+X_test = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
+sizes_test = []
+print('Getting and resizing test images ... ')
+sys.stdout.flush()
+for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
+    path = TEST_PATH + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    sizes_test.append([img.shape[0], img.shape[1]])
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    X_test[n] = img
 
-#note that this encodes the negative_one_vals column as well
-for c in one_hot:
-    if len(one_hot[c])>2 and len(one_hot[c]) < 105:
-        for val in one_hot[c]:
-            newcol = c + '_oh_' + str(val)
-            X_train[newcol] = (X_train[c].values == val).astype(np.int)
-            X_test[newcol] = (X_test[c].values == val).astype(np.int)
-        X_train.drop(labels=[c], axis=1, inplace=True)
-        X_test.drop(labels=[c], axis=1, inplace=True)
-            
-X_train = X_train.replace(-1, np.NaN)  # Get rid of -1 while computing interaction col
-X_test = X_test.replace(-1, np.NaN)
+print('Done!')
 
-X_train['ps_car_13_x_ps_reg_03'] = X_train['ps_car_13'] * X_train['ps_reg_03']
-X_test['ps_car_13_x_ps_reg_03'] = X_test['ps_car_13'] * X_test['ps_reg_03']
 
-X_train = X_train.fillna(-1)
-X_test = X_test.fillna(-1)
+# Get and resize train images and masks
+X_train = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
+Y_train = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
+print('Getting and resizing train images and masks ... ')
+sys.stdout.flush()
+for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
+    path = TRAIN_PATH + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    X_train[n] = img
+    mask = np.zeros((IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
+    for mask_file in next(os.walk(path + '/masks/'))[2]:
+        mask_ = imread(path + '/masks/' + mask_file)
+        mask_ = np.expand_dims(resize(mask_, (IMG_HEIGHT, IMG_WIDTH), mode='constant', 
+                                      preserve_range=True), axis=-1)
+        mask = np.maximum(mask, mask_)
+    Y_train[n] = mask
 
-'''Gini scoring function
-'''
+# Get and resize test images
+X_test = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
+sizes_test = []
+print('Getting and resizing test images ... ')
+sys.stdout.flush()
+for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
+    path = TEST_PATH + id_
+    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
+    sizes_test.append([img.shape[0], img.shape[1]])
+    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
+    X_test[n] = img
 
-#gini scoring function from kernel at: 
-#https://www.kaggle.com/tezdhar/faster-gini-calculation
-def ginic(actual, pred):
-    n = len(actual)
-    a_s = actual[np.argsort(pred)]
-    a_c = a_s.cumsum()
-    giniSum = a_c.sum() / a_c[-1] - (n + 1) / 2.0
-    return giniSum / n
- 
-def gini_normalizedc(a, p):
-    return ginic(a, p) / ginic(a, a)
+print('Done!')
 
-'''5-fold neural network training 
-'''
 
-K = 5 #number of folds
-runs_per_fold = 3 #bagging on each fold
+# Check if training data looks all right
+ix = random.randint(0, len(train_ids))
+imshow(X_train[ix])
+plt.show()
+imshow(np.squeeze(Y_train[ix]))
+plt.show()
 
-cv_ginis = []
-y_preds = np.zeros((np.shape(X_test)[0],K))
 
-kfold = StratifiedKFold(n_splits = K, 
-                            random_state = 100, 
-                            shuffle = True)    
-
-for i, (f_ind, outf_ind) in enumerate(kfold.split(X_train, y_train)):
-
-    X_train_f, X_val_f = X_train.loc[f_ind].copy(), X_train.loc[outf_ind].copy()
-    y_train_f, y_val_f = y_train[f_ind], y_train[outf_ind]
-          
-    #upsampling adapted from kernel: 
-    #https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283
-    pos = (pd.Series(y_train_f == 1))
+# Define IoU metric
+def mean_iou(y_true, y_pred):
+    prec = []
+    for t in np.arange(0.5, 1.0, 0.05):
+        y_pred_ = tf.to_int32(y_pred > t)
+        score, up_opt = tf.metrics.mean_iou(y_true, y_pred_, 2)
+        K.get_session().run(tf.local_variables_initializer())
+        with tf.control_dependencies([up_opt]):
+            score = tf.identity(score)
+        prec.append(score)
+    return K.mean(K.stack(prec), axis=0)
     
-    # Add positive examples
-    X_train_f = pd.concat([X_train_f, X_train_f.loc[pos]], axis=0)
-    y_train_f = pd.concat([y_train_f, y_train_f.loc[pos]], axis=0)
     
-    # Shuffle data
-    idx = np.arange(len(X_train_f))
-    np.random.shuffle(idx)
-    X_train_f = X_train_f.iloc[idx]
-    y_train_f = y_train_f.iloc[idx]
     
-    #track oof bagged prediction for cv scores
-    val_preds = 0
-    
-    for j in range(runs_per_fold):
-    
-        NN=Sequential()
-        NN.add(Dense(35,activation='relu',input_dim=np.shape(X_train_f)[1]))
-        NN.add(Dropout(0.3))
-        NN.add(Dense(1,activation='sigmoid'))
+# Build U-Net model
+inputs = Input((IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS))
+s = Lambda(lambda x: x / 255) (inputs)
+
+c1 = Conv2D(8, (3, 3), activation='relu', padding='same') (s)
+c1 = Conv2D(8, (3, 3), activation='relu', padding='same') (c1)
+p1 = MaxPooling2D((2, 2)) (c1)
+
+c2 = Conv2D(16, (3, 3), activation='relu', padding='same') (p1)
+c2 = Conv2D(16, (3, 3), activation='relu', padding='same') (c2)
+p2 = MaxPooling2D((2, 2)) (c2)
+
+c3 = Conv2D(32, (3, 3), activation='relu', padding='same') (p2)
+c3 = Conv2D(32, (3, 3), activation='relu', padding='same') (c3)
+p3 = MaxPooling2D((2, 2)) (c3)
+
+c4 = Conv2D(64, (3, 3), activation='relu', padding='same') (p3)
+c4 = Conv2D(64, (3, 3), activation='relu', padding='same') (c4)
+p4 = MaxPooling2D(pool_size=(2, 2)) (c4)
+
+c5 = Conv2D(128, (3, 3), activation='relu', padding='same') (p4)
+c5 = Conv2D(128, (3, 3), activation='relu', padding='same') (c5)
+
+u6 = Conv2DTranspose(64, (2, 2), strides=(2, 2), padding='same') (c5)
+u6 = concatenate([u6, c4])
+c6 = Conv2D(64, (3, 3), activation='relu', padding='same') (u6)
+c6 = Conv2D(64, (3, 3), activation='relu', padding='same') (c6)
+
+u7 = Conv2DTranspose(32, (2, 2), strides=(2, 2), padding='same') (c6)
+u7 = concatenate([u7, c3])
+c7 = Conv2D(32, (3, 3), activation='relu', padding='same') (u7)
+c7 = Conv2D(32, (3, 3), activation='relu', padding='same') (c7)
+
+u8 = Conv2DTranspose(16, (2, 2), strides=(2, 2), padding='same') (c7)
+u8 = concatenate([u8, c2])
+c8 = Conv2D(16, (3, 3), activation='relu', padding='same') (u8)
+c8 = Conv2D(16, (3, 3), activation='relu', padding='same') (c8)
+
+u9 = Conv2DTranspose(8, (2, 2), strides=(2, 2), padding='same') (c8)
+u9 = concatenate([u9, c1], axis=3)
+c9 = Conv2D(8, (3, 3), activation='relu', padding='same') (u9)
+c9 = Conv2D(8, (3, 3), activation='relu', padding='same') (c9)
+
+outputs = Conv2D(1, (1, 1), activation='sigmoid') (c9)
+
+model = Model(inputs=[inputs], outputs=[outputs])
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
+model.summary()
+
+
+# Fit model
+earlystopper = EarlyStopping(patience=5, verbose=1)
+checkpointer = ModelCheckpoint('model-dsbowl2018-1.h5', verbose=1, save_best_only=True)
+results = model.fit(X_train, Y_train, validation_split=0.2, batch_size=8, epochs=70, 
+                    callbacks=[earlystopper, checkpointer])
+                    
+                    
+# Predict on train, val and test
+model = load_model('model-dsbowl2018-1.h5', custom_objects={'mean_iou': mean_iou})
+preds_train = model.predict(X_train[:int(X_train.shape[0]*0.9)], verbose=1)
+preds_val = model.predict(X_train[int(X_train.shape[0]*0.9):], verbose=1)
+preds_test = model.predict(X_test, verbose=1)
+
+# Threshold predictions
+preds_train_t = (preds_train > 0.5).astype(np.uint8)
+preds_val_t = (preds_val > 0.5).astype(np.uint8)
+preds_test_t = (preds_test > 0.5).astype(np.uint8)
+
+# Create list of upsampled test masks
+preds_test_upsampled = []
+for i in range(len(preds_test)):
+    preds_test_upsampled.append(resize(np.squeeze(preds_test[i]), 
+                                       (sizes_test[i][0], sizes_test[i][1]), 
+                                       mode='constant', preserve_range=True))
+
+
+
+# Run-length encoding stolen from https://www.kaggle.com/rakhlin/fast-run-length-encoding-python
+def rle_encoding(x):
+    dots = np.where(x.T.flatten() == 1)[0]
+    run_lengths = []
+    prev = -2
+    for b in dots:
+        if (b>prev+1): run_lengths.extend((b + 1, 0))
+        run_lengths[-1] += 1
+        prev = b
+    return run_lengths
+
+def prob_to_rles(x, cutoff=0.5):
+    lab_img = label(x > cutoff)
+    for i in range(1, lab_img.max() + 1):
+        yield rle_encoding(lab_img == i)
         
-        NN.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
         
-        set_random_seed(1000*i+j)
-            
-        NN.fit(X_train_f.values, y_train_f.values, epochs=15, batch_size=2048, verbose=0)
-         
-        val_gini = gini_normalizedc(y_val_f.values, NN.predict(X_val_f.values)[:,0])   
-        print ('\nFold %d Run %d Results *****' % (i, j))
-        print ('Validation gini: %.5f\n' % (val_gini))
         
-        val_preds += NN.predict(X_val_f.values)[:,0] / runs_per_fold
-        y_preds[:,i] += NN.predict(X_test.values)[:,0] / runs_per_fold
-        
-    cv_ginis.append(val_gini)
-    print ('\nFold %i prediction cv gini: %.5f\n' %(i,val_gini))
-    
-print('Mean out of fold gini: %.5f' % np.mean(cv_ginis))
-y_pred_final = np.mean(y_preds, axis=1)
 
-df_sub = pd.DataFrame({'id' : test_id, 
-                       'target' : y_pred_final},
-                       columns = ['id','target'])
-df_sub.to_csv('NNShallow_5fold_3runs_sub.csv', index=False)
+new_test_ids = []
+rles = []
+for n, id_ in enumerate(test_ids):
+    rle = list(prob_to_rles(preds_test_upsampled[n]))
+    rles.extend(rle)
+    new_test_ids.extend([id_] * len(rle))
+    
+    
+# Create submission DataFrame
+sub = pd.DataFrame()
+sub['ImageId'] = new_test_ids
+sub['EncodedPixels'] = pd.Series(rles).apply(lambda x: ' '.join(str(y) for y in x))
+sub.to_csv('sub-dsbowl2018-1.csv', index=False)

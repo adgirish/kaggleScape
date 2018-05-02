@@ -1,333 +1,331 @@
 
 # coding: utf-8
 
-# Once you've gotten your feet wet in basic sklearn modeling, you might find yourself doing the same few steps over and over again in the same anaysis. To get to the next level, pipelines are your friend!
-# 
-# Pipelines are a way to streamline a lot of the routine processes, encapsulating little pieces of logic into one function call, which makes it easier to actually do modeling instead just writing a bunch of code. Pipelines allow for experiments, and for a dataset like this that only has the text as a feature, you're going to need to do a lot of experiments. Plus, when your modeling gets really complicated, it's sometimes hard to see if you have any data leakage hiding somewhere. Pipelines are set up with the fit/transform/predict functionality, so you can fit a whole pipeline to the training data and transform to the test data, without having to do it individually for each thing you do. Super convenienent, right??
-# 
-# This notebook is going to break down the pipeline process to make it easier to see how they all fit together. While not exhaustive, it should get you started on building your own pipelines so you can spend more time on the good stuff, thinking.
-# 
-# But first, we get the data:
+# ![flowers](https://media.giphy.com/media/6igrowTjYLNvi/giphy.gif)
 
-# In[1]:
+# Hello Kagglers. Working on Kaggle kernels is fun. The purpose of this kernel is totally different. Here I am not going to do a typical EDA or typical data modelling but I would love to share some cool things. We are going to dive into following topics:
+# * How to add pre-trained Keras models to your kernel and answer the question **Why do I need to do that at all?**
+# * What generator should I use for my model- inbuilt or a custom one?
+# * How to effectively use Keras ImageDataGenerator in kernels?
+
+# ## Adding Keras pre-trained models to your kernel
+# 
+# Transfer learning (Here I am assuming that you know about it) **almost always** works. Before doing some serious modelling, people like me always starts with transfer learning to get a baseline. For this, we need pre-trained models. Keras provides a lot of SOTA pre-trained models. When you want to use a pre-trained architecture for the first time, Keras download the weights for the corresponding model *but* Kernels can't use network connection to download pretrained keras model weights. So, the big question is `If Kernels can't use network connection to download pre-trained weights, how can I use them at all?` 
+# 
+# This is a great question and for people who are beginners or just getting started on Kaggle kernels, this can be very confusing. In order to use, pre-trained Keras model weights, people have uploaded the weights to a kernel and published it. Now here is the catch. **You can add the output of any other kernel as input data source for your kernel **. Follow these simple steps:
+# * On the top-left of your notebook, there is a `Input Files` cell. Expand it by clicking the `+` button.
+# * You will see a list of input data files on the left along with the description of the data on the right.
+# * Click the add `Add Data Source` button. A window will appear.
+# * In the search bar, search like this `VGG16 pretrained` or `Keras-pretrained`.
+# * Choose the kernel you want to add. That's it!!
+# 
+# Now if you expand your `Input Files` cell again, you will the pre-trained model as input files along with your dataset.
+# 
+
+# In[ ]:
 
 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import os
+import glob
+import shutil
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-df = pd.read_csv('../input/train.csv')
-
-df.dropna(axis=0)
-df.set_index('id', inplace = True)
-
-df.head()
-
-
-# ## Preprocessing and Feature Engineering
-# 
-# To begin, let's do some basic feature engineering. To make it easier to replicate on the submission data, we will encapsulate the logic into a function.
-# 
-# Note, all of this preprocessing is standard stuff, and does not depend on the data it's processing on, so it's ok to do this now. Things like count vectorization and numeric scaling depend on the data it's run on, so that part must be done differently. We will get to that later.
-# 
-# For now, we will count the number of words in each row, the number of characters, the number of non stop words, and the number of commas, since who knows, maybe using commas helps build suspense??
-
-# In[2]:
-
-
-import re
-from nltk.corpus import stopwords
-
-stopWords = set(stopwords.words('english'))
-
-#creating a function to encapsulate preprocessing, to mkae it easy to replicate on  submission data
-def processing(df):
-    #lowering and removing punctuation
-    df['processed'] = df['text'].apply(lambda x: re.sub(r'[^\w\s]','', x.lower()))
-    
-    #numerical feature engineering
-    #total length of sentence
-    df['length'] = df['processed'].apply(lambda x: len(x))
-    #get number of words
-    df['words'] = df['processed'].apply(lambda x: len(x.split(' ')))
-    df['words_not_stopword'] = df['processed'].apply(lambda x: len([t for t in x.split(' ') if t not in stopWords]))
-    #get the average word length
-    df['avg_word_length'] = df['processed'].apply(lambda x: np.mean([len(t) for t in x.split(' ') if t not in stopWords]) if len([len(t) for t in x.split(' ') if t not in stopWords]) > 0 else 0)
-    #get the average word length
-    df['commas'] = df['text'].apply(lambda x: x.count(','))
-
-    return(df)
-
-df = processing(df)
-
-df.head()
-
-
-# ### Creating a Pipeline
-# 
-# Sklearn's pipeline functionality makes it easier to repeat commonly occuring steps in your modeling process. Similar to the processing function I made above, it provides a way to take code, fit it to the training data, apply it to the test data without having to copy and paste everything.
-# 
-# Super easy, but I find the documentation a little hard to piece through. So let's build the pipelines up from the bottom. Plus, since pipelines are made from pipelines, it's useful to see how they build on each other.
-# 
-# First step, split your data into training and testing.
-
-# In[3]:
-
-
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.image as mimg
+from os import listdir, makedirs, getcwd, remove
+from os.path import isfile, join, abspath, exists, isdir, expanduser
+from PIL import Image
+from pathlib import Path
+from keras.models import Sequential, Model
+from keras.applications.vgg16 import VGG16, preprocess_input
+from keras.preprocessing.image import ImageDataGenerator,load_img, img_to_array
+from keras.models import Sequential
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten
+from keras.layers import GlobalMaxPooling2D
+from keras.layers.normalization import BatchNormalization
+from keras.layers.merge import Concatenate
+from keras.models import Model
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
-
-features= [c for c in df.columns.values if c  not in ['id','text','author']]
-numeric_features= [c for c in df.columns.values if c  not in ['id','text','author','processed']]
-target = 'author'
-
-X_train, X_test, y_train, y_test = train_test_split(df[features], df[target], test_size=0.33, random_state=42)
-X_train.head()
-
-
-# Now for the tricky parts.
-# 
-# First thing I want to do is define how to process my variables. The standard preprocessing apply the same preprocessing to the whole dataset, but in cases where you have heterogeneous data, this doesn't quite work. So first thing I'm going to do is create a selector transformer that simply returns the one column in the dataset by the key value I pass. 
-# 
-# I was having difficulty getting the selector to play nicely, so I made two different selectors for either text or numeric columns. The return type is different, but other than that they work the same.
-
-# In[4]:
-
-
-from sklearn.base import BaseEstimator, TransformerMixin
-
-class TextSelector(BaseEstimator, TransformerMixin):
-    """
-    Transformer to select a single column from the data frame to perform additional transformations on
-    Use on text columns in the data
-    """
-    def __init__(self, key):
-        self.key = key
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        return X[self.key]
-    
-class NumberSelector(BaseEstimator, TransformerMixin):
-    """
-    Transformer to select a single column from the data frame to perform additional transformations on
-    Use on numeric columns in the data
-    """
-    def __init__(self, key):
-        self.key = key
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        return X[[self.key]]
-    
-
-
-# To see how this is used, let's actually run it on one column.
-# 
-# I'm going to call it on the text column and transform it with another step. But again, pipelines are all about encapsulating several steps, so I'm going to make a mini pipeline that consists of two steps: first grab just that column from the dataset, then perform tf-idf on just that column and return the results.
-# 
-# To make a pipeline, just pass an array of tuples of the format (name, object). The first part is the name of the action, and the second is the actual object. So this pipeline consists of "selecting" and then "tfidf-ing" a column.
-# 
-# To execute, use it just like any other transformer. You can call text.fit() to fit to training data, text.transform() to apply it to training data, or text.fit_transform() to do both. 
-# 
-# Since it's text, it will return a sparse matrix, but we can see that it works:
-
-# In[17]:
-
-
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-text = Pipeline([
-                ('selector', TextSelector(key='processed')),
-                ('tfidf', TfidfVectorizer( stop_words='english'))
-            ])
-
-text.fit_transform(X_train)
-
-
-# Since our data is heterogeneous, we might want to do something else on numeric data, so let's build a mini pipeline for that too.
-# 
-# This transformer will be a simple scaler. Since our data is mixed, we must apply it column by column. Let's make one to process the "length" variable I made above. Just like the text one, we combine two steps, first selecting the column, then transforming the column, like so:
-
-# In[6]:
-
-
 from sklearn.preprocessing import StandardScaler
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-length =  Pipeline([
-                ('selector', NumberSelector(key='length')),
-                ('standard', StandardScaler())
-            ])
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-length.fit_transform(X_train)
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# We can see that the transformer pipeline returns a matrix for the column it's called on, so now all that's left to do is join the results from several transformed variables into a single dataset. I'll go ahead and make a pipeline for every variable in the data, then join them all together. 
+# You can see that my kernel has two kind of input files:
+# * flowers-recognition dataset
+# * vgg16 pre-trained model kernel that I added to my kernel
 # 
-# First, I'll transform all the numeric columns with the standard scaler, but of course you can change the scaler for any column as you desire.
+# Keras requires the pre-trained weights to be present in the `.keras/models` cache directory. This is how you do it
 
-# In[7]:
-
-
-words =  Pipeline([
-                ('selector', NumberSelector(key='words')),
-                ('standard', StandardScaler())
-            ])
-words_not_stopword =  Pipeline([
-                ('selector', NumberSelector(key='words_not_stopword')),
-                ('standard', StandardScaler())
-            ])
-avg_word_length =  Pipeline([
-                ('selector', NumberSelector(key='avg_word_length')),
-                ('standard', StandardScaler())
-            ])
-commas =  Pipeline([
-                ('selector', NumberSelector(key='commas')),
-                ('standard', StandardScaler()),
-            ])
+# In[ ]:
 
 
-# To make a pipeline from all of our pipelines, we do the same thing, but now we use a FeatureUnion to join the feature processing pipelines.
+# Check for the directory and if it doesn't exist, make one.
+cache_dir = expanduser(join('~', '.keras'))
+if not exists(cache_dir):
+    makedirs(cache_dir)
+    
+# make the models sub-directory
+models_dir = join(cache_dir, 'models')
+if not exists(models_dir):
+    makedirs(models_dir)
+
+
+# In[ ]:
+
+
+# Copy the weights from your input files to the cache directory
+get_ipython().system('cp ../input/vgg16/vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5 ~/.keras/models/')
+
+
+# That's it!! Now, you can use pre-trained models for transfer learning or fine-tuning. 
+
+# In[ ]:
+
+
+# Define some paths
+input_path = Path('../input/flowers-recognition/flowers/')
+flowers_path = input_path / 'flowers'
+
+
+# In[ ]:
+
+
+# Each species of flower is contained in a separate folder . Get all the sub directories
+flower_types = os.listdir(flowers_path)
+print("Types of flowers found: ", len(flower_types))
+print("Categories of flowers: ", flower_types)
+
+
+# In[ ]:
+
+
+# In order to keep track of my data details or in order to do some EDA, I always try to 
+# get the information in a dataframe. After all, pandas to the rescue!!
+
+# A list that is going to contain tuples: (species of the flower, corresponding image path)
+flowers = []
+
+for species in flower_types:
+    # Get all the file names
+    all_flowers = os.listdir(flowers_path / species)
+    # Add them to the list
+    for flower in all_flowers:
+        flowers.append((species, str(flowers_path /species) + '/' + flower))
+
+# Build a dataframe        
+flowers = pd.DataFrame(data=flowers, columns=['category', 'image'], index=None)
+flowers.head()
+
+
+# In[ ]:
+
+
+# Let's check how many samples for each category are present
+print("Total number of flowers in the dataset: ", len(flowers))
+fl_count = flowers['category'].value_counts()
+print("Flowers in each category: ")
+print(fl_count)
+
+
+# In[ ]:
+
+
+# Let's do some visualization too
+plt.figure(figsize=(12,8))
+sns.barplot(x=fl_count.index, y=fl_count.values)
+plt.title("Flowers count for each category", fontsize=16)
+plt.xlabel("Category", fontsize=14)
+plt.ylabel("Count", fontsize=14)
+plt.show()
+
+
+# In[ ]:
+
+
+# Let's visualize flowers from each category
+
+# A list for storing names of some random samples from each category
+random_samples = []
+
+# Get samples fom each category 
+for category in fl_count.index:
+    samples = flowers['image'][flowers['category'] == category].sample(4).values
+    for sample in samples:
+        random_samples.append(sample)
+
+
+
+# Plot the samples
+f, ax = plt.subplots(5,4, figsize=(15,10))
+for i,sample in enumerate(random_samples):
+    ax[i//4, i%4].imshow(mimg.imread(random_samples[i]))
+    ax[i//4, i%4].axis('off')
+plt.show()    
+
+
+# **What generator should I use for my model-  a custom one or the default Keras ImageDataGenerator?**
 # 
-# The syntax is the same as a regular pipeline, it's just an array of tuple, with the (name, object) format. 
+# This is a very interesting question. I would say that it actually depends on how your dataset is arranged or how are you going to set up your data. These are the following scenarios I can think of along with the corresponding solutions. If you think of any more, do let me know in the comments section.
 # 
-# The feature union itself is not a pipeline, it's just a union, so you need to do *one more step* to make it useable: pass it to a pipeline, with the same structure, an array of tuples, with the simple (name, object) format. . As you can see, we get a pipeline-ception going on the more complex you get! 
+# * **Data is arranged class-wise in separate directories with corresponding names**: This is the best way to arrange your data, if possible. Although it takes some time to arrange the data in such a way but it is the way to go if you want to use the Keras ImageDataGenerator efficiently as it requires data to be separated class wise in different folders. Once you have this, you need to arrange your data like this:
+# ```
+# data/
+#     train/
+#         category1/(contains all images related to category1)  
+#         category2/(contains all images related to category2)
+#         ...
+#         ...
+#             
+#     validation/
+#          category1/(contains all images related to category1)  
+#         category2/(contains all images related to category2)
+#         ...
+#         ...
+# ```
+# For this kernel, later in the notebook, I will show how to make this structure within the kernel for using ImageDataGenerator
 # 
-# You can then apply all those transformations at once with a single fit, transform, or fit_transform call. Nice, right?
+# * **All data is within one folder and you have meta info about the images** This is a very usual case. When we quickly crawl data, we generally store the met info about the images in a csv and allthe images are stored in a single folder. There are two ways to deal with this situatio, provided you don't want all the segregation of images as in the first step.
+#   * Define your own simple python generator which yields batches of images and labels while reading the csv
+#   * Use another high-level api such as `Dataset` api and let it do the work for you. 
 
-# In[8]:
+# Let's look at how to get the structure defined in the  first step above. If you are not aware, jupyter is pretty powerful and you can use bash directly within the notebook.
 
-
-from sklearn.pipeline import FeatureUnion
-
-feats = FeatureUnion([('text', text), 
-                      ('length', length),
-                      ('words', words),
-                      ('words_not_stopword', words_not_stopword),
-                      ('avg_word_length', avg_word_length),
-                      ('commas', commas)])
-
-feature_processing = Pipeline([('feats', feats)])
-feature_processing.fit_transform(X_train)
+# In[ ]:
 
 
-# To add a model to the mix and generate predictions as well, you can add a model at the end of the pipeline. The syntax is, you guessed it, an array of tuples, merging the transformations with a model. 
-# 
-# We can see the raw accuracy is at 63%. Not bad for a start.
-# 
+# Make a parent directory `data` and two sub directories `train` and `valid`
+get_ipython().run_line_magic('mkdir', '-p data/train')
+get_ipython().run_line_magic('mkdir', '-p data/valid')
 
-# In[12]:
+# Inside the train and validation sub=directories, make sub-directories for each catgeory
+get_ipython().run_line_magic('cd', 'data')
+get_ipython().run_line_magic('mkdir', '-p train/daisy')
+get_ipython().run_line_magic('mkdir', '-p train/tulip')
+get_ipython().run_line_magic('mkdir', '-p train/sunflower')
+get_ipython().run_line_magic('mkdir', '-p train/rose')
+get_ipython().run_line_magic('mkdir', '-p train/dandelion')
 
+get_ipython().run_line_magic('mkdir', '-p valid/daisy')
+get_ipython().run_line_magic('mkdir', '-p valid/tulip')
+get_ipython().run_line_magic('mkdir', '-p valid/sunflower')
+get_ipython().run_line_magic('mkdir', '-p valid/rose')
+get_ipython().run_line_magic('mkdir', '-p valid/dandelion')
 
-from sklearn.ensemble import RandomForestClassifier
+get_ipython().run_line_magic('cd', '..')
 
-pipeline = Pipeline([
-    ('features',feats),
-    ('classifier', RandomForestClassifier(random_state = 42)),
-])
-
-pipeline.fit(X_train, y_train)
-
-preds = pipeline.predict(X_test)
-np.mean(preds == y_test)
-
-
-# # Bringing It All Together
-# 
-# Preprocessing is great, but most likely, you actually want to model something too. To do that, we just need to add a classifier at the end of the pipeline. Here I'm going to make a pipeline that does all the processing I made above, then passes it to a Random Forest. As you might guess, this requires passing an array of tuples to the pipeline, with the (name, object) structure. 
-# 
-# To put it to use, we just fit and predict as if it was a regular classifier. First we fit on the training, then predict on the test data, and then see how well it did:
-
-# # Cross Validation To Find The Best Pipeline
-# 
-# That alone should give you enough flexibility to create some rather complex pipelines. But we're on a role, let's keep going.
-# 
-# What if I wanted to do cross validation on my pipeline? How many trees should I use on my classifier? How deep should I go? Or even more complicated, how many words should I use in my tf-idf transform? Should I include stop words? Pipelines allow you to do that with just a few more lines.
-# 
-# Cross validation is all about figuring out what the best hyperparameters of the data set is. To see the list of all the possible things you could fine tune, call get_params().keys() on your pipeline.
-
-# In[13]:
+# You can verify that everything went correctly using ls command
 
 
-pipeline.get_params().keys()
+# For each category, copy samples to the train and validation directory which we defined in the above step. The number of samples you want in your training and validation set is upto you. 
+
+# In[ ]:
 
 
-# Obviously don't be crazy, cross validation takes a while to run, and the more options you select, the longer it takes. But to give you an idea on how these work together, to test out the different combinations, define a dictionary with the settings you want, with the key being the pipeline's parameter key name, and the value being an array of all the settings you want to apply.
-# 
-# After the dictionary is made, call GridSearchCV on your pipeline, passing the dictionary and the number of folds you want to use. 
-# 
-# Here's an example with a few settings on 5 fold cross validation.
-
-# In[22]:
-
-
-from sklearn.model_selection import GridSearchCV
-
-hyperparameters = { 'features__text__tfidf__max_df': [0.9, 0.95],
-                    'features__text__tfidf__ngram_range': [(1,1), (1,2)],
-                   'classifier__max_depth': [50, 70],
-                    'classifier__min_samples_leaf': [1,2]
-                  }
-clf = GridSearchCV(pipeline, hyperparameters, cv=5)
- 
-# Fit and tune model
-clf.fit(X_train, y_train)
+for category in fl_count.index:
+    samples = flowers['image'][flowers['category'] == category].values
+    perm = np.random.permutation(samples)
+    # Copy first 30 samples to the validation directory and rest to the train directory
+    for i in range(30):
+        name = perm[i].split('/')[-1]
+        shutil.copyfile(perm[i],'./data/valid/' + str(category) + '/'+ name)
+    for i in range(31,len(perm)):
+        name = perm[i].split('/')[-1]
+        shutil.copyfile(perm[i],'./data/train/' + str(category) + '/' + name)
 
 
-# If you want to see which settings won, you can do so:
-
-# In[23]:
+# In[ ]:
 
 
-clf.best_params_
+# Define the generators
+
+batch_size = 8
+# this is the augmentation configuration we will use for training
+train_datagen = ImageDataGenerator(
+        rescale=1./255,
+        shear_range=0.2,
+        zoom_range=0.2,
+        horizontal_flip=True)
+
+# this is the augmentation configuration we will use for testing:
+# only rescaling
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+# this is a generator that will read pictures found in
+# subfolers of 'data/train', and indefinitely generate
+# batches of augmented image data
+train_generator = train_datagen.flow_from_directory(
+        'data/train',  # this is the target directory
+        target_size=(150, 150),  # all images will be resized to 150x150
+        batch_size=batch_size,
+        class_mode='categorical')  # more than two classes
+
+# this is a similar generator, for validation data
+validation_generator = test_datagen.flow_from_directory(
+        'data/valid',
+        target_size=(150,150),
+        batch_size=batch_size,
+        class_mode='categorical')
 
 
-# What's really convenient is you can call refit to automatically fit the pipeline on all of the training data with the best_params_setting applied!
-# 
-# Then applying it to the test data is the same as before.
-# 
-# Not much of an improvement, but at least now we can go back and easily change out the individual pieces.
-
-# In[24]:
+# In[ ]:
 
 
-#refitting on entire training data using best settings
-clf.refit
-
-preds = clf.predict(X_test)
-probs = clf.predict_proba(X_test)
-
-np.mean(preds == y_test)
-
-
-# # Final Predictions
-# 
-# To generate submission results, you just need to do the preprocessing on the submission data, then call the pipeline with the predict_proba call, since we want to know all the probabilities, not just the label.
-# 
-# The only tricky part for the submission is we need the class names as the column values. To access it, you must call clf.best_estimator_.named_steps['classifier'].classes_
-
-# In[28]:
-
-
-submission = pd.read_csv('../input/test.csv')
-
-#preprocessing
-submission = processing(submission)
-predictions = clf.predict_proba(submission)
-
-preds = pd.DataFrame(data=predictions, columns = clf.best_estimator_.named_steps['classifier'].classes_)
-
-#generating a submission file
-result = pd.concat([submission[['id']], preds], axis=1)
-result.set_index('id', inplace = True)
-result.head()
+def get_model():
+    # Get base model 
+    base_model = VGG16(include_top=False, input_shape=(150,150,3))
+    # Freeze the layers in base model
+    for layer in base_model.layers:
+        layer.trainable = False
+    # Get base model output 
+    base_model_ouput = base_model.output
+    
+    # Add new layers
+    x = Flatten()(base_model.output)
+    x = Dense(500, activation='relu', name='fc1')(x)
+    x = Dropout(0.5)(x)
+    x = Dense(5, activation='softmax', name='fc2')(x)
+    
+    model = Model(inputs=base_model.input, outputs=x)
+    return model
 
 
-# ### Wrapping Up
-# 
-# I hope this helps shed some light on the inner workings of pipelines. Using pipelines effectively can really help elevate you to the next level of data scientist, so once you've mastered the algorithms themselves, I strongly recommend mastering pipelines as well! You can even create a pipeline to test out different classifiers and pick the best one too! It's one step closer to automating away the boring stuff, letting you focus on what matters, the creativity and feature engineering.
-# 
-# More to come, so stay tuned!
+# In[ ]:
+
+
+# Get the model
+model = get_model()
+# Compile it
+opt = Adam(lr=1e-3, decay=1e-6)
+model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
+#Summary
+model.summary()
+
+
+# In[ ]:
+
+
+# Fit the genertor 
+model.fit_generator(
+        train_generator,
+        steps_per_epoch=4168 // batch_size,
+        epochs=50,
+        validation_data=validation_generator,
+        validation_steps=150 // batch_size)
+
+
+# That's all folks. I hope you enjoyed this. One last thing: Kaggle kernels doesn't provide you GPU, so the training time will depend on your architecture and size of your dataset. Also, if you find this kernel helpful, please upvote!!

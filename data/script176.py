@@ -1,57 +1,65 @@
 
 # coding: utf-8
 
-# This script will create one folder per category and save all respective images on it.
+# This small notebook outputs a single .gpx file with all the inquiries that have received a high interest level. Feel free to use it and deepen your exploratory data analysis with the help of Google Earth.
 # 
-# The pattern to each file is  `../input/train/[category]/[_id]-[index].jpg`, where `index` is the position of image on each product.
+# First, import the required packages.
 
-# In[1]:
+# In[ ]:
 
 
-import bson
-import numpy as np
+#Author Justin Neumann
+
+import json
 import pandas as pd
-import os
-from tqdm import tqdm_notebook
+import gpxpy as gpx
+import gpxpy.gpx
 
 
-# In[2]:
+# Then import the training set and create a new data frame with latitude, longitude and interest_level. Note: There is space for improvement in this code section.
+
+# In[ ]:
 
 
-out_folder = '../output/train'
+#import training data
+with open('../input/train.json') as data_file:
+    data = json.load(data_file)
+train = pd.DataFrame(data)
 
-# Create output folder
-if not os.path.exists(out_folder):
-    os.makedirs(out_folder)
-
-
-# In[3]:
+train.head(1)
 
 
-# Create categories folders
-categories = pd.read_csv('../input/category_names.csv', index_col='category_id')
+# Now create the structure of the .gpx file.
 
-for category in tqdm_notebook(categories.index):
-    os.mkdir(os.path.join(out_folder, str(category)))
+# In[ ]:
 
 
-# In[4]:
+# create gpx file as from https://pypi.python.org/pypi/gpxpy/0.8.8
+gpx = gpxpy.gpx.GPX()
+
+for index, row in train.iterrows():
+    #print (row['latitude'], row['longitude'])
+
+    if row['interest_level'] == 'high': #opting for all nominals results in poor performance of Google Earth
+        gps_waypoint = gpxpy.gpx.GPXWaypoint(row['latitude'],row['longitude'],elevation=10)
+        gpx.waypoints.append(gps_waypoint)
+
+# You can add routes and waypoints, too...
 
 
-num_products = 7069896  # 7069896 for train and 1768182 for test
+# Finally, export the .gpx file and feel free to use it in Google Earth via Tools->GPS->Import from File. I do not recommend to include all inquiries because of poor performance of Google Earth.
 
-bar = tqdm_notebook(total=num_products)
-with open('../input/train.bson', 'rb') as fbson:
+# In[ ]:
 
-    data = bson.decode_file_iter(fbson)
-    
-    for c, d in enumerate(data):
-        category = d['category_id']
-        _id = d['_id']
-        for e, pic in enumerate(d['imgs']):
-            fname = os.path.join(out_folder, str(category), '{}-{}.jpg'.format(_id, e))
-            with open(fname, 'wb') as f:
-                f.write(pic['picture'])
 
-        bar.update()
+filename = "test.gpx"
+FILE = open(filename,"w")
+FILE.writelines(gpx.to_xml())
+FILE.close()
+print ('Created GPX:')
 
+
+# The result looks like ![enter image description here][1]
+# 
+# 
+#   [1]: http://i.imgur.com/46EuCPC.jpg

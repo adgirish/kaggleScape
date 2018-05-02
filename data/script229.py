@@ -1,304 +1,315 @@
 
 # coding: utf-8
 
-# # **This notebook's best result: val_acc is 0.8779, val_loss is 0.3129**
-
-# # **1. Few Preprocessings**
-# # **2. Model: FastText by Keras**
-# ## **2.1** Change Preprocessings:
-# - Do lower case 
+# In this notebook, I examine the provided data for Kaggle's Humpback Whale ID challenge. I also look at data augmentations in an attempt to inflate the size of the training dataset.
 
 # In[ ]:
 
 
-import numpy as np
+import math
+from collections import Counter
 
+import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
+from PIL import Image
 
-from collections import defaultdict
+from tqdm import tqdm
 
-import keras
-import keras.backend as K
-from keras.layers import Dense, GlobalAveragePooling1D, Embedding
-from keras.callbacks import EarlyStopping
-from keras.models import Sequential
-from keras.preprocessing.sequence import pad_sequences
-from keras.preprocessing.text import Tokenizer
-from keras.utils import to_categorical
-
-from sklearn.model_selection import train_test_split
-
-np.random.seed(7)
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-df = pd.read_csv('./../input/train.csv')
-a2c = {'EAP': 0, 'HPL' : 1, 'MWS' : 2}
-y = np.array([a2c[a] for a in df.author])
-y = to_categorical(y)
+INPUT_DIR = '../input'
 
-
-# # 1. **Few Preprocessings**
-# 
-# In traditional NLP tasks, preprocessings play an important role, but...
-# 
-# ## **Low-frequency words**
-# In my experience, fastText is very fast, but I need to delete rare words to avoid overfitting.
-# 
-# **NOTE**:
-# Some keywords are rare words, such like *Cthulhu* in *Cthulhu Mythos* of *Howard Phillips Lovecraft*.
-# But these are useful for this task.
-# 
-# ## **Removing Stopwords**
-# 
-# Nothing.
-# To identify author from a sentence, some stopwords play an important role because one has specific usages of them.
-# 
-# ## **Stemming and Lowercase**
-# 
-# Nothing.
-# This reason is the same for stopwords removing.
-# And I guess some stemming rules provided by libraries is bad for this task because all author is the older author.
-# 
-# ## **Cutting long sentence**
-# 
-# Too long documents are cut.
-# 
-# ## **Punctuation**
-# 
-# Because I guess each author has unique punctuations's usage in the novel, I separate them from words.
-# 
-# e.g. `Don't worry` -> `Don ' t worry`
-# 
-# ## **Is it slow?**
-# 
-# Don't worry! FastText is a very fast algorithm if it runs on CPU. 
-
-# # **Let's check character distribution per author**
 
 # In[ ]:
 
 
-counter = {name : defaultdict(int) for name in set(df.author)}
-for (text, author) in zip(df.text, df.author):
-    text = text.replace(' ', '')
-    for c in text:
-        counter[author][c] += 1
-
-chars = set()
-for v in counter.values():
-    chars |= v.keys()
+def plot_images_for_filenames(filenames, labels, rows=4):
+    imgs = [plt.imread(f'{INPUT_DIR}/train/{filename}') for filename in filenames]
     
-names = [author for author in counter.keys()]
-
-print('c ', end='')
-for n in names:
-    print(n, end='   ')
-print()
-for c in chars:    
-    print(c, end=' ')
-    for n in names:
-        print(counter[n][c], end=' ')
-    print()
-
-
-# # **Summary of character distribution**
-# 
-# - HPL and EAP used non ascii characters like a `ä`.
-# - The number of punctuations seems to be good feature
-# 
-
-# # **Preprocessing**
-# 
-# My preproceeings are 
-# 
-# - Separate punctuation from words
-# - Remove lower frequency words ( <= 2)
-# - Cut a longer document which contains `256` words
-
-# In[ ]:
-
-
-def preprocess(text):
-    text = text.replace("' ", " ' ")
-    signs = set(',.:;"?!')
-    prods = set(text) & signs
-    if not prods:
-        return text
-
-    for sign in prods:
-        text = text.replace(sign, ' {} '.format(sign) )
-    return text
-
-
-# In[ ]:
-
-
-def create_docs(df, n_gram_max=2):
-    def add_ngram(q, n_gram_max):
-            ngrams = []
-            for n in range(2, n_gram_max+1):
-                for w_index in range(len(q)-n+1):
-                    ngrams.append('--'.join(q[w_index:w_index+n]))
-            return q + ngrams
+    return plot_images(imgs, labels, rows)
+    
         
-    docs = []
-    for doc in df.text:
-        doc = preprocess(doc).split()
-        docs.append(' '.join(add_ngram(doc, n_gram_max)))
+def plot_images(imgs, labels, rows=4):
+    # Set figure to 13 inches x 8 inches
+    figure = plt.figure(figsize=(13, 8))
+
+    cols = len(imgs) // rows + 1
+
+    for i in range(len(imgs)):
+        subplot = figure.add_subplot(rows, cols, i + 1)
+        subplot.axis('Off')
+        if labels:
+            subplot.set_title(labels[i], fontsize=16)
+        plt.imshow(imgs[i], cmap='gray')
+
+
+# In[ ]:
+
+
+np.random.seed(42)
+
+
+# ## Exploring the dataset
+
+# In[ ]:
+
+
+train_df = pd.read_csv('../input/train.csv')
+train_df.head()
+
+
+# Let's plot a couple of images at random.
+
+# In[ ]:
+
+
+rand_rows = train_df.sample(frac=1.)[:20]
+imgs = list(rand_rows['Image'])
+labels = list(rand_rows['Id'])
+
+plot_images_for_filenames(imgs, labels)
+
+
+# The competition states that it's hard because: "there are only a few examples for each of 3,000+ whale ids", so let's take a look at the breakdown of number of image per category.
+
+# In[ ]:
+
+
+num_categories = len(train_df['Id'].unique())
+     
+print(f'Number of categories: {num_categories}')
+
+
+# There appear to be too many categories to graph count by category, so let's instead graph the number of categories by the number of images in the category.
+
+# In[ ]:
+
+
+size_buckets = Counter(train_df['Id'].value_counts().values)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(10, 6))
+
+plt.bar(range(len(size_buckets)), list(size_buckets.values())[::-1], align='center')
+plt.xticks(range(len(size_buckets)), list(size_buckets.keys())[::-1])
+plt.title("Num of categories by images in the training set")
+
+plt.show()
+
+
+# As we can see, the vast majority of classes only have a single image in them. This is going to make predictions very difficult for most conventional image classification models.
+
+# In[ ]:
+
+
+train_df['Id'].value_counts().head(3)
+
+
+# In[ ]:
+
+
+total = len(train_df['Id'])
+print(f'Total images in training set {total}')
+
+
+# New whale is the biggest category with 810, followed by `w_1287fbc`. New whale, I believe, is any whale that isn't in scientist's database. Since we can pick 5 potential labels per id, it's probably going to make sense to always include new_whale in our prediction set, since there's always an 8.2% change that's the right one. Let's take a look at one of the classes, to get a sense what flute looks like from the same whale.
+
+# In[ ]:
+
+
+w_1287fbc = train_df[train_df['Id'] == 'w_1287fbc']
+plot_images_for_filenames(list(w_1287fbc['Image']), None, rows=9)
+
+
+# In[ ]:
+
+
+w_98baff9 = train_df[train_df['Id'] == 'w_98baff9']
+plot_images_for_filenames(list(w_98baff9['Image']), None, rows=9)
+
+
+# It's very difficult to build a validation set when most classes only have 1 image, so my thinking is to perform some aggressive data augmentation on the classes with < 10 images before creating a train/validation split. Let's take a look at a few examples of whales with only one example.
+
+# In[ ]:
+
+
+one_image_ids = train_df['Id'].value_counts().tail(8).keys()
+one_image_filenames = []
+labels = []
+for i in one_image_ids:
+    one_image_filenames.extend(list(train_df[train_df['Id'] == i]['Image']))
+    labels.append(i)
     
-    return docs
+plot_images_for_filenames(one_image_filenames, labels, rows=3)
+
+
+# From these small sample sizes, it seems like > 50% of images are black and white, suggesting that a good initial augementation might be to just convert colour images to greyscale and add to the training set. Let's confirm that by looking at a sample of the images.
+
+# In[ ]:
+
+
+def is_grey_scale(img_path):
+    """Thanks to https://stackoverflow.com/questions/23660929/how-to-check-whether-a-jpeg-image-is-color-or-gray-scale-using-only-python-stdli"""
+    im = Image.open(img_path).convert('RGB')
+    w,h = im.size
+    for i in range(w):
+        for j in range(h):
+            r,g,b = im.getpixel((i,j))
+            if r != g != b: return False
+    return True
 
 
 # In[ ]:
 
 
-min_count = 2
-
-docs = create_docs(df)
-tokenizer = Tokenizer(lower=False, filters='')
-tokenizer.fit_on_texts(docs)
-num_words = sum([1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-
-tokenizer = Tokenizer(num_words=num_words, lower=False, filters='')
-tokenizer.fit_on_texts(docs)
-docs = tokenizer.texts_to_sequences(docs)
-
-maxlen = 256
-
-docs = pad_sequences(sequences=docs, maxlen=maxlen)
+is_grey = [is_grey_scale(f'{INPUT_DIR}/train/{i}') for i in train_df['Image'].sample(frac=0.1)]
+grey_perc = round(sum([i for i in is_grey]) / len([i for i in is_grey]) * 100, 2)
+print(f"% of grey images: {grey_perc}")
 
 
-# # **2. Model: FastText by Keras**
-# 
-# FastText is very fast and strong baseline algorithm for text classification based on Continuous Bag-of-Words model a.k.a Word2vec.
-# 
-# FastText contains only three layers:
-# 
-# 1. Embeddings layer: Input words (and word n-grams) are all words in a sentence/document
-# 2. Mean/AveragePooling Layer: Taking average vector of Embedding vectors
-# 3. Softmax layer
-# 
-# There are some implementations of FastText:
-# 
-# - Original library provided by Facebook AI research: https://github.com/facebookresearch/fastText
-# - Keras: https://github.com/fchollet/keras/blob/master/examples/imdb_fasttext.py
-# - Gensim: https://radimrehurek.com/gensim/models/wrappers/fasttext.html
-# 
-# Original Paper: https://arxiv.org/abs/1607.01759 : More detail information about fastText classification model
-
-# # My FastText parameters are:
-# 
-# - The dimension of word vector is 20
-# - Optimizer is `Adam`
-# - Inputs are words and word bi-grams
-#   - you can change this parameter by passing the max n-gram size to argument of `create_docs` function.
-# 
+# It might also be worth capturing the size of the images so we can get a sense of what we're dealing with.
 
 # In[ ]:
 
 
-input_dim = np.max(docs) + 1
-embedding_dims = 20
+img_sizes = Counter([Image.open(f'{INPUT_DIR}/train/{i}').size for i in train_df['Image']])
+
+size, freq = zip(*Counter({i: v for i, v in img_sizes.items() if v > 1}).most_common(20))
+
+plt.figure(figsize=(10, 6))
+
+plt.bar(range(len(freq)), list(freq), align='center')
+plt.xticks(range(len(size)), list(size), rotation=70)
+plt.title("Image size frequencies (where freq > 1)")
+
+plt.show()
+
+
+# ## Data Augmentation
+
+# In[ ]:
+
+
+from keras.preprocessing.image import (
+    random_rotation, random_shift, random_shear, random_zoom,
+    random_channel_shift, transform_matrix_offset_center, img_to_array)
 
 
 # In[ ]:
 
 
-def create_model(embedding_dims=20, optimizer='adam'):
-    model = Sequential()
-    model.add(Embedding(input_dim=input_dim, output_dim=embedding_dims))
-    model.add(GlobalAveragePooling1D())
-    model.add(Dense(3, activation='softmax'))
-
-    model.compile(loss='categorical_crossentropy',
-                  optimizer=optimizer,
-                  metrics=['accuracy'])
-    return model
+img = Image.open(f'{INPUT_DIR}/train/ff38054f.jpg')
 
 
 # In[ ]:
 
 
-epochs = 25
-x_train, x_test, y_train, y_test = train_test_split(docs, y, test_size=0.2)
-
-model = create_model()
-hist = model.fit(x_train, y_train,
-                 batch_size=16,
-                 validation_data=(x_test, y_test),
-                 epochs=epochs,
-                 callbacks=[EarlyStopping(patience=2, monitor='val_loss')])
-
-
-# ### **Result**
-# 
-# - Best val_loss is 0.3409
-# - Best val_acc is 0.8700
-# 
-# 
-
-# # **2.1 Change Preprocessings**
-# 
-# Next, I change some parameters and preprocessings to improve fastText model.
-# ## **2.1.1 Do lower case**
-
-# In[ ]:
-
-
-docs = create_docs(df)
-tokenizer = Tokenizer(lower=True, filters='')
-tokenizer.fit_on_texts(docs)
-num_words = sum([1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-
-tokenizer = Tokenizer(num_words=num_words, lower=True, filters='')
-tokenizer.fit_on_texts(docs)
-docs = tokenizer.texts_to_sequences(docs)
-
-maxlen = 256
-
-docs = pad_sequences(sequences=docs, maxlen=maxlen)
-
-input_dim = np.max(docs) + 1
+img_arr = img_to_array(img)
 
 
 # In[ ]:
 
 
-epochs = 16
-x_train, x_test, y_train, y_test = train_test_split(docs, y, test_size=0.2)
-
-model = create_model()
-hist = model.fit(x_train, y_train,
-                 batch_size=16,
-                 validation_data=(x_test, y_test),
-                 epochs=epochs,
-                 callbacks=[EarlyStopping(patience=2, monitor='val_loss')])
+plt.imshow(img)
 
 
-# **Result**
+# ### Random rotation
+
+# In[ ]:
+
+
+imgs = [
+    random_rotation(img_arr, 30, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest') * 255
+    for _ in range(5)]
+plot_images(imgs, None, rows=1)
+
+
+# ### Random shift
+
+# In[ ]:
+
+
+imgs = [
+    random_shift(img_arr, wrg=0.1, hrg=0.3, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest') * 255
+    for _ in range(5)]
+plot_images(imgs, None, rows=1)
+
+
+# ### Random shear
+
+# In[ ]:
+
+
+imgs = [
+    random_shear(img_arr, intensity=0.4, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest') * 255
+    for _ in range(5)]
+plot_images(imgs, None, rows=1)
+
+
+# ### Random zoom
+
+# In[ ]:
+
+
+imgs = [
+    random_zoom(img_arr, zoom_range=(1.5, 0.7), row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest') * 255
+    for _ in range(5)]
+plot_images(imgs, None, rows=1)
+
+
+# ### Grey scale
 # 
-# - Best val_loss is 0.3129
-# - Best val_acc is 0.8787
+# We want to ensure that all colour images also have a grey scale version.
 
 # In[ ]:
 
 
-test_df = pd.read_csv('../input/test.csv')
-docs = create_docs(test_df)
-docs = tokenizer.texts_to_sequences(docs)
-docs = pad_sequences(sequences=docs, maxlen=maxlen)
-y = model.predict_proba(docs)
+import random
 
-result = pd.read_csv('../input/sample_submission.csv')
-for a, i in a2c.items():
-    result[a] = y[:, i]
+def random_greyscale(img, p):
+    if random.random() < p:
+        return np.dot(img[...,:3], [0.299, 0.587, 0.114])
+    
+    return img
+
+imgs = [
+    random_greyscale(img_arr, 0.5) * 255
+    for _ in range(5)]
+
+plot_images(imgs, None, rows=1)
+
+
+# ### Flips
+# 
+# Usually for side-on image sets like this we'd include a veritical flip, however, in this case the veritical alignment is requirement to differentiate between flutes, so I'll leave it out.
+
+# ### All together
+# 
+# Going to create an augmentation pipeline which will combine all the augs for a single predictions.
+
+# In[ ]:
+
+
+def augmentation_pipeline(img_arr):
+    img_arr = random_rotation(img_arr, 18, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest')
+    img_arr = random_shear(img_arr, intensity=0.4, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest')
+    img_arr = random_zoom(img_arr, zoom_range=(0.9, 2.0), row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest')
+    img_arr = random_greyscale(img_arr, 0.4)
+
+    return img_arr
 
 
 # In[ ]:
 
 
-result.to_csv('fastText_result.csv', index=False)
+imgs = [augmentation_pipeline(img_arr) * 255 for _ in range(5)]
+plot_images(imgs, None, rows=1)
 

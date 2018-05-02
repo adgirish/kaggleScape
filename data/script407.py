@@ -1,362 +1,570 @@
 
 # coding: utf-8
 
-# ## Introduction
-# 
-# Working with these files can be a challenge, especially given their heterogeneous nature. Some preprocessing is required before they are ready for consumption by your CNN.
-# 
-# Fortunately, I participated in the LUNA16 competition as part of a university course on computer aided diagnosis, so I have some experience working with these files. At this moment we top the leaderboard there :)
-# 
-# **This tutorial aims to provide a comprehensive overview of useful steps to take before the data hits your ConvNet/other ML method.**
-# 
-# What we will cover:  
-# 
-# * **Loading the DICOM files**, and adding missing metadata  
-# * **Converting the pixel values to *Hounsfield Units (HU)***, and what tissue these unit values correspond to
-# * **Resampling** to an isomorphic resolution to remove variance in scanner resolution.
-# * **3D plotting**, visualization is very useful to see what we are doing.
-# * **Lung segmentation**
-# * **Normalization** that makes sense.
-# * **Zero centering** the scans.
-# 
-# 
-# ---
-# 
-# Before we start, let's import some packages and determine the available patients.
+# <h1>Kickstarter: Exploratory Data Analysis with Python</h1>
 
-# In[ ]:
+#  <i>Leonado Ferreira, 2018-02-12 </i> 
+# 
+
+# Look for another interesting Kernels on https://www.kaggle.com/kabure/kernels
+
+# <h2>The goal is try to understand : </h2>
+# - The difference values in  categorys.<br>
+# - The most frequency status of project<br>
+# - Distribuitions<br>
+# - Patterns <br>
+# - And some another informations that the data can show us<br>
+
+# <i>English is not my native language, so sorry for any mistake</i>
+
+# If you like me Kernel, give me some feedback and also <b>votes up </b> my kernel =)
+# 
+
+# <h1>Understanding Kickstarter: </h1>
+
+# <b>Kickstarter</b>
+# Is an American public-benefit corporation based in Brooklyn, New York, that maintains a global crowdfunding platform focused on creativity The company's stated mission is to "help bring creative projects to life". Kickstarter has reportedly received more than $1.9 billion in pledges from 9.4 million backers to fund 257,000 creative projects, such as films, music, stage shows, comics, journalism, video games, technology and food-related projects.
+# 
+# People who back Kickstarter projects are offered tangible rewards or experiences in exchange for their pledges. This model traces its roots to subscription model of arts patronage, where artists would go directly to their audiences to fund their work.
+# 
+
+# In[1]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import dicom
-import os
-import scipy.ndimage
+#Load the Librarys
+import pandas as pd
+import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 
-from skimage import measure, morphology
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-# Some constants 
-INPUT_FOLDER = '../input/sample_images/'
-patients = os.listdir(INPUT_FOLDER)
-patients.sort()
+# In[2]:
 
 
-# # Loading the files
-# Dicom is the de-facto file standard in medical imaging. This is my first time working with it, but it seems to be fairly straight-forward.  These files contain a lot of metadata (such as the pixel size, so how long one pixel is in every dimension in the real world). 
-# 
-# This pixel size/coarseness of the scan differs from scan to scan (e.g. the distance between slices may differ), which can hurt performance of CNN approaches. We can deal with this by isomorphic resampling, which we will do later.
-# 
-# Below is code to load a scan, which consists of multiple slices, which we simply save in a Python list. Every folder in the dataset is one scan (so one patient). One metadata field is missing, the pixel size in the Z direction, which is the slice thickness. Fortunately we can infer this, and we add this to the metadata.
-
-# In[ ]:
+#loading the data with encode 
+df_kick = pd.read_csv("../input/ks-projects-201801.csv")
 
 
-# Load the scans in given folder path
-def load_scan(path):
-    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
-    slices.sort(key = lambda x: float(x.ImagePositionPatient[2]))
-    try:
-        slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
-    except:
-        slice_thickness = np.abs(slices[0].SliceLocation - slices[1].SliceLocation)
-        
-    for s in slices:
-        s.SliceThickness = slice_thickness
-        
-    return slices
+# In[3]:
 
 
-# The unit of measurement in CT scans is the **Hounsfield Unit (HU)**, which is a measure of radiodensity. CT scanners are carefully calibrated to accurately measure this.  From Wikipedia:
-# 
-# ![HU examples][1]
-# 
-# By default however, the returned values are not in this unit. Let's fix this.
-# 
-# Some scanners have cylindrical scanning bounds, but the output image is square. The pixels that fall outside of these bounds get the fixed value -2000. The first step is setting these values to 0, which currently corresponds to air. Next, let's go back to HU units, by multiplying with the rescale slope and adding the intercept (which are conveniently stored in the metadata of the scans!).
-# 
-#   [1]: http://i.imgur.com/4rlyReh.png
-
-# In[ ]:
+#knowning the main informations of our data
+print(df_kick.shape)
+print(df_kick.info())
 
 
-def get_pixels_hu(slices):
-    image = np.stack([s.pixel_array for s in slices])
-    # Convert to int16 (from sometimes int16), 
-    # should be possible as values should always be low enough (<32k)
-    image = image.astype(np.int16)
-
-    # Set outside-of-scan pixels to 0
-    # The intercept is usually -1024, so air is approximately 0
-    image[image == -2000] = 0
-    
-    # Convert to Hounsfield units (HU)
-    for slice_number in range(len(slices)):
-        
-        intercept = slices[slice_number].RescaleIntercept
-        slope = slices[slice_number].RescaleSlope
-        
-        if slope != 1:
-            image[slice_number] = slope * image[slice_number].astype(np.float64)
-            image[slice_number] = image[slice_number].astype(np.int16)
-            
-        image[slice_number] += np.int16(intercept)
-    
-    return np.array(image, dtype=np.int16)
+# In[4]:
 
 
-# Let's take a look at one of the patients.
-
-# In[ ]:
+print(df_kick.nunique())
 
 
-first_patient = load_scan(INPUT_FOLDER + patients[0])
-first_patient_pixels = get_pixels_hu(first_patient)
-plt.hist(first_patient_pixels.flatten(), bins=80, color='c')
-plt.xlabel("Hounsfield Units (HU)")
-plt.ylabel("Frequency")
-plt.show()
+# <h2> Knowing our data</h2>
 
-# Show some slice in the middle
-plt.imshow(first_patient_pixels[80], cmap=plt.cm.gray)
+# In[5]:
+
+
+#Looking the data
+df_kick.head(n=3)
+
+
+# <h2>I will start, looking the state column distribuition that might will be our key to understand this dataset</h2>
+
+# In[6]:
+
+
+percentual_sucess = round(df_kick["state"].value_counts() / len(df_kick["state"]) * 100,2)
+
+print("State Percentual in %: ")
+print(percentual_sucess)
+
+plt.figure(figsize = (8,6))
+
+ax1 = sns.countplot(x="state", data=df_kick)
+ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
+ax1.set_title("Status Project Distribuition", fontsize=15)
+ax1.set_xlabel("State Description", fontsize=12)
+ax1.set_ylabel("Count", fontsize=12)
+
 plt.show()
 
 
-# Looking at the table from Wikipedia and this histogram, we can clearly see which pixels are air and which are tissue. We will use this for lung segmentation in a bit :)
+# Very interesting percentual ! <br>
+# just 35,38% of all projects got sucess.<br>
+# More than half have failed or 10% was canceled
+
+# <h1>Let's start looking our Project values</h1> <br>
+# 
+# - I will start exploring the distribuition logarithmn of these values
+
+# In[7]:
+
+
+#Normalization to understand the distribuition of the pledge
+df_kick["pledge_log"] = np.log(df_kick["pledged"]+ 1)
+df_kick["goal_log"] = np.log(df_kick["goal"]+ 1)
+
+df_failed = df_kick[df_kick["state"] == "failed"]
+df_sucess = df_kick[df_kick["state"] == "successful"]
+df_suspended = df_kick[df_kick["state"] == "suspended"]
+
+plt.figure(figsize = (14,6))
+plt.subplot(221)
+g = sns.distplot(df_kick["pledge_log"])
+g.set_title("Pledged Log", fontsize=18)
+
+plt.subplot(222)
+g1 = sns.distplot(df_kick["goal_log"])
+g1.set_title("Pledged Log", fontsize=18)
+
+plt.subplot(212)
+g2 = sns.distplot(df_failed['goal_log'], color='r')
+g2 = sns.distplot(df_sucess['goal_log'], color='b')
+g2.set_title("Pledged x Goal cross distribuition", fontsize=18)
+
+plt.subplots_adjust(wspace = 0.1, hspace = 0.4,top = 0.9)
+
+plt.show()
+
+
+# Interesting difference between Pledged and Goal distribuition!  But we cannot see significantly differences beween failed and successful state
+# 
+
+# <h2>Description of the continous variables</h2>
+
+# In[8]:
+
+
+print("Min Goal and Pledged values")
+print(df_kick[["goal", "pledged"]].min())
+print("")
+print("Mean Goal and Pledged values")
+print(round(df_kick[["goal", "pledged"]].mean(),2))
+print("")
+print("Median Goal and Pledged values")
+print(df_kick[["goal", "pledged"]].median())
+print("")
+print("Max Goal and Pledged values")
+print("goal       100000000.0") #If i put the both together give me back log values, 
+print("pledged     20338986.27") # so i decide to just show this values
+print("dtype: float64")
+print("")
+print("Std Goal and Pledged values")
+print(round(df_kick[["goal", "pledged"]].std(),2))
+
+
+# <h2>Looking the State variable</h2>
+# - pledge log by state
+# - goal log by state
+# - goal log x pledged log
+
+# In[9]:
+
+
+plt.figure(figsize = (12,8))
+plt.subplots_adjust(hspace = 0.75, top = 0.75)
+
+ax1 = plt.subplot(221)
+ax1 = sns.violinplot(x="state", y="pledge_log", 
+                     data=df_kick, palette="hls")
+ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
+ax1.set_title("Understanding the Pledged values by state", fontsize=15)
+ax1.set_xlabel("State Description", fontsize=12)
+ax1.set_ylabel("Pledged Values(log)", fontsize=12)
+
+ax2 = plt.subplot(222)
+ax2 = sns.violinplot(x="state", y="goal_log", data=df_kick)
+ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
+ax2.set_title("Understanding the Goal values by state", fontsize=15)
+ax2.set_xlabel("State Description", fontsize=12)
+ax2.set_ylabel("Goal Values(log)", fontsize=12)
+
+ax0 = plt.subplot(212)
+ax0 = sns.regplot(x="goal_log", y="pledge_log", 
+                    data=df_kick, x_jitter=False)
+ax0.set_title("Better view of Goal x Pledged values", fontsize=15)
+ax0.set_xlabel("Goal Values(log)")
+ax0.set_ylabel("Pledged Values(log)")
+ax0.set_xticklabels(ax0.get_xticklabels(),rotation=90)
+plt.show()
+
+
+# <h2>Analysing further the CAaegorys: </h2>
+# - Sucessful category's frequency
+# - failed category's frequency
+# - General Goal Distribuition by Category
+
+# In[10]:
+
+
+main_cats = df_kick["main_category"].value_counts()
+main_cats_failed = df_kick[df_kick["state"] == "failed"]["main_category"].value_counts()
+main_cats_sucess = df_kick[df_kick["state"] == "successful"]["main_category"].value_counts()
+
+plt.figure(figsize = (12,8))
+plt.subplots_adjust(hspace = 0.9, top = 0.75)
+
+ax0 = plt.subplot(221)
+ax0 = sns.barplot(x=main_cats_failed.index, y= main_cats_failed.values, orient='v')
+ax0.set_xticklabels(ax0.get_xticklabels(),rotation=90)
+ax0.set_title("Frequency Failed by Main Category", fontsize=15)
+ax0.set_xlabel("Main Category Failed", fontsize=12)
+ax0.set_ylabel("Count", fontsize=12)
+
+ax1 = plt.subplot(222)
+ax1 = sns.barplot(x=main_cats_sucess.index, y = main_cats_sucess.values, orient='v')
+ax1.set_xticklabels(ax1.get_xticklabels(),rotation=90)
+ax1.set_title("Frequency Successful by Main Category", fontsize=15)
+ax1.set_xlabel("Main Category Sucessful", fontsize=12)
+ax1.set_ylabel("Count", fontsize=12)
+
+ax2 = plt.subplot(212)
+ax2 = sns.violinplot(x="main_category", y="goal_log", data=df_kick)
+ax2.set_xticklabels(ax1.get_xticklabels(),rotation=90)
+ax2.set_title("Distribuition goal(log) by General Main Category", fontsize=15)
+ax2.set_xlabel("Main Category", fontsize=12)
+ax2.set_ylabel("Goal(log)", fontsize=8)
+plt.show()
+
+
+# <h2>Looking the Goal and Pledged Means by State</h2>
+
+# In[11]:
+
+
+print("Looking Goal and Pledged Mean by state ")
+print(round(df_kick.groupby(["state"])["goal", "pledged"].mean(),2))
+
+
+# We have a high mean and standard deviation... Interesting values. <br>
+# Let's known better the distribuition of this values using log scale
+
+# <h2>We have a very interesting distribuition in goal values.</h2>
+
+# In[12]:
+
+
+categorys_failed = df_kick[df_kick["state"] == "failed"]["category"].value_counts()[:25]
+categorys_sucessful = df_kick[df_kick["state"] == "successful"]["category"].value_counts()[:25]
+
+fig, ax = plt.subplots(ncols=2, figsize=(15,20))
+plt.subplots_adjust(wspace = 0.35, top = 0.5)
+
+g1 = plt.subplot(222)
+g1 = sns.barplot(x= categorys_failed.values, y=categorys_failed.index, orient='h')
+g1.set_title("Failed Category's", fontsize=15)
+g1.set_xlabel("Count Category", fontsize=12)
+g1.set_ylabel("Category's Failed", fontsize=12)
+
+g2 = plt.subplot(221)
+g2 = sns.barplot(x= categorys_sucessful.values, y=categorys_sucessful.index, orient='h')
+g2.set_title("Sucessful Category's", fontsize=15)
+g2.set_xlabel("Count Category", fontsize=12)
+g2.set_ylabel("Category's Successful", fontsize=12)
+
+ax2 = plt.subplot(212)
+ax2 = sns.countplot(x="main_category", data=df_kick)
+ax2.set_xticklabels(ax1.get_xticklabels(),rotation=90)
+ax2.set_title("General Main Category's", fontsize=15)
+ax2.set_xlabel("Main Category", fontsize=12)
+ax2.set_ylabel("Count", fontsize=12)
+
+plt.show()
+
+
+# <h2>Now I will start to Investigating the 3 top sucess and fail projects</h2>
+# 
+
+# In[13]:
+
+
+sucess_music = df_kick[(df_kick['main_category'] == 'Music') & 
+                      (df_kick['state'] == 'successful')]
+sucess_filme_video = df_kick[(df_kick['main_category'] == 'Film & Video') & 
+                      (df_kick['state'] == 'successful')]
+sucess_games = df_kick[(df_kick['main_category'] == 'Games') & 
+                      (df_kick['state'] == 'successful')]
+
+plt.figure(figsize=(12,12))
+
+plt.subplot(3,1,1)
+ax0 = sns.countplot(x='category', data=sucess_music)
+ax0.set_xticklabels(ax0.get_xticklabels(),rotation=45)
+ax0.set_title("Categorys of Music with Sucess", fontsize=15)
+ax0.set_xlabel("Music categories", fontsize=12)
+ax0.set_ylabel("Counts", fontsize=12)
+
+plt.subplot(3,1,2)
+ax1 = sns.countplot(x='category', data=sucess_filme_video)
+ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
+ax1.set_title("Categorys of Film & Video with Sucess", fontsize=15)
+ax1.set_xlabel("Film and Video Categorys", fontsize=12)
+ax1.set_ylabel("Counts", fontsize=12)
+
+plt.subplot(3,1,3)
+ax2 = sns.countplot(x='category', data=sucess_games)
+ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
+ax2.set_title("Categorys of Film & Video with Sucess", fontsize=15)
+ax2.set_xlabel("Categorys of Games with Sucess", fontsize=12)
+ax2.set_ylabel("Counts", fontsize=12)
+
+plt.subplots_adjust(wspace = 0.3, hspace = 0.9,top = 0.9)
+
+plt.show()
+
+
+# <h2>Main Category</h2>
+
+# In[15]:
+
+
+failed_film = df_kick[(df_kick['main_category'] == 'Film & Video') & 
+                      (df_kick['state'] == 'failed')]
+failed_publishing = df_kick[(df_kick['main_category'] == 'Publishing') & 
+                      (df_kick['state'] == 'failed')]
+failed_music = df_kick[(df_kick['main_category'] == 'Music') & 
+                      (df_kick['state'] == 'failed')]
+
+plt.figure(figsize=(12,12))
+
+plt.subplot(3,1,1)
+ax0 = sns.countplot(x='category', data=failed_film)
+ax0.set_xticklabels(ax0.get_xticklabels(),rotation=45)
+ax0.set_title("Film & Video Most Fail Category's ", fontsize=15)
+ax0.set_xlabel("", fontsize=12)
+ax0.set_ylabel("Counts", fontsize=12)
+
+plt.subplot(3,1,2)
+ax1 = sns.countplot(x='category', data=failed_publishing)
+ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
+ax1.set_title("Publishing Most Fail Category's", fontsize=15)
+ax1.set_xlabel("", fontsize=12)
+ax1.set_ylabel("Counts", fontsize=12)
+
+plt.subplot(3,1,3)
+ax2 = sns.countplot(x='category', data=failed_music)
+ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
+ax2.set_title("Music Most Fail Category's", fontsize=15)
+ax2.set_xlabel("", fontsize=12)
+ax2.set_ylabel("Counts", fontsize=12)
+
+plt.subplots_adjust(wspace = 0.5, hspace = 0.9,top = 0.9)
+plt.show()
+
+
+# In the musics with sucess the most frequent is Indie, and fails is Rock and Hip Hop! 
+# 
+# Another interesting thing, is that Documentary is a significant value in both states... 
+
+# <h1> Looking the time and another features  </h1>
+# 
+
+# In[16]:
+
+
+df_kick['launched'] = pd.to_datetime(df_kick['launched'])
+df_kick['laun_month_year'] = df_kick['launched'].dt.to_period("M")
+df_kick['laun_year'] = df_kick['launched'].dt.to_period("A")
+
+df_kick['deadline'] = pd.to_datetime(df_kick['deadline'])
+df_kick['dead_month_year'] = df_kick['deadline'].dt.to_period("M")
+df_kick['dead_year'] = df_kick['launched'].dt.to_period("A")
+
+
+# In[17]:
+
+
+#Creating a new columns with Campaign total months
+df_kick['time_campaign'] = df_kick['dead_month_year'] - df_kick['laun_month_year']
+df_kick['time_campaign'] = df_kick['time_campaign'].astype(int)
+
+
+# In[18]:
+
+
+plt.figure(figsize = (10,6))
+
+ax = sns.countplot(x='time_campaign', hue='state', 
+                   data=df_kick[df_kick['time_campaign'] < 10])
+ax.set_title("Distribuition of Campaign Time by State", fontsize=30)
+ax.set_xlabel("Campaign Total Months", fontsize=20)
+ax.set_ylabel("Count", fontsize=20)
+plt.show()
+
+print("Descriptions of Campaign Time x State")
+print(pd.crosstab(df_kick[df_kick['time_campaign'] < 5]['time_campaign'], df_kick.state))
+
+
+# In[19]:
+
+
+df_kick.laun_month_year = df_kick.laun_month_year.dt.strftime('%Y-%m')
+df_kick.laun_year = df_kick.laun_year.dt.strftime('%Y')
+
+
+# In[20]:
+
+
+year = df_kick['laun_year'].value_counts()
+month = df_kick['laun_month_year'].value_counts()
+
+fig, ax = plt.subplots(2,1, figsize=(12,10))
+
+ax1 = sns.boxplot(x="laun_year", y='pledge_log', data=df_kick, ax=ax[0])
+ax1.set_title("Project Pledged by Year", fontsize=15)
+ax1.set_xlabel("Years", fontsize=12)
+ax1.set_ylabel("Pledged(log)", fontsize=12)
+
+ax2 = sns.countplot(x="laun_year", hue='state', data=df_kick, ax=ax[1])
+ax2.set_title("Projects count by Year", fontsize=18)
+ax2.set_xlabel("State columns by Year", fontsize=15)
+ax2.set_ylabel("Count", fontsize=15)
+
+#order=['1970','2009','2010','2011','2012',
+#'2013','2014','2015', '2016', '2017','2018']
+# Why the order are not working? 
+plt.show()
+
+print("Descriptive status count by year")
+print(pd.crosstab(df_kick.laun_year, df_kick.state))
+
+
+# <h2>Creating a new feature to calc the % of pledged x goal</h2>
+
+# In[21]:
+
+
+df_kick['diff_pleded_goal'] = round(df_kick['pledge_log'] / df_kick['goal_log'] * 100,2)
+df_kick['diff_pleded_goal'] = df_kick['diff_pleded_goal'].astype(float)
+
+
+# In[22]:
+
+
+plt.figure(figsize = (12,6))
+sns.distplot(df_kick[(df_kick['diff_pleded_goal'] < 200) & 
+                     (df_kick['state'] == 'failed')]['diff_pleded_goal'], color='r')
+sns.distplot(df_kick[(df_kick['diff_pleded_goal'] < 200) & 
+                     (df_kick['state'] == 'successful')]['diff_pleded_goal'],color='g')
+plt.show()
+
+
+# In[23]:
+
+
+plt.figure(figsize = (18,15))
+
+plt.subplots_adjust(hspace = 0.35, top = 0.8)
+
+g1 = plt.subplot(211)
+g1 = sns.countplot(x="laun_month_year", data=df_kick[df_kick['laun_month_year'] >= '2010-01'])
+g1.set_xticklabels(g1.get_xticklabels(),rotation=90)
+g1.set_title("Value Distribuition by Date Distribuition", fontsize=30)
+g1.set_xlabel("Date Distribuition", fontsize=20)
+g1.set_ylabel("Count", fontsize=20)
+
+g2 = plt.subplot(212)
+g2 = sns.boxplot(x="laun_year", y="diff_pleded_goal",
+                 data=df_kick[df_kick['diff_pleded_goal'] < 150], 
+                 hue="state")
+g2.set_xticklabels(g2.get_xticklabels(),rotation=90)
+g2.set_title("Value Distribuition by Date Distribuition", fontsize=20)
+g2.set_xlabel("Date Distribuition", fontsize=20)
+g2.set_ylabel("Goal x Pledged (%)", fontsize=20)
+plt.show()
+
+
+# Looking the difference pledged x goal between failed and sucessful 
+
+# In[24]:
+
+
+plt.figure(figsize = (14,10))
+
+plt.subplots_adjust(hspace = 0.50, top = 0.8)
+
+plt.subplot(311)
+g =sns.boxplot(x='state', y='goal_log', 
+            data=df_kick[df_kick['time_campaign'] < 10], 
+            hue='time_campaign')
+g.set_title("State Goal's by Campaign Time", fontsize=30)
+g.set_xlabel("", fontsize=20)
+g.set_ylabel("Goal(log)", fontsize=20)
+
+plt.subplot(312, sharex=g)
+g1 = sns.boxplot(x='state', y='pledge_log', 
+            data=df_kick[df_kick['time_campaign'] < 10], 
+            hue='time_campaign')
+g1.set_title("State Pledged's by Campaign Time", fontsize=30)
+g1.set_xlabel("", fontsize=20)
+g1.set_ylabel("Pledged(log)", fontsize=20)
+
+plt.subplot(313)
+g2 = sns.boxplot(x='state', y='diff_pleded_goal', 
+            data=df_kick[(df_kick['time_campaign'] < 10) & (df_kick['diff_pleded_goal'] < 200)], 
+            hue='time_campaign')
+g2.set_title("State % of Goal reached by Campaign Time", fontsize=30)
+g2.set_xlabel("State", fontsize=20)
+g2.set_ylabel("Percentual Goal", fontsize=20)
+plt.show()
+
+
+# In[25]:
+
+
+df_kick['backers_log'] = np.log(df_kick['backers'] + 1 ) 
+#The + 1 is to normalize the zero or negative values
+
+plt.figure(figsize = (8,6))
+sns.distplot(df_kick['backers_log'])
+
+plt.show()
+
+
+# In[26]:
+
+
+plt.figure(figsize = (12,8))
+
+plt.subplot(211)
+g = sns.violinplot(x='state',y='backers_log', 
+               data=df_kick)
+g.set_title("Backers by STATE", fontsize=18)
+
+plt.subplot(212)
+g = sns.violinplot(x='main_category',y='backers_log', 
+                   data=df_kick)
+g.set_xticklabels(g.get_xticklabels(),rotation=45)
+
+plt.show()
+
+
+# In[27]:
+
+
+plt.figure(figsize = (12,8))
+
+plt.subplot(211)
+g = sns.boxplot(x='laun_year',y='backers_log', 
+               data=df_kick)
+g.set_title("Backers by STATE", fontsize=18)
+
+plt.show()
+
+
+# In[28]:
+
+
+#Looking the relation of Backers and % of goal reached
+sns.lmplot(x='diff_pleded_goal', y ='backers_log', 
+           data=df_kick[df_kick['diff_pleded_goal'] < 150], size = 5, aspect = 2,
+           hue='state')
+plt.show()
+
+
+# <h1>Conclusions: </h1>
+# 
+# <i>I will continue</i>
 # 
 # 
-# ----------
-
-# # Resampling
-# A scan may have a pixel spacing of `[2.5, 0.5, 0.5]`, which means that the distance between slices is `2.5` millimeters. For a different scan this may be `[1.5, 0.725, 0.725]`, this can be problematic for automatic analysis (e.g. using ConvNets)! 
-# 
-# A common method of dealing with this is resampling the full dataset to a certain isotropic resolution. If we choose to resample everything to 1mm*1mm*1mm pixels we can use 3D convnets without worrying about learning zoom/slice thickness invariance. 
-# 
-# Whilst this may seem like a very simple step, it has quite some edge cases due to rounding. Also, it takes quite a while.
-# 
-# Below code worked well for us (and deals with the edge cases):
-
-# In[ ]:
-
-
-def resample(image, scan, new_spacing=[1,1,1]):
-    # Determine current pixel spacing
-    spacing = np.array([scan[0].SliceThickness] + scan[0].PixelSpacing, dtype=np.float32)
-
-    resize_factor = spacing / new_spacing
-    new_real_shape = image.shape * resize_factor
-    new_shape = np.round(new_real_shape)
-    real_resize_factor = new_shape / image.shape
-    new_spacing = spacing / real_resize_factor
-    
-    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
-    
-    return image, new_spacing
-
-
-# Please note that when you apply this, to save the new spacing! Due to rounding this may be slightly off from the desired spacing (above script picks the best possible spacing with rounding).
-# 
-# Let's resample our patient's pixels to an isomorphic resolution of 1 by 1 by 1 mm.
-
-# In[ ]:
-
-
-pix_resampled, spacing = resample(first_patient_pixels, first_patient, [1,1,1])
-print("Shape before resampling\t", first_patient_pixels.shape)
-print("Shape after resampling\t", pix_resampled.shape)
-
-
-# # 3D plotting the scan
-# For visualization it is useful to be able to show a 3D image of the scan. Unfortunately, the packages available in this Kaggle docker image is very limited in this sense, so we will use marching cubes to create an approximate mesh for our 3D object, and plot this with matplotlib. Quite slow and ugly, but the best we can do.
-
-# In[ ]:
-
-
-def plot_3d(image, threshold=-300):
-    
-    # Position the scan upright, 
-    # so the head of the patient would be at the top facing the camera
-    p = image.transpose(2,1,0)
-    
-    verts, faces = measure.marching_cubes(p, threshold)
-
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Fancy indexing: `verts[faces]` to generate a collection of triangles
-    mesh = Poly3DCollection(verts[faces], alpha=0.70)
-    face_color = [0.45, 0.45, 0.75]
-    mesh.set_facecolor(face_color)
-    ax.add_collection3d(mesh)
-
-    ax.set_xlim(0, p.shape[0])
-    ax.set_ylim(0, p.shape[1])
-    ax.set_zlim(0, p.shape[2])
-
-    plt.show()
-
-
-# Our plot function takes a threshold argument which we can use to plot certain structures, such as all tissue or only the bones. 400 is a good threshold for showing the bones only (see Hounsfield unit table above). Let's do this!
-
-# In[ ]:
-
-
-plot_3d(pix_resampled, 400)
-
-
-# Spooky!
-# 
-# # Lung segmentation
-# In order to reduce the problem space, we can segment the lungs (and usually some tissue around it). The method that me and my student colleagues developed was quite effective. 
-# 
-# It involves quite a few smart steps. It consists of a series of applications of region growing and morphological operations. In this case, we will use only connected component analysis.
-# 
-# The steps:  
-# 
-# * Threshold the image (-320 HU is a good threshold, but it doesn't matter much for this approach)
-# * Do connected components, determine label of air around person, fill this with 1s in the binary image
-# * Optionally: For every axial slice in the scan, determine the largest solid connected component (the body+air around the person), and set others to 0. This fills the structures in the lungs in the mask.
-# * Keep only the largest air pocket (the human body has other pockets of air here and there).
-
-# In[ ]:
-
-
-def largest_label_volume(im, bg=-1):
-    vals, counts = np.unique(im, return_counts=True)
-
-    counts = counts[vals != bg]
-    vals = vals[vals != bg]
-
-    if len(counts) > 0:
-        return vals[np.argmax(counts)]
-    else:
-        return None
-
-def segment_lung_mask(image, fill_lung_structures=True):
-    
-    # not actually binary, but 1 and 2. 
-    # 0 is treated as background, which we do not want
-    binary_image = np.array(image > -320, dtype=np.int8)+1
-    labels = measure.label(binary_image)
-    
-    # Pick the pixel in the very corner to determine which label is air.
-    #   Improvement: Pick multiple background labels from around the patient
-    #   More resistant to "trays" on which the patient lays cutting the air 
-    #   around the person in half
-    background_label = labels[0,0,0]
-    
-    #Fill the air around the person
-    binary_image[background_label == labels] = 2
-    
-    
-    # Method of filling the lung structures (that is superior to something like 
-    # morphological closing)
-    if fill_lung_structures:
-        # For every slice we determine the largest solid structure
-        for i, axial_slice in enumerate(binary_image):
-            axial_slice = axial_slice - 1
-            labeling = measure.label(axial_slice)
-            l_max = largest_label_volume(labeling, bg=0)
-            
-            if l_max is not None: #This slice contains some lung
-                binary_image[i][labeling != l_max] = 1
-
-    
-    binary_image -= 1 #Make the image actual binary
-    binary_image = 1-binary_image # Invert it, lungs are now 1
-    
-    # Remove other air pockets insided body
-    labels = measure.label(binary_image, background=0)
-    l_max = largest_label_volume(labels, bg=0)
-    if l_max is not None: # There are air pockets
-        binary_image[labels != l_max] = 0
- 
-    return binary_image
-
-
-# In[ ]:
-
-
-segmented_lungs = segment_lung_mask(pix_resampled, False)
-segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
-
-
-# In[ ]:
-
-
-plot_3d(segmented_lungs, 0)
-
-
-# Beautiful! 
-# 
-# But there's one thing we can fix, it is probably a good idea to include structures within the lung (as the nodules are solid), we do not only want to air in the lungs. 
-
-# In[ ]:
-
-
-plot_3d(segmented_lungs_fill, 0)
-
-
-# That's better. Let's also visualize the difference between the two.
-
-# In[ ]:
-
-
-plot_3d(segmented_lungs_fill - segmented_lungs, 0)
-
-
-# Pretty cool, no? 
-# 
-# Anyway, when you want to use this mask, **remember to first apply a dilation morphological operation** on it (i.e. with a circular kernel).  This expands the mask in all directions. The air + structures in the lung alone will not contain all nodules, in particular it will miss those that are stuck to the side of the lung, where they often appear! So expand the mask a little :)
-# 
-# **This segmentation may fail for some edge cases**. It relies on the fact that the air outside the patient is not connected to the air in the lungs. If the patient has a [tracheostomy](https://en.wikipedia.org/wiki/Tracheotomy), this will not be the case, I do not know whether this is present in the dataset. Also, particulary noisy images (for instance due to a pacemaker in the image below) this method may also fail. Instead, the second largest air pocket in the body will be segmented. You can recognize this by checking the fraction of image that the mask corresponds to, which will be very small for this case. You can then first apply a morphological closing operation with a kernel a few mm in size to close these holes, after which it should work (or more simply, do not use the mask for this image). 
-# 
-# ![pacemaker example][1]
-# 
-# # Normalization
-# Our values currently range from -1024 to around 2000. Anything above 400 is not interesting to us, as these are simply bones with different radiodensity.  A commonly used set of thresholds in the LUNA16 competition to normalize between are -1000 and 400. Here's some code you can use:
-# 
-# 
-#   [1]: http://i.imgur.com/po0eX1L.png
-
-# In[ ]:
-
-
-MIN_BOUND = -1000.0
-MAX_BOUND = 400.0
-    
-def normalize(image):
-    image = (image - MIN_BOUND) / (MAX_BOUND - MIN_BOUND)
-    image[image>1] = 1.
-    image[image<0] = 0.
-    return image
-
-
-# # Zero centering
-# 
-# As a final preprocessing step, it is advisory to zero center your data so that your mean value is 0. To do this you simply subtract the mean pixel value from all pixels. 
-# 
-# To determine this mean you simply average all images in the whole dataset.  If that sounds like a lot of work, we found this to be around 0.25 in the LUNA16 competition. 
-# 
-# **Warning: Do not zero center with the mean per image (like is done in some kernels on here). The CT scanners are calibrated to return accurate HU measurements. There is no such thing as an image with lower contrast or brightness like in normal pictures.**
-
-# In[ ]:
-
-
-PIXEL_MEAN = 0.25
-
-def zero_center(image):
-    image = image - PIXEL_MEAN
-    return image
-
-
-# # What's next? 
-# 
-# With these steps your images are ready for consumption by your CNN or other ML method :). You can do all these steps offline (one time and save the result), and I would advise you to do so and let it run overnight as it may take a long time. 
-# 
-# **Tip:** To save storage space, don't do normalization and zero centering beforehand, but do this online (during training, just after loading). If you don't do this yet, your image are int16's, which are smaller than float32s and easier to compress as well.
-# 
-# **If this tutorial helped you at all, please upvote it and leave a comment :)**
+#     

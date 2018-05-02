@@ -1,1321 +1,677 @@
 
 # coding: utf-8
 
-# I am  going to apply 6 Supervised machine learning models on the given dataset.The strategy is to apply default model first with no tuning of the hyperparameter and then tuned them with different hyperparameter values and then I'll plot ROC curve to select the best machine learning model.The models used are as follows:
-# **1) Principal Component Analysis
-# **2)Logistic Regression**
-#  **3)Gaussian Naive Bayes**
-#   **4)Support Vector Machine**
-#   **5)Random Forest Classifier** 
-#   **6)Decision trees**
-#    **7)Simple neural network**
+# # Zillow House EDA：The Fast &  Curious Journey
+# 
+# `Majin Buu - UPDATED Year Build Error, 9 Sept 2017`
+# ### UPDATE: ` Multiplicative Model`
+# ---
+# 
+# - **1 First Step**
+#     - 1.1 Load libraries and helper functions
+#     - 1.2 Load data
+#     - 1.3 Check the Memory Usage
+#     - 1.4 DataType Converting
+#     - 1.5 DateTime Parsing
+# - **2 Univariable Analysis**
+#     - 2.1 Basic Statistic using Pandas and Numpy
+#     - 2.2 The Distribution of our target variables (**logerror**)
+# 
+# 
+# - **3 Multivariate Analysis**
+#     - 3.1 Target Variable Distribution Join Fips by Bokeh
+#     - 3.2 Geographic Location by Folium and Cluster by KMeans
+#     - 3.3 Where are the Perfect Estimation area ?
+# - **4 Time Series Approach**
+#     - 4.1 Aggragation & Visualization
+#         - Time Series Components
+#         - Combining Time Series Components
+#     - 4.2 Moving Average Smoothing / Random Walk and Stationarity
+#     - 4.3 Prophet Forecasting
+# 
+# 
+# 
+# - **Reference**
+#         
+# In this Notebook, you will discover time series forecasting. After reading this Notebook, you will know:
+# 1. Basic Time Series analysis, and time series forecasting. 
+# 2. The Time Series components to consider in time series data.
+# 3. Examples of Time Series to make your understanding concrete.
+# 4. Time Series Libararies
+# 
+# Let’s get started.
+# #### NOTE - Please UPVOTING if you like, **all your support is my motivation to update the notebook**.
+# 
+# 
 
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# ###  Importing all the libraries
+# ### 1.1 Load libraries and helper functions
 
 # In[ ]:
 
 
 import pandas as pd
 import numpy as np
-from matplotlib import pyplot as plt
+from scipy import stats
+
+# Forceasting with decompasable model
+from pylab import rcParams
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller
+
+# Datetime operations
+import time
+
+# Visualisation
+import matplotlib.pyplot as plt
 import seaborn as sns
+import folium
+from fbprophet import Prophet
+plt.style.use('fivethirtyeight')
+import pickle
+import gc
+import warnings
+warnings.filterwarnings("ignore")
 
 
-# ### Reading the file 
-
-# In[ ]:
-
-
-data = pd.read_csv("../input/mushrooms.csv")
-data.head(6)
-
-
-# ### Let us check if there is any null values
+# ### 1.2 Load Data
 
 # In[ ]:
 
 
-data.isnull().sum()
+start = time.time()
+prop = pd.read_csv('../input/properties_2016.csv')
+train = pd.read_csv("../input/train_2016_v2.csv", parse_dates=["transactiondate"])
+df_train = train.merge(prop, how='left', on='parcelid')
+end = time.time()
+print("time taken by thie script by now is {} sec.".format(end-start))
 
 
-# In[ ]:
-
-
-data['class'].unique()
-
-
-# **Thus we have two claasification. Either the mushroom is poisonous or edible**
-
-# In[ ]:
-
-
-data.shape
-
-
-# **Thus we have 22 features(1st one is label)  and 8124 instances.Now let us check which features constitutes maximum information.** 
-
-# **We can see that the dataset has values in strings.We need to convert all the unique values to integers. Thus we perform label encoding on the data.**
+# ### 1.3 Check the Memory Usage 
+# - Very useful skill if we only have enough hardware resource
 
 # In[ ]:
 
 
-from sklearn.preprocessing import LabelEncoder
-labelencoder=LabelEncoder()
-for col in data.columns:
-    data[col] = labelencoder.fit_transform(data[col])
- 
-data.head()
-
-
-# ### Checking the encoded values
-
-# In[ ]:
-
-
-data['stalk-color-above-ring'].unique()
+# To avoid Notebook flood, by setting verbose False
+train.info(verbose=False)
 
 
 # In[ ]:
 
 
-print(data.groupby('class').size())
-
-
-# ### Plotting boxplot to see the distribution of the data
-
-# In[ ]:
-
-
-'''
-# Create a figure instance
-fig, axes = plt.subplots(nrows=2 ,ncols=2 ,figsize=(9, 9))
-
-# Create an axes instance and the boxplot
-bp1 = axes[0,0].boxplot(data['stalk-color-above-ring'],patch_artist=True)
-
-bp2 = axes[0,1].boxplot(data['stalk-color-below-ring'],patch_artist=True)
-
-bp3 = axes[1,0].boxplot(data['stalk-surface-below-ring'],patch_artist=True)
-
-bp4 = axes[1,1].boxplot(data['stalk-surface-above-ring'],patch_artist=True)
-'''
-ax = sns.boxplot(x='class', y='stalk-color-above-ring', 
-                data=data)
-ax = sns.stripplot(x="class", y='stalk-color-above-ring',
-                   data=data, jitter=True,
-                   edgecolor="gray")
-sns.plt.title("Class w.r.t stalkcolor above ring",fontsize=12)
-
-
-# **Separating features and label**
-
-# In[ ]:
-
-
-X = data.iloc[:,1:23]  # all rows, all the features and no labels
-y = data.iloc[:, 0]  # all rows, label only
-X.head()
-y.head()
+prop.info(verbose=False)
 
 
 # In[ ]:
 
 
-X.describe()
+df_train.info(verbose=False)
 
 
 # In[ ]:
 
 
-y.head()
+df_train.get_dtype_counts()
 
 
 # In[ ]:
 
 
-data.corr()
+del prop, train
+gc.collect()
 
 
-# # Standardising the data
-
-# In[ ]:
-
-
-# Scale the data to be between -1 and 1
-from sklearn.preprocessing import StandardScaler
-scaler = StandardScaler()
-X=scaler.fit_transform(X)
-X
-
-
-# **Note**: We can avoid PCA here since the dataset is very small.
-
-# # Principal Component Analysis
+# ### 1.4 DataType Converting
+# - Reference: [Anokas](https://www.kaggle.com/anokas) script
 
 # In[ ]:
 
 
-from sklearn.decomposition import PCA
-pca = PCA()
-pca.fit_transform(X)
+for c, dtype in zip(df_train.columns, df_train.dtypes):
+    if dtype == np.float64:
+        df_train[c] = df_train[c].astype(np.float32) 
+    elif dtype == np.int64:
+        df_train[c] = df_train[c].astype(np.int32) 
+gc.collect()
+
+
+# ### 1.5 DateTime Parsing
+
+# In[ ]:
+
+
+df_train['transaction_month'] = df_train['transactiondate'].dt.month
+df_train['transaction_year'] = df_train['transactiondate'].dt.year
+
+
+# # 2 Univariable Analysis
+# ---
+# ### We'll just focus on the target variable (**Log Error**)
+# - Fundamental Statistic
+# - Visaulize the dstribution of logerror
+# 
+# `logerror = log(Zestimate) - log(Saleprice)`
+
+# ## 2.1 Basic Statistic using Pandas and Numpy
+# -  **Pandas DataFrame/Numpy API**
+# 
+# `df.mean(), np.mean(df)`
+
+# In[ ]:
+
+
+me = np.mean(df_train['logerror']); med = np.median(df_train['logerror']); st = df_train['logerror'].std(); 
+print(df_train['logerror'].describe())
+
+
+# - The mean, median, and mode of a normal distribution are equal.
+
+# In[ ]:
+
+
+x = df_train['logerror']
+f, (ax_box, ax_hist) = plt.subplots(2, sharex=True ,
+                                    gridspec_kw={"height_ratios": (.15, .85)})
+sns.boxplot(x, ax=ax_box)
+sns.distplot(x, ax=ax_hist, bins=400, kde=False)
+ax_box.set(yticks=[])
+sns.despine(ax=ax_hist)
+sns.despine(ax=ax_box, left=True)
+plt.xlim([me-2*st, me+2*st])
+plt.show()
+
+
+# #### We get that the distribution spikes which very close to zero
+# - Zillow has Good Data Scientists
+
+# # 3. Multivariate Analysis. 
+# ---
+# 
+
+# ## 3.1 Target Variable Distribution Join Fips by Bokeh
+# 
+# - Reference - 
+# [Philipp Spachtholz](https://www.kaggle.com/philippsp/exploratory-analysis-zillow) FanNotebook, we introduce **Absolute logerror** and **FIPS** codes map to city.
+# 
+
+# In[ ]:
+
+
+df_train.loc[:,'abs_logerror'] = df_train['logerror'].abs()
+
+
+# - Transaction Date Vs ** Mean Error** in each County
+
+# In[ ]:
+
+
+from bokeh.palettes import Spectral4
+from bokeh.plotting import figure, output_notebook, show
+
+fips1 = pd.DataFrame(df_train.loc[df_train['fips']==6037].groupby('transactiondate')['abs_logerror'].mean())
+fips1.reset_index(inplace = True)
+fips2 = pd.DataFrame(df_train.loc[df_train['fips']==6059].groupby('transactiondate')['abs_logerror'].mean())
+fips2.reset_index(inplace = True)
+fips3 = pd.DataFrame(df_train.loc[df_train['fips']==6111].groupby('transactiondate')['abs_logerror'].mean())
+fips3.reset_index(inplace = True)
+
+
+output_notebook()
+out = figure(plot_width=800, plot_height=250, x_axis_type="datetime")
+
+for data, name, color in zip([fips1, fips2, fips3], ["Los Angeles", "Orange County", "Ventura County"], Spectral4):
+
+    out.line(data['transactiondate'], data['abs_logerror'], line_width=2, color=color, alpha=0.8, legend=name)
+
+out.legend.location = "top_left"
+out.legend.click_policy="hide"
+show(out)
+
+
+# - Year Build Vs **Mean Error** in each County
+
+# In[ ]:
+
+
+#yearbuilt
+fips1 = pd.DataFrame(df_train.loc[df_train['fips']==6037].groupby('yearbuilt')['abs_logerror'].mean())
+fips1.reset_index(inplace = True)
+fips2 = pd.DataFrame(df_train.loc[df_train['fips']==6059].groupby('yearbuilt')['abs_logerror'].mean())
+fips2.reset_index(inplace = True)
+fips3 = pd.DataFrame(df_train.loc[df_train['fips']==6111].groupby('yearbuilt')['abs_logerror'].mean())
+fips3.reset_index(inplace = True)
+
+output_notebook()
+out = figure(plot_width=800, plot_height=250)
+
+for data, name, color in zip([fips1, fips2, fips3], ["Los Angeles", "Orange County", "Ventura County"], Spectral4):
+
+    out.line(data['yearbuilt'], data['abs_logerror'], line_width=2, color=color, alpha=0.8, legend=name)
+
+out.legend.location = "top_right"
+out.legend.click_policy="hide"
+show(out)
+
+
+# ### An important note:  
+# - Ventura Country has **Spikes** means Zillow Estimation Inaccurate
+
+# In[ ]:
+
+
+import plotly # visualization
+from plotly.graph_objs import Scatter, Figure, Layout # visualization
+from plotly.offline import download_plotlyjs, init_notebook_mode, plot,iplot # visualization
+import plotly.figure_factory as ff # visualization
+import plotly.graph_objs as go # visualization
+init_notebook_mode(connected=True) # visualization
+
+worst_prediction = df_train['abs_logerror'].quantile(q=.95)
+
+
+trace0 = go.Scatter(
+    y = df_train[(df_train['fips']==6037)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean(),
+    x = df_train[(df_train['fips']==6037)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean().index,
+    mode = 'lines+markers',
+    name = "Los Angeles", 
+)
+trace1 = go.Scatter(
+    y = df_train[(df_train['fips']==6059)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean(),
+    x = df_train[(df_train['fips']==6059)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean().index,
+    mode = 'lines+markers',
+    name = "Orange County"
+)
+trace2 = go.Scatter(
+    y = df_train[(df_train['fips']==6111)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean(),
+    x = df_train[(df_train['fips']==6111)&(df_train['abs_logerror']>worst_prediction)].\
+                groupby('yearbuilt')['abs_logerror'].mean().index,
+    mode = 'lines+markers',
+    name = "Ventura County"
+)
+data = [trace0, trace1, trace2]
+
+plotly.offline.iplot(data, filename='line-mode')
+
+
+# 
+# 
+# ## 3.2 Geographic Location by Folium and Cluster by KMeans
+# 
+# ### Introduction:
+# 
+# Folium builds on the data wrangling strengths of the Python ecosystem and the mapping strengths of the Leaflet.js library. 
+# 
+# Manipulate your data in Python, then visualize it in on a Leaflet map via Folium.
+
+# In[ ]:
+
+
+geo_df = df_train[['latitude', 'longitude','logerror']]
 
 
 # In[ ]:
 
 
-covariance=pca.get_covariance()
-#covariance
+geo_df['longitude']/=1e6
+geo_df['latitude']/=1e6
 
 
 # In[ ]:
 
 
-explained_variance=pca.explained_variance_
-explained_variance
+geo_df.dropna(subset=['latitude','longitude'], axis=0 ,inplace=True)
 
 
 # In[ ]:
 
 
-with plt.style.context('dark_background'):
-    plt.figure(figsize=(6, 4))
-    
-    plt.bar(range(22), explained_variance, alpha=0.5, align='center',
-            label='individual explained variance')
-    plt.ylabel('Explained variance ratio')
-    plt.xlabel('Principal components')
-    plt.legend(loc='best')
-    plt.tight_layout()
+from sklearn.cluster import MiniBatchKMeans
+kmeans = MiniBatchKMeans(n_clusters=120, batch_size=1000).fit(geo_df[['latitude','longitude']])
+geo_df.loc[:, 'label'] = kmeans.labels_
 
-
-# **We can see that the last 4 components has less amount of variance  of the data.The 1st 17 components retains more than 90% of the data.**
-
-# ### Let us take only first two principal components and visualise it using K-means clustering
 
 # In[ ]:
 
 
-N=data.values
-pca = PCA(n_components=2)
-x = pca.fit_transform(N)
-plt.figure(figsize = (5,5))
-plt.scatter(x[:,0],x[:,1])
+map_2 = folium.Map(location=[34.088537, -118.249923],
+                   zoom_start=9)
+for label in kmeans.cluster_centers_:
+    folium.Marker(location=[label][0]).add_to(map_2)
+
+map_2
+
+
+# In[ ]:
+
+
+map_1 = folium.Map(location=[34.088537, -118.249923], zoom_start=9,
+                   tiles='Stamen Terrain')
+for label in kmeans.cluster_centers_:
+    folium.Marker(location=[label][0]).add_to(map_1)
+map_1
+
+
+# In[ ]:
+
+
+del map_2 ,map_1
+gc.collect()
+
+
+# ### Finding:
+# -  Most houses locat in **Flat Ground**
+# -  Few locat in **Santa Catalina Island**
+
+# ## 3.3 Where are the Perfect Estimation area ?
+# 
+# - We are going to have a look 
+# - Ignoring Time Series, i.e Without taking month into consideration 
+
+# In[ ]:
+
+
+gc.collect()
+perfect_geo_df = geo_df[geo_df['logerror']==0]
+perfect_geo_df.shape
+
+
+# In[ ]:
+
+
+map_perfect = folium.Map(location=[34.088537, -118.249923], zoom_start=9,
+                   tiles='Stamen Toner')
+for lat, lon in zip(perfect_geo_df.latitude, perfect_geo_df.longitude):
+    folium.Marker(location=[lat,lon]).add_to(map_perfect)
+map_perfect
+
+
+# In[ ]:
+
+
+del perfect_geo_df, map_perfect, geo_df
+gc.collect()
+
+
+# ### An important note:
+# - There is no pattern between Geo and perfect Estimation
+# - Never Happen in the Santa Catalina Island (Millionair hard to predict :-) )
+
+# # 4. Time Series Approach
+# ---
+# 
+
+# ## 4.1 Aggragation & Visualisation
+# 
+
+# ### OverAll Average Absolute Log Error
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6))
+mean_group = df_train[['transactiondate','abs_logerror']].groupby(['transactiondate'])['abs_logerror'].mean()
+plt.plot(mean_group)
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series - Average')
+plt.show()
+
+
+# ### Los Angeles Average Absolute Log error
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6)) 
+fips1 = pd.DataFrame(df_train.loc[df_train['fips']==6037].groupby('transactiondate')['abs_logerror'].mean())
+plt.plot(fips1,c='k')
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series Los Angeles - Average')
+plt.show()
+
+
+# ### Orange County Average Absolute Log error
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6)) 
+fips1 = pd.DataFrame(df_train.loc[df_train['fips']==6059].groupby('transactiondate')['abs_logerror'].mean())
+plt.plot(fips1, c = 'm')
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series Orange County - Average')
+plt.show()
+
+
+# ### Ventura County  Average Absolute Log error
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6))
+fips1 = pd.DataFrame(df_train.loc[df_train['fips']==6111].groupby('transactiondate')['abs_logerror'].mean())
+plt.plot(fips1, c = 'y')
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series Ventura County - Average')
+plt.show()
+
+
+# - Median of Absolute Logerror
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6))
+median_group = df_train[['transactiondate','abs_logerror']].groupby(['transactiondate'])['abs_logerror'].median()
+plt.plot(median_group, c='b')
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series - Median')
+plt.show()
+
+
+# - Standard Deviation of Absolute Logerror
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 6))
+std_group = df_train[['transactiondate','abs_logerror']].groupby(['transactiondate'])['abs_logerror'].median()
+plt.plot(std_group, c='g')
+plt.xlabel('Date', fontsize=15)
+plt.ylabel('Absolute Log error', fontsize=15)
+plt.title('Time Series - STD')
 plt.show()
 
 
 # In[ ]:
 
 
-from sklearn.cluster import KMeans
-kmeans = KMeans(n_clusters=2, random_state=5)
-X_clustered = kmeans.fit_predict(N)
+del mean_group, median_group, std_group
+gc.collect()
 
-LABEL_COLOR_MAP = {0 : 'g',
-                   1 : 'y'
-                  }
 
-label_color = [LABEL_COLOR_MAP[l] for l in X_clustered]
-plt.figure(figsize = (5,5))
-plt.scatter(x[:,0],x[:,1], c= label_color)
+# 
+# Here, I only use inliner 
+#     - Definition:  Absolute Logerror < Mean + Std
+
+# In[ ]:
+
+
+df_train = df_train[df_train['abs_logerror']<  me + st ]
+mean_group = df_train[['transactiondate','abs_logerror']].groupby(['transactiondate'])['abs_logerror'].mean()
+
+
+# ### Time Series Components
+#   
+# - A given time series is thought to consist of three systematic components including level, trend, seasonality, and one non-systematic component called noise. These components are defined as follows:
+# 
+#     1. **Level**: The average value in the series.
+#     2. **Trend**: The increasing or decreasing value in the series. 
+#     3. **Seasonality**: The repeating short-term cycle in the series. 
+#     4. **Noise**: The random variation in the series.
+# 
+# 
+
+# ### Combining Time Series Components
+# - A series is thought to be an aggregate or combination of these four components. All series have a level and noise. The trend and seasonality components are optional. It is helpful to think of the components as combining either **additively** or **multiplicatively**.
+# 
+#     - Additive Model
+#         y(t) = Level + Trend + Seasonality + Noise 
+#         
+#     - Multiplicative Model
+#         y(t) = Level x Trend x Seasonality x Noise 
+# 
+
+# - Additive Model
+
+# In[ ]:
+
+
+times_series_means =  pd.DataFrame(mean_group).reset_index(drop=False)
+df_date_index = times_series_means[['transactiondate','abs_logerror']].set_index('transactiondate')
+decomposition = sm.tsa.seasonal_decompose(df_date_index, model='additive',freq = 31)
+trend = decomposition.trend
+seasonal = decomposition.seasonal
+residual = decomposition.resid
+rcParams['figure.figsize'] = 15, 8
+
+plt.subplot(411)
+plt.title('Obesered = Level + Trend + Seasonality + Noise ')
+plt.plot(df_date_index, label='Observed')
+plt.legend(loc='best')
+plt.subplot(412)
+plt.plot(trend, label='Trend')
+plt.legend(loc='best')
+plt.subplot(413)
+plt.plot(seasonal,label='Seasonality')
+plt.legend(loc='best')
+plt.subplot(414)
+plt.plot(residual, label='Residuals')
+plt.legend(loc='best')
+plt.tight_layout()
 plt.show()
 
 
-# ### Thus using K-means we are able segregate 2 classes well using the first two components with maximum variance.
-
-# # Performing PCA by taking 17 components with maximum Variance
+# - Multiplicative
 
 # In[ ]:
 
 
-pca_modified=PCA(n_components=17)
-pca_modified.fit_transform(X)
-
-
-# ### Splitting the data into training and testing dataset
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2,random_state=4)
-
-
-# # Default Logistic Regression
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
-from sklearn import metrics
-
-model_LR= LogisticRegression()
-
-
-# In[ ]:
-
-
-model_LR.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-y_prob = model_LR.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-model_LR.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# # Logistic Regression(Tuned model)
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
-from sklearn import metrics
-
-LR_model= LogisticRegression()
-
-tuned_parameters = {'C': [0.001, 0.01, 0.1, 1, 10, 100, 1000] ,
-              'penalty':['l1','l2']
-                   }
-
-
-# **L1 and L2 are regularization parameters.They're used to avoid overfiting.Both L1 and L2 regularization prevents overfitting by shrinking (imposing a penalty) on the coefficients.**  
-#     **L1 is the first moment norm |x1-x2| (|w| for regularization case) that is simply the absolute dıstance between two points where L2 is second moment norm corresponding to Eucledian Distance that is  |x1-x2|^2 (|w|^2 for regularization case).**     
-#        **In simple words,L2 (Ridge) shrinks all the coefficient by the same proportions but eliminates none, while L1 (Lasso) can shrink some coefficients to zero, performing variable selection.
-# If all the features are correlated with the label, ridge outperforms lasso, as the coefficients are never zero in ridge. If only a subset of features are correlated with the label, lasso outperforms ridge as in lasso model some coefficient can be shrunken to zero.**
-
-# ### Taking a look at the correlation 
-
-# In[ ]:
-
-
-data.corr()
-
-
-# **The grid search provided by GridSearchCV exhaustively generates candidates from a grid of parameter values specified with the tuned_parameter.The GridSearchCV instance implements the usual estimator API: when “fitting” it on a dataset all the possible combinations of parameter values are evaluated and the best combination is retained.**
-
-# In[ ]:
-
-
-from sklearn.model_selection import GridSearchCV
-
-LR= GridSearchCV(LR_model, tuned_parameters,cv=10)
-
-
-# In[ ]:
-
-
-LR.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-print(LR.best_params_)
-
-
-# In[ ]:
-
-
-y_prob = LR.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-LR.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# In[ ]:
-
-
-LR_ridge= LogisticRegression(penalty='l2')
-LR_ridge.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-y_prob = LR_ridge.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-LR_ridge.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# # Gaussian Naive Bayes
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import GaussianNB
-model_naive = GaussianNB()
-model_naive.fit(X_train, y_train)
-
-
-# In[ ]:
-
-
-y_prob = model_naive.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-model_naive.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-print("Number of mislabeled points from %d points : %d"
-      % (X_test.shape[0],(y_test!= y_pred).sum()))
-
-
-# In[ ]:
-
-
-scores = cross_val_score(model_naive, X, y, cv=10, scoring='accuracy')
-print(scores)
-
-
-# In[ ]:
-
-
-scores.mean()
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# # Support Vector Machine
-
-# In[ ]:
-
-
-from sklearn.svm import SVC
-svm_model= SVC()
-
-
-# The **gamma** parameter defines how far the influence of a single training example reaches, with low values meaning ‘far’ and high values meaning ‘close’. The **gamma** parameters can be seen as the inverse of the radius of influence of samples selected by the model as support vectors.
+times_series_means =  pd.DataFrame(mean_group).reset_index(drop=False)
+df_date_index = times_series_means[['transactiondate','abs_logerror']].set_index('transactiondate')
+decomposition = sm.tsa.seasonal_decompose(df_date_index, model='multiplicative',freq = 14)
+trend = decomposition.trend
+seasonal = decomposition.seasonal
+residual = decomposition.resid
+rcParams['figure.figsize'] = 15, 8
+
+plt.subplot(411)
+plt.title('Obesered = Level x Trend x Seasonality x Noise ')
+plt.plot(df_date_index, label='Observed')
+plt.legend(loc='best')
+plt.subplot(412)
+plt.plot(trend, label='Trend')
+plt.legend(loc='best')
+plt.subplot(413)
+plt.plot(seasonal,label='Seasonality')
+plt.legend(loc='best')
+plt.subplot(414)
+plt.plot(residual, label='Residuals')
+plt.legend(loc='best')
+plt.tight_layout()
+plt.show()
+
+
+# ## 4.2 Moving Average Smoothing / Random Walk and Stationarity
 # 
-# The **C** parameter trades off misclassification of training examples against simplicity of the decision surface. A low **C** makes the decision surface smooth, while a high **C** aims at classifying all training examples correctly by giving the model freedom to select more samples as support vectors.
-
-# # Support Vector Machine without polynomial kernel
-
-# In[ ]:
-
-
-tuned_parameters = {
- 'C': [1, 10, 100,500, 1000], 'kernel': ['linear','rbf'],
- 'C': [1, 10, 100,500, 1000], 'gamma': [1,0.1,0.01,0.001, 0.0001], 'kernel': ['rbf'],
- #'degree': [2,3,4,5,6] , 'C':[1,10,100,500,1000] , 'kernel':['poly']
-    }
-
-
-# The grid search provided by GridSearchCV exhaustively generates candidates from a grid of parameter values specified with the tuned_parameter**.The GridSearchCV instance implements the usual estimator API: when “fitting” it on a dataset all the possible combinations of parameter values are evaluated and the best combination is retained.
-# But it is proving computationally expensive here.So I am opting for RandomizedSearchCV.
+# Moving average smoothing is a naive and effective technique in time series forecasting. It can be used for data preparation, feature engineering, and even directly for making predictions.
 # 
-# RandomizedSearchCV implements a randomized search over parameters, where each setting is sampled from a distribution over possible parameter values. This has two main benefits over an exhaustive search:
-# 1)A budget can be chosen independent of the number of parameters and possible values.
-# 2)Adding parameters that do not influence the performance does not decrease efficiency.
-
-# In[ ]:
-
-
-from sklearn.grid_search import RandomizedSearchCV
-
-model_svm = RandomizedSearchCV(svm_model, tuned_parameters,cv=10,scoring='accuracy',n_iter=20)
-
-
-# In[ ]:
-
-
-model_svm.fit(X_train, y_train)
-print(model_svm.best_score_)
-
-
-# In[ ]:
-
-
-print(model_svm.grid_scores_)
-
-
-# In[ ]:
-
-
-print(model_svm.best_params_)
-
-
-# In[ ]:
-
-
-
-y_pred= model_svm.predict(X_test)
-print(metrics.accuracy_score(y_pred,y_test))
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_pred)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# # Support Vector machine with polynomial Kernel
-
-# In[ ]:
-
-
-tuned_parameters = {
- 'C': [1, 10, 100,500, 1000], 'kernel': ['linear','rbf'],
- 'C': [1, 10, 100,500, 1000], 'gamma': [1,0.1,0.01,0.001, 0.0001], 'kernel': ['rbf'],
- 'degree': [2,3,4,5,6] , 'C':[1,10,100,500,1000] , 'kernel':['poly']
-    }
-
-
-# In[ ]:
-
-
-from sklearn.grid_search import RandomizedSearchCV
-
-model_svm = RandomizedSearchCV(svm_model, tuned_parameters,cv=10,scoring='accuracy',n_iter=20)
-
-
-# In[ ]:
-
-
-model_svm.fit(X_train, y_train)
-print(model_svm.best_score_)
-
-
-# In[ ]:
-
-
-print(model_svm.grid_scores_)
-
-
-# In[ ]:
-
-
-print(model_svm.best_params_)
-
-
-# In[ ]:
-
-
-y_pred= model_svm.predict(X_test)
-print(metrics.accuracy_score(y_pred,y_test))
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_pred)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ### Trying default model
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestClassifier
-
-model_RR=RandomForestClassifier()
-
-#tuned_parameters = {'min_samples_leaf': range(5,10,5), 'n_estimators' : range(50,200,50),
-                    #'max_depth': range(5,15,5), 'max_features':range(5,20,5)
-                    #}
-               
-
-
-# In[ ]:
-
-
-model_RR.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-y_prob = model_RR.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-model_RR.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ### Thus default Random forest model is giving us best accuracy.
-
-# ### Let us tuned the parameters of Random Forest just for the purpose of knowledge
-
-# **There are 3 features which can be tuned to improve the performance of Random Forest**    
+# A stationary time series is one where the values are not a function of time. We can confirm this using a statistical significance test, specifically the Augmented Dickey-Fuller test.
 # 
-# **1) max_features 2) n_estimators  3) min_sample_leaf**
-
-#  **A)max_features**: These are the maximum number of features Random Forest is allowed to try in individual tree.
-# **1)Auto** : This will simply take all the features which make sense in every tree.Here we simply do not put any restrictions on the individual tree.
-# **2)sqrt** : This option will take square root of the total number of features in individual run. For instance, if the total number of variables are 100, we can only take 10 of them in individual tree.
-# **3)log2**:It  is another option which takes log to the base 2 of the features input.
-# 
-# **Increasing max_features generally improves the performance of the model as at each node now we have a higher number of options to be considered.But, for sure, you decrease the speed of algorithm by increasing the max_features. Hence, you need to strike the right balance and choose the optimal max_features.**
-
-# **B) n_estimators** : This is the number of trees you want to build before taking the maximum voting or averages of predictions. Higher number of trees give you better performance but makes your code slower. You should choose as high value as your processor can handle because this makes your predictions stronger and more stable.
-
-# **C)min_sample_leaf**:  Leaf is the end node of a decision tree. A smaller leaf makes the model more prone to capturing noise in train data. Hence it is important to try different values to get good estimate.
+# - The script is copied from kaggler 
+#     1. [Julien Heiduk](https://www.kaggle.com/zoupet) and  
+#     2. https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/ 
+#     3. [Dr. Jason Brownlee]()
 
 # In[ ]:
 
 
-from sklearn.ensemble import RandomForestClassifier
+def test_stationarity(timeseries):
+    plt.figure(figsize=(15, 8))
+    #Determing rolling statistics
+    rolmean = pd.rolling_mean(timeseries, window=31) # Slide window depend on past 1 month
+    rolstd = pd.rolling_std(timeseries, window=31)
 
-model_RR=RandomForestClassifier()
-
-tuned_parameters = {'min_samples_leaf': range(10,100,10), 'n_estimators' : range(10,100,10),
-                    'max_features':['auto','sqrt','log2']
-                    }
+    #Plot rolling statistics:
+    orig = plt.plot(timeseries, color='blue',label='Original')
+    mean = plt.plot(rolmean, color='red', label='Rolling Mean')
+    std = plt.plot(rolstd, color='black', label = 'Rolling Std')
+    plt.legend(loc='best', fontsize=15)
+    plt.title('Rolling Mean & Standard Deviation', fontsize=15)
+    plt.xlabel('Date', fontsize=15)
+    plt.ylabel('Absolute Log Error', fontsize=15)
+    plt.show(block=False)
     
-
-
-# ### n_jobs
-# **This parameter tells the engine how many processors is it allowed to use. A value of “-1” means there is no restriction whereas a value of “1” means it can only use one processor.**
-
-# In[ ]:
-
-
-from sklearn.grid_search import RandomizedSearchCV
-
-RR_model= RandomizedSearchCV(model_RR, tuned_parameters,cv=10,scoring='accuracy',n_iter=20,n_jobs= -1)
-
-
-# In[ ]:
-
-
-RR_model.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-print(RR_model.grid_scores_)
-
-
-# In[ ]:
-
-
-print(RR_model.best_score_)
-
-
-# In[ ]:
-
-
-print(RR_model.best_params_)
-
-
-# In[ ]:
-
-
-y_prob = RR_model.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-RR_model.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ### Default Decision Tree model
-
-# In[ ]:
-
-
-from sklearn.tree import DecisionTreeClassifier
-
-model_tree = DecisionTreeClassifier()
-
-
-# In[ ]:
-
-
-model_tree.fit(X_train, y_train)
-
-
-# In[ ]:
-
-
-y_prob = model_tree.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-model_tree.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ### Thus default decision tree model is giving us best accuracy score
-
-# ### Let us tune the hyperparameters of the Decision tree model
-
-# **1)Criterion:** Decision trees use multiple algorithms to decide to split a node in two or more sub-nodes.Decision tree splits the nodes on all available variables and then selects the split which results in most homogeneous sub-nodes. The details of Gini and entropy needs detail explanation.
-# 
-# 2)**max_depth(Maximum depth of tree (vertical depth)):**
-# Used to control over-fitting as higher depth will allow model to learn relations very specific to a particular sample.
-# 
-# **max_features** and **min_samples_leaf** is same as Random Forest classifier
-
-# In[ ]:
-
-
-from sklearn.tree import DecisionTreeClassifier
-
-model_DD = DecisionTreeClassifier()
-
-
-tuned_parameters= {'criterion': ['gini','entropy'], 'max_features': ["auto","sqrt","log2"],
-                   'min_samples_leaf': range(1,100,1) , 'max_depth': range(1,50,1)
-                  }
-           
-
-
-# In[ ]:
-
-
-from sklearn.grid_search import RandomizedSearchCV
-DD_model= RandomizedSearchCV(model_DD, tuned_parameters,cv=10,scoring='accuracy',n_iter=20,n_jobs= -1,random_state=5)
-
-
-# In[ ]:
-
-
-DD_model.fit(X_train, y_train)
-
-
-# In[ ]:
-
-
-print(DD_model.grid_scores_)
-
-
-# In[ ]:
-
-
-print(DD_model.best_score_)
-
-
-# In[ ]:
-
-
-print(DD_model.best_params_)
-
-
-# In[ ]:
-
-
-y_prob = DD_model.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-DD_model.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ## Neural Network
-
-# ### Applying default Neural Network model
-
-# In[ ]:
-
-
-from sklearn.neural_network import MLPClassifier
-
-
-# In[ ]:
-
-
-mlp = MLPClassifier()
-mlp.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-y_prob = mlp.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-mlp.score(X_test, y_pred)
-
-
-# In[ ]:
-
-
-confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-confusion_matrix
-
-
-# In[ ]:
-
-
-auc_roc=metrics.classification_report(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-auc_roc=metrics.roc_auc_score(y_test,y_pred)
-auc_roc
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-roc_auc
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-
-
-# ### Tuning the hyperparameters of the neural network
-
-# It is turning out to be computationally expensive for me with tuned model. Hence I am not running this. Also any suggestion to improvise it is welcome. :)
-
-# **1) hidden_layer_sizes**  : Number of hidden layers in the network.(default is 100).Large number may overfit the data.
-# 
-# **2)activation**: Activation function for the hidden layer.
-# A)‘logistic’, the logistic sigmoid function, returns f(x) = 1 / (1 + exp(-x)).
-# B)‘tanh’, the hyperbolic tan function, returns f(x) = tanh(x).
-# C)‘relu’, the rectified linear unit function, returns f(x) = max(0, x)
-# 
-# **3)alpha:** L2 penalty (regularization term) parameter.(default 0.0001)
-# 
-# **4)max_iter:** Maximum number of iterations. The solver iterates until convergence (determined by ‘tol’) or this number of iterations.(default 200)
-
-# In[ ]:
-
-
-'''
-from sklearn.neural_network import MLPClassifier
-
-mlp = MLPClassifier()
-
-tuned_parameters={'hidden_layer_sizes': range(1,200,10) , 'activation': ['tanh','logistic','relu'],
-                  'alpha':[0.0001,0.001,0.01,0.1,1,10], 'max_iter': range(50,200,50)
+    #Perform Dickey-Fuller test:
+    print('Results of Dickey-Fuller Test:')
+    dftest = sm.tsa.adfuller(timeseries['abs_logerror'], autolag='AIC')
+    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic','p-value','#Lags Used','Number of Observations Used'])
+    for key,value in dftest[4].items():
+        dfoutput['Critical Value (%s)'%key] = value
+    print(dfoutput)
     
-}
-'''
+test_stationarity(df_date_index)   
 
 
-# In[ ]:
+# The **null hypothesis** of the test is that the time series is **non-stationary** and we can see that the test statistic value was **-1.736474e+01** with a significance level of less than **1%** (i.e. a low probability that the result is a statistical fluke). 
+# 
+# Rejecting the null hypothesis means that the process has no unit root, and in turn that the time series is ** stationary** or does not have time-dependent structure.
+# 
+# # Non Time Dependent Structure
+# - Under Constraint
+#     - Exclude Outlier
+#     - Only depend on past 3 months 
 
-
-#from sklearn.grid_search import RandomizedSearchCV
-#model_mlp= RandomizedSearchCV(mlp_model, tuned_parameters,cv=10,scoring='accuracy',n_iter=5,n_jobs= -1,random_state=5)
-
-
-# In[ ]:
-
-
-#model_mlp.fit(X_train, y_train)
-
-
-# In[ ]:
-
-
-#print(model_mlp.grid_scores_)
-
+# ## 4.3 Prophet Forecasting
+# ### This is inspired by kaggler [Julien Heiduk](https://www.kaggle.com/zoupet)
+# 
+# - This tool was created by Facebook. 
+# More information on the library here: https://research.fb.com/prophet-forecasting-at-scale/
+# 
 
 # In[ ]:
 
 
-#print(model_mlp.best_score_)
+sns.set(font_scale=1) 
+df_prophet =  pd.DataFrame(mean_group).reset_index(drop=False)
+df_prophet = df_prophet.iloc[-92:,:] # Forecast due to past 3 months
+df_prophet.columns = ['ds','y']
+
+m = Prophet()
+m.fit(df_prophet)
+future = m.make_future_dataframe(periods=59,freq='D') # Forecast Jan 2017
+forecast = m.predict(future)
+plt.figure(figsize=(30, 6))
+fig = m.plot(forecast)
+plt.show()
 
 
-# In[ ]:
+# ## Reference
+# - [1] [Philipp Spachtholz](https://www.kaggle.com/philippsp/exploratory-analysis-zillow)
+# - [2] [Julien Heiduk](https://www.kaggle.com/zoupet) 
+# - [3] [Aarshay Jain](https://www.analyticsvidhya.com/blog/author/aarshay/) A comprehensive beginner’s guide to create a Time Series Forecast
+# - [4] [Dr. Jason Brownlee]()
+# 
+# 
 
-
-#print(model_mlp.best_params_)
-
-
-# In[ ]:
-
-
-'''
-y_prob = model_LR.predict_proba(X_test)[:,1] # This will give you positive class prediction probabilities  
-y_pred = np.where(y_prob > 0.5, 1, 0) # This will threshold the probabilities to give class predictions.
-model_LR.score(X_test, y_pred)
-'''
-
-
-# In[ ]:
-
-
-#confusion_matrix=metrics.confusion_matrix(y_test,y_pred)
-#confusion_matrix
-
-
-# In[ ]:
-
-
-#auc_roc=metrics.classification_report(y_test,y_pred)
-#auc_roc
-
-
-# In[ ]:
-
-
-#auc_roc=metrics.roc_auc_score(y_test,y_pred)
-#auc_roc
-
-
-# In[ ]:
-
-
-'''
-from sklearn.metrics import roc_curve, auc
-false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test, y_prob)
-roc_auc = auc(false_positive_rate, true_positive_rate)
-'''
-
-
-# In[ ]:
-
-
-'''
-import matplotlib.pyplot as plt
-plt.figure(figsize=(10,10))
-plt.title('Receiver Operating Characteristic')
-plt.plot(false_positive_rate,true_positive_rate, color='red',label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],linestyle='--')
-plt.axis('tight')
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-'''
-
+# ## Stay tuned, this notebook will be updated on a regular basis
+# 

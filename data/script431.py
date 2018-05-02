@@ -1,285 +1,358 @@
 
 # coding: utf-8
 
+# Goes over several of the tables available. Removes some missing hero_id from test_player.csv. 
+# 
+# Last updated december 2nd 2016
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import gc
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-import os
-print(os.listdir("../input"))
-import librosa
-#from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score
-from scipy.stats import skew
-SAMPLE_RATE = 44100
+# Any results you write to the current directory are saved as output.
 
-#from sklearn.model_selection import KFold, RepeatedKFold
-from tqdm import tqdm, tqdm_pandas
 
-tqdm.pandas()
-import scipy
-data_path = '../input/'
-ss = pd.read_csv(os.path.join(data_path, 'sample_submission.csv'))
+# ###match.csv
+
+# In[ ]:
+
+
+matches = pd.read_csv('../input/match.csv', index_col=0)
+matches.head()
+
+
+# `match_id`  has been reencoded from steams  `match_id` to save a little but of space.  tower_status and barracks_status are binarymasks indicating whether various structures have been destroyed. See the very bottom of https://wiki.teamfortress.com/wiki/WebAPI/GetMatchDetails#Tower_Status%22tower_status_dire%22:%202047, for details.  **radiant_win** would be good choice for a target of a binary classification task. 
+
+# In[ ]:
+
+
+# Each file needs to be removed after use.
+del matches
+gc.collect()
+
+
+# ###players.csv
+# 
+# Contains statistics abouts players performance in individual matches. 
+
+# In[ ]:
+
+
+players = pd.read_csv('../input/players.csv')
+players.iloc[:5,:15]
+
+
+# `account_id` is useful if you want to look at multiple matches for the same player but be aware that many players choose to hide their account_id so it won't be available.
+
+# In[ ]:
+
+
+players['account_id'].value_counts()
+
+
+# About 180000 thousand of the records out of a possible 500k are not available. The data was sampled using a time based split so this distribution should be representative of the rest of the available data. 
+
+# In[ ]:
+
+
+players.iloc[:5,20:30]
+
+
+# xp_hero, means the amount of experience gained from killing other players.  The three main types of counts included are experience, gold, and user action
+
+# In[ ]:
+
+
+players.iloc[:5,40:55]
+
+
+# I am pretty sure these are counts of user issued commands. The only reason they look like floats is because of how pandas handles nan. It is a float so if there is even one in a column all other numbers are converted. There may be a way of approximating actions per minute(not quite clicks per minute) from this. 
+
+# In[ ]:
+
+
+#cleanup
+del players
+gc.collect()
+
+
+# ###player_time.csv
+# contains xp, gold, and last hit totals for each player at one minute intervals
+
+# In[ ]:
+
+
+player_time = pd.read_csv('../input/player_time.csv')
+player_time.head()
 
 
 # In[ ]:
 
 
-#loading data
-audio_train_files = os.listdir('../input/audio_train')
-audio_test_files = os.listdir('../input/audio_test')
-
-train = pd.read_csv('../input/train.csv')
-submission = pd.read_csv('../input/sample_submission.csv')
+a_match = player_time.query('match_id == 1')
 
 
 # In[ ]:
 
 
-#function from EDA kernel: https://www.kaggle.com/codename007/a-very-extensive-freesound-exploratory-analysis
-def clean_filename(fname, string):   
-    file_name = fname.split('/')[1]
-    if file_name[:2] == '__':        
-        file_name = string + file_name
-    return file_name
+a_match.T
 
-#returns mfcc features with mean and standard deviation along time
-def get_mfcc(name, path):
-    b, _ = librosa.core.load(path + name, sr = SAMPLE_RATE)
-    assert _ == SAMPLE_RATE
-    try:
-        ft1 = librosa.feature.mfcc(b, sr = SAMPLE_RATE, n_mfcc=20)
-        ft2 = librosa.feature.zero_crossing_rate(b)[0]
-        ft3 = librosa.feature.spectral_rolloff(b)[0]
-        ft4 = librosa.feature.spectral_centroid(b)[0]
-        ft5 = librosa.feature.spectral_contrast(b)[0]
-        ft6 = librosa.feature.spectral_bandwidth(b)[0]
-        ft1_trunc = np.hstack((np.mean(ft1, axis=1), np.std(ft1, axis=1), skew(ft1, axis = 1), np.max(ft1, axis = 1), np.min(ft1, axis = 1)))
-        ft2_trunc = np.hstack((np.mean(ft2), np.std(ft2), skew(ft2), np.max(ft2), np.min(ft2)))
-        ft3_trunc = np.hstack((np.mean(ft3), np.std(ft3), skew(ft3), np.max(ft3), np.min(ft3)))
-        ft4_trunc = np.hstack((np.mean(ft4), np.std(ft4), skew(ft4), np.max(ft4), np.min(ft4)))
-        ft5_trunc = np.hstack((np.mean(ft5), np.std(ft5), skew(ft5), np.max(ft5), np.min(ft5)))
-        ft6_trunc = np.hstack((np.mean(ft6), np.std(ft6), skew(ft6), np.max(ft6), np.m(ft6)))
-        return pd.Series(np.hstack((ft1_trunc, ft2_trunc, ft3_trunc, ft4_trunc, ft5_trunc, ft6_trunc)))
-    except:
-        print('bad file')
-        return pd.Series([0]*125)
+
+# Since each match lasts for a different amount of time storing them with time on the horizontal axis would
+# take a lot of space.  The suffix for each variable indicates the value of the player_slot variable allowing this data to be combined with players.csv if desired.  
+
+# In[ ]:
+
+
+del player_time
+gc.collect()
+
+
+# ###teamfights.csv
+
+# In[ ]:
+
+
+teamfights = pd.read_csv('../input/teamfights.csv')
+teamfights.head()
+
+
+# `start`, `end` and `last_death` contain the time for those events. Each row contains very basic info about each team fight.  Time is in seconds. I was considering adding a specific column for the count of teamfights in a match. It would make getting the first teamfight for each match easier.
+
+# In[ ]:
+
+
+del teamfights
+gc.collect()
+
+
+# ###teamfights_players.csv
+# More detailed information about each teamfight
+
+# In[ ]:
+
+
+teamfights_players = pd.read_csv('../input/teamfights_players.csv')
+teamfights_players.head()
+
+
+# Each row in the `teamfights.csv` corrosponds to ten rows in this file. I have marked this file and teamfights to be updated with specific variable indicating which teamfight in the match it belongs to this should make joining and working with these tables easier.
+
+# In[ ]:
+
+
+del teamfights_players
+gc.collect()
+
+
+# ###chat.csv
+# contains chat logs for 50k matches
+
+# In[ ]:
+
+
+chat = pd.read_csv('../input/chat.csv')
+chat.head()
+
+
+# [Here is a Kernel][1] by mammykins showing how to make a wordcloud from the chat logs
+# 
+# 
+#   [1]: https://www.kaggle.com/mammykins/d/devinanzelmo/dota-2-matches/dota-2-allchat-wordcloud
+
+# ### test_players.csv and hero_names.csv
+# removes heros with invalid hero_ids from the test_players.csv file
+
+# In[ ]:
+
+
+# problem with the hero_ids in test_player brought to my attention by @Dexter, thanks!
+# hero_id is 0 in 15 cases. 
+
+test_players = pd.read_csv('../input/test_player.csv')
+hero_names = pd.read_csv('../input/hero_names.csv')
 
 
 # In[ ]:
 
 
-#preparing data
-train_data = pd.DataFrame()
-train_data['fname'] = train['fname']
-test_data = pd.DataFrame()
-test_data['fname'] = audio_test_files
-
-train_data = train_data['fname'].progress_apply(get_mfcc, path='../input/audio_train/')
-print('done loading train mfcc')
-test_data = test_data['fname'].progress_apply(get_mfcc, path='../input/audio_test/')
-print('done loading test mfcc')
-
-train_data['fname'] = train['fname']
-test_data['fname'] = audio_test_files
-train_data['label'] = train['label']
-test_data['label'] = np.zeros((len(audio_test_files)))
+# As can been seen the number of zeros appearing here are much less then the least popular hero. These are very likely
+# caused by processing problems, either in my data generation code, or in the data pulled from steam. 
+test_players['hero_id'].value_counts().tail()
 
 
 # In[ ]:
 
 
-train_data.head()
+test_players.query('hero_id == 0')
+
+
+# No pattern immediately jumps out in relationship to the missing hero IDs. Except maybe they are more common for Dire. The safest way to deal with this is probably to remove the the matches in which any hero_id is 0
+
+# In[ ]:
+
+
+# remove matches with any invalid hero_ids
+# imputing hero_id, is likely possible but the data is not available online in this dataset
+
+matches_with_zero_ids = test_players.query('hero_id == 0')['match_id'].values.tolist()
+test_players = test_players.query('match_id != @matches_with_zero_ids')
 
 
 # In[ ]:
 
 
-#Features from LightGBM baseline kernel: https://www.kaggle.com/opanichev/lightgbm-baseline
-# MAPk from https://github.com/benhamner/Metrics/blob/master/Python/ml_metrics/average_precision.py
-def apk(actual, predicted, k=10):
-    """
-    Computes the average precision at k.
-    This function computes the average prescision at k between two lists of
-    items.
-    Parameters
-    ----------
-    actual : list
-             A list of elements that are to be predicted (order doesn't matter)
-    predicted : list
-                A list of predicted elements (order does matter)
-    k : int, optional
-        The maximum number of predicted elements
-    Returns
-    -------
-    score : double
-            The average precision at k over the input lists
-    """
-    if len(predicted)>k:
-        predicted = predicted[:k]
-
-    score = 0.0
-    num_hits = 0.0
-
-    for i,p in enumerate(predicted):
-        if p in actual and p not in predicted[:i]:
-            num_hits += 1.0
-            score += num_hits / (i+1.0)
-
-    if not actual:
-        return 0.0
-
-    return score / min(len(actual), k)
-
-def mapk(actual, predicted, k=10):
-    """
-    Computes the mean average precision at k.
-    This function computes the mean average prescision at k between two lists
-    of lists of items.
-    Parameters
-    ----------
-    actual : list
-             A list of lists of elements that are to be predicted 
-             (order doesn't matter in the lists)
-    predicted : list
-                A list of lists of predicted elements
-                (order matters in the lists)
-    k : int, optional
-        The maximum number of predicted elements
-    Returns
-    -------
-    score : double
-            The mean average precision at k over the input lists
-    """
-    return np.mean([apk(a,p,k) for a,p in zip(actual, predicted)])
+# check that the invalid ids are removed
+# This is now on my list of bugs to fix for next release. 
+test_players['hero_id'].value_counts().tail()
 
 
-def extract_features(files, path):
-    features = {}
+# ###player_ratings.csv
+# A possible way to measure skill rating when we don't have MMR data
+# See this kernel for details on how this was calculated https://www.kaggle.com/devinanzelmo/d/devinanzelmo/dota-2-matches/dota-2-skill-rating-with-trueskill
 
-    cnt = 0
-    for f in tqdm(files):
-        features[f] = {}
-
-        fs, data = scipy.io.wavfile.read(os.path.join(path, f))
-
-        abs_data = np.abs(data)
-        diff_data = np.diff(data)
-
-        def calc_part_features(data, n=2, prefix=''):
-            f_i = 1
-            for i in range(0, len(data), len(data)//n):
-                features[f]['{}mean_{}_{}'.format(prefix, f_i, n)] = np.mean(data[i:i + len(data)//n])
-                features[f]['{}std_{}_{}'.format(prefix, f_i, n)] = np.std(data[i:i + len(data)//n])
-                features[f]['{}min_{}_{}'.format(prefix, f_i, n)] = np.min(data[i:i + len(data)//n])
-                features[f]['{}max_{}_{}'.format(prefix, f_i, n)] = np.max(data[i:i + len(data)//n])
-
-        features[f]['len'] = len(data)
-        if features[f]['len'] > 0:
-            n = 1
-            calc_part_features(data, n=n)
-            calc_part_features(abs_data, n=n, prefix='abs_')
-            calc_part_features(diff_data, n=n, prefix='diff_')
-
-            n = 2
-            calc_part_features(data, n=n)
-            calc_part_features(abs_data, n=n, prefix='abs_')
-            calc_part_features(diff_data, n=n, prefix='diff_')
-
-            n = 3
-            calc_part_features(data, n=n)
-            calc_part_features(abs_data, n=n, prefix='abs_')
-            calc_part_features(diff_data, n=n, prefix='diff_')
+# In[ ]:
 
 
-        cnt += 1
+# player_ratings.csv contains trueskill ratings for players in the match, and test data.
+# True Skill is a rating method somewhat like MMR, and can be used to sort players by skill. 
 
-        # if cnt >= 1000:
-        #     break
-
-    features = pd.DataFrame(features).T.reset_index()
-    features.rename(columns={'index': 'fname'}, inplace=True)
-    
-    return features
-
-path = os.path.join(data_path, 'audio_train')
-train_files = train.fname.values
-train_features = extract_features(train_files, path)
-
-path = os.path.join(data_path, 'audio_test')
-test_files = ss.fname.values
-test_features = extract_features(test_files, path)
+player_ratings = pd.read_csv('../input/player_ratings.csv')
 
 
 # In[ ]:
 
 
-train_data = train_data.merge(train_features, on='fname', how='left')
-test_data = test_data.merge(test_features, on='fname', how='left')
-train_data.head()
+player_ratings.head()
+
+
+# In addition to trueskill rating total_wins and total_matches have been included to allow for the calculation of winrate. See this kernel for details on how trueskill values were calculated
+
+# In[ ]:
+
+
+# Now create a list of player rankings by using the formula mu - 3*sigma
+# This ranking formula penalizes players with fewer matches because there is more uncertainty
+
+player_ratings['conservative_skill_estimate'] = player_ratings['trueskill_mu'] - 3*player_ratings['trueskill_sigma']
 
 
 # In[ ]:
 
 
-#Functions from LightGBM baseline: https://www.kaggle.com/opanichev/lightgbm-baseline
-# Construct features set
-X = train_data.drop(['label', 'fname'], axis=1)
-feature_names = list(X.columns)
-X = X.values
-labels = np.sort(np.unique(train_data.label.values))
-num_class = len(labels)
-c2i = {}
-i2c = {}
-for i, c in enumerate(labels):
-    c2i[c] = i
-    i2c[i] = c
-y = np.array([c2i[x] for x in train_data.label.values])
+player_ratings.head()
 
 
 # In[ ]:
 
 
-#fitting xgboost on the dataset
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=10, shuffle = True)
-clf = XGBClassifier(max_depth=5, learning_rate=0.05, n_estimators=3000,
-                    n_jobs=-1, random_state=0, reg_alpha=0.2, 
-                    colsample_bylevel=0.9, colsample_bytree=0.9)
-clf.fit(X_train, y_train)
-print(accuracy_score(clf.predict(X_val), y_val))
-#more functions from LightGBM baseline: https://www.kaggle.com/opanichev/lightgbm-baseline
-def proba2labels(preds, i2c, k=3):
-    ans = []
-    ids = []
-    for p in preds:
-        idx = np.argsort(p)[::-1]
-        ids.append([i for i in idx[:k]])
-        ans.append(' '.join([i2c[i] for i in idx[:k]]))
-
-    return ans, ids
+player_ratings = player_ratings.sort_values(by='conservative_skill_estimate', ascending=False)
 
 
 # In[ ]:
 
 
-#fitting on the entire data
+# negative account ids are players not appearing in other data available in this dataset.
 
-clf.fit(X, y)
-str_preds, _ = proba2labels(clf.predict_proba(test_data.drop(['label', 'fname'], axis = 1).values), i2c, k=3)
-# Prepare submission
-subm = pd.DataFrame()
-subm['fname'] = audio_test_files
-subm['label'] = str_preds
-subm.to_csv('submission.csv', index=False)
+player_ratings.head(10)
+
+
+# In[ ]:
+
+
+del player_ratings
+gc.collect()
+
+
+# ###match_outcomes.csv
+# Useful for creating custom skill calculations. Contains results with account_ids for 900k matches occuring prior to the other available data. Data is mostly from patch 6.85 and some from 6.84
+
+# In[ ]:
+
+
+match_outcomes = pd.read_csv('../input/match_outcomes.csv')
+
+
+# In[ ]:
+
+
+# each match has data on two rows. the 'rad' tells whether the team is Radiant or not(1 is Radiant 0 is Dire)
+# negative account ids are not in the other available data. account_id 0 is for anonymous players.
+match_outcomes.head()
+
+
+# In[ ]:
+
+
+del match_outcomes
+gc.collect()
+
+
+# ### ability_upgrades.csv and ability_names.csv
+# 
+# ability_upgrades.csv contains the upgrade performed at each level for each player.
+# ability_ids.csv links the ability ids to the english names of abilities.  
+
+# In[ ]:
+
+
+ability_upgrades = pd.read_csv('../input/ability_upgrades.csv')
+ability_ids = pd.read_csv('../input/ability_ids.csv')
+
+
+# In[ ]:
+
+
+ability_ids.head()
+
+
+# In[ ]:
+
+
+ability_upgrades.head()
+
+
+# In[ ]:
+
+
+del ability_upgrades, ability_ids
+gc.collect()
+
+
+# ###purchase_log.csv and item_ids.csv
+# 
+# purchase_log.csv contains the time for each purchase.
+# item_ids.csv contains numeric id's for items and the english names 
+
+# In[ ]:
+
+
+purchase_log = pd.read_csv('../input/purchase_log.csv')
+item_ids = pd.read_csv('../input/item_ids.csv')
+
+
+# In[ ]:
+
+
+item_ids.head()
+
+
+# In[ ]:
+
+
+purchase_log.head()
+
+
+# In[ ]:
+
+
+del purchase_log, item_ids
+gc.collect()
 

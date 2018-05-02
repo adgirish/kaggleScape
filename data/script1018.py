@@ -1,288 +1,545 @@
 
 # coding: utf-8
 
-# # Top Spotify Tracks of 2017: What Makes Songs Popular?
-# In this kernel, I'll be examining the audio features of the tracks in Spotify's Top Songs of 2017 playlist. I extracted these audio features using Spotify's Web API and the spotipy library, and created the featuresdf.csv file. Please consider upvoting if this is interesting!
 # 
-# **Contents:**
-# 1. Import Necessary Libraries
-# 2. Read In and Explore the Data
-# 3. Data Analysis
+# **Introduction**
+# 
+# Here is my first Kernel where I try to explore some basic information about Instacart dataset. As said in the description , the Dataset is anonymized and contains a sample of over 3 million grocery orders from more than 200,000 Instacart users. The goal  is then to predict which previously purchased products will be in a user’s next order. 
+# Now  let's jump straight into the data and do some  exploratory analysis !!
 
-# ## 1) Import Necessary Libraries
-# We'll start off by importing several Python libraries such as `numpy`, `pandas`, `matplotlib.pylot` and `seaborn`.
-
-# In[1]:
+# In[ ]:
 
 
-#data analysis libraries 
-import numpy as np
-import pandas as pd
+#import the needed librairies
 
-#visualization libraries
-import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 get_ipython().run_line_magic('matplotlib', 'inline')
-
-#ignore warnings
+import matplotlib.pyplot as plt  # Matlab-style plotting
+import seaborn as sns
+color = sns.color_palette()
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore') #Supress unnecessary warnings for readability and cleaner presentation
 
 
-# ## 2) Read In and Explore the Data
-# It's time to read in our data using `pd.read_csv`, and take a first look using the `head()` and `describe()` functions.
-
-# In[2]:
+pd.set_option('display.float_format', lambda x: '%.3f' % x) #Limiting floats output to 3 decimal points
 
 
-#read in featuresdf.csv and store in variable named music
-music = pd.read_csv("../input/featuresdf.csv")
-#look at first five rows of dataset
-music.head()
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8")) #check the files available in the directory
 
 
-# In[3]:
+# In[ ]:
 
 
-#look at summary of dataset
-music.describe(include="all")
+#Now let's get and put the data in  pandas dataframe
+
+order_products_train = pd.read_csv('../input/order_products__train.csv')
+order_products_prior = pd.read_csv('../input/order_products__prior.csv')
+orders = pd.read_csv('../input/orders.csv')
+products = pd.read_csv('../input/products.csv')
+aisles = pd.read_csv('../input/aisles.csv')
+departments = pd.read_csv('../input/departments.csv')
 
 
-# ## 3) Data Analysis
-# It's time to analyze each of the features in search of the answer to our question: What makes top Spotify songs popular?
+# Firstly, let's explore  **order_products_train** and  **order_products_prior** files.   These files specify which products were purchased in each order. More specifically, **order_products__prior** contains previous order contents for all customers and  **order_products_train**  contains the last orders for some customers only.
 
-# In[4]:
-
-
-#we'll start off by creating two datasets, numeric and small, with some values removed
-numeric = music.drop(['id','name','artists'], axis=1)
-#i'm removing the below values since all the other values range between 0.0 and 1.0
-#the other values are much larger, making it hard to see these values
-small = numeric.drop(['tempo','duration_ms','key','loudness','time_signature'], axis=1)
+# In[ ]:
 
 
-# In[5]:
+print("The order_products_train size is : ", order_products_train.shape)
+print("The order_products_prior size is : ", order_products_prior.shape)
 
 
-#set color palette to pastel
-sns.set_palette('pastel')
+# In[ ]:
 
 
-# ## First Look
-# To take our first look at the dataset, we'll create a bar chart of the mean values for danceability, energy, mode, speechiness, acousticness, instrumentalness, liveness and valence.
+#display first five rows.
 
-# In[6]:
+order_products_train.head(5)
 
 
-#create a bar chart of the mean values of the audio features in the small dataset
-small.mean().plot.bar()
-plt.title('Mean Values of Audio Features')
+# In[ ]:
+
+
+#display first five rows. 
+
+order_products_prior.head(5)
+
+
+# Now, let's concatenate them in the same order_products dataframe.
+
+# In[ ]:
+
+
+order_products_all = pd.concat([order_products_train, order_products_prior], axis=0)
+
+print("The order_products_all size is : ", order_products_all.shape)
+
+
+# In[ ]:
+
+
+#display first five rows.
+
+order_products_all.head(5)
+
+
+# ##Missing Data
+
+# In[ ]:
+
+
+total = order_products_all.isnull().sum().sort_values(ascending=False)
+percent = (order_products_all.isnull().sum()/order_products_all.isnull().count()).sort_values(ascending=False)
+missing_data = pd.concat([total, percent], axis=1, keys=['Total Missing', 'Percent'])
+missing_data
+
+
+# There is no missing data in order_products_all dataset. 
+
+# In[ ]:
+
+
+# Check the number of unique orders and unique products
+orders_Unique = len(set(order_products_all.order_id))
+products_Unique = len(set(order_products_all.product_id))
+print("There are %s orders for %s products" %(orders_Unique, products_Unique))
+
+
+# **Number of products that people usually order :**
+
+# In[ ]:
+
+
+grouped = order_products_all.groupby("order_id")["add_to_cart_order"].aggregate("max").reset_index()
+grouped = grouped.add_to_cart_order.value_counts()
+
+sns.set_style('whitegrid')
+f, ax = plt.subplots(figsize=(15, 12))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+
+plt.ylabel('Number of Orders', fontsize=13)
+plt.xlabel('Number of products added in order', fontsize=13)
 plt.show()
 
 
-# ## Danceability
+# We can observe that people usually order around 5 products.
 
-# In[7]:
+# ##Most ordered Products
+
+# Now let's identify which products are ordered the most.
+
+# In[ ]:
 
 
-#mean value and distplot for danceability feature
-print("Mean value for danceability:", music['danceability'].mean())
-sns.distplot(music['danceability'])
+grouped = order_products_all.groupby("product_id")["reordered"].aggregate({'Total_reorders': 'count'}).reset_index()
+grouped = pd.merge(grouped, products[['product_id', 'product_name']], how='left', on=['product_id'])
+grouped = grouped.sort_values(by='Total_reorders', ascending=False)[:10]
+grouped
+
+
+# Fruits like banana , strawberries...are  the most ordered products.
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['product_name']).sum()['Total_reorders'].sort_values(ascending=False)
+
+sns.set_style('darkgrid')
+f, ax = plt.subplots(figsize=(12, 10))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of Reorders', fontsize=13)
+plt.xlabel('Most ordered Products', fontsize=13)
 plt.show()
 
 
-# With a mean value of 0.697, it's clear that the majority of the top tracks have a high danceability rating.  
-# **Conclusion:** People like to stream songs they can dance to. I wonder if this says anything about when/where people stream songs? (Parties etc.?) 
+# ###Reorder Frequency:
 
-# ## Energy
+# Do people usually reorder the same previous ordered products ?
 
-# In[8]:
+# In[ ]:
 
 
-#mean value and distplot for energy feature
-print("Mean value for energy:", music['energy'].mean())
-sns.distplot(music['energy'])
+grouped = order_products_all.groupby("reordered")["product_id"].aggregate({'Total_products': 'count'}).reset_index()
+grouped['Ratios'] = grouped["Total_products"].apply(lambda x: x /grouped['Total_products'].sum())
+grouped
+
+
+# **59 %** of ordered products are previously ordered by customers.
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['reordered']).sum()['Total_products'].sort_values(ascending=False)
+
+sns.set_style('whitegrid')
+f, ax = plt.subplots(figsize=(5, 8))
+sns.barplot(grouped.index, grouped.values, palette='RdBu_r')
+plt.ylabel('Number of Products', fontsize=13)
+plt.xlabel('Reordered or Not Reordered', fontsize=13)
+plt.ticklabel_format(style='plain', axis='y')
 plt.show()
 
 
-# Again, people seem like energetic songs more than calm ones (mean of 0.661), although this feature seems to be a bit more evenly distributed than danceability.  
-# **Conclusion:** People like energetic songs. I wonder what the ages of Spotify users are?
+# ##Most Reordered Products
 
-# ## Key
+# Which products are usually reordered ? 
 
-# In[9]:
+# In[ ]:
 
 
-#map the numeric values of key to notes
-key_mapping = {0.0: 'C', 1.0: 'C♯,D♭', 2.0: 'D', 3.0: 'D♯,E♭', 4.0: 'E', 5.0: 'F', 6.0: 'F♯,G♭', 7.0: 'G', 8.0: 'G♯,A♭', 9.0: 'A', 10.0: 'A♯,B♭', 11.0: 'B'}
-music['key'] = music['key'].map(key_mapping)
+grouped = order_products_all.groupby("product_id")["reordered"].aggregate({'reorder_sum': sum,'reorder_total': 'count'}).reset_index()
+grouped['reorder_probability'] = grouped['reorder_sum'] / grouped['reorder_total']
+grouped = pd.merge(grouped, products[['product_id', 'product_name']], how='left', on=['product_id'])
+grouped = grouped[grouped.reorder_total > 75].sort_values(['reorder_probability'], ascending=False)[:10]
+grouped
 
-sns.countplot(x = 'key', data=music, order=music['key'].value_counts().index)
-plt.title("Count of Song Keys")
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['product_name']).sum()['reorder_probability'].sort_values(ascending=False)
+
+sns.set_style('darkgrid')
+f, ax = plt.subplots(figsize=(12, 10))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylim([0.85,0.95])
+plt.ylabel('Reorder probability', fontsize=13)
+plt.xlabel('Most reordered products', fontsize=12)
 plt.show()
 
 
-# **Conclusion:** The most common key among top tracks is C♯/D♭. 
+# Let's explore now the orders.csv file
 
-# ## Loudness
+# In[ ]:
 
-# In[10]:
 
+print("The orders data size is : ", orders.shape)
+print("Columns in orders data  are : ",  orders.columns.values)
 
-#mean value and distplot for loudness feature
-print("Mean value for loudness:", music['loudness'].mean())
-sns.distplot(music['loudness'])
-plt.show()
 
+# In[ ]:
 
-# So the mean value for loudness is -5.653. I'm still kind of confused on how to interpret this (Why are the values negative? Does a more negative value mean less loud or more loud?). If anybody has some insight, it would be greatly appreciated!  
-# **Conclusion:** ??
 
-# ## Mode
+#display first five rows of our dataset.
 
-# In[11]:
+orders.head(5)
 
 
-#print mean value for mode
-print("Mean value for mode feature:", music['mode'].mean())
+# ##Missing Data
 
-#map the binary value of mode to major/minor
-mode_mapping = {1.0: "major", 0.0: "minor"}
-music['mode'] = music['mode'].map(mode_mapping)
+# In[ ]:
 
-#draw a countplot of the values
-sns.countplot(x = 'mode', data=music)
-plt.title("Count of Major/Minor Songs")
-plt.show()
 
+orders_na = (orders.isnull().sum() / len(orders)) * 100
+orders_na = orders_na.drop(orders_na[orders_na == 0].index).sort_values(ascending=False)
+orders_na
 
-# People lean more towards songs with a major mode than those with a minor mode. Does this mean people like happier songs? (Maybe we'll find out with the valence feature.)  
-# **Conclusion:** Major is preferred over minor. 
 
-# ## Speechiness
-
-# In[12]:
-
-
-#mean value and distplot for speechiness feature
-print("Mean value for speechiness:", music['speechiness'].mean())
-sns.distplot(music['speechiness'])
-plt.show()
-
-
-# The mean value for speechiness is pretty low (only 0.104). This indicates that people prefer actual music. (I wonder if rapping counts as spoken lyrics?)  
-# **Conclusion:** Actual music is more popular than, say, audiobooks. (Can't say I didn't see this coming..) 
-
-# ## Acousticness
-
-# In[13]:
-
-
-#mean value and distplot for acousticness feature
-print("Mean value for acousticness:", music['acousticness'].mean())
-sns.distplot(music['acousticness'])
-plt.show()
-
-
-# Once again, the mean value for acousticness is low at 0.166.  
-# **Conclusion:** People don't seem to stream acoustic songs as much non-acoustic ones. Sorry, acoustic covers!
-
-# ## Instrumentalness
-
-# In[14]:
-
-
-#mean value and distplot for instrumentalness feature
-print("Mean value for instrumentalness:", music['instrumentalness'].mean())
-sns.distplot(music['instrumentalness'])
-plt.show()
-
-
-# The mean value for instrumentalness is *really, really* low at 0.00479.  
-# **Conclusion:** People like songs that have lyrics. 
-
-# ## Liveness
-
-# In[15]:
-
-
-#mean value and distplot for liveness feature
-print("Mean value for liveness:valen", music['liveness'].mean())
-sns.distplot(music['liveness'])
-plt.show()
-
-
-# As expected, the mean value for liveness is pretty low at 0.151. I wouldn't expect people to listen to live music on Spotify with the audience cheering in the background.  
-# **Conclusion:** People like to listen to  live music at concerts, not on Spotify.
-
-# ## Valence
-
-# In[16]:
-
-
-#mean value and distplot for valence feature
-print('Mean value for valence feature:', music['valence'].mean())
-sns.distplot(music['valence'])
-plt.show()
-
-
-# Happy and sad songs are actually pretty evenly distributed at 0.517.  
-# **Conclusion:** Some days are happy, some days are sad. Music reflects that. 
-
-# ## Tempo
-
-# In[17]:
-
-
-#mean value and distplot for tempo feature
-print('Mean value for tempo feature:', music['tempo'].mean())
-sns.distplot(music['tempo'])
-plt.show()
-
-
-# The mean value for tempo is 119.202 bpm, which is actually pretty fast.  
-# **Conclusion:** People like fast songs more than slow ones.
-
-# ## Duration
-
-# In[18]:
-
-
-#mean value and distplot for duration_ms feature
-print('Mean value for duration_ms feature:', music['duration_ms'].mean())
-sns.distplot(music['duration_ms'])
-plt.show()
-
-
-# The mean value for duration is 218387 milliseconds, which is around 3 minutes and 38 seconds.  
-# **Conclusion:** People don't like it when songs are too short or too long. (Duh - although I'd say that 3 mins and 38 secs is pretty long already) 
-
-# ## Time Signature
-
-# In[19]:
-
-
-#mean value and distplot for time_signature feature
-print('Mean value for time_signature feature:', music['time_signature'].mean())
-sns.distplot(music['time_signature'])
-plt.show()
-
-
-# Basically all the songs in the playlist are 4/4.  
-# **Conclusion:** People really like songs that are 4/4? (I wonder if we subconsciously notice this or something.) 
-
-# ## Correlation Heatmap
-
-# In[26]:
-
-
-plt.figure(figsize = (16,5))
-sns.heatmap(numeric.corr(), cmap="coolwarm", annot=True)
-plt.show()
-
-
-# Energy and loudness seem to be pretty correlated, which is not surprising. What I did find surprising is that there seems to be little correlation between energy and danceability. 
+# The only feature with missing values is **days_since_prior_order** with **6.028 %** missing
 # 
-# **To be continued**
 
-# # This is a work-in-progress! Any and all feedback is appreciated! 
+# ##Time of orders
+
+# Time at which people usually order products.
+
+# **Hours of Order in a Day:** 
+
+# In[ ]:
+
+
+grouped = orders.groupby("order_id")["order_hour_of_day"].aggregate("sum").reset_index()
+grouped = grouped.order_hour_of_day.value_counts()
+
+sns.set_style('darkgrid')
+f, ax = plt.subplots(figsize=(15, 10))
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of orders', fontsize=13)
+plt.xlabel('Hours of order in a day', fontsize=13)
+plt.show()
+
+
+# People mostly order between  8  and 19 (anonimyzed hours and probably between 8 a.m and 7 p.m.)
+# 
+
+#  **Days of Orders in a week:**
+
+# In[ ]:
+
+
+grouped = orders.groupby("order_id")["order_dow"].aggregate("sum").reset_index()
+grouped = grouped.order_dow.value_counts()
+
+f, ax = plt.subplots(figsize=(10, 10))
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of orders', fontsize=13)
+plt.xlabel('Days of order in a week', fontsize=13)
+plt.show()
+
+
+# People usually order at days 0 and 1 (anonimyzed days and probably the week end)
+
+# **Period of Reorders:**
+
+# In[ ]:
+
+
+grouped = orders.groupby("order_id")["days_since_prior_order"].aggregate("sum").reset_index()
+grouped = grouped.days_since_prior_order.value_counts()
+
+from matplotlib.ticker import FormatStrFormatter
+f, ax = plt.subplots(figsize=(15, 10))
+sns.barplot(grouped.index, grouped.values)
+ax.xaxis.set_major_formatter(FormatStrFormatter('%.0f'))
+plt.ylabel('Number of orders', fontsize=13)
+plt.xlabel('Period of reorder', fontsize=13)
+plt.show()
+
+
+# People usually reorder either after 1 week or after 1 month.
+
+# ##Orders in the whole dataset
+
+# Number and ratio  of orders from the three datasets (prior, train, test).
+
+# In[ ]:
+
+
+grouped = orders.groupby("eval_set")["order_id"].aggregate({'Total_orders': 'count'}).reset_index()
+grouped['Ratio'] = grouped["Total_orders"].apply(lambda x: x /grouped['Total_orders'].sum())
+grouped
+
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['eval_set']).sum()['Total_orders'].sort_values(ascending=False)
+
+sns.set_style('whitegrid')
+f, ax = plt.subplots(figsize=(8, 8))
+sns.barplot(grouped.index, grouped.values, palette='coolwarm')
+plt.ylabel('Number of Orders', fontsize=13)
+plt.xlabel('datasets', fontsize=13)
+plt.show()
+
+
+# ##Customers in the whole dataset
+
+# Let's check the total number of unique customers in the three datasets (prior, train, test).
+
+# In[ ]:
+
+
+print("Number of unique customers in the whole dataset : ",len(set(orders.user_id)))
+
+
+# In[ ]:
+
+
+grouped = orders.groupby("eval_set")["user_id"].apply(lambda x: len(x.unique()))
+
+plt.figure(figsize=(7,8))
+sns.barplot(grouped.index, grouped.values, palette='coolwarm')
+plt.ylabel('Number of users', fontsize=13)
+plt.xlabel('Eval set', fontsize=13)
+plt.title("Number of unique customers in each dataset")
+plt.show()
+
+
+# ##Orders made by each customer
+
+# Let's check the number of orders made by each costumer in the whole dataset.
+
+# In[ ]:
+
+
+grouped = orders.groupby('user_id')['order_id'].apply(lambda x: len(x.unique())).reset_index()
+grouped = grouped.groupby('order_id').aggregate("count")
+
+sns.set_style("whitegrid")
+f, ax = plt.subplots(figsize=(15, 12))
+sns.barplot(grouped.index, grouped.user_id)
+plt.ylabel('Numbers of Customers')
+plt.xlabel('Number of Orders per customer')
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# We can observe that most customers made  4 orders.
+
+# Now let's explore the items datasets (products,  departments and aisles files.)
+
+# In[ ]:
+
+
+#display first five rows of our dataset.
+products.head(5)
+
+
+# In[ ]:
+
+
+#display first five rows of our dataset.
+departments.head(5)
+
+
+# In[ ]:
+
+
+#display first five rows of our dataset.
+aisles.head(5)
+
+
+# Now let's combine them in a single dataframe
+
+# In[ ]:
+
+
+items  = pd.merge(left =pd.merge(left=products, right=departments, how='left'), right=aisles, how='left')
+items.head()
+
+
+# ##Most important Departments  (by number of products)
+
+# In[ ]:
+
+
+grouped = items.groupby("department")["product_id"].aggregate({'Total_products': 'count'}).reset_index()
+grouped['Ratio'] = grouped["Total_products"].apply(lambda x: x /grouped['Total_products'].sum())
+grouped.sort_values(by='Total_products', ascending=False, inplace=True)
+grouped
+
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['department']).sum()['Total_products'].sort_values(ascending=False)
+
+sns.set_style("darkgrid")
+f, ax = plt.subplots(figsize=(12, 15))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of products', fontsize=13)
+plt.xlabel('Departments', fontsize=13)
+plt.show()
+
+
+# ##Most important Aisles in each Department (by number of Products)
+
+# In[ ]:
+
+
+grouped = items.groupby(["department", "aisle"])["product_id"].aggregate({'Total_products': 'count'}).reset_index()
+grouped.sort_values(by='Total_products', ascending=False, inplace=True)
+fig, axes = plt.subplots(7,3, figsize=(20,45), gridspec_kw =  dict(hspace=1.4))
+for (aisle, group), ax in zip(grouped.groupby(["department"]), axes.flatten()):
+    g = sns.barplot(group.aisle, group.Total_products , ax=ax)
+    ax.set(xlabel = "Aisles", ylabel=" Number of products")
+    g.set_xticklabels(labels = group.aisle,rotation=90, fontsize=12)
+    ax.set_title(aisle, fontsize=15)
+
+
+# ##Most important Aisles over all Departments (by number of Products)
+
+# In[ ]:
+
+
+grouped = items.groupby("aisle")["product_id"].aggregate({'Total_products': 'count'}).reset_index()
+grouped['Ratio'] = grouped["Total_products"].apply(lambda x: x /grouped['Total_products'].sum())
+grouped = grouped.sort_values(by='Total_products', ascending=False)[:20]
+grouped
+
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['aisle']).sum()['Total_products'].sort_values(ascending=False)
+
+f, ax = plt.subplots(figsize=(12, 15))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of products', fontsize=13)
+plt.xlabel('Aisles', fontsize=13)
+plt.show()
+
+
+# 
+# **What are customers' favorite Departments and Aisles ?**
+
+# In[ ]:
+
+
+
+users_flow = orders[['user_id', 'order_id']].merge(order_products_train[['order_id', 'product_id']],
+                                          how='inner', left_on='order_id', right_on='order_id')
+
+users_flow = users_flow.merge(items, how='inner', left_on='product_id',
+                                         right_on='product_id')
+
+
+# ##Best Selling Departments  (number of Orders)
+
+# In[ ]:
+
+
+grouped = users_flow.groupby("department")["order_id"].aggregate({'Total_orders': 'count'}).reset_index()
+grouped['Ratio'] = grouped["Total_orders"].apply(lambda x: x /grouped['Total_orders'].sum())
+grouped.sort_values(by='Total_orders', ascending=False, inplace=True)
+grouped
+
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['department']).sum()['Total_orders'].sort_values(ascending=False)
+
+f, ax = plt.subplots(figsize=(12, 15))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of Orders', fontsize=13)
+plt.xlabel('Departments', fontsize=13)
+plt.show()
+
+
+# ##Best Selling Aisles in each Department (number of Orders)
+
+# In[ ]:
+
+
+grouped = users_flow.groupby(["department", "aisle"])["order_id"].aggregate({'Total_orders': 'count'}).reset_index()
+grouped.sort_values(by='Total_orders', ascending=False, inplace=True)
+fig, axes = plt.subplots(7,3, figsize=(20,45), gridspec_kw =  dict(hspace=1.4))
+for (aisle, group), ax in zip(grouped.groupby(["department"]), axes.flatten()):
+    g = sns.barplot(group.aisle, group.Total_orders , ax=ax)
+    ax.set(xlabel = "Aisles", ylabel=" Number of Orders")
+    g.set_xticklabels(labels = group.aisle,rotation=90, fontsize=12)
+    ax.set_title(aisle, fontsize=15)
+
+
+# ##Best Selling Aisles  over all Departments.
+
+# In[ ]:
+
+
+grouped = users_flow.groupby("aisle")["order_id"].aggregate({'Total_orders': 'count'}).reset_index()
+grouped['Ratio'] = grouped["Total_orders"].apply(lambda x: x /grouped['Total_orders'].sum())
+grouped.sort_values(by='Total_orders', ascending=False, inplace=True )
+grouped.head(10)
+
+
+# In[ ]:
+
+
+grouped  = grouped.groupby(['aisle']).sum()['Total_orders'].sort_values(ascending=False)[:15]
+
+f, ax = plt.subplots(figsize=(12, 15))
+plt.xticks(rotation='vertical')
+sns.barplot(grouped.index, grouped.values)
+plt.ylabel('Number of Orders', fontsize=13)
+plt.xlabel('Aisles', fontsize=13)
+plt.show()
+

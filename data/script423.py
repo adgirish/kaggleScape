@@ -1,94 +1,48 @@
 
 # coding: utf-8
 
-# **Overview**
+# *This is the first step in Kaggle's [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning) series.*
 # 
-# This Kernel uses only the test data. However, some parameters have been tuned on the training data.
-# It reads the images, convert them into binary after some preprocessing steps, Then, it simply labels connected components and considers each obtained component as a nuclei.
-
-# **Reading data**
-
-# In[ ]:
-
-
-import os
-import cv2
-import numpy as np
-
-test_dirs = os.listdir("../input/stage1_test")
-test_filenames=["../input/stage1_test/"+file_id+"/images/"+file_id+".png" for file_id in test_dirs]
-test_images=[cv2.imread(imagefile) for imagefile in test_filenames]
-
-# Any results you write to the current directory are saved as output.
-
-
-# **List of operations to be performed on each image**
-
-# In[ ]:
-
-
-def process(img_rgb):
-    #green channel happends to produce slightly better results
-    #than the grayscale image and other channels
-    img_gray=img_rgb[:,:,1]#cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-    #morphological opening (size tuned on training data)
-    circle7=cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(7,7))
-    img_open=cv2.morphologyEx(img_gray, cv2.MORPH_OPEN, circle7)
-    #Otsu thresholding
-    img_th=cv2.threshold(img_open,0,255,cv2.THRESH_OTSU)[1]
-    #Invert the image in case the objects of interest are in the dark side
-    if(np.sum(img_th==255)>np.sum(img_th==0)):
-        img_th=cv2.bitwise_not(img_th)
-    #second morphological opening (on binary image this time)
-    bin_open=cv2.morphologyEx(img_th, cv2.MORPH_OPEN, circle7) 
-    #connected components
-    cc=cv2.connectedComponents(bin_open)[1]
-    #cc=segment_on_dt(bin_open,20)
-    return cc
-
-
-# **Computing output for each image**
-
-# In[ ]:
-
-
-test_connected_components=[process(img)  for img in test_images]
-
-
-# **RLE encoding**
 # 
-# Taken from this [kernel](https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277) but slghtly adapted to our case.
-
-# In[ ]:
-
-
-def rle_encoding(cc):
-    values=list(np.unique(cc))
-    values.remove(0)
-    RLEs=[]
-    for v in values:
-        dots = np.where(cc.T.flatten() == v)[0]
-        run_lengths = []
-        prev = -2
-        for b in dots:
-            if (b>prev+1):
-                run_lengths.extend((b + 1, 0))
-            run_lengths[-1] += 1
-            prev = b
-        RLEs.append(run_lengths)
-    return RLEs
-
-test_RLEs=[rle_encoding(cc) for cc in test_connected_components]
-
-
-# **Writing submission file**
-
-# In[ ]:
-
-
-with open("submission_image_processing.csv", "a") as myfile:
-    myfile.write("ImageId,EncodedPixels\n")
-    for i,RLEs in enumerate(test_RLEs):
-        for RLE in RLEs:
-            myfile.write(test_dirs[i]+","+" ".join([str(i) for i in RLE])+"\n")
-
+# ---
+# # Introduction
+# We'll start with an overview of how machine learning models work and how they are used. This may feel basic if you've done statistical modeling or machine learning before. Don't worry, we will progress to building powerful models soon.
+# 
+# The course will have you build models for the following scenario:
+# 
+# Your cousin has made millions of dollars speculating on real estate. He's offered to become business partners with you because of your interest in data science. He'll supply the money, and you'll supply models that predict how much various houses are worth.
+# 
+# You ask your cousin how he's predicted real estate values in the past. and he says it is just intuition. But more questioning reveals that he's identified price patterns from houses he has seen in the past, and he uses those patterns to make predictions for new houses he is considering.
+# 
+# Machine learning works the same way.  We'll start with a model called the Decision Tree. There are fancier models that give more accurate predictions. But decision trees are easy to understand, and they are the basic building block for some of the best models in data science.
+# 
+# For simplicity, we'll start with the simplest possible decision tree. 
+# 
+# ![First Decision Trees](http://i.imgur.com/7tsb5b1.png)
+# 
+# It divides houses into only two categories. You predict the price of a new house by finding out which category it's in, and the prediction is the historical average price from that category.
+# 
+# This captures the relationship between house size and price. We use data to decide how to break the houses into two groups,  and then again to determine the predicted price in each group.  This step of capturing patterns from data is called **fitting** or **training** the model. The data used to **fit** the model is called the **training data**.  
+# 
+# The details of how the model is fit (e.g. how to split up the data) is complex enough that we will save it for later. After the model has been fit, you can apply it to new data to **predict** prices of additional homes.
+# 
+# ---
+# # Example
+# Assuming your decision tree works in a sensible way, which of the two trees shown here do you think you might get from **fitting** this especially simple decision tree?
+# 
+# ![First Decision Trees](http://i.imgur.com/prAjgku.png)
+# 
+# ---
+# # Improving the Decision Tree
+# 
+# The decision tree on the left (Decision Tree 1) probably makes more sense, because it captures the reality that houses with more bedrooms tend to sell at higher prices than houses with fewer bedrooms.  The biggest shortcoming of this model is that it doesn't capture most factors affecting home price, like number of bathrooms, lot size, location, etc. 
+# 
+# You can capture more factors using a tree that has more "splits." These are called "deeper" trees. A decision tree that also considers the total size of each house's lot might look like this: 
+# ![Depth 2 Tree](http://i.imgur.com/R3ywQsR.png)
+# 
+# You predict the price of any house by tracing through the decision tree, always picking the path corresponding to that house's characteristics. The predicted price for the house is at the bottom of the tree.  The point at the bottom where we make a prediction is called a **leaf.**   
+# 
+# The splits and values at the leaves will be determined by the data, so it's time for you to check out the data you will be working with.
+# 
+# # Continue
+# You will write code as part of an ongoing data science project for the rest of the tutorials. **[Click here](https://www.kaggle.com/dansbecker/starting-your-ml-project)** to get started.

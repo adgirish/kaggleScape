@@ -1,290 +1,433 @@
 
 # coding: utf-8
 
-# **In this notebook, we are going to tackle the same toxic classification problem just like my previous notebooks but this time round, we are going deeper with the use of Character-level features and Convolutional Neural Network (CNNs). **
-# 
-# 
-# ![](https://i.imgur.com/okCCLAU.jpg)
-# 
-# 
-# **Why do we consider the idea of using char-gram features?**
-# 
-# 
-# You might noticed that there are a lot of sparse misspellings due to the nature of the dataset. When we train our model using the word vectors from our training set, we might be missing out some genuine words and mispellings that are not present in the training set but yet present in our prediction set. Sometimes that wouldn't affect the model's capability to make good judgement, but most of the time, it's unable to correctly classify because the misspelt words are not in the model's "dictionary". 
-# 
-# Hence, if we could "go deeper" by splitting the sentence into a list of characters instead of words, the chances that the same characters that are present in both training and prediction set are much higher. You could imagine that this approach introduce another problem: an explosion of dimensions. One of the ways to tackle this problem is to use CNN as it's designed to solve high-dimensional dataset like images. Traditionally, CNN is used to solve computer vision problems but there's an increased trend of using CNN not just in Kaggle competitions but also in papers written by researchers too. Therefore, I believe it deserve a writeup and without much ado, let's see how we can apply CNN to our competition at hand.
-# 
-# I have skipped some elaboration of some concepts like embeddings which I have went through in my previous notebooks, so take a look at these if you are interested in learning more:
-# 
-# * [Do Pretrained Embeddings Give You The Extra Edge?](https://www.kaggle.com/sbongo/do-pretrained-embeddings-give-you-the-extra-edge)
-# * [[For Beginners] Tackling Toxic Using Keras](https://www.kaggle.com/sbongo/for-beginners-tackling-toxic-using-keras)
+# # What are common characteristics of employees lost in attrition compared to those who stay in IBM's fictional dataset? 
+# ## We will be using point plots, box plots, kernel density diagrams, means, standard deviations, and z-tests to explore this question.
 
-# **A brief glance at Convolutional Neural Network (CNNs)**
-# 
-# CNN is basically a feed-forward neural network that consists of several layers such as the convolution, pooling and some densely connected layers that we are familiar with.
-# 
-# ![](https://i.imgur.com/aa46tRe.png)
-# 
-# Firstly, as seen in the above picture, we feed the data(image in this case) into the convolution layer. The convolution layer works by sliding a window across the input data and as it slides, the window(filter) applies some matrix operations with the underlying data that falls in the window. And when you eventually collect all the result of the matrix operations, you will have a condensed output in another matrix(we call it a feature map).
-# 
-# ![](https://i.imgur.com/wSbiLCi.gif)
-# 
-# With the resulting matrix at hand, you do a max pooling that basically down-samples or in another words decrease the number of dimensions without losing the essence. 
-# 
-# ![](https://i.imgur.com/Cphci9k.png)
-# 
-# Consider this simplified image of max pooling operation above. In the above example, we slide a 2 X 2 filter window across our dataset in strides of 2. As it's sliding, it grabs the maximum value and put it into a smaller-sized matrix.
-# 
-# There are different ways to down-sample the data such as min-pooling, average-pooling and in max-pooling, you simply take the maximum value of the matrix. Imagine that you have a list: [1,4,0,8,5]. When you do max-pooling on this list, you will only retain the value "8". Indirectly, we are only concerned about the existence of 8, and not the location of it. Despite it's simplicity, it's works quite well and it's a pretty niffy way to reduce the data size.
-# 
-# Again, with the down-sized "after-pooled" matrix, you could feed it to a densely connected layer which eventually leads to prediction.
-# 
-# **How does this apply to NLP in our case?**
-# 
-# Now, forget about real pixels about a minute and imagine using each tokenized character as a form of pixel in our input matrix. Just like word vectors, we could also have character vectors that gives a lower-dimension representation. So for a list of 10 sentences that consists of 50 characters each, using a 30-dimensional embedding will allow us to feed in a 10x50x30 matrix into our convolution layer.
-# ![](https://i.imgur.com/g59nKYc.jpg)
-# Looking at the above picture, let's just focus(for now) on 1 sentence instead of a list. Each character is represented in a row (8 characters), and each embedding dimension is represented in a column (5 dimensions) in this starting matrix.
-# 
-# You would begin the convolution process by using filters of different dimensions to "slide" across your initial matrix to get a lower-dimension feature map. There's something I deliberately missed out earlier: filters. 
-# 
-# ![](https://i.imgur.com/Lwa7wBG.gif)
-# The sliding window that I mention earlier are actually filters that are designed to capture different distinctive features in the input data. By defining the dimension of the filter, you can control the window of infomation you want to "summarize". To translate back in the picture, each of the feature maps could contain 1 high level representation of the embeddings for each character.
+# ----------
 # 
 # 
-# Next, we would apply a max pooling to get the maximum value in each feature map. In our context, some characters in each filter would be selected through this max pooling process based on their values. As usual, we would then feed into a normal densely connected layer that outputs to a softmax function which gives the probabilities of each class.
-# 
-# Note that my explanation hides some technical details to facilitate understanding. There's a whole load of things that you could tweak with CNN. For instance, the stride size which determine how often the filter will be applied, narrow VS wide CNN, etc.
-# 
-# **Okay! Let's see how we could implement CNN in our competition.**
-
-# As always, we start off with the importing of relevant libraries and dataset:
+# ## Set Up Dataset
 
 # In[ ]:
 
 
-import sys, os, re, csv, codecs, numpy as np, pandas as pd
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation, GRU,Conv1D,MaxPooling1D
-from keras.layers import Bidirectional, GlobalMaxPool1D,Bidirectional
-from keras.models import Model
-from keras import initializers, regularizers, constraints, optimizers, layers
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-import gc
-from sklearn.model_selection import train_test_split
-from keras.models import load_model
+from pandas import read_csv
+data = read_csv("../input/WA_Fn-UseC_-HR-Employee-Attrition.csv")
 
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv')
-submit = pd.read_csv('../input/test.csv')
-submit_template = pd.read_csv('../input/sample_submission.csv', header = 0)
+target = "Attrition"
 
-
-# Split into training and test set:
 
 # In[ ]:
 
 
-X_train, X_test, y_train, y_test = train_test_split(train, train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]], test_size = 0.10, random_state = 42)
+feature_by_dtype = {}
+for c in data.columns:
+    
+    if c == target: continue
+    
+    data_type = str(data[c].dtype)
+    
+    if data_type not in feature_by_dtype.keys():
+         feature_by_dtype[data_type] = [c]
+    else:
+        feature_by_dtype[data_type].append(c)
 
+feature_by_dtype
+feature_by_dtype.keys()
 
-# Store the comments as seperate variables for further processing.
 
 # In[ ]:
 
 
-list_sentences_train = X_train["comment_text"]
-list_sentences_test = X_test["comment_text"]
-list_sentences_submit = submit["comment_text"]
+objects = feature_by_dtype["object"]
 
-
-# In our previous notebook, we have began using Kera's helpful Tokenizer class to help us do the gritty text processing work. We are going to use it again to help us split the text into characters by setting the "char_level" parameter to true.
 
 # In[ ]:
 
 
-max_features = 20000
-tokenizer = Tokenizer(num_words=max_features,char_level=True)
+remove = ["Over18"]
 
-
-# This function allows Tokenizer to create an index of the tokenized unique characters. Eg. a=1, b=2, etc
 
 # In[ ]:
 
 
-tokenizer.fit_on_texts(list(list_sentences_train))
+categorical_features = [f for f in objects if f not in remove]
 
-
-# Then we get back a list of sentences with the sequence of indexes which represent each character.
 
 # In[ ]:
 
 
-list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
-list_sentences_test = tokenizer.texts_to_sequences(list_sentences_test)
-list_tokenized_submit = tokenizer.texts_to_sequences(list_sentences_submit)
+int64s = feature_by_dtype["int64"]
 
-
-# Since there are sentences with varying length of characters, we have to get them on a constant size. Let's put them to a length of 500 characters for each sentence:
 
 # In[ ]:
 
 
-maxlen = 500
-X_t = pad_sequences(list_tokenized_train, maxlen=maxlen)
-X_te = pad_sequences(list_sentences_test, maxlen=maxlen)
-X_sub = pad_sequences(list_tokenized_submit, maxlen=maxlen)
+remove.append("StandardHours")
+remove.append("EmployeeCount")
 
-
-# Just in case you are wondering, the reason why I used 500 is because most of the number of characters in a sentence falls within 0 to 500:
 
 # In[ ]:
 
 
-totalNumWords = [len(one_comment) for one_comment in list_tokenized_train]
-plt.hist(totalNumWords)
-plt.show()
+count_features = []
+for i in [i for i in int64s if len(data[i].unique()) < 20 and i not in remove]:
+    count_features.append(i)
 
-
-# Finally, we can start buliding our model.
-
-# First, we set up our input layer. As mentioned in the Keras documentation, we have to include the shape for the very first layer and Keras will automatically derive the shape for the rest of the layers.
 
 # In[ ]:
 
 
-inp = Input(shape=(maxlen, ))
+count_features = count_features #+ ["TotalWorkingYears", "YearsAtCompany", "HourlyRate"]
 
-
-# We use an embedding size of 240. That also means that we are projecting characters on a 240-dimension vector space. It will output a (num of sentences X 500 X 240) matrix. We have talked about embedding layer in my previous notebooks, so feel free to check them out.
 
 # In[ ]:
 
 
-embed_size = 240
-x = Embedding(len(tokenizer.word_index)+1, embed_size)(inp)
+remove.append("EmployeeNumber")
 
-
-# Here's the meat of our notebook. With the output of embedding layer, we feed it into a convolution layer. We use a window size of 4 (remember it's 5 in the earlier picture above) and 100 filters (it's 6 in the earlier picture above) to extract the features in our data. That also means we slides a window across the 240 dimensions of embeddings for each of the 500 characters and it will result in a (num of sentences X 500 X 100) matrix. Notice that we have set padding to "same". What does this padding means?
-# ![](https://i.imgur.com/hITQent.png)
-# For simplicity sake, let's imagine we have a 32 x 32 x 3 input matrix and a 5 x 5 x 3 filter, if you apply the filter on the matrix with 1 stride, you will end up with a 28 x 28 x 3 matrix. In the early stages, you would want to preserve as much information as possible, so you will want to have a 32 x 32 x 3 matrix back. If we add(padding) some zeros around the original input matrix, we will be sure that the result output matrix dimension will be the same. But if you really want to have the resulting matrix to be reduced, you can set the padding parameter to "valid".
 
 # In[ ]:
 
 
-x = Conv1D(filters=100,kernel_size=4,padding='same', activation='relu')(x)
+numerical_features = [i for i in int64s if i not in remove]
 
 
-# Then we pass it to the max pooling layer that applies the max pool operation on a window of every 4 characters. And that is why we get an output of (num of sentences X 125 X 100) matrix.
-
-# In[ ]:
-
-
-x=MaxPooling1D(pool_size=4)(x)
-
-
-# Next, we pass it to the Bidriectional LSTM that we are famliar with, since the previous notebook. 
-
-# In[ ]:
-
-
-x = Bidirectional(GRU(60, return_sequences=True,name='lstm_layer',dropout=0.2,recurrent_dropout=0.2))(x)
-
-
-# Afterwhich, we apply a max pooling again but this time round, it's a global max pooling. What's the difference between this and the previous max pooling attempt?
+# ----------
 # 
-# In the previous max pooling attempt, we merely down-sampled a single 2nd dimension, which contains the number of characters. From a matrix of:
-# (num of sentences X 500 X 100)
-# it becomes:
-# (num of sentences X 125 X 100)
-# which is still a 3d matrix.
 # 
-# But in global max pooling, we perform pooling operation across several dimensions(2nd and 3rd dimension) into a single dimension. So it outputs a:
-# (num of sentences X 120) 2D matrix.
+# # Numerical Features
 
 # In[ ]:
 
 
-x = GlobalMaxPool1D()(x)
+data[numerical_features].head()
 
 
-# Now that we have a 2D matrix, it's convenient to plug it into the densely connected layer, followed by a relu activation function.
+# ----------
 
-# In[ ]:
-
-
-x = Dense(50, activation="relu")(x)
-
-
-# We'll pass it through a dropout layer and a densely connected layer that eventually passes to a sigmoid function.
+# # Python Source Code
 
 # In[ ]:
 
 
-x = Dropout(0.2)(x)
-x = Dense(6, activation="sigmoid")(x)
+def display_ttest(data, category, numeric):
+    output = {}
+    s1 = data[data[category] == data[category].unique()[0]][numeric]
+    s2 = data[data[category] == data[category].unique()[1]][numeric]
+    from scipy.stats import ttest_ind
+    t, p = ttest_ind(s1,s2)
+    from IPython.display import display
+    from pandas import DataFrame
+    display(DataFrame(data=[{"t-test statistic" : t, "p-value" : p}], columns=["t-test statistic", "p-value"], index=[category]).round(2))
 
+def display_ztest(data, category, numeric):
+    output = {}
+    s1 = data[data[category] == data[category].unique()[0]][numeric]
+    s2 = data[data[category] == data[category].unique()[1]][numeric]
+    from statsmodels.stats.weightstats import ztest
+    z, p = ztest(s1,s2)
+    from IPython.display import display
+    from pandas import DataFrame
+    display(DataFrame(data=[{"z-test statistic" : z, "p-value" : p}], columns=["z-test statistic", "p-value"], index=[category]).round(2))
+    
+def display_cxn_analysis(data, category, numeric, target):
+    
+    from seaborn import boxplot, kdeplot, set_style, distplot, countplot
+    from matplotlib.pyplot import show, figure, subplots, ylabel, xlabel, subplot, suptitle
+    
+    not_target = [a for a in data[category].unique() if a != target][0]
+    
+    pal = {target : "yellow",
+          not_target : "darkgrey"}
+    
 
-# You could experiment with the dropout rate and size of the dense connected layer to see it could decrease overfitting.
-# 
-# Finally, we move on to train the model with 6 epochs and the results seems pretty decent. The training loss decreases steadily along with validation loss until at the 5th or 6th epoch where traces of overfitting starts to emerge.
+    set_style("whitegrid")
+    figure(figsize=(12,5))
+    suptitle(numeric + " by " + category)
+
+    # ==============================================
+    
+    p1 = subplot(2,2,2)
+    boxplot(y=category, x=numeric, data=data, orient="h", palette = pal)
+    p1.get_xaxis().set_visible(False)
+
+    # ==============================================
+    
+    if(numeric in count_features):
+        p2 = subplot(2,2,4)
+        
+        s2 = data[data[category] == not_target][numeric]
+        s2 = s2.rename(not_target) 
+        countplot(s2, color = pal[not_target])
+        
+        s1 = data[data[category] == target][numeric]
+        s1 = s1.rename(target)
+        ax = countplot(s1, color = pal[target])
+        
+        ax.set_yticklabels([ "{:.0f}%".format((tick/len(data)) * 100) for tick in ax.get_yticks()])
+        
+        ax.set_ylabel("Percentage")
+        ax.set_xlabel(numeric)
+        
+    else:
+        p2 = subplot(2,2,4, sharex=p1)
+        s1 = data[data[category] == target][numeric]
+        s1 = s1.rename(target)
+        kdeplot(s1, shade=True, color = pal[target])
+        #distplot(s1,kde=False,color = pal[target])
+
+        s2 = data[data[category] == not_target][numeric]
+        s2 = s2.rename(not_target)  
+        kdeplot(s2, shade=True, color = pal[not_target])
+        #distplot(s2,kde=False,color = pal[not_target])
+
+        #ylabel("Density Function")
+        ylabel("Distribution Plot")
+        xlabel(numeric)
+    
+    # ==============================================
+    
+    p3 = subplot(1,2,1)
+    from seaborn import pointplot
+    from matplotlib.pyplot import rc_context
+
+    with rc_context({'lines.linewidth': 0.8}):
+        pp = pointplot(x=category, y=numeric, data=data, capsize=.1, color="black", marker="s")
+        
+    
+    # ==============================================
+    
+    show()
+    
+    #display p value
+    
+    if(data[category].value_counts()[0] > 30 and data[category].value_counts()[1] > 30):
+        display_ztest(data,category,numeric)
+    else:
+        display_ttest(data,category,numeric)
+    
+    #Means, Standard Deviation, Absolute Distance
+    table = data[[category,numeric]]
+    
+    means = table.groupby(category).mean()
+    stds = table.groupby(category).std()
+    
+    s1_mean = means.loc[data[category].unique()[0]]
+    s1_std = stds.loc[data[category].unique()[0]]
+    
+    s2_mean = means.loc[data[category].unique()[1]]
+    s2_std = means.loc[data[category].unique()[1]]
+    
+    print("%s Mean: %.2f (+/- %.2f)" % (category + " == " + str(data[category].unique()[0]),s1_mean, s1_std))
+    print("%s Mean : %.2f (+/- %.2f)" % (category + " == " + str(data[category].unique()[1]), s2_mean, s2_std))
+    print("Absolute Mean Diferrence Distance: %.2f" % abs(s1_mean - s2_mean))
+
 
 # In[ ]:
 
 
-model = Model(inputs=inp, outputs=x)
-model.compile(loss='binary_crossentropy',
-                  optimizer='adam',
-                 metrics=['accuracy'])
+def get_p_value(s1,s2):
+    
+    from statsmodels.stats.weightstats import ztest
+    from scipy.stats import ttest_ind
+    
+    if(len(s1) > 30 & len(s2) > 30):
+        z, p = ztest(s1,s2)
+        return p
+    else:
+        t, p = ttest_ind(s1,s2)
+        return p
+    
+def get_p_values(data, category, numerics):
+    
+    output = {}
+    
+    for numeric in numerics:
+        s1 = data[data[category] == data[category].unique()[0]][numeric]
+        s2 = data[data[category] == data[category].unique()[1]][numeric]
+        row = {"p-value" : get_p_value(s1,s2)}
+        output[numeric] = row
+    
+    from pandas import DataFrame
+    
+    return DataFrame(data=output).T
+
+def get_statistically_significant_numerics(data, category, numerics):
+    df = get_p_values(data, category, numerics)
+    return list(df[df["p-value"] < 0.05].index)
+
+def get_statistically_non_significant_numerics(data, category, numerics):
+    df = get_p_values(data, category, numerics)
+    return list(df[df["p-value"] >= 0.05].index)
+    
+def display_p_values(data, category, numerics):
+    from IPython.display import display
+    display(get_p_values(data, category, numerics).round(2).sort_values("p-value", ascending=False))
 
 
 # In[ ]:
 
 
-model.summary()
+significant = get_statistically_significant_numerics(data,target,numerical_features) 
+ns = get_statistically_non_significant_numerics(data,target,numerical_features)
 
 
-# Due to Kaggle kernel time limit, I have pasted the training output of these 6 epochs.
+# ----------
+# 
+# # Statistically Significant Numerical Features
 
 # In[ ]:
 
 
-batch_size = 32
-epochs = 6
-#uncomment below to train in your local machine
-#hist = model.fit(X_t,y_train, batch_size=batch_size, epochs=epochs,validation_data=(X_te,y_test),callbacks=callbacks_list)
+i = iter(significant)
 
 
-# Train on 143613 samples, validate on 15958 samples
-# 
-# Epoch 1/6
-# 143613/143613 [==============================] - 2580s 18ms/step - loss: 0.0786 - acc: 0.9763 - val_loss: 0.0585 - val_acc: 0.9806
-# 
-# Epoch 2/6
-# 143613/143613 [==============================] - 2426s 17ms/step - loss: 0.0582 - acc: 0.9804 - val_loss: 0.0519 - val_acc: 0.9816
-# 
-# Epoch 3/6
-# 143613/143613 [==============================] - 2471s 17ms/step - loss: 0.0531 - acc: 0.9816 - val_loss: 0.0489 - val_acc: 0.9823
-# 
-# Epoch 4/6
-# 143613/143613 [==============================] - 2991s 21ms/step - loss: 0.0505 - acc: 0.9821 - val_loss: 0.0484 - val_acc: 0.9829
-# 
-# Epoch 5/6
-# 143613/143613 [==============================] - 3023s 21ms/step - loss: 0.0487 - acc: 0.9826 - val_loss: 0.0463 - val_acc: 0.9829
-# 
-# Epoch 6/6
-# 143613/143613 [==============================] - 2961s 21ms/step - loss: 0.0474 - acc: 0.9830 - val_loss: 0.0463 - val_acc: 0.9831
+# ## The fictional company on average loses staff that are 3 - 4 years younger than those who stay.
 
-# I hope this notebook serves as a good start for beginners who are interested in tackling NLP problems using the CNN angle. There are some ideas which you could use to push the performance further, such as :
-# 1. Tweak CNN parameters such as number of strides, different padding settings, window size.
-# 2. Hyper-parameter tunings
-# 3. Experiment with different architecture layers
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition tend to have lower daily rates than those who stay.
+#  - Each of the group are 180 degrees flipped from each other in their kernel density diagram
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition tend to have longer commute distances than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# # Employees lost in attrition are less satisfied with their work environment on average than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition are less involved with their jobs on average than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition tend to be lower in job level than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees who stay have more job satisfication than employees lost in attrition
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition tend to have lower monthly average income on average than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees who stay tend to have more stock options than those lost in attrition.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition had less total working years than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition had less training opportunities than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition had poorer work-life balance on average than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees who stay had longer organization tenure than those lost in attrition by 2 years on average.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees who stayed had 1 - 2 more years in their current role than those lost in attrition.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees lost in attrition had less time with their current manager by 1 - 2 years on average than those who stay.
+
+# In[ ]:
+
+
+display_cxn_analysis(data, target, next(i), "Yes")
+
+
+# ## Employees who stay are more satisfied with their work environment on average than those who leave.
+
+# ----------
+# # Non-Significant Features
+
+# In[ ]:
+
+
+for n in ns:
+    print(n)
+    
+    display_cxn_analysis(data, target, n, "Yes")
+
+
+# ----------
 # 
-# Thank you for your time in reading and if you like what I wrote, support me by upvoting my notebook..
 # 
-# With the toxic competition coming to an end in a month, I wish everyone godspeed!
+# ### Thank you for reading. Please upvote if you liked it or leave a critique for this report so I can improve.
+# 
+# ### Read more:
+# - [IBM Employee Attrition Analysis by Category][1]
+#   [1]: https://www.kaggle.com/slamnz/d/pavansubhasht/ibm-hr-analytics-attrition-dataset/ibm-employee-attrition-analysis-by-category/

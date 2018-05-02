@@ -1,564 +1,679 @@
 
 # coding: utf-8
 
-# # **PPP, Salaries and XGBoost ! **
-# ***
+# ## Introduction 
 # 
-# **Mhamed Jabri — 11/22/17**
+# Hello! This is my very first Kernel. It is meant to give a grasp of a problem of speech representation. I'd also like to take a look on a features specific to this dataset. 
 # 
-# When I started working on this dataset, I checked other kernels that had a salary-approach and noticed that it was really complicated to give unbiased insights when you compare incomes from all over the world. So in my previous [kernel](http://www.kaggle.com/mhajabri/what-do-kagglers-say-about-data-science), I restricted my income analysis to US Data Scientists and , as I explained there, the reason why I did so is that comparing wages across countries can be misleading and actually false.
-# The main problem that arises is the fact that **the cost of living** is not the same for every country. As a consequence to that, the wages we get after converting to the same currency using market exchange rates are different from one another.
+# Content:<br>
+# * [1. Visualization of the recordings - input features](#visualization)
+#    * [1.1. Wave and spectrogram](#waveandspectrogram)
+#    * [1.2. MFCC](#mfcc)
+#    * [1.3. Sprectrogram in 3d](#3d)
+#    * [1.4. Silence removal](#resampl)
+#    * [1.5. Resampling - dimensionality reductions](#silenceremoval)
+#    * [1.6. Features extraction steps](#featuresextractionsteps)
+# * [2. Dataset investigation](#investigations)
+#    * [2.1. Number of files](#numberoffiles)
+#    * [2.2. Mean spectrograms and fft](#meanspectrogramsandfft)
+#    * [2.3. Deeper into recordings](#deeper)
+#    * [2.4. Length of recordings](#len)
+#    * [2.5. Note on Gaussian Mixtures modeling](#gmms)
+#    * [2.6. Frequency components across the words](#components)
+#    * [2.7. Anomaly detection](#anomaly)
+# * [3. Where to look for the inspiration](#wheretostart)
 # 
-# In this kernel, I'll try to show you how you can analyze income data when the respondents come from differents countries and we'll see who are the most valued data scientists in different parts of the world. After that, we'll use the adjusted incomes from part 1 and the insights from part 2 to build a ML model that predicts the income of a Kaggler Data Scientist.
-
-# # Table of contents
-# 
-# * [Purchasing Power Parity (PPP) for dummies](#ppp)
-# * [PPP-Adjusted Kagglers' incomes ](#adjusted)
-# * [How valued are Data Scientists across the world](#valuation)
-# * [What makes a Data Scientist valuable for each country](#properties)
-#    * [Most valuated ML methods](#methods)
-#    * [Most valuated DS tools](#tools)
-#    * [Most valuated job titles](#titles)
-#    * [Most valuated job functions](#functions)
-# * [Income prediction across the world using xgboost](#xgboost)
-#     * [Feature engineering](#features)
-#     * [Prediction and scores](#prediction)
-#     * [Analysis of the results](#analysis)
+# All we need is here:
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import os
+from os.path import isdir, join
+from pathlib import Path
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# Math
+import numpy as np
+from scipy.fftpack import fft
+from scipy import signal
+from scipy.io import wavfile
+import librosa
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from sklearn.decomposition import PCA
 
+# Visualization
 import matplotlib.pyplot as plt
 import seaborn as sns
-sns.set(color_codes=True)
+import IPython.display as ipd
+import librosa.display
 
 import plotly.offline as py
 py.init_notebook_mode(connected=True)
 import plotly.graph_objs as go
 import plotly.tools as tls
+import pandas as pd
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-import xgboost as xgb
-from sklearn.metrics import mean_squared_log_error as MSLE
-
-# Any results you write to the current directory are saved as output.
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# # What's Purchasing Power Parity (PPP) ?
-# <a id="ppp"></a>
-# ***
-
-# When you're traveling across the country you live in, you notice that prices for food, rent and common goods vary from one city to another. This happens in a much larger scale when changing countries !      
-# Let's take an example : Consider 1 USD, Google tells you that it equals 64.92 Indian Rupee. An average dinner in the US may cost you 10-12 USD which corresponds to 640-760 INR. But in fact, it appears that you could get yourself a good meal with 150-200INR in India. In other words : **You can do with 1USD in India more than what you would do with 1USD in the US.**
 # 
-# As a basic example, let's say we find that 1USD in India = 3USD in the US, that would mean that if you get paid 3000 USD in India you would lead the same someone would be leading in the US if he's getting paid 9000 USD.
+# # 1. Visualization 
+# <a id="visualization"></a> 
 # 
-# Here comes the **Purchasing Power Parity (PPP from now on)** : Faced with this problematic of different costs of livings, economists came up with a ratio to convert currencies without using market exchange rates. To do so, they select a **basket of goods**, say orange/Milk/tomato ..., and check its value in the USD and in the country they're interested in.     
-# Let's say they find that : 
-# * Value of the basket in the US = 10 USD
-# * Value of the basket in India = 200 INR        
+# There are two theories of a human hearing - place ( https://en.wikipedia.org/wiki/Place_theory_(hearing) (frequency-based) and temporal (https://en.wikipedia.org/wiki/Temporal_theory_(hearing) )
+# In speech recognition, I see two main tendencies - to input [spectrogram](https://en.wikipedia.org/wiki/Spectrogram) (frequencies), and more sophisticated features MFCC - Mel-Frequency Cepstral Coefficients, PLP. You rarely work with raw, temporal data.
 # 
-# Then they would say that **PPP(India) = 200/10 = 20**, in other words, you need 20 local currency units to get what you would get with 1 USD in the US.   
+# Let's visualize some recordings!
 # 
-# **All in all,* The purchasing power of a currency refers to the quantity of the currency needed to purchase a given unit of a good, or common basket of goods and services.***
-
-# # Kagglers incomes adjusted according to PPPs
-# <a id="adjusted"></a>
-# ***
-
-# In the following, we'll convert the incomes using the PPP rates and see what happens for different countries.      
-# To get significant results, we'll only keep countries from where at least 80 respondents gave their income informations.
+# ## 1.1. Wave and spectrogram:
+# <a id="waveandspectrogram"></a> 
+# 
+# Choose and read some file:
 
 # In[ ]:
 
 
-data = pd.read_csv('../input/multipleChoiceResponses.csv', encoding="ISO-8859-1")
-
-#We convert the salaries to numerical values and keep salaries between 1000 and 1.000.000 Local currency
-data['CompensationAmount'] = data['CompensationAmount'].fillna(0)
-data['CompensationAmount'] = data.CompensationAmount.apply(lambda x: 0 if (pd.isnull(x) or (x=='-') or (x==0))
-                                                       else float(x.replace(',','')))
-df = data[(data['CompensationAmount']>1000) & (data['CompensationAmount']<2000000)]
+train_audio_path = '../input/train/audio/'
+filename = '/yes/0a7c2a8d_nohash_0.wav'
+sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
 
 
-#We only keep the countries with more than 80 respondents to get significant results later on
-s_temp = df['Country'].value_counts()
-s_temp = s_temp[s_temp>80]
-countries=list(s_temp.index)
-countries.remove('Other')
-df=df[df.Country.isin(countries)]
-
-
-# We have some missing values in the Currency column.    
-# We won't drop the rows with missing values, instead, we'll fill them with the currency of the country the respondent lives in, here's the code to do so : 
+# Define a function that calculates spectrogram.
+# 
+# Note, that we are taking logarithm of spectrogram values. It will make our plot much more clear, moreover, it is strictly connected to the way people hear.
+# We need to assure that there are no 0 values as input to logarithm.
 
 # In[ ]:
 
 
-df['CompensationCurrency'] =df.groupby('Country')['CompensationCurrency'].apply(lambda x: x.fillna(x.value_counts().idxmax()))
+def log_specgram(audio, sample_rate, window_size=20,
+                 step_size=10, eps=1e-10):
+    nperseg = int(round(window_size * sample_rate / 1e3))
+    noverlap = int(round(step_size * sample_rate / 1e3))
+    freqs, times, spec = signal.spectrogram(audio,
+                                    fs=sample_rate,
+                                    window='hann',
+                                    nperseg=nperseg,
+                                    noverlap=noverlap,
+                                    detrend=False)
+    return freqs, times, np.log(spec.T.astype(np.float32) + eps)
 
 
-# Now, we'll provide PPP rates for the countries we kept earlier.
-# > I tried to use the latest PPP rates available, you can found the PPP for each country [here](http://www.imf.org/external/datamapper/PPPEX@WEO/OEMDC/ADVEC/WEOWORLD/IND).
-
-# In[ ]:
-
-
-#The PPP rates
-rates_ppp={'Countries':['United States','India','United Kingdom','Germany','France','Brazil','Canada','Spain','Australia','Russia','Italy',"People 's Republic of China",'Netherlands'],
-           'Currency':['USD','INR','GBP','EUR','EUR','BRL','CAD','EUR','AUD','RUB','EUR','CNY','EUR'],
-           'PPP':[1.00,17.7,0.7,0.78,0.81,2.05,1.21,0.66,1.46,25.13,0.74,3.51,0.8]}
-
-rates_ppp = pd.DataFrame(data=rates_ppp)
-rates_ppp
-
-
-# We notice that **the currency used for each country respondents is most of the time the local currency but not always** so we can't directly use the PPP rates.    
-# What we'll do instead is the following : 
-# 1. Convert all incomes to USD using Market Exchange Rates that were given by kaggle
-# 2. Calculature the ratio of PPP rates to MER rates
-# 3. Calculate the adjusted salaries using the ratio adjusting factor
+# Frequencies are in range (0, 8000) according to [Nyquist theorem](https://en.wikipedia.org/wiki/Nyquist_rate).
+# 
+# Let's plot it:
 
 # In[ ]:
 
 
-#we load the exchange rates that were given by Kaggle a
-rates_mer=pd.read_csv('../input/conversionRates.csv', encoding="ISO-8859-1")
-rates_mer.drop('Unnamed: 0',inplace=True,axis=1)
+freqs, times, spectrogram = log_specgram(samples, sample_rate)
 
-rates=rates_ppp.merge(rates_mer,left_on='Currency',right_on='originCountry',how='left')
-rates['PPP/MER']=rates['PPP']*rates['exchangeRate']
+fig = plt.figure(figsize=(14, 8))
+ax1 = fig.add_subplot(211)
+ax1.set_title('Raw wave of ' + filename)
+ax1.set_ylabel('Amplitude')
+ax1.plot(np.linspace(0, sample_rate/len(samples), sample_rate), samples)
 
-#keep the PPP/MER rates plus the 'Countries' column that will be used for the merge
-rates=rates[['Countries','PPP','PPP/MER']]
-rates
+ax2 = fig.add_subplot(212)
+ax2.imshow(spectrogram.T, aspect='auto', origin='lower', 
+           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
+ax2.set_yticks(freqs[::16])
+ax2.set_xticks(times[::16])
+ax2.set_title('Spectrogram of ' + filename)
+ax2.set_ylabel('Freqs in Hz')
+ax2.set_xlabel('Seconds')
 
+
+# If we use spectrogram as an input features for NN, we have to remember to normalize features. (We need to normalize over all the dataset, here's example just for one, which doesn't give good *mean* and *std*!)
 
 # In[ ]:
 
 
-df=df.merge(rates_mer,left_on='CompensationCurrency',right_on='originCountry',how='left')
-df=df.merge(rates,left_on='Country',right_on='Countries',how='left')
+mean = np.mean(spectrogram, axis=0)
+std = np.std(spectrogram, axis=0)
+spectrogram = (spectrogram - mean) / std
 
-df['AdjustedSalary']=df['CompensationAmount']*df['exchangeRate']/df['PPP/MER']
 
-d_salary = {}
-for country in df['Country'].value_counts().index :
-    d_salary[country]=df[df['Country']==country]['AdjustedSalary'].median()
-    
-median_wages = pd.DataFrame.from_dict(data=d_salary, orient='index').round(2)
-median_wages.sort_values(by=list(median_wages),axis=0, ascending=True, inplace=True)
-ax = median_wages.plot(kind='barh',figsize=(15,8),width=0.7,align='center')
-ax.legend_.remove()
-ax.set_title("Adjusted incomes over the world",fontsize=16)
-ax.set_xlabel("Amount", fontsize=14)
-ax.set_ylabel("Country", fontsize=14)
-for tick in ax.get_xticklabels():
-    tick.set_rotation(0)
-    tick.set_fontsize(10)
+# There is an interesting fact to point out. We have ~160 features for each frame, frequencies are between 0 and 8000. It means, that one feature corresponds to 50 Hz. However, [frequency resolution of the ear is 3.6 Hz within the octave of 1000 – 2000 Hz](https://en.wikipedia.org/wiki/Psychoacoustics) It means, that people are far more precise and can hear much smaller details than those represented by spectrograms like above.
+
+# ## 1.2. MFCC
+# <a id="mfcc"></a> 
+# 
+# If you want to get to know some details about *MFCC* take a look at this great tutorial. [MFCC explained](http://practicalcryptography.com/miscellaneous/machine-learning/guide-mel-frequency-cepstral-coefficients-mfccs/) You can see, that it is well prepared to imitate human hearing properties.
+# 
+# You can calculate *Mel power spectrogram* and *MFCC* using for example *librosa* python package.
+# 
+
+# In[ ]:
+
+
+# From this tutorial
+# https://github.com/librosa/librosa/blob/master/examples/LibROSA%20demo.ipynb
+S = librosa.feature.melspectrogram(samples, sr=sample_rate, n_mels=128)
+
+# Convert to log scale (dB). We'll use the peak power (max) as reference.
+log_S = librosa.power_to_db(S, ref=np.max)
+
+plt.figure(figsize=(12, 4))
+librosa.display.specshow(log_S, sr=sample_rate, x_axis='time', y_axis='mel')
+plt.title('Mel power spectrogram ')
+plt.colorbar(format='%+02.0f dB')
 plt.tight_layout()
 
-plt.show();
-
-
-# Let's analyze this plot.    
-# Other kernels, such as this [one](http://www.kaggle.com/drgilermo/salary-analysis), have already plotted the medians of the yearly incomes  using Market Exchanges Rates. We notice there for example that the median for India was about 12k USD while it was 36k USD for China.      
-# Using the PPP rates as above, the results are more balanced, with 33k USD for India and 50K for USD for China. That being said, the problem is not entirely solved as the gap is still quite big comparing to the US. Why is that ? 
-# 
-# Two main reasons : 
-# * **Very populated and/or developing countries often set the value of their currency to be lower than the U.S. dollar** because they want the cost of living to be lower, so that they can pay their workers less. This also mean that they are more attractive markers to big companies and investors who are interested in implementing themselves in countries where it would cost them less (Hello Apple) ! 
-# * **There are some limitations to PPP rates**. One of them is that, as we've said before, we use baskets of products and compare their price in different countries. By doing that, we are regaling with a similar group of commodities in both countries which is not entirely reasonable since production for some products depends on geographical parameters.
-
-# # Which country values its Data Scientists the most ?
-# <a id="valuation"></a>
-# ***
-
-# **We know the median salary for each country so we can compare between that and the median income in that country to measure how well is a data scientist paid by the standards of the country he lives in.**
-# 
-# Unfortunately, the information we find easily on the internet is the *average income* which is not trustworthy at all because as we know the mean is very sensitive to abnormally high values and, in any country in the world, the wealthiest people have ridiculous incomes.
-# 
-# That being said [Gallup](http://news.gallup.com/poll/166211/worldwide-median-household-income-000.aspx) conducted a survey between 2005 and 2012 to publish the medians over the world for 2013. This information is valuable, but how to use it ? 
-# 
-# You certainly heard your grandfather saying *When I was your age, I traveled across the country with 100\$ in my pocket* and you tought to yourself *that's absurd, I can't believe it.* Well, that's **inflation** ! Inflation is the fact that, in the same country with the same currency, you can't do in the present with some amount X what you could have done in the past with that same amount. So yeah obviously, **100\$ in the 1930s is much more *valuable* than 100\$ in 2017**.    
-# What we'll do is the following : 
-# 1. We take the median incomes that were measured in 2013 
-# 2. We calculate the inflation rate between 2013 and now ([source](http://data.oecd.org/price/inflation-cpi.htm))
-# 3. We use the inflation rate to calculate new medians that would correspond to the present ([tutorial](http://www.cpwr.com/sites/default/files/annex_how_to_calculate_the_real_wages.pdf) on how to do that)
 
 # In[ ]:
 
 
-inflations={'Countries':['United States','India','United Kingdom','Germany','France','Brazil','Canada','Spain','Australia','Russia','Italy',"People 's Republic of China",'Netherlands'],
-           'CPI_2013':[106.83,131.98,110.15,105.68,105.01,119.37,105.45,107.21,107.70,121.64,107.20,111.16,107.48],
-           'CPI_2017':[113.10,162.01,116.51,109.6,107.1,156.73,112.39,109.13,113.48,168.50,108.61,119.75,111.55],
-           'medians_2013':[15480,615,12399,14098,12445,2247,15181,7284,15026,4129,6874,1786,14450]}
+mfcc = librosa.feature.mfcc(S=log_S, n_mfcc=13)
 
-rates_inflations = pd.DataFrame(inflations)
-rates_inflations['adjusted_medians']=(rates_inflations['medians_2013']*rates_inflations['CPI_2017']/rates_inflations['CPI_2013']).round(2)
-rates_inflations
+# Let's pad on the first and second deltas while we're at it
+delta2_mfcc = librosa.feature.delta(mfcc, order=2)
 
-
-# The three steps are now completed.    
-# We move on to calculate the ratio of data scientists incomes to median incomes for each country.
-
-# In[ ]:
-
-
-tmp=median_wages.reset_index()
-tmp = tmp.rename(columns={'index': 'Country', 0: 'median_income'})
-
-rates_inflations=rates_inflations.merge(tmp,left_on='Countries',right_on='Country',how='left')
-rates_inflations['ratio_incomes']=(rates_inflations['median_income']/rates_inflations['adjusted_medians']).round(2)
-
-tmp2=rates_inflations[['Country','ratio_incomes']]
-tmp2.sort_values(by='ratio_incomes',axis=0, ascending=True, inplace=True)
-
-
-# In[ ]:
-
-
-tmp2.plot.barh(x='Country',figsize=(12,8))
-plt.show();
-
-
-# **Indian Data Scientists are paid 44 times more than average workers, WOW !    **
-# In second and third position we find China (25 times more) and Brazil (15 times more). Is that to be expected ? In fact, Yes !   
-# Actually, India, China and Brazil are part of what's called [BRICS](http://en.wikipedia.org/wiki/BRICS) which is the acronym for an association of five major emerging national economies: *Brazil, Russia, India, China and South Africa*. These countries have fast-growing economies but are still suffering from high poverty rates (Russia not to be included). The consequence of that is a social imbalance where workers with high status (such as data scientists) are getting paid much more higher (at least 15 times more) than average workers, hence the results above.   
-# 
-# Looking at developed countries, we find that data scientists are pretty well payed comparing to average, with minimums in Canada and France and maximums in Spain and the US.
-
-# So much for the economics course ! Personnaly, I enjoyed digging to find data about inflation rates and PPP rates. I hope you guys learned a thing or two from what's above and hopefully you can use that in the future when you deal with incomes from various years (inflations) or countries (PPP).
-# 
-# We move on to more usual stuff to understand what impacts most the income of data scientists across the world.
-
-# # Who are the most valued Data Scientists ? 
-# <a id="properties"></a>
-# ***
-
-# In this section, we'll try to see who are the data scientists who earn by analyzing what they do at work : their job function, their roles, the ML/DS methods they use the most ...
-# 
-# In order to progress in our analysis and obtain significant results, we'll construct baskets of countries for which salaries are similar.
-# 1. First group will only contain the US,
-# 2. Second group will contain *Australia, Netherlands, Germany, United Kingdom and Canada*,
-# 3. Third group will contain *Spain, France, Italy, China, Brazil*,
-# 4. At last, the last group will contain *India and Russia*
-
-# In[ ]:
-
-
-datasets = {'USA' : df[df['Country']=='United States'] , 
-            'Eur+Ca' :df[df.Country.isin(['Australia','Germany','Canada','United Kingdom','Netherlands'])],
-            'Eur2+Bra+Chi' : df[df.Country.isin(['Spain','France','Brazil',"People 's Republic of China",'Italy'])],
-            'India/Russia' : df[df.Country.isin(['India','Russia'])]}
-
-
-# ## Methods used at work
-# <a id="methods"></a>
-
-# In[ ]:
-
-
-methods=['WorkMethodsFrequencyBayesian','WorkMethodsFrequencyNaiveBayes','WorkMethodsFrequencyLogisticRegression',
-       'WorkMethodsFrequencyDecisionTrees','WorkMethodsFrequencyRandomForests',
-       'WorkMethodsFrequencyEnsembleMethods','WorkMethodsFrequencyDataVisualization','WorkMethodsFrequencyPCA',
-       'WorkMethodsFrequencyNLP','WorkMethodsFrequencyNeuralNetworks',
-       'WorkMethodsFrequencyTextAnalysis',
-       'WorkMethodsFrequencyRecommenderSystems','WorkMethodsFrequencyKNN','WorkMethodsFrequencySVMs',
-       'WorkMethodsFrequencyTimeSeriesAnalysis']
-
-
-d_method_countries={} 
-for key, value in datasets.items():
-    d_method_countries[key]={}
-    for col in methods : 
-        method = col.split('WorkMethodsFrequency')[1]
-        d_method_countries[key][method]=value[value[col].isin(['Most of the time','Often'])]['AdjustedSalary'].median()
-        
-positions=[(0,0),(1,0),(0,1),(1,1)]
-f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
-for ((key, value), pos) in zip(d_method_countries.items() , positions):
-    methods = pd.DataFrame.from_dict(data=value, orient='index').round(2)
-    methods.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
-    methods.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
-    ax[pos[0],pos[1]].set_title(key,fontsize=14)
-    ax[pos[0],pos[1]].legend_.remove()
-    
-
+plt.figure(figsize=(12, 4))
+librosa.display.specshow(delta2_mfcc)
+plt.ylabel('MFCC coeffs')
+plt.xlabel('Time')
+plt.title('MFCC')
+plt.colorbar()
 plt.tight_layout()
-plt.show();
+
+
+# In classical, but still state-of-the-art systems, *MFCC*  or similar features are taken as the input to the system instead of spectrograms.
+# 
+# However, in end-to-end (often neural-network based) systems, the most common input features are probably raw spectrograms, or mel power spectrograms. For example *MFCC* decorrelates features, but NNs deal with correlated features well. Also, if you'll understand mel filters, you may consider their usage sensible.a
+# 
+# It is your decision which to choose!
+
+# ## 1.3. Spectrogram in 3d
+# <a id="3d"></a> 
+# 
+# By the way, times change, and the tools change. Have you ever seen spectrogram in 3d?
+
+# In[ ]:
+
+
+data = [go.Surface(z=spectrogram.T)]
+layout = go.Layout(
+    title='Specgtrogram of "yes" in 3d',
+    scene = dict(
+    yaxis = dict(title='Frequencies', range=freqs),
+    xaxis = dict(title='Time', range=times),
+    zaxis = dict(title='Log amplitude'),
+    ),
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# (Don't know how to set axis ranges to proper values yet. I'd also like it to be streched like a classic spectrogram above..)
+
+# ## 1.4. Silence removal
+# <a id="silenceremoval"></a> 
+# 
+# Let's listen to that file
+
+# In[ ]:
+
+
+ipd.Audio(samples, rate=sample_rate)
+
+
+# I consider that some *VAD* (Voice Activity Detection) will be really useful here. Although the words are short, there is a lot of silence in them. A decent *VAD* can reduce training size a lot, accelerating training speed significantly.
+# Let's cut a bit of the file from the beginning and from the end. and listen to it again (based on a plot above, we take from 4000 to 13000):
+
+# In[ ]:
+
+
+samples_cut = samples[4000:13000]
+ipd.Audio(samples_cut, rate=sample_rate)
+
+
+# We can agree that the entire word can be heard. It is impossible to cut all the files manually and do this basing on the simple plot. But you can use for example *webrtcvad* package to have a good *VAD*.
+# 
+# Let's plot it again, together with guessed alignment of* 'y' 'e' 's'* graphems
+
+# In[ ]:
+
+
+freqs, times, spectrogram_cut = log_specgram(samples_cut, sample_rate)
+
+fig = plt.figure(figsize=(14, 8))
+ax1 = fig.add_subplot(211)
+ax1.set_title('Raw wave of ' + filename)
+ax1.set_ylabel('Amplitude')
+ax1.plot(samples_cut)
+
+ax2 = fig.add_subplot(212)
+ax2.set_title('Spectrogram of ' + filename)
+ax2.set_ylabel('Frequencies * 0.1')
+ax2.set_xlabel('Samples')
+ax2.imshow(spectrogram_cut.T, aspect='auto', origin='lower', 
+           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
+ax2.set_yticks(freqs[::16])
+ax2.set_xticks(times[::16])
+ax2.text(0.06, 1000, 'Y', fontsize=18)
+ax2.text(0.17, 1000, 'E', fontsize=18)
+ax2.text(0.36, 1000, 'S', fontsize=18)
+
+xcoords = [0.025, 0.11, 0.23, 0.49]
+for xc in xcoords:
+    ax1.axvline(x=xc*16000, c='r')
+    ax2.axvline(x=xc, c='r')
+
+
+# ## 1.5. Resampling - dimensionality reduction
+# <a id="resampl"></a> 
+# 
+# Another way to reduce the dimensionality of our data is to resample recordings.
+# 
+# You can hear that the recording don't sound very natural, because they are sampled with 16k frequency, and we usually hear much more. However, [the most speech related frequencies are presented in smaller band](https://en.wikipedia.org/wiki/Voice_frequency). That's why you can still understand another person talking to the telephone, where GSM signal is sampled to 8000 Hz.
+# 
+# Summarizing, we could resample our dataset to 8k. We will discard some information that shouldn't be important, and we'll reduce size of the data.
+# 
+# We have to remember that it can be risky, because this is a competition, and sometimes very small difference in performance wins, so we don't want to lost anything. On the other hand, first experiments can be done much faster with smaller training size.
+# 
+# We'll need to calculate FFT (Fast Fourier Transform). Definition:
+# 
+
+# In[ ]:
+
+
+def custom_fft(y, fs):
+    T = 1.0 / fs
+    N = y.shape[0]
+    yf = fft(y)
+    xf = np.linspace(0.0, 1.0/(2.0*T), N//2)
+    vals = 2.0/N * np.abs(yf[0:N//2])  # FFT is simmetrical, so we take just the first half
+    # FFT is also complex, to we take just the real part (abs)
+    return xf, vals
+
+
+# Let's read some recording, resample it, and listen. We can also compare FFT, Notice, that there is almost no information above 4000 Hz in original signal.
+
+# In[ ]:
+
+
+filename = '/happy/0b09edd3_nohash_0.wav'
+new_sample_rate = 8000
+
+sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
+resampled = signal.resample(samples, int(new_sample_rate/sample_rate * samples.shape[0]))
+
+
+# In[ ]:
+
+
+ipd.Audio(samples, rate=sample_rate)
+
+
+# In[ ]:
+
+
+ipd.Audio(resampled, rate=new_sample_rate)
+
+
+# Almost no difference!
+
+# In[ ]:
+
+
+xf, vals = custom_fft(samples, sample_rate)
+plt.figure(figsize=(12, 4))
+plt.title('FFT of recording sampled with ' + str(sample_rate) + ' Hz')
+plt.plot(xf, vals)
+plt.xlabel('Frequency')
+plt.grid()
+plt.show()
+
+
+# In[ ]:
+
+
+xf, vals = custom_fft(resampled, new_sample_rate)
+plt.figure(figsize=(12, 4))
+plt.title('FFT of recording sampled with ' + str(new_sample_rate) + ' Hz')
+plt.plot(xf, vals)
+plt.xlabel('Frequency')
+plt.grid()
+plt.show()
+
+
+# This is how we reduced dataset size twice!
+
+# ## 1.6. Features extraction steps
+# <a id="featuresextractionsteps"></a> 
+# 
+# I would propose the feature extraction algorithm like that:
+# 1. Resampling
+# 2. *VAD*
+# 3. Maybe padding with 0 to make signals be equal length
+# 4. Log spectrogram (or *MFCC*, or *PLP*)
+# 5. Features normalization with *mean* and *std*
+# 6. Stacking of a given number of frames to get temporal information
+# 
+# It's a pity it can't be done in notebook. It has not much sense to write things from zero, and everything is ready to take, but in packages, that can not be imported in Kernels.
+
+# 
+# # 2. Dataset investigation
+# <a id="investigations"></a> 
+# 
+# Some usuall investgation of dataset.
+# 
+# ## 2.1. Number of records
+# <a id="numberoffiles"></a> 
+# 
+
+# In[ ]:
+
+
+dirs = [f for f in os.listdir(train_audio_path) if isdir(join(train_audio_path, f))]
+dirs.sort()
+print('Number of labels: ' + str(len(dirs)))
+
+
+# In[ ]:
+
+
+# Calculate
+number_of_recordings = []
+for direct in dirs:
+    waves = [f for f in os.listdir(join(train_audio_path, direct)) if f.endswith('.wav')]
+    number_of_recordings.append(len(waves))
+
+# Plot
+data = [go.Histogram(x=dirs, y=number_of_recordings)]
+trace = go.Bar(
+    x=dirs,
+    y=number_of_recordings,
+    marker=dict(color = number_of_recordings, colorscale='Viridius', showscale=True
+    ),
+)
+layout = go.Layout(
+    title='Number of recordings in given label',
+    xaxis = dict(title='Words'),
+    yaxis = dict(title='Number of recordings')
+)
+py.iplot(go.Figure(data=[trace], layout=layout))
+
+
+# Dataset is balanced except of background_noise, but that's the different thing.
+
+# ## 2.2. Deeper into recordings
+# <a id="deeper"></a> 
+
+# There's a very important fact. Recordings come from very different sources. As far as I can tell, some of them can come from mobile GSM channel.
+# 
+# Nevertheless,** it is extremely important to split the dataset in a way that one speaker doesn't occur in both train and test sets.**
+# Just take a look and listen to this two examlpes:
+
+# In[ ]:
+
+
+filenames = ['on/004ae714_nohash_0.wav', 'on/0137b3f4_nohash_0.wav']
+for filename in filenames:
+    sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
+    xf, vals = custom_fft(samples, sample_rate)
+    plt.figure(figsize=(12, 4))
+    plt.title('FFT of speaker ' + filename[4:11])
+    plt.plot(xf, vals)
+    plt.xlabel('Frequency')
+    plt.grid()
+    plt.show()
+
+
+# Even better to listen:
+
+# In[ ]:
+
+
+print('Speaker ' + filenames[0][4:11])
+ipd.Audio(join(train_audio_path, filenames[0]))
+
+
+# In[ ]:
+
+
+print('Speaker ' + filenames[1][4:11])
+ipd.Audio(join(train_audio_path, filenames[1]))
+
+
+# There are also recordings with some weird silence (some compression?):
+# 
+
+# In[ ]:
+
+
+filename = '/yes/01bb6a2a_nohash_1.wav'
+sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
+freqs, times, spectrogram = log_specgram(samples, sample_rate)
+
+plt.figure(figsize=(10, 7))
+plt.title('Spectrogram of ' + filename)
+plt.ylabel('Freqs')
+plt.xlabel('Time')
+plt.imshow(spectrogram.T, aspect='auto', origin='lower', 
+           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
+plt.yticks(freqs[::16])
+plt.xticks(times[::16])
+plt.show()
+
+
+# It means, that we have to prevent overfitting to the very specific acoustical environments.
+# 
+
+# ## 2.3. Recordings length
+# <a id="len"></a> 
+# 
+# Find if all the files have 1 second duration:
+
+# In[ ]:
+
+
+num_of_shorter = 0
+for direct in dirs:
+    waves = [f for f in os.listdir(join(train_audio_path, direct)) if f.endswith('.wav')]
+    for wav in waves:
+        sample_rate, samples = wavfile.read(train_audio_path + direct + '/' + wav)
+        if samples.shape[0] < sample_rate:
+            num_of_shorter += 1
+print('Number of recordings shorter than 1 second: ' + str(num_of_shorter))
+
+
+# That's suprising, and there is a lot of them. We can pad them with zeros.
+
+# ## 2.4. Mean spectrograms and FFT
+# <a id="meanspectrogramsandfft"></a> 
+
+# Let's plot mean FFT for every word
+
+# In[ ]:
+
+
+to_keep = 'yes no up down left right on off stop go'.split()
+dirs = [d for d in dirs if d in to_keep]
+
+print(dirs)
+
+for direct in dirs:
+    vals_all = []
+    spec_all = []
+
+    waves = [f for f in os.listdir(join(train_audio_path, direct)) if f.endswith('.wav')]
+    for wav in waves:
+        sample_rate, samples = wavfile.read(train_audio_path + direct + '/' + wav)
+        if samples.shape[0] != 16000:
+            continue
+        xf, vals = custom_fft(samples, 16000)
+        vals_all.append(vals)
+        freqs, times, spec = log_specgram(samples, 16000)
+        spec_all.append(spec)
+
+    plt.figure(figsize=(14, 4))
+    plt.subplot(121)
+    plt.title('Mean fft of ' + direct)
+    plt.plot(np.mean(np.array(vals_all), axis=0))
+    plt.grid()
+    plt.subplot(122)
+    plt.title('Mean specgram of ' + direct)
+    plt.imshow(np.mean(np.array(spec_all), axis=0).T, aspect='auto', origin='lower', 
+               extent=[times.min(), times.max(), freqs.min(), freqs.max()])
+    plt.yticks(freqs[::16])
+    plt.xticks(times[::16])
+    plt.show()
+
+
+# ## 2.5. Gaussian Mixtures modeling
+# <a id="gmms"></a> 
+# 
+# We can see that mean FFT looks different for every word. We could model each FFT with a mixture of Gaussian distributions. Some of them however, look almost identical on FFT, like *stop* and *up*... But wait, they are still distinguishable when we look at spectrograms! High frequencies are earlier than low at the beginning of *stop* (probably *s*).
+# 
+# That's why temporal component is also necessary. There is a [Kaldi](http://kaldi-asr.org/) library, that can model words (or smaller parts of words) with GMMs and model temporal dependencies with [Hidden Markov Models](https://github.com/danijel3/ASRDemos/blob/master/notebooks/HMM_FST.ipynb).
+# 
+# We could use simple GMMs for words to check what can we model and how hard it is to distinguish the words. We can use [Scikit-learn](http://scikit-learn.org/) for that, however it is not straightforward and lasts very long here, so I abandon this idea for now.
+
+# ## 2.6. Frequency components across the words
+# <a id="components"></a> 
+# 
+
+# In[ ]:
+
+
+def violinplot_frequency(dirs, freq_ind):
+    """ Plot violinplots for given words (waves in dirs) and frequency freq_ind
+    from all frequencies freqs."""
+
+    spec_all = []  # Contain spectrograms
+    ind = 0
+    for direct in dirs:
+        spec_all.append([])
+
+        waves = [f for f in os.listdir(join(train_audio_path, direct)) if
+                 f.endswith('.wav')]
+        for wav in waves[:100]:
+            sample_rate, samples = wavfile.read(
+                train_audio_path + direct + '/' + wav)
+            freqs, times, spec = log_specgram(samples, sample_rate)
+            spec_all[ind].extend(spec[:, freq_ind])
+        ind += 1
+
+    # Different lengths = different num of frames. Make number equal
+    minimum = min([len(spec) for spec in spec_all])
+    spec_all = np.array([spec[:minimum] for spec in spec_all])
+
+    plt.figure(figsize=(13,7))
+    plt.title('Frequency ' + str(freqs[freq_ind]) + ' Hz')
+    plt.ylabel('Amount of frequency in a word')
+    plt.xlabel('Words')
+    sns.violinplot(data=pd.DataFrame(spec_all.T, columns=dirs))
+    plt.show()
+
+
+# In[ ]:
+
+
+violinplot_frequency(dirs, 20)
+
+
+# In[ ]:
+
+
+violinplot_frequency(dirs, 50)
+
+
+# In[ ]:
+
+
+violinplot_frequency(dirs, 120)
+
+
+# ## 2.7. Anomaly detection
+# <a id="anomaly"></a> 
+# 
+# We should check if there are any recordings that somehow stand out from the rest. We can lower the dimensionality of the dataset and interactively check for any anomaly.
+# We'll use PCA for dimensionality reduction:
+
+# In[ ]:
+
+
+fft_all = []
+names = []
+for direct in dirs:
+    waves = [f for f in os.listdir(join(train_audio_path, direct)) if f.endswith('.wav')]
+    for wav in waves:
+        sample_rate, samples = wavfile.read(train_audio_path + direct + '/' + wav)
+        if samples.shape[0] != sample_rate:
+            samples = np.append(samples, np.zeros((sample_rate - samples.shape[0], )))
+        x, val = custom_fft(samples, sample_rate)
+        fft_all.append(val)
+        names.append(direct + '/' + wav)
+
+fft_all = np.array(fft_all)
+
+# Normalization
+fft_all = (fft_all - np.mean(fft_all, axis=0)) / np.std(fft_all, axis=0)
+
+# Dim reduction
+pca = PCA(n_components=3)
+fft_all = pca.fit_transform(fft_all)
+
+def interactive_3d_plot(data, names):
+    scatt = go.Scatter3d(x=data[:, 0], y=data[:, 1], z=data[:, 2], mode='markers', text=names)
+    data = go.Data([scatt])
+    layout = go.Layout(title="Anomaly detection")
+    figure = go.Figure(data=data, layout=layout)
+    py.iplot(figure)
     
+interactive_3d_plot(fft_all, names)
 
 
-# People who often use Recommender Systems in their work are generally well paid no matter the country (2nd in the US, 3rd in India/Russia...).      
-# 
-# It's interesting to notice a clear contrast in the 4 plots : In the US, Canada and the first group of european countries (where the median income was high), the most valued method seems to be Naive Bayes. On the other hand, in the BRICS countries (see above) + other european countries, not only Native Bayes users aren't the best paid like their counterparties in the US, they're actually the lowest paid !      
-# The same thing happens with Data Visualization but the other way around this time : not too valuable in the US + first basket of Europe, quite important in the rest of the world.
-# 
-# **For me, this really shows how data science has a different meaning and value depending on the country you live in. Some countries would pay more if you're good at visualizing data while others will pay more if you know how to use bayesian methods so the needs and the purpose of DS/ML vary across the world.**
-# 
-# 
-
-# ## Tools and programming languages used at work
-# <a id="tools"></a>
+# Notice that there are *yes/e4b02540_nohash_0.wav*, *go/0487ba9b_nohash_0.wav* and more points, that lie far away from the rest. Let's listen to them.
 
 # In[ ]:
 
 
-tools=['WorkToolsFrequencyC','WorkToolsFrequencyJava','WorkToolsFrequencyMATLAB',
-       'WorkToolsFrequencyPython','WorkToolsFrequencyR','WorkToolsFrequencyTensorFlow',
-       'WorkToolsFrequencyHadoop','WorkToolsFrequencySpark','WorkToolsFrequencySQL',
-       'WorkToolsFrequencyNoSQL','WorkToolsFrequencyExcel','WorkToolsFrequencyTableau',
-       'WorkToolsFrequencyJupyter','WorkToolsFrequencyAWS',
-       'WorkToolsFrequencySASBase','WorkToolsFrequencyUnix']
+print('Recording go/0487ba9b_nohash_0.wav')
+ipd.Audio(join(train_audio_path, 'go/0487ba9b_nohash_0.wav'))
 
-d_tools_countries={} 
-for key, value in datasets.items():
-    d_tools_countries[key]={}
-    for col in tools : 
-        tool = col.split('WorkToolsFrequency')[1]
-        d_tools_countries[key][tool]=value[value[col].isin(['Most of the time','Often'])]['AdjustedSalary'].median()
-        
-positions=[(0,0),(1,0),(0,1),(1,1)]
-f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
-for ((key, value), pos) in zip(d_tools_countries.items() , positions):
-    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
-    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
-    tools.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
-    ax[pos[0],pos[1]].set_title(key,fontsize=14)
-    ax[pos[0],pos[1]].legend_.remove()
-    
-
-plt.tight_layout()
-plt.show();
-        
-
-
-# I found the results on this plot quite surprising and not that expected.    
-# 
-# Technologies that are often used with big data architecture such as Hadoop, Spark and AWS grant good incomes abslutely everywhere, which is stunning.        
-# 
-# Java users in the US seem to be well payed too, I didn't expect that actually but I thought about it and my guess is that data scientsts that still work with Java occupy senior positions and have been using it for a long time while Python and R coders can be junior data scientists.        
-# 
-# MATLAB coders are the lowest paid in all countries.
-
-# ## Job titles
-# <a id="titles"></a>
 
 # In[ ]:
 
 
-titles=list(df['CurrentJobTitleSelect'].value_counts().index)
-d_titles_countries={} 
-for key, value in datasets.items():
-    d_titles_countries[key]={}
-    for title in titles : 
-        d_titles_countries[key][title]=value[value['CurrentJobTitleSelect']==title]['AdjustedSalary'].median()
-        
-positions=[(0,0),(1,0),(0,1),(1,1)]
-f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
-for ((key, value), pos) in zip(d_titles_countries.items() , positions):
-    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
-    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
-    tools.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
-    ax[pos[0],pos[1]].set_title(key,fontsize=14)
-    ax[pos[0],pos[1]].legend_.remove()
-    
-
-plt.tight_layout()
-plt.show();
+print('Recording yes/e4b02540_nohash_0.wav')
+ipd.Audio(join(train_audio_path, 'yes/e4b02540_nohash_0.wav'))
 
 
-# In the US, business analysts and data analysts are far from getting paid as much as data scientists or ML engineers. On the other hand, in Russia and India, business analysts are better paid than data scientists actually !      
-# 
-# This plot gives us yet another view of what we said above : **countries and companies have different needs across the world**, it seems that US employers are hungry for ML practitioners and they pay them good money while in other emerging countries, the most important role is Predictive Modeler and analysts are still quite needed.
-
-# ## Job Functions
-# <a id="functions"></a>
+# If you will look for anomalies for individual words, you can find for example this file for *seven*:
 
 # In[ ]:
 
 
-func = list(df['JobFunctionSelect'].value_counts().index)
-tmp = df
-tmp=tmp.replace(to_replace=func, value=['Analyze data','Build a ML service','Build prototypes',
-                                        'Build the Data Infrastructure','Other','Research'])
-
-datasets_tmp = {'USA' : tmp[tmp['Country']=='United States'] , 
-            'Eur+Ca' :tmp[tmp.Country.isin(['Australia','Germany','Canada','United Kingdom','Netherlands'])],
-            'Eur2+Bra+Chi' : tmp[tmp.Country.isin(['Spain','France','Brazil',"People 's Republic of China",'Italy'])],
-            'India/Russia' : tmp[tmp.Country.isin(['India','Russia'])]}
-
-functions=list(tmp['JobFunctionSelect'].value_counts().index)
-d_functions_countries={} 
-for key, value in datasets_tmp.items():
-    d_functions_countries[key]={}
-    for function in functions : 
-        d_functions_countries[key][function]=value[value['JobFunctionSelect']==function]['AdjustedSalary'].median()
-        
-positions=[(0,0),(1,0),(0,1),(1,1)]
-f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
-for ((key, value), pos) in zip(d_functions_countries.items() , positions):
-    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
-    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
-    tools.plot(kind='barh',figsize=(15,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
-    ax[pos[0],pos[1]].set_title(key,fontsize=14)
-    ax[pos[0],pos[1]].legend_.remove()
-    
-plt.tight_layout()
-plt.show();
+print('Recording seven/e4b02540_nohash_0.wav')
+ipd.Audio(join(train_audio_path, 'seven/b1114e4f_nohash_0.wav'))
 
 
-# Building prototypes seems to be the function that's the most rewarded everywhere. It's not the most paid one in the US but it's a close second.** Being a researcher in a lab to advance the SOTA of ML isn't rewarding, no matter the country.** That's a pity :( I always felt like researchers aren't valued enough in France and that's honestly a real issue for many researchers here who switch to industry based roles for salary purposes. This plot shows that it's in fact the case everywhere.   
-# Let's hope that this will change in the future ! 
+# That's nothing obviously important. Usually you can find some distortions using this method. Data seems to contain what it should.
 
-# # How hard is it to predict the incomes for different respondents ?
-# <a id="xgboost"></a>
-# ***
-
-# In this part, I try to predict the income for kagglers.   
+# ## 3. Where to look for the inspiration
+# <a id="wheretostart"></a> 
 # 
-# First, I would like to show how to benefit from the data analysis part to build a model. When you complete your data exploration and find insights, you have to perform some feature engineering according to your findings. For example, we found that MATLAB users are always under-paid while Hadoop/Spark users are always amongst the most paid. We'll add specific binarized features that indicate whether the instance uses that tool or not.    
-# Then we do the exact same thing with ML methods using again the results we found above.
+# You can take many different approches for the competition. I can't really advice any of that. I'd like to share my initial thoughts.
 # 
-# At last, we keep the feature we think will be the most important to our prediction.
-
-# **Feature engineering and preprocessing**
-# <a id="features"></a>
-
-# In[ ]:
-
-
-df['MATLABUsers']=[1 if df['WorkToolsFrequencyMATLAB'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-df['AWSUsers']=[1 if df['WorkToolsFrequencyAWS'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-df['HadoopUsers']=[1 if df['WorkToolsFrequencyHadoop'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-df['SparkUsers']=[1 if df['WorkToolsFrequencySpark'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-
-df['NaiveBayesUsers']=[1 if df['WorkMethodsFrequencyNaiveBayes'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-df['RecommenderSystemsUsers']=[1 if df['WorkMethodsFrequencyRecommenderSystems'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-df['DataVisualizationUsers']=[1 if df['WorkMethodsFrequencyDataVisualization'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
-
-features= ['GenderSelect','Country','Age','FormalEducation','MajorSelect','ParentsEducation',
-           'EmploymentStatus','StudentStatus','DataScienceIdentitySelect','CodeWriter',
-           'CurrentEmployerType','SalaryChange','RemoteWork','WorkMLTeamSeatSelect',
-           'Tenure','EmployerIndustry','EmployerSize','CurrentJobTitleSelect','JobFunctionSelect',
-           'MATLABUsers','AWSUsers','HadoopUsers','SparkUsers',
-           'NaiveBayesUsers','RecommenderSystemsUsers','DataVisualizationUsers',
-           'TimeGatheringData','TimeModelBuilding','TimeProduction','TimeVisualizing','TimeFindingInsights',
-           'AdjustedSalary']
-
-
-
-
-# Now that we don't really have to worry about having the same range of salary in the same dataset, we'll group countries using a more meaningful way.
-# * USA will be kept alone as it already has enough respondents
-# * We talked about BRICS earliers, we'll make a dataset with those countries
-# * We merge all european countries and add to them Canada and Australia
-
-# In[ ]:
-
-
-df_us = df[df['Country']=='United States'][features]
-df_eur = df[df.Country.isin(['Spain','France','Germany','Canada','United Kingdom','Netherlands','Italy','Australia','Canada'])][features]
-df_bric = df[df.Country.isin(['India','Russia','Brazil',"People 's Republic of China"])][features]
-
-
-# The scoring metric we'll use is the [Mean Squared Logarithmic Error](http://www.kaggle.com/wiki/RootMeanSquaredLogarithmicError). This metric is appropriate when the target variable in the regression problem takes high values so that large differences aren't too penalized. For example, using RMSE, if you predict an annual income of 80k when the real income is 82k, your prediction is quite good but the error score you commit would be $2000^2$ ! Hence our choice.     
+# There is a trend in recent years to propose solutions based on neural networks. Usually there are two architectures. My ideas are here.
 # 
-# In my previous Kernel, I used logistic regression as it's the most simple model around for classification. Here, instead of using linear regression, I'll go with the most used algorithm on Kaggle, the beloved **XGBoost** !   
-# Here we go ! 
-
-# **Predictions**
-# <a id="prediction"></a>
-
-# In[ ]:
-
-
-for (dataset,zone) in zip([df_us,df_bric,df_eur],['USA','BRIC','Europe + Canada and Australia']) : 
-    
-    dataset=pd.get_dummies(dataset,columns=['GenderSelect','Country','FormalEducation','MajorSelect','ParentsEducation',
-           'EmploymentStatus','StudentStatus','DataScienceIdentitySelect','CodeWriter',
-           'CurrentEmployerType','SalaryChange','RemoteWork','WorkMLTeamSeatSelect',
-           'Tenure','EmployerIndustry','EmployerSize','CurrentJobTitleSelect','JobFunctionSelect'])
-    for col in ['Age','TimeGatheringData','TimeModelBuilding','TimeProduction','TimeVisualizing','TimeFindingInsights']:
-        dataset[col] = dataset[col].fillna(value=dataset[col].median())
-    dataset.dropna(axis=0,inplace=True)
-
-    np.random.seed(42)
-    perm = np.random.permutation(dataset.shape[0])
-    train = dataset.iloc[perm[0:round(0.85*len(perm))]]
-    test = dataset.iloc[perm[round(0.85*len(perm))::]]
-    y_train , y_test = train['AdjustedSalary'] , test['AdjustedSalary']
-    X_train , X_test = train.drop('AdjustedSalary',axis=1) , test.drop('AdjustedSalary',axis=1)
-
-    clf=xgb.XGBRegressor(learning_rate=0.05, n_estimators=500, objective='reg:linear',reg_lambda=0.5, 
-                         random_state=42)
-    clf.fit(X_train,y_train)
-    y_pred=clf.predict(X_test)
-    
-    print('Prediction for : %s'%zone)
-    print('The RMSLE score is : {:0.4f}'.format(np.sqrt(MSLE(y_test,y_pred)) /np.sqrt(len(y_pred)) ))
-    print('-------------------------------------------------')
-
-
-# **Results analysis**
-# <a id="analysis"></a>
-
-# Those scores are actually not bad at all ! I consider them to be really great.
-# Just to get an idea, the public leaderboard for beginners competition "Bike Sharing Demand" on kaggle displays a best RMSLE of $0.33$. I didn't expect the regression prediction problem to yield results that are as good. If you want to to get an idea about what a RMSLE score means and how it can be interpreted, I invite you to check @j_scheibel response to this [Kaggle topic](https://www.kaggle.com/general/9933).
+# 1. Encoder-decoder: https://arxiv.org/abs/1508.01211
+# 2. RNNs with CTC loss: https://arxiv.org/abs/1412.5567<br>
+# For me, 1 and 2  are a sensible choice for this competition, especially if you do not have background in SR field. They try to be end-to-end solutions. Speech recognition is a really big topic and it would be hard to get to know important things in short time.
 # 
-# We notice that it's way harder to predict the salary for BRIC countries as the RMSLE is 4 times as high as the RMSLE for US Prediction or Europe prediciton.          
-# Let's check the salary distribution (plot histograms) for each one of those datasets.
-
-# In[ ]:
-
-
-f,ax=plt.subplots(nrows=1, ncols=3,figsize=(15,8))
-df_bric['AdjustedSalary'].plot.hist(bins=50,ax=ax[0],figsize=(15,8),title='Salary distribution in BRIC countries')
-df_eur['AdjustedSalary'].plot.hist(bins=50,ax=ax[1],figsize=(15,8),title='Salary distribution in Europe + Ca+ Aus')
-df_us['AdjustedSalary'].plot.hist(bins=50,ax=ax[2],figsize=(15,8),title='Salary distribution in the the US')
-plt.show();
-
-
-# We notice that the salary distributions in the US + Euro zone are quite similar : a bit skewed to the right because of some very high values. For the BRIC countries, it's really different : it's highly skewed to the right and most values of the income are actually near 0 ! As a consequence to that, 'outlier bins' appear earlier for BRIC countries than for the rest.   
-# Let's confirm that with boxplots.
-
-# In[ ]:
-
-
-f,ax=plt.subplots(nrows=1, ncols=3,figsize=(15,8))
-sns.boxplot(y=df_bric['AdjustedSalary'],data=df_bric,ax=ax[0]).set_title('Quartiles and outliers in BRIC')
-sns.boxplot(y=df_eur['AdjustedSalary'],data=df_eur,ax=ax[1]).set_title('Quartiles and outliers in EUR')
-sns.boxplot(y=df_us['AdjustedSalary'],data=df_us,ax=ax[2]).set_title('Quartiles and outliers in USA')
-plt.show();
-
-
-# As we observed before, too many points near the 0 mark for BRIC zone and also a higher density of outliers (isolated points). Those points are the hardest for algorithms because they don't have enough data that looks like them, I think that this is the main reason why the error we got for BRIC was much higher than the errors we got for EUR/USA.
-
-# # Conclusion and perspectives
-# ***
-# What I truly appreciate about Data Analytics is that you can always dig deeper, try to find additional informations elsewhere to complete the dataset that you have and then gain new insights. Moreover, your knowledge from different fields can be put into practice, you just have to think about what's the best way to use it !    
+# 3. Classic speech recognition is described here: http://www.ece.ucsb.edu/Faculty/Rabiner/ece259/Reprints/tutorial%20on%20hmm%20and%20applications.pdf
 # 
-# I hope you enjoyed learning some basic economics (PPP and inflation rates) and its application to this particular dataset that helped us analyzing the incomes for several countries all at once. Throughout the second part of the kernel, I tried to emphasize on the fact that data science importance is really country-related : the most needed and valuable tools / methods / functions in a country will be very different from those of another one, espacially if their economies are very different from one another (USA vs India for example). At last, I wanted to see how related the income was to some features by building a predictive model and I was surprised by how good the model was.
+# You can find *Kaldi* [Tutorial for dummies](http://kaldi-asr.org/doc/kaldi_for_dummies.html), with a problem similar to this competition in some way.
 # 
-# **To do list **       
-# I would suggest you guys think of other features that can show the difference of perception and application of Data Science and Machine Learning across the globe; maybe the method to learn next year isn't the same for everyone for example ?      
-# Also, since the regresison model for BRIC countries gave a score not as good as the one for the US and Europe, I would suugest building a specific ML model for BRIC that would be more suited to its specifities.
+# 4. Very deep CNN - Don't know if it is used for SR. However, most papers concern Large Vocabulary Continuous Speech Recognition Systems (LVCSR). We got different task here - a very small vocabulary, and recordings with only one word in it, with a (mostly) given length. I suppose such approach can win the competition. 
 # 
-# Of course, if you guys have any suggestions about informations I could add to this kernel or improvements to what's already here,  don't hesitate to put that in the comments section, I'd appreciate that !       
-# Also, an upvote is always welcome if you feel like the content here is worth it :)
+
+# ---
 # 
-# Thanks for your time and see on another one fellow Kagglers ! 
+# **If you like my work please upvote.**
 # 
+# Leave a feedback that will let me improve! 

@@ -1,98 +1,179 @@
 
 # coding: utf-8
 
-# I have been struggling for a while on how to spell check questions while only using allowed data/software.  Here is the solution I am using now.
+# # Station combinations
 # 
-# It is an adaptation of Peter Norvig's spell checker.  It uses word2vec ordering of words to approximate word probabilities.  Indeed, Google word2vec apparently orders words in decreasing order of frequency in the training corpus.
+# We have seen [station 32 has high (4.7%) error rate][1].
 # 
-# This kernel requires to download Google's word2vec: https://github.com/mmihaltz/word2vec-GoogleNews-vectors .  I have put it in my ../data directory.
+# Let's investigate that failure rate with station combinations.
 # 
-# I don't think that  the notebooks can run on Kaggle kernels but I share it anyway as many have already downloaded the word2vec embedding.
+#   [1]: https://www.kaggle.com/jeffd23/bosch-production-line-performance/what-s-wrong-with-station-32
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import gc
+sns.set_style('whitegrid')
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# # Read station and response data
+# 
+# ['S32', 'S33', 'S34'] have the most interesting pattern. 
+# 
+# We read the full train set although only 5 columns.
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+# In[ ]:
 
-# Any results you write to the current directory are saved as output.
+
+STATIONS = ['S32', 'S33', 'S34']
+train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
+date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
+date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
+date_cols = date_cols[date_cols['station'].isin(STATIONS)]
+date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
+print(date_cols)
+train_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
+print(train_date.columns)
+train_date.columns = ['Id'] + STATIONS
+for station in STATIONS:
+    train_date[station] = 1 * (train_date[station] >= 0)
+response = pd.read_csv('../input/train_numeric.csv', usecols=['Id', 'Response'])
+print(response.shape)
+train = response.merge(train_date, how='left', on='Id')
+# print(train.count())
+train.head(3)
+
+
+# #Aggregation
+# 
+# Remove cases with less than 1000 records to show significant results.
+
+# In[ ]:
+
+
+train['cnt'] = 1
+failure_rate = train.groupby(STATIONS).sum()[['Response', 'cnt']]
+failure_rate['failure_rate'] = failure_rate['Response'] / failure_rate['cnt']
+failure_rate = failure_rate[failure_rate['cnt'] > 1000]  # remove 
+failure_rate.head(20)
 
 
 # In[ ]:
 
 
-import gensim
-model = gensim.models.KeyedVectors.load_word2vec_format('../data/GoogleNews-vectors-negative300.bin.gz', 
-                                                        binary=True)
+failure_rate_pretty = failure_rate.reset_index()
+failure_rate_pretty['group'] = ['-'.join([s if row[s] else '' for s in STATIONS])                          for _, row in failure_rate_pretty.iterrows()]
+fig=plt.figure(figsize=(10, 4))
+sns.barplot(x='group', y="failure_rate", data=failure_rate_pretty, color='r', alpha=0.8)
+plt.ylabel('failure rate')
+for i, row in failure_rate_pretty.iterrows():
+    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
+             verticalalignment='top', horizontalalignment='center')
+plt.title('Station combinations %s' % str(STATIONS))
+fig.savefig('failure_rate.png', dpi=300)
+plt.show()
 
-words = model.index2word
 
-w_rank = {}
-for i,word in enumerate(words):
-    w_rank[word] = i
-
-WORDS = w_rank
-
-
-# The rest of the code is a simple modification of Peter Norvig's code. Instead of computing the frequency of each word we use the above rank.
+# #Magic/Leakage features
+# First we need to get the start times for both train and test.
 
 # In[ ]:
 
 
-import re
-from collections import Counter
-
-def words(text): return re.findall(r'\w+', text.lower())
-
-def P(word): 
-    "Probability of `word`."
-    # use inverse of rank as proxy
-    # returns 0 if the word isn't in the dictionary
-    return - WORDS.get(word, 0)
-
-def correction(word): 
-    "Most probable spelling correction for word."
-    return max(candidates(word), key=P)
-
-def candidates(word): 
-    "Generate possible spelling corrections for word."
-    return (known([word]) or known(edits1(word)) or known(edits2(word)) or [word])
-
-def known(words): 
-    "The subset of `words` that appear in the dictionary of WORDS."
-    return set(w for w in words if w in WORDS)
-
-def edits1(word):
-    "All edits that are one edit away from `word`."
-    letters    = 'abcdefghijklmnopqrstuvwxyz'
-    splits     = [(word[:i], word[i:])    for i in range(len(word) + 1)]
-    deletes    = [L + R[1:]               for L, R in splits if R]
-    transposes = [L + R[1] + R[0] + R[2:] for L, R in splits if len(R)>1]
-    replaces   = [L + c + R[1:]           for L, R in splits if R for c in letters]
-    inserts    = [L + c + R               for L, R in splits for c in letters]
-    return set(deletes + transposes + replaces + inserts)
-
-def edits2(word): 
-    "All edits that are two edits away from `word`."
-    return (e2 for e1 in edits1(word) for e2 in edits1(e1))
+train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
+date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
+date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
+date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
+# Train start dates
+train_start_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
+train_start_date['start_date'] = train_start_date[date_cols].min(axis=1)
+train_start_date = train_start_date.drop(date_cols, axis=1)
+print(train_start_date.shape)
+# Test start dates
+test_start_date = pd.read_csv('../input/test_date.csv', usecols=['Id'] + date_cols)
+test_start_date['start_date'] = test_start_date[date_cols].min(axis=1)
+test_start_date = test_start_date.drop(date_cols, axis=1)
+print(test_start_date.shape)
+start_date = pd.concat([train_start_date, test_start_date])
+print(start_date.shape)
+del train_start_date, test_start_date
+gc.collect()
+start_date.head()
 
 
-# That's it. If you have downloaded word2vec then you can start using this code.  Here are few examples of what it does.
-# 
-# correction('quikly') returns quickly
-# 
-# correction('israil') returns israel
-# 
-# correction('neighbour') returns neighbor
+# Then we add Faron's features.
 
-# If you like this notebook then please upvote (button at the top right).
+# In[ ]:
+
+
+train_id = pd.read_csv('../input/train_numeric.csv', usecols=['Id'])
+test_id = pd.read_csv('../input/test_numeric.csv', usecols=['Id'])
+train_id = train_id.merge(start_date, on='Id')
+test_id = test_id.merge(start_date, on='Id')
+train_test_id = pd.concat((train_id, test_id)).reset_index(drop=True).reset_index(drop=False)
+train_test_id = train_test_id.sort_values(by=['start_date', 'Id'], ascending=True)
+train_test_id['IdDiff1'] = train_test_id['Id'].diff().fillna(9999999).astype(int)
+train_test_id['IdDiff2'] = train_test_id['Id'].iloc[::-1].diff().fillna(9999999).astype(int)
+train_test_id['Magic'] = 1 + 2 * (train_test_id['IdDiff1'] > 1) + 1 * (train_test_id['IdDiff2'] < -1)
+
+train_with_magic = train.merge(train_test_id[['Id', 'Magic']], on='Id')
+train_with_magic.head()
+
+
+# In[ ]:
+
+
+magic_failure_rate = train_with_magic.groupby(['Magic']).sum()[['Response', 'cnt']]
+magic_failure_rate['failure_rate'] = magic_failure_rate['Response'] / magic_failure_rate['cnt']
+magic_failure_rate.head()
+
+
+# 5% failure rate for 100K rows. Not bad for a single feature.
+
+# In[ ]:
+
+
+magic_failure_rate_pretty = magic_failure_rate.reset_index()
+fig=plt.figure(figsize=(10, 4))
+sns.barplot(x='Magic', y="failure_rate", data=magic_failure_rate_pretty, color='k', alpha=0.8)
+plt.ylabel('failure rate')
+for i, row in magic_failure_rate_pretty.iterrows():
+    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
+             verticalalignment='top', horizontalalignment='center')
+fig.savefig('magic_failure_rate.png', dpi=300)
+plt.show()
+
+
+# # Combining the results
+# Let's check ifwe could get something even stronger by combining the previous results.
+
+# In[ ]:
+
+
+combined_failure_rate = train_with_magic.groupby(['Magic','S32', 'S33']).sum()[['Response', 'cnt']]
+combined_failure_rate['failure_rate'] = combined_failure_rate['Response'] / combined_failure_rate['cnt']
+combined_failure_rate.head(20)
+
+
+# In[ ]:
+
+
+full = combined_failure_rate.reset_index()
+full['group'] = 100 * full['Magic'] + 10 * full['S32'] + full['S33']
+fig=plt.figure(figsize=(10, 4))
+sns.barplot(x='group', y="failure_rate", data=full, color='g', alpha=0.8)
+plt.ylabel('failure rate')
+for i, row in full.iterrows():
+    plt.text(i, row['failure_rate']+0.05, np.round(row['failure_rate'], 3),
+             verticalalignment='top', horizontalalignment='center')
+plt.title('Magic & S32 - S33')
+fig.savefig('magic_station_failure_rate.png', dpi=300)
+plt.show()
+
+
+# We are able to find **1000 products with almost 70% failure rate using only 3 features**.

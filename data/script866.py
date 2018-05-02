@@ -1,163 +1,306 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-import numpy as np # linear algebra
-np.random.seed(666)
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.model_selection import train_test_split
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
+# # Predict the effect of Genetic Variants
 
 # In[ ]:
 
 
-#Load data
-train = pd.read_json("../input/train.json")
-test = pd.read_json("../input/test.json")
-train.inc_angle = train.inc_angle.replace('na', 0)
-train.inc_angle = train.inc_angle.astype(float).fillna(0.0)
-print("done!")
+from __future__ import print_function
+import os
+import re
+import tqdm
+import string
+import pandas as pd
+import numpy as np
+import keras
 
+
+# ## 1. Loading Data
 
 # In[ ]:
 
 
-# Train data
-x_band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_1"]])
-x_band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_2"]])
-X_train = np.concatenate([x_band1[:, :, :, np.newaxis]
-                          , x_band2[:, :, :, np.newaxis]
-                         , ((x_band1+x_band1)/2)[:, :, :, np.newaxis]], axis=-1)
-X_angle_train = np.array(train.inc_angle)
-y_train = np.array(train["is_iceberg"])
+""" Read Data """
+train_variant = pd.read_csv("../input/training_variants")
+test_variant = pd.read_csv("../input/test_variants")
+train_text = pd.read_csv("../input/training_text", sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
+test_text = pd.read_csv("../input/test_text", sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
+train = pd.merge(train_variant, train_text, how='left', on='ID')
+train_y = train['Class'].values
+train_x = train.drop('Class', axis=1)
+train_size=len(train_x)
+print('Number of training variants: %d' % (train_size))
+# number of train data : 3321
 
-# Test data
-x_band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_1"]])
-x_band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_2"]])
-X_test = np.concatenate([x_band1[:, :, :, np.newaxis]
-                          , x_band2[:, :, :, np.newaxis]
-                         , ((x_band1+x_band1)/2)[:, :, :, np.newaxis]], axis=-1)
-X_angle_test = np.array(test.inc_angle)
+test_x = pd.merge(test_variant, test_text, how='left', on='ID')
+test_size=len(test_x)
+print('Number of test variants: %d' % (test_size))
+# number of test data : 5668
 
-
-X_train, X_valid, X_angle_train, X_angle_valid, y_train, y_valid = train_test_split(X_train
-                    , X_angle_train, y_train, random_state=123, train_size=0.75)
+test_index = test_x['ID'].values
+all_data = np.concatenate((train_x, test_x), axis=0)
+all_data = pd.DataFrame(all_data)
+all_data.columns = ["ID", "Gene", "Variation", "Text"]
 
 
 # In[ ]:
 
 
-X_train.shape
+all_data.head()
+
+
+# ## 2. Data Preprocessing
+
+# In[ ]:
+
+
+from nltk.corpus import stopwords
+from gensim.models.doc2vec import LabeledSentence
+from gensim import utils
+
+def constructLabeledSentences(data):
+    sentences=[]
+    for index, row in data.iteritems():
+        sentences.append(LabeledSentence(utils.to_unicode(row).split(), ['Text' + '_%s' % str(index)]))
+    return sentences
+
+def textClean(text):
+    text = re.sub(r"[^A-Za-z0-9^,!.\/'+-=]", " ", text)
+    text = text.lower().split()
+    stops = set(stopwords.words("english"))
+    text = [w for w in text if not w in stops]    
+    text = " ".join(text)
+    return(text)
+    
+def cleanup(text):
+    text = textClean(text)
+    text= text.translate(str.maketrans("","", string.punctuation))
+    return text
+
+allText = all_data['Text'].apply(cleanup)
+sentences = constructLabeledSentences(allText)
+allText.head()
 
 
 # In[ ]:
 
 
-from matplotlib import pyplot
-from keras.preprocessing.image import ImageDataGenerator
+sentences[0]
+
+
+# ## 3. Data Preparation and Features Extraction
+
+# ### 3.1 Text Featurizer using Doc2Vec
+
+# Training Doc2Vec with your data or import a saved file
+
+# In[ ]:
+
+
+from gensim.models import Doc2Vec
+
+Text_INPUT_DIM=300
+
+
+text_model=None
+filename='docEmbeddings_5_clean.d2v'
+if os.path.isfile(filename):
+    text_model = Doc2Vec.load(filename)
+else:
+    text_model = Doc2Vec(min_count=1, window=5, size=Text_INPUT_DIM, sample=1e-4, negative=5, workers=4, iter=5,seed=1)
+    text_model.build_vocab(sentences)
+    text_model.train(sentences, total_examples=text_model.corpus_count, epochs=text_model.iter)
+    text_model.save(filename)
+
+
+# Featurize text for your training and testing dataset 
+
+# In[ ]:
+
+
+text_train_arrays = np.zeros((train_size, Text_INPUT_DIM))
+text_test_arrays = np.zeros((test_size, Text_INPUT_DIM))
+
+for i in range(train_size):
+    text_train_arrays[i] = text_model.docvecs['Text_'+str(i)]
+
+j=0
+for i in range(train_size,train_size+test_size):
+    text_test_arrays[j] = text_model.docvecs['Text_'+str(i)]
+    j=j+1
+    
+print(text_train_arrays[0][:50])
+
+
+# ### 3.2 Gene and Varation Featurizer
+
+# In[ ]:
+
+
+from sklearn.decomposition import TruncatedSVD
+Gene_INPUT_DIM=25
+
+svd = TruncatedSVD(n_components=25, n_iter=Gene_INPUT_DIM, random_state=12)
+
+one_hot_gene = pd.get_dummies(all_data['Gene'])
+truncated_one_hot_gene = svd.fit_transform(one_hot_gene.values)
+
+one_hot_variation = pd.get_dummies(all_data['Variation'])
+truncated_one_hot_variation = svd.fit_transform(one_hot_variation.values)
+
+
+# ### 3.3 Output class encoding
+
+# In[ ]:
+
+
+from keras.utils import np_utils
+from sklearn.preprocessing import LabelEncoder
+
+label_encoder = LabelEncoder()
+label_encoder.fit(train_y)
+encoded_y = np_utils.to_categorical((label_encoder.transform(train_y)))
+print(encoded_y[0])
+
+
+# ### 3.4 Merge Input features
+
+# In[ ]:
+
+
+train_set=np.hstack((truncated_one_hot_gene[:train_size],truncated_one_hot_variation[:train_size],text_train_arrays))
+test_set=np.hstack((truncated_one_hot_gene[train_size:],truncated_one_hot_variation[train_size:],text_test_arrays))
+print(train_set[0][:50])
+
+
+# ## 4. Define Keras Model
+
+# In[ ]:
+
+
 from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten
-from keras.layers import GlobalMaxPooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.layers.merge import Concatenate
-from keras.models import Model
-from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from keras.layers import Dense, Dropout, LSTM, Embedding, Input, RepeatVector
+from keras.optimizers import SGD
 
-def get_callbacks(filepath, patience=2):
-    es = EarlyStopping('val_loss', patience=patience, mode="min")
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [es, msave]
+def baseline_model():
+    model = Sequential()
+    model.add(Dense(256, input_dim=Text_INPUT_DIM+Gene_INPUT_DIM*2, init='normal', activation='relu'))
+    model.add(Dropout(0.3))
+    model.add(Dense(256, init='normal', activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(80, init='normal', activation='relu'))
+    model.add(Dense(9, init='normal', activation="softmax"))
     
-def get_model():
-    bn_model = 0
-    p_activation = "elu"
-    input_1 = Input(shape=(75, 75, 3), name="X_1")
-    input_2 = Input(shape=[1], name="angle")
-    
-    img_1 = Conv2D(16, kernel_size = (3,3), activation=p_activation) ((BatchNormalization(momentum=bn_model))(input_1))
-    img_1 = Conv2D(16, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(32, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = Conv2D(32, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(64, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = Conv2D(64, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(128, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = GlobalMaxPooling2D() (img_1)
-    
-    
-    img_2 = Conv2D(128, kernel_size = (3,3), activation=p_activation) ((BatchNormalization(momentum=bn_model))(input_1))
-    img_2 = MaxPooling2D((2,2)) (img_2)
-    img_2 = Dropout(0.2)(img_2)
-    img_2 = GlobalMaxPooling2D() (img_2)
-    
-    img_concat =  (Concatenate()([img_1, img_2, BatchNormalization(momentum=bn_model)(input_2)]))
-    
-    dense_ayer = Dropout(0.5) (BatchNormalization(momentum=bn_model) ( Dense(256, activation=p_activation)(img_concat) ))
-    dense_ayer = Dropout(0.5) (BatchNormalization(momentum=bn_model) ( Dense(64, activation=p_activation)(dense_ayer) ))
-    output = Dense(1, activation="sigmoid")(dense_ayer)
-    
-    model = Model([input_1,input_2],  output)
-    optimizer = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)  
+    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
     return model
-model = get_model()
+
+
+# In[ ]:
+
+
+model = baseline_model()
 model.summary()
 
 
-# In[ ]:
+# ## 5. Training and Evaluating the Model
 
-
-file_path = ".model_weights.hdf5"
-callbacks = get_callbacks(filepath=file_path, patience=5)
-
-model = get_model()
-model.fit([X_train, X_angle_train], y_train, epochs=25
-          , validation_data=([X_valid, X_angle_valid], y_valid)
-         , batch_size=32
-         , callbacks=callbacks)
-
+# Create estimator for training the model
 
 # In[ ]:
 
 
-model.load_weights(filepath=file_path)
+estimator=model.fit(train_set, encoded_y, validation_split=0.2, epochs=10, batch_size=64)
 
-print("Train evaluate:")
-print(model.evaluate([X_train, X_angle_train], y_train, verbose=1, batch_size=200))
-print("####################")
-print("watch list evaluate:")
-print(model.evaluate([X_valid, X_angle_valid], y_valid, verbose=1, batch_size=200))
+
+# Final model accuracy
+
+# In[ ]:
+
+
+print("Training accuracy: %.2f%% / Validation accuracy: %.2f%%" % (100*estimator.history['acc'][-1], 100*estimator.history['val_acc'][-1]))
 
 
 # In[ ]:
 
 
-prediction = model.predict([X_test, X_angle_test], verbose=1, batch_size=200)
+import matplotlib.pyplot as plt
+
+# summarize history for accuracy
+plt.plot(estimator.history['acc'])
+plt.plot(estimator.history['val_acc'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'valid'], loc='upper left')
+plt.show()
+
+# summarize history for loss
+plt.plot(estimator.history['loss'])
+plt.plot(estimator.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'valid'], loc='upper left')
+plt.show()
+
+
+# ## 6. Make Predictions
+
+# In[ ]:
+
+
+y_pred = model.predict_proba(test_set)
+
+
+# Make Submission File
+
+# In[ ]:
+
+
+submission = pd.DataFrame(y_pred)
+submission['id'] = test_index
+submission.columns = ['class1', 'class2', 'class3', 'class4', 'class5', 'class6', 'class7', 'class8', 'class9', 'id']
+submission.to_csv("submission_all.csv",index=False)
+submission.head()
+
+
+# ## 7. Layers Visualization
+
+# In[ ]:
+
+
+from keras import backend as K
+import seaborn as sns
+
+layer_of_interest=0
+intermediate_tensor_function = K.function([model.layers[0].input],[model.layers[layer_of_interest].output])
+intermediate_tensor = intermediate_tensor_function([train_set[0,:].reshape(1,-1)])[0]
 
 
 # In[ ]:
 
 
-submission = pd.DataFrame({'id': test["id"], 'is_iceberg': prediction.reshape((prediction.shape[0]))})
-submission.head(10)
+import matplotlib
+colors = list(matplotlib.colors.cnames)
+
+intermediates = []
+color_intermediates = []
+for i in range(len(train_set)):
+    output_class = np.argmax(encoded_y[i,:])
+    intermediate_tensor = intermediate_tensor_function([train_set[i,:].reshape(1,-1)])[0]
+    intermediates.append(intermediate_tensor[0])
+    color_intermediates.append(colors[output_class])
 
 
 # In[ ]:
 
 
-submission.to_csv("./submission.csv", index=False)
+from sklearn.manifold import TSNE
+tsne = TSNE(n_components=2, random_state=0)
+intermediates_tsne = tsne.fit_transform(intermediates)
+plt.figure(figsize=(8, 8))
+plt.scatter(x = intermediates_tsne[:,0], y=intermediates_tsne[:,1], color=color_intermediates)
+plt.show()
 
-
-# Any comment will be welcome! ;)

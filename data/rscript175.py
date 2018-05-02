@@ -1,221 +1,174 @@
-# coding: utf-8
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
-
+# -*- coding: utf-8 -*-
+"""
+@author: Faron
+"""
 import pandas as pd
 import numpy as np
-from collections import Counter
-import operator
-import math
+import xgboost as xgb
+from sklearn.cross_validation import KFold
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+
+ID = 'id'
+TARGET = 'loss'
+NFOLDS = 4
+SEED = 0
+NROWS = None
+DATA_DIR = "../input"
+
+TRAIN_FILE = "{0}/train.csv".format(DATA_DIR)
+TEST_FILE = "{0}/test.csv".format(DATA_DIR)
+SUBMISSION_FILE = "{0}/sample_submission.csv".format(DATA_DIR)
+
+train = pd.read_csv(TRAIN_FILE, nrows=NROWS)
+test = pd.read_csv(TEST_FILE, nrows=NROWS)
+
+y_train = train[TARGET].ravel()
+
+train.drop([ID, TARGET], axis=1, inplace=True)
+test.drop([ID], axis=1, inplace=True)
+
+print("{},{}".format(train.shape, test.shape))
+
+ntrain = train.shape[0]
+ntest = test.shape[0]
+train_test = pd.concat((train, test)).reset_index(drop=True)
+
+features = train.columns
+
+cats = [feat for feat in features if 'cat' in feat]
+for feat in cats:
+    train_test[feat] = pd.factorize(train_test[feat], sort=True)[0]
+
+print(train_test.head())
+
+x_train = np.array(train_test.iloc[:ntrain,:])
+x_test = np.array(train_test.iloc[ntrain:,:])
+
+kf = KFold(ntrain, n_folds=NFOLDS, shuffle=True, random_state=SEED)
 
 
-INPUT_PATH = '../input/'
+class SklearnWrapper(object):
+    def __init__(self, clf, seed=0, params=None):
+        params['random_state'] = seed
+        self.clf = clf(**params)
+
+    def train(self, x_train, y_train):
+        self.clf.fit(x_train, y_train)
+
+    def predict(self, x):
+        return self.clf.predict(x)
 
 
-def lcm(a, b):
-    """Compute the lowest common multiple of a and b"""
-    # in case of large numbers, using floor division
-    return a * b // math.gcd(a, b)
+class XgbWrapper(object):
+    def __init__(self, seed=0, params=None):
+        self.param = params
+        self.param['seed'] = seed
+        self.nrounds = params.pop('nrounds', 250)
+
+    def train(self, x_train, y_train):
+        dtrain = xgb.DMatrix(x_train, label=y_train)
+        self.gbdt = xgb.train(self.param, dtrain, self.nrounds)
+
+    def predict(self, x):
+        return self.gbdt.predict(xgb.DMatrix(x))
 
 
-def avg_normalized_happiness(pred, gift, wish):
-    
-    n_children = 1000000 # n children to give
-    n_gift_type = 1000 # n types of gifts available
-    n_gift_quantity = 1000 # each type of gifts are limited to this quantity
-    n_gift_pref = 100 # number of gifts a child ranks
-    n_child_pref = 1000 # number of children a gift ranks
-    twins = math.ceil(0.04 * n_children / 2.) * 2    # 4% of all population, rounded to the closest number
-    triplets = math.ceil(0.005 * n_children / 3.) * 3    # 0.5% of all population, rounded to the closest number
-    ratio_gift_happiness = 2
-    ratio_child_happiness = 2
+def get_oof(clf):
+    oof_train = np.zeros((ntrain,))
+    oof_test = np.zeros((ntest,))
+    oof_test_skf = np.empty((NFOLDS, ntest))
 
-    # check if triplets have the same gift
-    for t1 in np.arange(0, triplets, 3):
-        triplet1 = pred[t1]
-        triplet2 = pred[t1+1]
-        triplet3 = pred[t1+2]
-        # print(t1, triplet1, triplet2, triplet3)
-        assert triplet1 == triplet2 and triplet2 == triplet3
-                
-    # check if twins have the same gift
-    for t1 in np.arange(triplets, triplets+twins, 2):
-        twin1 = pred[t1]
-        twin2 = pred[t1+1]
-        # print(t1)
-        assert twin1 == twin2
+    for i, (train_index, test_index) in enumerate(kf):
+        x_tr = x_train[train_index]
+        y_tr = y_train[train_index]
+        x_te = x_train[test_index]
 
-    max_child_happiness = n_gift_pref * ratio_child_happiness
-    max_gift_happiness = n_child_pref * ratio_gift_happiness
-    total_child_happiness = 0
-    total_gift_happiness = np.zeros(n_gift_type)
-    
-    for i in range(len(pred)):
-        child_id = i
-        gift_id = pred[i]
-        
-        # check if child_id and gift_id exist
-        assert child_id < n_children
-        assert gift_id < n_gift_type
-        assert child_id >= 0 
-        assert gift_id >= 0
-        child_happiness = (n_gift_pref - np.where(wish[child_id]==gift_id)[0]) * ratio_child_happiness
-        if not child_happiness:
-            child_happiness = -1
+        clf.train(x_tr, y_tr)
 
-        gift_happiness = ( n_child_pref - np.where(gift[gift_id]==child_id)[0]) * ratio_gift_happiness
-        if not gift_happiness:
-            gift_happiness = -1
+        oof_train[test_index] = clf.predict(x_te)
+        oof_test_skf[i, :] = clf.predict(x_test)
 
-        total_child_happiness += child_happiness
-        total_gift_happiness[gift_id] += gift_happiness
-        
-    denominator1 = n_children*max_child_happiness
-    denominator2 = n_gift_quantity*max_gift_happiness*n_gift_type
-    common_denom = lcm(denominator1, denominator2)
-    multiplier = common_denom / denominator1
-
-    ret = float(math.pow(total_child_happiness*multiplier,3) + \
-        math.pow(np.sum(total_gift_happiness),3)) / float(math.pow(common_denom,3))
-    return ret
-    
-
-def get_overall_hapiness(wish, gift):
+    oof_test[:] = oof_test_skf.mean(axis=0)
+    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
 
 
-    res_child = dict()
-    for i in range(0, wish.shape[0]):
-        for j in range(55):
-            res_child[(i, wish[i][j])] = int(100* (1 + (wish.shape[1] - j)*2))
+et_params = {
+    'n_jobs': 16,
+    'n_estimators': 100,
+    'max_features': 0.5,
+    'max_depth': 12,
+    'min_samples_leaf': 2,
+}
 
-    res_santa = dict()
-    for i in range(gift.shape[0]):
-        for j in range(gift.shape[1]):
-            res_santa[(gift[i][j], i)] = int((1 + (gift.shape[1] - j)*2))
+rf_params = {
+    'n_jobs': 16,
+    'n_estimators': 100,
+    'max_features': 0.2,
+    'max_depth': 8,
+    'min_samples_leaf': 2,
+}
 
-    positive_cases = list(set(res_santa.keys()) | set(res_child.keys()))
-    print('Positive case tuples (child, gift): {}'.format(len(positive_cases)))
+xgb_params = {
+    'seed': 0,
+    'colsample_bytree': 0.7,
+    'silent': 1,
+    'subsample': 0.7,
+    'learning_rate': 0.075,
+    'objective': 'reg:linear',
+    'max_depth': 7,
+    'num_parallel_tree': 1,
+    'min_child_weight': 1,
+    'eval_metric': 'mae',
+    'nrounds': 350
+}
 
-    res = dict()
-    for p in positive_cases:
-        res[p] = 0
-        if p in res_child:
-            res[p] += res_child[p]
-        if p in res_santa:
-            res[p] += res_santa[p]
-    return res
+xg = XgbWrapper(seed=SEED, params=xgb_params)
+et = SklearnWrapper(clf=ExtraTreesRegressor, seed=SEED, params=et_params)
+rf = SklearnWrapper(clf=RandomForestRegressor, seed=SEED, params=rf_params)
 
+xg_oof_train, xg_oof_test = get_oof(xg)
+et_oof_train, et_oof_test = get_oof(et)
+rf_oof_train, rf_oof_test = get_oof(rf)
 
-def sort_dict_by_values(a, reverse=True):
-    sorted_x = sorted(a.items(), key=operator.itemgetter(1), reverse=reverse)
-    return sorted_x
-
-
-def value_counts_for_list(lst):
-    a = dict(Counter(lst))
-    a = sort_dict_by_values(a, True)
-    return a
-
-
-def get_most_desired_gifts(wish, gift):
-    best_gifts = value_counts_for_list(np.ravel(wish))
-    return best_gifts
-
-
-def recalc_hapiness(happiness, best_gifts, gift):
-    recalc = dict()
-    for b in best_gifts:
-        recalc[b[0]] = b[1] / 2000000
-
-    for h in happiness:
-        c, g = h
-        happiness[h] /= recalc[g]
-
-        # Make triples/twins more happy
-        # if c <= 45000 and happiness[h] < 0.00001:
-        #     happiness[h] = 0.00001
-
-    return happiness
+print("XG-CV: {}".format(mean_absolute_error(y_train, xg_oof_train)))
+print("ET-CV: {}".format(mean_absolute_error(y_train, et_oof_train)))
+print("RF-CV: {}".format(mean_absolute_error(y_train, rf_oof_train)))
 
 
-def solve():
-    wish = pd.read_csv(INPUT_PATH + 'child_wishlist_v2.csv', header=None).as_matrix()[:, 1:]
-    gift_init = pd.read_csv(INPUT_PATH + 'gift_goodkids_v2.csv', header=None).as_matrix()[:, 1:]
-    gift = gift_init.copy()
-    answ = np.zeros(len(wish), dtype=np.int32)
-    answ[:] = -1
-    gift_count = np.zeros(len(gift), dtype=np.int32)
+x_train = np.concatenate((xg_oof_train, et_oof_train, rf_oof_train), axis=1)
+x_test = np.concatenate((xg_oof_test, et_oof_test, rf_oof_test), axis=1)
 
-    happiness = get_overall_hapiness(wish, gift)
-    best_gifts = get_most_desired_gifts(wish, gift)
-    happiness = recalc_hapiness(happiness, best_gifts, gift)
-    sorted_hapiness = sort_dict_by_values(happiness)
-    print('Happiness sorted...')
+print("{},{}".format(x_train.shape, x_test.shape))
 
-    for i in range(len(sorted_hapiness)):
-        child = sorted_hapiness[i][0][0]
-        g = sorted_hapiness[i][0][1]
-        if answ[child] != -1:
-            continue
-        if gift_count[g] >= 1000:
-            continue
-        if child <= 5000 and gift_count[g] < 997:
-            if child % 3 == 0:
-                answ[child] = g
-                answ[child+1] = g
-                answ[child+2] = g
-                gift_count[g] += 3
-            elif child % 3 == 1:
-                answ[child] = g
-                answ[child-1] = g
-                answ[child+1] = g
-                gift_count[g] += 3
-            else:
-                answ[child] = g
-                answ[child-1] = g
-                answ[child-2] = g
-                gift_count[g] += 3
-        elif child > 5000 and child <= 45000 and gift_count[g] < 998:
-            if child % 2 == 0:
-                answ[child] = g
-                answ[child - 1] = g
-                gift_count[g] += 2
-            else:
-                answ[child] = g
-                answ[child + 1] = g
-                gift_count[g] += 2
-        elif child > 45000:
-            answ[child] = g
-            gift_count[g] += 1
+dtrain = xgb.DMatrix(x_train, label=y_train)
+dtest = xgb.DMatrix(x_test)
 
-    print('Left unhappy:', len(answ[answ == -1]))
-    
-    # unhappy children
-    for child in range(45001, len(answ)):
-        if answ[child] == -1:
-            g = np.argmin(gift_count)
-            answ[child] = g
-            gift_count[g] += 1
+xgb_params = {
+    'seed': 0,
+    'colsample_bytree': 0.8,
+    'silent': 1,
+    'subsample': 0.6,
+    'learning_rate': 0.01,
+    'objective': 'reg:linear',
+    'max_depth': 4,
+    'num_parallel_tree': 1,
+    'min_child_weight': 1,
+    'eval_metric': 'mae',
+}
 
-    if answ.min() == -1:
-        print('Some children without present')
-        exit()
+res = xgb.cv(xgb_params, dtrain, num_boost_round=500, nfold=4, seed=SEED, stratified=False,
+             early_stopping_rounds=25, verbose_eval=10, show_stdv=True)
 
-    if gift_count.max() > 1000:
-        print('Some error in kernel: {}'.format(gift_count.max()))
-        exit()
+best_nrounds = res.shape[0] - 1
+cv_mean = res.iloc[-1, 0]
+cv_std = res.iloc[-1, 1]
 
-    print('Start score calculation...')
-    # score = avg_normalized_happiness(answ, gift_init, wish)
-    # print('Predicted score: {:.8f}'.format(score))
-    score = avg_normalized_happiness(answ, gift, wish)
-    print('Predicted score: {:.8f}'.format(score))
+print('Ensemble-CV: {0}+{1}'.format(cv_mean, cv_std))
 
-    out = open('subm_{}.csv'.format(score), 'w')
-    out.write('ChildId,GiftId\n')
-    for i in range(len(answ)):
-        out.write(str(i) + ',' + str(answ[i]) + '\n')
-    out.close()
+gbdt = xgb.train(xgb_params, dtrain, best_nrounds)
 
-
-if __name__ == '__main__':
-    solve()
+submission = pd.read_csv(SUBMISSION_FILE)
+submission.iloc[:, 1] = gbdt.predict(dtest)
+submission.to_csv('xgstacker_starter.sub.csv', index=None)

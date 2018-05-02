@@ -1,243 +1,135 @@
 
 # coding: utf-8
 
-# # How far is China ahead of India ?
-# - It is well known that China and India are [re-emerging][1] as top economies in the world, but China is much ahead of India by most measures.
-# - So how long would it take for India to catch up with China?
-# 
-# Here we explore some key world development indicators to answer the question.
-# 
-#   [1]: http://www.economist.com/node/16834943
+# ## Data loading and preparation ##
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import re
-plt.style.use('ggplot')
 
 
-# ### Choosing Key Indicators
-# - Key topics for comparison are chosen using the [method discussed earlier][1] and then key indicators are hand-picked from those topics.
+# In[ ]:
+
+
+train = pd.read_csv("../input/train.csv", index_col=0)
+test = pd.read_csv("../input/test.csv", index_col=0)
+
+
+# Just take a little look at the data. does this look good?
+
+# In[ ]:
+
+
+train.head()
+
+
+# In[ ]:
+
+
+# Really simple data preparation
+y_train = pd.get_dummies(train[["type"]], prefix="")
+train.drop("type", inplace=True, axis=1)
+
+train_test = pd.concat([train, test], axis=0)
+
+# It looks like the color actually is just noise, and does not give any signal to the monster-class.
+# Comment one of these lines.
+#train_test = pd.get_dummies( train_test, columns=["color"], drop_first=False)
+train_test.drop("color", inplace=True, axis=1)
+
+X_train = train_test.iloc[:len(y_train)]
+X_test  = train_test.iloc[len(y_train):]
+
+# Clean up
+del train_test
+del train
+del test
+
+
+# ## A really simple neural network ##
+# Here is an implementation of a really simple neural network. This is the kind of neural network you would expect in the late 1990's. There is no weight decay regularisation or dropout or anything fancy, so the only way to prevent overfitting is early stopping, and limiting the capacity by setting the number of hidden units. 
 # 
-#   [1]: https://www.kaggle.com/kmravikumar/d/worldbank/world-development-indicators/choosing-topics-to-explore
+# Also note that there is only three layers: input, hidden and output. The output has softmax outputs and the hidden layer has sigmoid activation function. Please try other configurations if you like.
 
 # In[ ]:
 
 
-# read in file as data frame
-df = pd.read_csv('../input/Indicators.csv')
+## A dead simple neural network class in Python+Numpy. Plain SGD, and no regularization.
+def sigmoid(X):
+    return 1.0 / ( 1.0 + np.exp(-X) )
 
-# Create list of unique indicators, indicator codes
-Indicator_array =  df[['IndicatorName','IndicatorCode']].drop_duplicates().values
+def softmax(X):
+    _sum = np.exp(X).sum()
+    return np.exp(X) / _sum
+
+class neuralnet(object):
+    def __init__(self, num_input, num_hidden, num_output):
+        self._W1 = (np.random.random_sample((num_input, num_hidden)) - 0.5).astype(np.float32)
+        self._b1 = np.zeros((1, num_hidden)).astype(np.float32)
+        self._W2 = (np.random.random_sample((num_hidden, num_output)) - 0.5).astype(np.float32)
+        self._b2 = np.zeros((1, num_output)).astype(np.float32)
+
+    def forward(self,X):
+        net1 = np.matmul( X, self._W1 ) + self._b1
+        y = sigmoid(net1)
+        net2 = np.matmul( y, self._W2 ) + self._b2
+        z = softmax(net2)
+        return z,y
+
+    def backpropagation(self, X, target, eta):
+        z, y = self.forward(X)
+        d2 = (z - target)
+        d1 = y*(1.0-y) * np.matmul(d2, self._W2.T)
+        # The updates are done within this method. This more or less implies
+        # utpdates with Stochastic Gradient Decent. Let's fix that later.
+        # TODO: Support for full batch and mini-batches etc.
+        self._W2 -= eta * np.matmul(y.T,d2)
+        self._W1 -= eta * np.matmul(X.reshape((-1,1)),d1)
+        self._b2 -= eta * d2
+        self._b1 -= eta * d1
 
 
-# In[ ]:
-
-
-modified_indicators = []
-unique_indicator_codes = []
-for ele in Indicator_array:
-    indicator = ele[0]
-    indicator_code = ele[1].strip()
-    if indicator_code not in unique_indicator_codes:
-        # delete , ( ) from the IndicatorNames
-        new_indicator = re.sub('[,()]',"",indicator).lower()
-        # replace - with "to" and make all words into lower case
-        new_indicator = re.sub('-'," to ",new_indicator).lower()
-        modified_indicators.append([new_indicator,indicator_code])
-        unique_indicator_codes.append(indicator_code)
-
-Indicators = pd.DataFrame(modified_indicators,columns=['IndicatorName','IndicatorCode'])
-Indicators = Indicators.drop_duplicates()
-print(Indicators.shape)
-
-
-# In[ ]:
-
-
-
-key_word_dict = {}
-key_word_dict['Demography'] = ['population','birth','death','fertility','mortality','expectancy']
-key_word_dict['Food'] = ['food','grain','nutrition','calories']
-key_word_dict['Trade'] = ['trade','import','export','good','shipping','shipment']
-key_word_dict['Health'] = ['health','desease','hospital','mortality','doctor']
-key_word_dict['Economy'] = ['income','gdp','gni','deficit','budget','market','stock','bond','infrastructure']
-key_word_dict['Energy'] = ['fuel','energy','power','emission','electric','electricity']
-key_word_dict['Education'] = ['education','literacy']
-key_word_dict['Employment'] =['employed','employment','umemployed','unemployment']
-key_word_dict['Rural'] = ['rural','village']
-key_word_dict['Urban'] = ['urban','city']
-
+# *Who you gonna call?*
+# ... The neural network!
 
 # In[ ]:
 
 
-feature = 'Education'
-for indicator_ele in Indicators.values:
-    for ele in key_word_dict[feature]:
-        word_list = indicator_ele[0].split()
-        if ele in word_list or ele+'s' in word_list:
-            # Uncomment this line to print the indicators explicitely
-            #print(indicator_ele)
-            break
+# Some hyper-parameters to tune.
+num_hidden = 8
+n_epochs   = 1500
+eta        = 0.01
+# Create the net.
+nn = neuralnet( X_train.shape[1], num_hidden, y_train.shape[1])
 
 
-# #### Important Features 
+# We train in a simple loop, pure Stochastic Gradient Decent.
 
 # In[ ]:
 
 
-# Main indicators to compare contries
-chosen_indicators = ['NE.TRD.GNFS.ZS',                       'SI.POV.2DAY', 'SE.SEC.ENRL', 'SE.ADT.1524.LT.ZS',                      'SI.DST.10TH.10', 'SE.ADT.LITR.ZS', 'SP.DYN.LE00.IN',                      'NY.GDP.PCAP.PP.KD','SP.URB.TOTL.IN.ZS', 'SH.DTH.IMRT',                      'NE.EXP.GNFS.KD', 'NE.IMP.GNFS.KD' ]
-
-# Subset of data with the required features alone
-df_subset = df[df['IndicatorCode'].isin(chosen_indicators)]
-
-# Chose only India and China for Analysis
-df_India = df_subset[df['CountryName']=="India"]
-df_China = df_subset[df['CountryName']=="China"]
+# (EDIT: It's much faster to convert the dataframes to numpy arrays and then iterate)
+X = np.array(X_train, dtype=np.float32)
+Y = np.array(y_train, dtype=np.float32)
+for epoch in range(n_epochs):
+    for monster, target in zip(X,Y):
+        nn.backpropagation( monster, target, eta)
 
 
-# In[ ]:
-
-
-# PLotting function for comparing development indicators
-def plot_indicator(indicator,delta=10):
-    ds_India = df_India[['IndicatorName','Year','Value']][df_India['IndicatorCode']==indicator]
-    try:
-        title = ds_India['IndicatorName'].iloc[0]
-    except:
-        title = "None"
-
-    xindia = ds_India['Year'].values
-    yindia = ds_India['Value'].values
-    ds_China = df_China[['IndicatorName','Year','Value']][df_China['IndicatorCode']==indicator]
-    xchina = ds_China['Year'].values
-    ychina = ds_China['Value'].values
-    
-    plt.figure(figsize=(14,4))
-    
-    plt.subplot(121)
-    plt.plot(xindia,yindia,label='India')
-    plt.plot(xchina,ychina,label='China')
-    plt.title(title)
-    plt.legend(loc=2)
-
-    plt.subplot(122)
-    plt.plot(xindia,yindia,label='India')
-    plt.plot(xchina+delta,ychina,label='China')
-    plt.title(title + "\n Chinese Data Shifted by " +str(delta)+" Years")
-    plt.legend(loc=2)
-
-
-# # KEY FEATURES
-# Now let us explore the key features one-by-one.
+# *We came, we saw, we kicked its ass!*
 # 
-# ## 1) Trade as a percentage of GDP
-# - Note that by shifting the Chinese data by 10 years to the right it aligns well with the Indian data suggesting that India lags behind China by at least 10 years in terms of trade.
+# Let's make a submission:
 
 # In[ ]:
 
 
-plot_indicator(chosen_indicators[0],delta=10)
+with open('submission-{}-hidden.csv'.format(num_hidden), 'w') as f:
+    f.write("id,type\n")
+    for index, monster in X_test.iterrows():
+        probs = nn.forward( np.array(monster, dtype=np.float32))[0]
+        f.write("{},{}\n".format(index, y_train.columns.values[np.argmax(probs)][1:]))
 
 
-# ## 2) Import and Export of goods and services
-# More specifically, we can look at total exports and imports.
-# - India lags behind China by 10 years 
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[10],delta=10)
-
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[11],delta=10)
-
-
-# ## 3) GDP per capita (adjusted by purchasing power parity)
-# - Here also India lags behind China by ~9 years.
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[7],delta=9)
-
-
-# ## 4) Poverty Alleviation 
-# - China has managed to get a much steeper drop in poverty compared to India.
-# - It still appears that China has a head start of 10 years ahead of India.
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[1],delta=10)
-
-
-# ## 5) Life Expectancy
-# - There was steep rise in life expectancy in China during the 1960's.
-# - Both countries have shown a significant increase over a past 5 decades.
-# - In terms of life expectancy, China leads India by ~ 25 years
-# 
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[6],delta=25)
-
-
-# ## 6) Urban Population growth
-# - China leads India by ~ 15 years
-# 
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[8],delta=15)
-
-
-# ## 6) Infant Mortality - as a measure of health care
-# - Both countries show a significant decrease in infant mortality.
-# - Surprisingly, there has been an increase in Chinese infant mortality rate during the 1980's - Might be something interesting to explore here!
-# - China leads India by ~ 20 years in infant mortality rate.
-# 
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[9],delta=20)
-
-
-# ## 7) Adult Literacy Rate
-# - Although the rate of increase seems to be the same for both countries, China has always had a 25 year advantage over India.
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[5],delta=25)
-
-
-# ## 8) Finally, how are the rich 10% doing in each country?
-# - This may not be the best economic measure, but gives some insights
-# - China has managed to create a lot more rich people faster, but due to the recent recessions India seems to have caught up with China.
-
-# In[ ]:
-
-
-plot_indicator(chosen_indicators[4],delta=10)
-
-
-# # CONCLUSION
-# - By most economic measures like GDP, trade, and poverty alleviation China seems to be ahead of India by 10 years. 
-# - It is interesting to note that China undertook economic reforms in 1978 and India in 1990, exactly 12 years apart, suggesting that this might be the most significant reason for India to lag behind China by around 10 years in many economic growth measures.
-# - Even though the political model adopted in China and India are not the same, the growth rates and trend in most indicators are similar for both countries. This prompts us to ask the question does politics even matter ? 
-# - By some measures of education (literacy) and health care (infant mortality rate), India lags behind China by 20 - 25 years.
-# 
-# 
+# TODO: Local CV and parameter tuning.

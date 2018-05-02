@@ -1,207 +1,186 @@
-# This model is based on the kernel of  Pranav Pandya and andy harless.
-#       https://www.kaggle.com/pranav84/single-lightgbm-in-r-with-75-mln-rows-lb-0-9690
-#       https://www.kaggle.com/aharless/try-pranav-s-r-lgbm-in-python/code
-# I modified code to make it easier for me
-# The actual changed values are the parameters only. I focused on parameter tuning
-# num_leaves :  7  ->  9
-# max_depth  :  4  ->  5
-# subsample  : 0.7 -> 0.9
-
-
-# This is the first version and will be performing additional data sampling and parameter tuning.
-
-
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.model_selection import train_test_split # for validation 
+"""
+This is an upgraded version of Ceshine's LGBM starter script, simply adding more
+average features and weekly average features on it.
+"""
+from datetime import date, timedelta
+import calendar as ca
+import pandas as pd
+import numpy as np
+from sklearn.metrics import mean_squared_error
 import lightgbm as lgb
-import gc # memory 
-from datetime import datetime # train time checking
+print('Loading Data')
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
+item_nbr_u = df_train[df_train.date>pd.datetime(2017,8,10)].item_nbr.unique()
+
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
+
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
+
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
 
 
 
-start = datetime.now()
-VALIDATE = False
-RANDOM_STATE = 50
-VALID_SIZE = 0.90
-MAX_ROUNDS = 1000
-EARLY_STOP = 50
-OPT_ROUNDS = 650
-skiprows = range(1,109903891)
-nrows = 75000000
-output_filename = 'submission.csv'
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
 
-path = '../input/'
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
-
-
-
-train_cols = ['ip','app','device','os', 'channel', 'click_time', 'is_attributed']
-train_df = pd.read_csv(path+"train.csv", skiprows=skiprows, nrows=nrows,dtype=dtypes, usecols=train_cols)
-
-len_train = len(train_df)
-gc.collect()
-
-most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
-least_freq_hours_in_test_data = [6, 11, 15]
-
-def prep_data( df ):
     
-    df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
-    df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
-    df.drop(['click_time'], axis=1, inplace=True)
-    gc.collect()
-    
-    df['in_test_hh'] = (   3 
-                         - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
-                         - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
-    gp = df[['ip', 'day', 'in_test_hh', 'channel']].groupby(by=['ip', 'day', 'in_test_hh'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_day_test_hh'})
-    df = df.merge(gp, on=['ip','day','in_test_hh'], how='left')
-    df.drop(['in_test_hh'], axis=1, inplace=True)
-    df['nip_day_test_hh'] = df['nip_day_test_hh'].astype('uint32')
-    del gp
-    gc.collect()
+items = items.reindex(df_2017.index.get_level_values(1))
 
-    gp = df[['ip', 'day', 'hour', 'channel']].groupby(by=['ip', 'day', 'hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_day_hh'})
-    df = df.merge(gp, on=['ip','day','hour'], how='left')
-    df['nip_day_hh'] = df['nip_day_hh'].astype('uint16')
-    del gp
-    gc.collect()
-    
-    gp = df[['ip', 'os', 'hour', 'channel']].groupby(by=['ip', 'os', 'hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_hh_os'})
-    df = df.merge(gp, on=['ip','os','hour'], how='left')
-    df['nip_hh_os'] = df['nip_hh_os'].astype('uint16')
-    del gp
-    gc.collect()
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
 
-    gp = df[['ip', 'app', 'hour', 'channel']].groupby(by=['ip', 'app',  'hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_hh_app'})
-    df = df.merge(gp, on=['ip','app','hour'], how='left')
-    df['nip_hh_app'] = df['nip_hh_app'].astype('uint16')
-    del gp
-    gc.collect()
+def get_nearwd(date,b_date):
+    date_list = pd.date_range(date-timedelta(140),periods=21,freq='7D').date
+    result = date_list[date_list<=b_date][-1]
+    return result
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values,
+        "unpromo_16aftsum_2017":(1-get_timespan(promo_2017, t2017+timedelta(16), 16, 16)).iloc[:,1:].sum(axis=1).values, 
+    })
 
-    gp = df[['ip', 'device', 'hour', 'channel']].groupby(by=['ip', 'device', 'hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_hh_dev'})
-    df = df.merge(gp, on=['ip','device','hour'], how='left')
-    df['nip_hh_dev'] = df['nip_hh_dev'].astype('uint32')
-    del gp
-    gc.collect()
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+        for j in [14,60,140]:
+            X["aft_promo_{}{}".format(i,j)] = (promo_2017[
+                t2017 + timedelta(days=i)]-1).values.astype(np.uint8)
+            X["aft_promo_{}{}".format(i,j)] = X["aft_promo_{}{}".format(i,j)]\
+                                        *X['promo_{}_2017'.format(j)]
+        if i ==15:
+            X["bf_unpromo_{}".format(i)]=0
+        else:
+            X["bf_unpromo_{}".format(i)] = (1-get_timespan(
+                    promo_2017, t2017+timedelta(16), 16-i, 16-i)).iloc[:,1:].sum(
+                            axis=1).values / (15-i) * X['promo_{}'.format(i)]
 
-    df.drop( ['ip','day'], axis=1, inplace=True )
-    gc.collect()
-    return df
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        #X['mean_12_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 84-i, 12, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values        
+        
+        date = get_nearwd(t2017+timedelta(i),t2017)
+        ahead = (t2017-date).days
+        if ahead!=0:
+            X['ahead0_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead, ahead).mean(axis=1).values
+            X['ahead7_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead+7, ahead+7).mean(axis=1).values
+        X["day_1_2017_{}1".format(i)]= get_timespan(df_2017, date, 1, 1).values.ravel()
+        X["day_1_2017_{}2".format(i)]= get_timespan(df_2017, date-timedelta(7), 1, 1).values.ravel()
+        for m in [3,7,14,30,60,140]:
+            X["mean_{}_2017_{}1".format(m,i)]= get_timespan(df_2017, date,m, m).\
+                mean(axis=1).values
+            X["mean_{}_2017_{}2".format(m,i)]= get_timespan(df_2017, date-timedelta(7),m, m).\
+                mean(axis=1).values
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    return X
 
-train_df = prep_data(train_df)
-gc.collect()
+print("Preparing dataset...")
 
+t2017 = date(2017, 7, 5)
+X_l, y_l = [], []
+for i in range(4):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
+
+print("Training and predicting models...")
 params = {
-          'boosting_type': 'gbdt',
-          'objective': 'binary',
-          'metric':'auc',
-          'learning_rate': 0.1,
-          'num_leaves': 9,  # we should let it be smaller than 2^(max_depth)
-          'max_depth': 5,  # -1 means no limit
-          'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-          'max_bin': 100,  # Number of bucketed bin for feature values
-          'subsample': 0.9,  # Subsample ratio of the training instance.
-          'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-          'colsample_bytree': 0.7,  # Subsample ratio of columns when constructing each tree.
-          'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-          'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-          'nthread': 8,
-          'verbose': 0,
-          'scale_pos_weight':99.7, # because training data is extremely unbalanced 
-         }
+    'num_leaves': 31,
+    'objective': 'regression',
+    'min_data_in_leaf': 200,
+    'learning_rate': 0.07,
+    'feature_fraction': 0.8,
+    'bagging_fraction': 0.85,
+    'bagging_freq': 3,
+    'metric': 'l2_root',
+    'num_threads': 4
+}
 
-target = 'is_attributed'
-predictors = ['app','device','os', 'channel', 'hour', 'nip_day_test_hh', 'nip_day_hh', 'nip_hh_os', 'nip_hh_app', 'nip_hh_dev']
-categorical = ['app', 'device', 'os', 'channel', 'hour']
+MAX_ROUNDS = 400
+val_pred = []
+test_pred = []
+cate_vars = []
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    dtrain = lgb.Dataset(
+        X_train, label=y_train[:, i],
+        categorical_feature=cate_vars,
+        weight=pd.concat([items["perishable"]] * 4) * 0.25 + 1
+    )
+    dval = lgb.Dataset(
+        X_val, label=y_val[:, i], reference=dtrain,
+        weight=items["perishable"] * 0.25 + 1,
+        categorical_feature=cate_vars)
+    bst = lgb.train(
+        params, dtrain, num_boost_round=MAX_ROUNDS,
+        valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100
+    )
+    print("\n".join(("%s: %.2f" % x) for x in sorted(
+        zip(X_train.columns, bst.feature_importance("gain")),
+        key=lambda x: x[1], reverse=True
+    )))
+    val_pred.append(bst.predict(
+        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+    test_pred.append(bst.predict(
+        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
 
+print("Validation mse:", mean_squared_error(
+    y_val, np.array(val_pred).transpose())**0.5)
 
-if VALIDATE:
+print("Making submission...")
+y_test = np.array(test_pred).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
-    train_df, val_df = train_test_split(train_df, test_size=VALID_SIZE, random_state=RANDOM_STATE, shuffle=True )
-    dtrain = lgb.Dataset(train_df[predictors].values, 
-                         label=train_df[target].values,
-                         feature_name=predictors,
-                         categorical_feature=categorical)
-    del train_df
-    gc.collect()
-
-    dvalid = lgb.Dataset(val_df[predictors].values,
-                         label=val_df[target].values,
-                         feature_name=predictors,
-                         categorical_feature=categorical)
-    del val_df
-    gc.collect()
-
-    evals_results = {}
-
-    model = lgb.train(params, 
-                      dtrain, 
-                      valid_sets=[dtrain, dvalid], 
-                      valid_names=['train','valid'], 
-                      evals_result=evals_results, 
-                      num_boost_round=MAX_ROUNDS,
-                      early_stopping_rounds=EARLY_STOP,
-                      verbose_eval=50, 
-                      feval=None)
-
-    del dvalid
-
-else:
-
-    gc.collect()
-    dtrain = lgb.Dataset(train_df[predictors].values, label=train_df[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical
-                          )
-    del train_df
-    gc.collect()
-
-    evals_results = {}
-
-    model = lgb.train(params, 
-                      dtrain, 
-                      valid_sets=[dtrain], 
-                      valid_names=['train'], 
-                      evals_result=evals_results, 
-                      num_boost_round=OPT_ROUNDS,
-                      verbose_eval=50,
-                      feval=None)
-    
-del dtrain
-gc.collect()
-
-test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=test_cols)
-test_df = prep_data(test_df)
-gc.collect()
-
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id']
-sub['is_attributed'] = model.predict(test_df[predictors])
-sub.to_csv(output_filename, index=False, float_format='%.9f')
-
-print('=='*35)
-print('============================ Final Report ============================')
-print('=='*35)
-print(datetime.now(), '\n')
-print('{:^17} : {:}'.format('train time', datetime.now()-start))
-print('{:^17} : {:}'.format('output file', output_filename))
-print('{:^17} : {:.5f}'.format('train auc', model.best_score['train']['auc']))
-if VALIDATE:
-    print('{:^17} : {:.5f}\n'.format('valid auc', model.best_score['valid']['auc']))
-    print('{:^17} : {:}\n{:^17} : {}\n{:^17} : {}'.format('VALIDATE', VALIDATE, 'VALID_SIZE', VALID_SIZE, 'RANDOM_STATE', RANDOM_STATE))
-print('{:^17} : {:}\n{:^17} : {}\n{:^17} : {}\n'.format('MAX_ROUNDS', MAX_ROUNDS, 'EARLY_STOP', EARLY_STOP, 'OPT_ROUNDS', model.best_iteration))
-print('{:^17} : {:}\n{:^17} : {}\n'.format('skiprows', skiprows, 'nrows', nrows))
-print('{:^17} : {:}\n{:^17} : {}\n'.format('variables', predictors, 'categorical', categorical))
-print('{:^17} : {:}\n'.format('model params', params))
-print('=='*35)
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0).reset_index()
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 10000)
+submission.loc[~submission.item_nbr.isin(item_nbr_u),'unit_sales']=0
+del item_nbr_u
+submission[['id','unit_sales']].to_csv('lgb.csv', float_format='%.4f', index=None)

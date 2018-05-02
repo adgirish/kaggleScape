@@ -1,108 +1,47 @@
-import sqlite3
 import pandas as pd
-from haversine import haversine
+import numpy as np
+from datetime import datetime
+from collections import defaultdict
 
-north_pole = (90,0)
-weight_limit = 1000.0
+df_train = pd.read_csv('../input/air_visit_data.csv').sort_values('visit_date')
+date_info = pd.read_csv('../input/date_info.csv')
 
-def bb_sort(ll):
-    s_limit = 5000
-    optimal = False
-    ll = [[0,north_pole,10]] + ll[:] + [[0,north_pole,10]] 
-    while not optimal:
-        optimal = True
-        for i in range(1,len(ll) - 2):
-            lcopy = ll[:]
-            lcopy[i], lcopy[i+1] = ll[i+1][:], ll[i][:]
-            if path_opt_test(ll[1:-1]) > path_opt_test(lcopy[1:-1]):
-                #print("swap")
-                ll = lcopy[:]
-                optimal = False
-                s_limit -= 1
-                if s_limit < 0:
-                    optimal = True
-                    break
-    return ll[1:-1]
+is_holiday = {}
+for day, flag in date_info[['calendar_date', 'holiday_flg']].values:
+    is_holiday[day] = flag
 
-def path_opt_test(llo):
-    f_ = 0.0
-    d_ = 0.0
-    l_ = north_pole
-    for i in range(len(llo)):
-        d_ += haversine(l_, llo[i][1])
-        f_ += d_ * llo[i][2]
-        l_ = llo[i][1]
-    d_ += haversine(l_, north_pole)
-    f_ += d_ * 10 #sleigh weight for whole trip
-    return f_
-
-gifts = pd.read_csv("../input/gifts.csv").fillna(" ")
-c = sqlite3.connect(":memory:")
-gifts.to_sql("gifts",c)
-cu = c.cursor()
-cu.execute("ALTER TABLE gifts ADD COLUMN 'TripId' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'i' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'j' INT;")
-c.commit()
-
-
-for n in [1.25252525]:
-    i_ = 0
-    j_ = 0
-    for i in range(90,-90,int(-180/n)):
-        i_ += 1
-        j_ = 0
-        for j in range(180,-180,int(-360/n)):
-            j_ += 1
-            cu = c.cursor()
-            cu.execute("UPDATE gifts SET i=" + str(i_) + ", j=" + str(j_) + " WHERE ((Latitude BETWEEN " + str(i - (180/n)) + " AND  " + str(i) + ") AND (Longitude BETWEEN " + str(j - (360/n)) + " AND  " + str(j) + "));")
-            c.commit()
+def get_day_of_week(visit_date):
+    if is_holiday[visit_date]:
+        return -1
+    year, month, day = [int(i) for i in visit_date.split('-')]
+    dt = datetime(day=day, month=month, year=year)
+    return dt.weekday()
     
-    for limit_ in [67]:
-        trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY i, j, Longitude, Latitude LIMIT " + str(limit_) + " ) ORDER BY Latitude DESC",c)
-        t_ = 0
-        while len(trips.GiftId)>0:
-            g = []
-            t_ += 1
-            w_ = 0.0
-            for i in range(len(trips.GiftId)):
-                if (w_ + float(trips.Weight[i]))<= weight_limit:
-                    w_ += float(trips.Weight[i])
-                    g.append(trips.GiftId[i])
-            cu = c.cursor()
-            cu.execute("UPDATE gifts SET TripId = " + str(t_) + " WHERE GiftId IN(" + (",").join(map(str,g)) + ");")
-            c.commit()
-        
-            trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY i, j, Longitude, Latitude LIMIT " + str(limit_) + " ) ORDER BY Latitude DESC",c)
-            #break
-        
-        ou_ = open("submission_opt" + str(limit_) + " " + str(n) + ".csv","w")
-        ou_.write("TripId,GiftId\n")
-        bm = 0.0
-        submission = pd.read_sql("SELECT TripId FROM gifts GROUP BY TripId ORDER BY TripId;", c)
-        for s_ in range(len(submission.TripId)):
-            trip = pd.read_sql("SELECT GiftId, Latitude, Longitude, Weight FROM gifts WHERE TripId = " + str(submission.TripId[s_]) + " ORDER BY Latitude DESC, Longitude ASC;",c)
-            a = []
-            for x_ in range(len(trip.GiftId)):
-                a.append([trip.GiftId[x_],(trip.Latitude[x_],trip.Longitude[x_]),trip.Weight[x_]])
-            b = bb_sort(a)
-            if path_opt_test(a) <= path_opt_test(b):
-                print(submission.TripId[s_], "No Change", path_opt_test(a) , path_opt_test(b))
-                bm += path_opt_test(a)
-                for y_ in range(len(a)):
-                    ou_.write(str(submission.TripId[s_])+","+str(a[y_][0])+"\n")
-            else:
-                print(submission.TripId[s_], "Optimized", path_opt_test(a) - path_opt_test(b))
-                bm += path_opt_test(b)
-                for y_ in range(len(b)):
-                    ou_.write(str(submission.TripId[s_])+","+str(b[y_][0])+"\n")
-        ou_.close()
-        
-        benchmark = 12514008574.2
-        if bm < benchmark:
-            print(n, limit_, "Improvement", bm, bm - benchmark, benchmark)
-        else:
-            print(n, limit_, "Try again", bm, bm - benchmark, benchmark)
-        cu = c.cursor()
-        cu.execute("UPDATE gifts SET TripId = NULL;")
-        c.commit()
+y_train = np.log1p(df_train['visitors'])
+    
+table = defaultdict(list)
+backup_table = defaultdict(list)
+backup_table2 = defaultdict(list)
+for row, y in zip(list(zip(df_train['air_store_id'].values, df_train['visit_date'].apply(get_day_of_week).values)), y_train):
+    table[hash(str(row))].append(y)
+    backup_table[hash(str(row[0]))].append(y)
+    backup_table2[hash(str(row[1]))].append(y)
+   
+df_test = pd.read_csv('../input/sample_submission.csv')
+df_test['air_store_id'] = df_test['id'].apply(lambda x: '_'.join(x.split('_')[:2]))
+df_test['visit_date'] = df_test['id'].apply(lambda x: x.split('_')[-1])
+
+p_test = []
+for row in zip(df_test['air_store_id'].values, df_test['visit_date'].apply(get_day_of_week).values):
+    vals = table[hash(str(row))]
+    if len(vals) == 0:
+        vals = backup_table[hash(str(row[0]))]
+    if len(vals) == 0:
+        vals = backup_table2[hash(str(row[1]))]
+    if len(vals) == 0:
+        vals = [np.mean(y_train)]
+    p_test.append(np.expm1(np.mean(vals)))
+    
+sub = pd.read_csv('../input/sample_submission.csv')
+sub['visitors'] = p_test
+sub.to_csv('hashtable_btb.csv', index=False)

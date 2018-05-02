@@ -20,110 +20,104 @@ print(check_output(["ls", "../input"]).decode("utf8"))
 # Any results you write to the current directory are saved as output.
 
 
-#  ## Data augmentation definition :
-# * Data augmentation is the process by which we create new synthetic training samples by adding small perturbations on our initial training set.
-# * The objective is to make our model invariant to those perturbations and enhace its ability to generalize.
-# * In order to this to work adding the perturbations must conserve the same label as the original training sample.
-# * In images data augmention can be performed by shifting the image, zooming, rotating ... 
-# * In our case we will add noise, stretch and roll, pitch shift ... 
+# The bson files for this competition contain a list of dictionaries, one dictionary per product. Each dictionary contains a product id (key: _id), the category id of the product (key: category_id), and between 1-4 images, stored in a list (key: imgs). Each image list contains a single dictionary per image, which uses the format: {'picture': b'...binary string...'}. 
+# 
+# The bson file can be read and processed iteratively. The following code shows how to read the data from the `train_example.bson` file.
 
 # In[ ]:
 
 
-#Import stuff
-
-import numpy as np
-import random
-import itertools
-import librosa
-import IPython.display as ipd
+import io
+import bson                       # this is installed with the pymongo package
 import matplotlib.pyplot as plt
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-def load_audio_file(file_path):
-    input_length = 16000
-    data = librosa.core.load(file_path)[0] #, sr=16000
-    if len(data)>input_length:
-        data = data[:input_length]
-    else:
-        data = np.pad(data, (0, max(0, input_length - len(data))), "constant")
-    return data
-def plot_time_series(data):
-    fig = plt.figure(figsize=(14, 8))
-    plt.title('Raw wave ')
-    plt.ylabel('Amplitude')
-    plt.plot(np.linspace(0, 1, len(data)), data)
-    plt.show()
+from skimage.data import imread   # or, whatever image library you prefer
+import multiprocessing as mp      # will come in handy due to the size of the data
 
 
 # In[ ]:
 
 
-data = load_audio_file("../input/train/audio/off/1df483c0_nohash_0.wav")
-plot_time_series(data)
+# Simple data processing
+
+data = bson.decode_file_iter(open('../input/train_example.bson', 'rb'))
+
+prod_to_category = dict()
+
+for c, d in enumerate(data):
+    product_id = d['_id']
+    category_id = d['category_id'] # This won't be in Test data
+    prod_to_category[product_id] = category_id
+    for e, pic in enumerate(d['imgs']):
+        picture = imread(io.BytesIO(pic['picture']))
+        # do something with the picture, etc
+
+prod_to_category = pd.DataFrame.from_dict(prod_to_category, orient='index')
+prod_to_category.index.name = '_id'
+prod_to_category.rename(columns={0: 'category_id'}, inplace=True)
 
 
 # In[ ]:
 
 
-#Hear it ! 
-ipd.Audio(data, rate=16000)
+prod_to_category.head()
 
 
 # In[ ]:
 
 
-# Adding white noise 
-wn = np.random.randn(len(data))
-data_wn = data + 0.005*wn
-plot_time_series(data_wn)
-# We limited the amplitude of the noise so we can still hear the word even with the noise, 
-#which is the objective
-ipd.Audio(data_wn, rate=16000)
+plt.imshow(picture);
+
+
+# For more efficient use of your resources, you can use the `multiprocessing` module to read and process the bson file.
+# 
+# Inspiration for this code is from:  https://stackoverflow.com/questions/43078980/python-multiprocessing-with-generator Note this may be slower on a small file, due to the overhead setting up the workers, but will be significantly faster for the large files.
+
+# In[ ]:
+
+
+NCORE =  8
+
+prod_to_category = mp.Manager().dict() # note the difference
+
+def process(q, iolock):
+    while True:
+        d = q.get()
+        if d is None:
+            break
+        product_id = d['_id']
+        category_id = d['category_id']
+        prod_to_category[product_id] = category_id
+        for e, pic in enumerate(d['imgs']):
+            picture = imread(io.BytesIO(pic['picture']))
+            # do something with the picture, etc
+    
+q = mp.Queue(maxsize=NCORE)
+iolock = mp.Lock()
+pool = mp.Pool(NCORE, initializer=process, initargs=(q, iolock))
+
+# process the file
+
+data = bson.decode_file_iter(open('../input/train_example.bson', 'rb'))
+for c, d in enumerate(data):
+    q.put(d)  # blocks until q below its max size
+
+# tell workers we're done
+
+for _ in range(NCORE):  
+    q.put(None)
+pool.close()
+pool.join()
+
+# convert back to normal dictionary
+prod_to_category = dict(prod_to_category)
+
+prod_to_category = pd.DataFrame.from_dict(prod_to_category, orient='index')
+prod_to_category.index.name = '_id'
+prod_to_category.rename(columns={0: 'category_id'}, inplace=True)
 
 
 # In[ ]:
 
 
-# Shifting the sound
-data_roll = np.roll(data, 1600)
-plot_time_series(data_roll)
-ipd.Audio(data_roll, rate=16000)
-
-
-# In[ ]:
-
-
-# stretching the sound
-def stretch(data, rate=1):
-    input_length = 16000
-    data = librosa.effects.time_stretch(data, rate)
-    if len(data)>input_length:
-        data = data[:input_length]
-    else:
-        data = np.pad(data, (0, max(0, input_length - len(data))), "constant")
-
-    return data
-
-
-data_stretch =stretch(data, 0.8)
-print("This makes the sound deeper but we can still hear 'off' ")
-plot_time_series(data_stretch)
-ipd.Audio(data_stretch, rate=16000)
-
-data_stretch =stretch(data, 1.2)
-print("Higher frequencies  ")
-plot_time_series(data_stretch)
-ipd.Audio(data_stretch, rate=16000)
-
-
-# In[ ]:
-
-
-# You can now plug all those transformations in your keras data generator and see your LB rank go up :D
+prod_to_category.head()
 

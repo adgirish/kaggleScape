@@ -1,7 +1,18 @@
 
 # coding: utf-8
 
-# In[ ]:
+# **Created by Peter Nagy February 2017 [Github][1]**
+# 
+# **Sentiment Analysis:** the process of computationally identifying and categorizing opinions expressed in a piece of text, especially in order to determine whether the writer's attitude towards a particular topic, product, etc. is positive, negative, or neutral.
+# 
+# 
+#   [1]: https://github.com/nagypeterjob
+
+# As an improvement to my previous [Kernel][1], here I am trying to achieve better results with a Recurrent Neural Network.
+# 
+#   [1]: https://www.kaggle.com/ngyptr/d/crowdflower/first-gop-debate-twitter-sentiment/python-nltk-sentiment-analysis
+
+# In[34]:
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
@@ -11,196 +22,144 @@
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
+from sklearn.feature_extraction.text import CountVectorizer
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.models import Sequential
+from keras.layers import Dense, Embedding, LSTM, SpatialDropout1D
+from sklearn.model_selection import train_test_split
+from keras.utils.np_utils import to_categorical
+import re
+
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Any results you write to the current directory are saved as output.
+# Only keeping the necessary columns.
 
-
-# In[ ]:
+# In[35]:
 
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_score
-
-from lightgbm import LGBMClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier
-
-from rgf import *     # https://github.com/fukatani/rgf_python
-
-train = pd.read_csv('../input/porto-seguro-safe-driver-prediction/train.csv')
-test = pd.read_csv('../input/porto-seguro-safe-driver-prediction/test.csv')
+data = pd.read_csv('../input/Sentiment.csv')
+# Keeping only the neccessary columns
+data = data[['text','sentiment']]
 
 
-# In[ ]:
+# Next, I am dropping the 'Neutral' sentiments as my goal was to only differentiate positive and negative tweets. After that, I am filtering the tweets so only valid texts and words remain.  Then, I define the number of max features as 2000 and use Tokenizer to vectorize and convert text into Sequences so the Network can deal with it as input.
+
+# In[36]:
 
 
-# The lgbm part of the code is infuenced by https://www.kaggle.com/yekenot/simple-stacker-lb-0-284
-# with a little modification
-# The output of this model is available under Input datasets section
-# Preprocessing 
-id_test = test['id'].values
-target_train = train['target'].values
+data = data[data.sentiment != "Neutral"]
+data['text'] = data['text'].apply(lambda x: x.lower())
+data['text'] = data['text'].apply((lambda x: re.sub('[^a-zA-z0-9\s]','',x)))
 
-train = train.drop(['target','id'], axis = 1)
-test = test.drop(['id'], axis = 1)
+print(data[ data['sentiment'] == 'Positive'].size)
+print(data[ data['sentiment'] == 'Negative'].size)
 
-col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
-train = train.drop(col_to_drop, axis=1)  
-test = test.drop(col_to_drop, axis=1)  
-
-train = train.replace(-1, np.nan)
-test = test.replace(-1, np.nan)
-
-cat_features = [a for a in train.columns if a.endswith('cat')]
-
-for column in cat_features:
-	temp = pd.get_dummies(pd.Series(train[column]))
-	train = pd.concat([train,temp],axis=1)
-	train = train.drop([column],axis=1)
+for idx,row in data.iterrows():
+    row[0] = row[0].replace('rt',' ')
     
-for column in cat_features:
-	temp = pd.get_dummies(pd.Series(test[column]))
-	test = pd.concat([test,temp],axis=1)
-	test = test.drop([column],axis=1)
-
-print(train.values.shape, test.values.shape)
-
-
-# In[ ]:
+max_fatures = 2000
+tokenizer = Tokenizer(num_words=max_fatures, split=' ')
+tokenizer.fit_on_texts(data['text'].values)
+X = tokenizer.texts_to_sequences(data['text'].values)
+X = pad_sequences(X)
 
 
-class Ensemble(object):
-    def __init__(self, n_splits, stacker, base_models):
-        self.n_splits = n_splits
-        self.stacker = stacker
-        self.base_models = base_models
+# Next, I compose the LSTM Network. Note that **embed_dim**, **lstm_out**, **batch_size**, **droupout_x** variables are hyperparameters, their values are somehow intuitive, can be and must be played with in order to achieve good results. Please also note that I am using softmax as activation function. The reason is that our Network is using categorical crossentropy, and softmax is just the right activation method for that.
 
-    def fit_predict(self, X, y, T):
-        X = np.array(X)
-        y = np.array(y)
-        T = np.array(T)
-
-        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
-
-        S_train = np.zeros((X.shape[0], len(self.base_models)))
-        S_test = np.zeros((T.shape[0], len(self.base_models)))
-        for i, clf in enumerate(self.base_models):
-
-            S_test_i = np.zeros((T.shape[0], self.n_splits))
-
-            for j, (train_idx, test_idx) in enumerate(folds):
-                X_train = X[train_idx]
-                y_train = y[train_idx]
-                X_holdout = X[test_idx]
-#                y_holdout = y[test_idx]
-
-                print ("Fit %s fold %d" % (str(clf).split('(')[0], j+1))
-                clf.fit(X_train, y_train)
-#                cross_score = cross_val_score(clf, X_train, y_train, cv=3, scoring='roc_auc')
-#                print("    cross_score: %.5f" % (cross_score.mean()))
-                y_pred = clf.predict_proba(X_holdout)[:,1]                
-
-                S_train[test_idx, i] = y_pred
-                S_test_i[:, j] = clf.predict_proba(T)[:,1]
-            S_test[:, i] = S_test_i.mean(axis=1)
-
-        results = cross_val_score(self.stacker, S_train, y, cv=3, scoring='roc_auc')
-        print("Stacker score: %.5f" % (results.mean()))
-
-        self.stacker.fit(S_train, y)
-        res = self.stacker.predict_proba(S_test)[:,1]
-        return res
+# In[44]:
 
 
-# In[ ]:
+embed_dim = 128
+lstm_out = 196
+
+model = Sequential()
+model.add(Embedding(max_fatures, embed_dim,input_length = X.shape[1]))
+model.add(SpatialDropout1D(0.4))
+model.add(LSTM(lstm_out, dropout=0.2, recurrent_dropout=0.2))
+model.add(Dense(2,activation='softmax'))
+model.compile(loss = 'categorical_crossentropy', optimizer='adam',metrics = ['accuracy'])
+print(model.summary())
 
 
-# LightGBM params
-lgb_params = {}
-lgb_params['learning_rate'] = 0.02
-lgb_params['n_estimators'] = 650
-lgb_params['max_bin'] = 10
-lgb_params['subsample'] = 0.8
-lgb_params['subsample_freq'] = 10  
-lgb_params['min_child_samples'] = 500
-lgb_params['feature_fraction'] = 0.9
-lgb_params['bagging_freq'] = 1
-lgb_params['seed'] = 200
+# Hereby I declare the train and test dataset.
 
-lgb_params2 = {}
-lgb_params2['n_estimators'] = 1090
-lgb_params2['learning_rate'] = 0.02   
-lgb_params2['subsample'] = 0.7
-lgb_params2['subsample_freq'] = 2
-lgb_params2['num_leaves'] = 16
-lgb_params2['feature_fraction'] = 0.8
-lgb_params2['bagging_freq'] = 1
-lgb_params2['seed'] = 200
+# In[45]:
 
 
-lgb_params3 = {}
-lgb_params3['n_estimators'] = 1100
-lgb_params3['max_depth'] = 4
-lgb_params3['learning_rate'] = 0.02
-lgb_params3['feature_fraction'] = 0.95
-lgb_params3['bagging_freq'] = 1
-lgb_params3['seed'] = 200
+Y = pd.get_dummies(data['sentiment']).values
+X_train, X_test, Y_train, Y_test = train_test_split(X,Y, test_size = 0.33, random_state = 42)
+print(X_train.shape,Y_train.shape)
+print(X_test.shape,Y_test.shape)
 
 
-# In[ ]:
+# Here we train the Network. We should run much more than 7 epoch, but I would have to wait forever for kaggle, so it is 7 for now.
+
+# In[46]:
 
 
-lgb_model = LGBMClassifier(**lgb_params)
-
-lgb_model2 = LGBMClassifier(**lgb_params2)
-
-lgb_model3 = LGBMClassifier(**lgb_params3)
+batch_size = 32
+model.fit(X_train, Y_train, epochs = 7, batch_size=batch_size, verbose = 2)
 
 
-# In[ ]:
+# Extracting a validation set, and measuring score and accuracy.
+
+# In[47]:
 
 
-log_model = LogisticRegression()
+validation_size = 1500
+
+X_validate = X_test[-validation_size:]
+Y_validate = Y_test[-validation_size:]
+X_test = X_test[:-validation_size]
+Y_test = Y_test[:-validation_size]
+score,acc = model.evaluate(X_test, Y_test, verbose = 2, batch_size = batch_size)
+print("score: %.2f" % (score))
+print("acc: %.2f" % (acc))
+
+
+# Finally measuring the number of correct guesses.  It is clear that finding negative tweets goes very well for the Network but deciding whether is positive is not really. My educated guess here is that the positive training set is dramatically smaller than the negative, hence the "bad" results for positive tweets.
+
+# In[52]:
+
+
+pos_cnt, neg_cnt, pos_correct, neg_correct = 0, 0, 0, 0
+for x in range(len(X_validate)):
+    
+    result = model.predict(X_validate[x].reshape(1,X_test.shape[1]),batch_size=1,verbose = 2)[0]
+   
+    if np.argmax(result) == np.argmax(Y_validate[x]):
+        if np.argmax(Y_validate[x]) == 0:
+            neg_correct += 1
+        else:
+            pos_correct += 1
        
-stack = Ensemble(n_splits=6,
-        stacker = log_model,
-        base_models = (lgb_model, lgb_model2, lgb_model3))        
-        
-y_pred = stack.fit_predict(train, target_train, test)        
+    if np.argmax(Y_validate[x]) == 0:
+        neg_cnt += 1
+    else:
+        pos_cnt += 1
 
-sub_1 = pd.DataFrame()
-sub_1['id'] = id_test
-sub_1['target'] = y_pred
 
+
+print("pos_acc", pos_correct/pos_cnt*100, "%")
+print("neg_acc", neg_correct/neg_cnt*100, "%")
+
+
+# Finally, an example on predicting an arbitrary tweet's sentiment:
 
 # In[ ]:
 
 
-# All these datasets are from different kaggle kernels
-stacked_1 = pd.read_csv('../input/input-datasets/stacked_1.csv')
-xgb_submit = pd.read_csv('../input/input-datasets/xgb_submit_1.csv')
-Froza_and_Pascal = pd.read_csv('../input/input-datasets/Froza_and_Pascal.csv')
-rgf_submit = pd.read_csv('../input/input-datasets/rgf_submit.csv')
-gpari = pd.read_csv('../input/input-datasets/gpari.csv')
-
-# Ensemble and create submission 
-
-sub = pd.DataFrame()
-sub['id'] = stacked_1['id']
-sub['target'] = np.exp(np.mean(
-	[	
-    sub_1['target'].apply(lambda x: np.log(x)),\
-    Froza_and_Pascal['target'].apply(lambda x: np.log(x)),\
-    rgf_submit['target'].apply(lambda x: np.log(x)),\
-    gpari['target'].apply(lambda x: np.log(x)),\
-	stacked_1['target'].apply(lambda x: np.log(x)),\
-	xgb_submit['target'].apply(lambda x: np.log(x))\
-	], axis =0))
-
-sub.to_csv('sub.csv.gz', index = False, compression = 'gzip')
+twt = 'Meetings: Because none of us is as dumb as all of us.'
+#vectorizing the tweet by the pre-fitted tokenizer instance
+twt = tokenizer.texts_to_sequences(twt)
+#padding the tweet to have exactly the same shape as `embedding_2` input
+twt = pad_sequences(twt, maxlen=28, dtype='int32', padding='post', truncating='post', value=0)
+sentiment = model.predict(twt,batch_size=1,verbose = 2)[0]
+if(np.argmax(sentiment) == 0):
+    print("negative")
+elif (np.argmax(sentiment) == 1):
+    print("positive")
 

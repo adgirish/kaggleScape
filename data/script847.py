@@ -1,290 +1,392 @@
 
 # coding: utf-8
 
-# # A Tensorflow based Convolutional Neural Network for Iceberg Classification
-# 
-# In an attempt to improve my understanding of how to best design and use neural networks, I set out to build a convolutional neural network using just tensorflow (as opposed to my usual workflow of using nifty wrappers like Keras to make life easier). I am sharing the code here in the hopes that other people can learn a bit and maybe be tempted into experiment with using tensorflow themselves!
-# 
-# NOTE: This solution abandons the non-image data in the train and test json files so it is definitely far from an optimal solution. This network is not designed to win the competition, but rather with the idea of me learning more about neural network design through the use of base tensorflow.
-# 
-# NOTE2: The model scores in the 0.27 range if the n_epochs=250 line is changed to n_epochs=2500. Expanding the number of neurons and adding connected layers also further improves the score.
-# 
-# NOTE3: The kernel ran over time... so I made the change in NOTE2 on the master so no one else has to worry about that!
-# 
-# ## Imports
-# Relitavely short list of libraries and imports, making use of pandas, numpy, the train/test split function from SciKit-Learn and obviously tensorflow.
-# 
+# Data Import
+# ------------------
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
-import tensorflow as tf
-from sklearn.model_selection import train_test_split
+import pandas as pd
+pd.options.mode.chained_assignment = None
+
+import plotly.plotly as py
+import plotly.graph_objs as go
+from plotly import tools
+from plotly.offline import iplot, init_notebook_mode
+init_notebook_mode()
+
+terror_data = pd.read_csv('../input/globalterrorismdb_0616dist.csv', encoding='ISO-8859-1',
+                          usecols=[0, 1, 2, 3, 8, 11, 13, 14, 35, 84, 100, 103])
+terror_data = terror_data.rename(
+    columns={'eventid':'id', 'iyear':'year', 'imonth':'month', 'iday':'day',
+             'country_txt':'country', 'provstate':'state', 'targtype1_txt':'target',
+             'weaptype1_txt':'weapon', 'nkill':'fatalities', 'nwound':'injuries'})
+terror_data['fatalities'] = terror_data['fatalities'].fillna(0).astype(int)
+terror_data['injuries'] = terror_data['injuries'].fillna(0).astype(int)
+
+# terrorist attacks in United States only (2,198 rows)
+terror_usa = terror_data[(terror_data.country == 'United States') &
+                         (terror_data.state != 'Puerto Rico') &
+                         (terror_data.longitude < 0)]
+terror_usa['day'][terror_usa.day == 0] = 1
+terror_usa['date'] = pd.to_datetime(terror_usa[['day', 'month', 'year']])
+terror_usa = terror_usa[['id', 'date', 'year', 'state', 'latitude', 'longitude',
+                         'target', 'weapon', 'fatalities', 'injuries']]
+terror_usa = terror_usa.sort_values(['fatalities', 'injuries'], ascending = False)
+terror_usa = terror_usa.drop_duplicates(['date', 'latitude', 'longitude', 'fatalities'])
 
 
-# ### Citations
-# 
-# Here is a list of the resorces that went in to helping me design this convolutional neural network:
-# 
-# https://www.tensorflow.org/api_docs/python/tf/layers
-# 
-# https://github.com/aymericdamien/TensorFlow-Examples/blob/master/examples/3_NeuralNetworks/convolutional_network.py
-# 
-# This example is using TensorFlow layers API
-# TensorFlow’s high-level machine learning API (tf.estimator) makes it easy to configure, 
-# train, and evaluate a variety of machine learning models:
-# 
-# https://www.tensorflow.org/get_started/estimator
-# 
-# I also read this book. It was neat.
-# http://shop.oreilly.com/product/0636920052289.do
-# 
-# ## Load the data, split the training data into a training and validation set
-# 
-# Before the model is built there is the same old basic housekeeping of loading in the data and splitting off a validation set. As I mentioned above I am discarding everything except for the images and the labels... which is most definitely a loss of useful information. I am also not augmenting the data here (as I want to deal with one thing at a time. see this kernel for how I generated more image instances for training: https://www.kaggle.com/camnugent/expanded-training-set-keras-imagedatagenerator)
-# Thank you to Kevin Mader, I have appropriated your input function below.
-
-# In[ ]:
-
-
-#####
-# Load in the data
-#####
-print('loading data')
-# load function from: https://www.kaggle.com/kmader/exploring-the-icebergs-with-skimage-and-keras
-# b/c I didn't want to reinvent the wheel
-def load_and_format(in_path):
-    """ take the input data in .json format and return a df with the data and an np.array for the pictures """
-    out_df = pd.read_json(in_path)
-    out_images = out_df.apply(lambda c_row: [np.stack([c_row['band_1'],c_row['band_2']], -1).reshape((75,75,2))],1)
-    out_images = np.stack(out_images).squeeze()
-    return out_df, out_images
-
-
-train_df, train_images = load_and_format('../input/train.json')
-
-test_df, test_images = load_and_format('../input/test.json')
-
-X_train, X_valid, y_train, y_valid = train_test_split(train_images,
-                                                   train_df['is_iceberg'].as_matrix(),
-                                                   test_size = 0.3
-                                                   )
-print('Train', X_train.shape, y_train.shape)
-print('Validation', X_valid.shape, y_valid.shape)
-
-
-# ## Convert data to float32 
-# 
-# Tensorflow likes its data to be in float32, if you skip this step and pass in float64 values... it will yell at you. I don't like being yelled at so I avoid this.
+# Terrorist Attacks by Latitude/Longitude
+# ---------------------------------------
 
 # In[ ]:
 
 
-#convert to np.float32 for use in tensorflow
-X_train = X_train.astype(np.float32)
-y_train = y_train.astype(np.float32)
-X_valid = X_valid.astype(np.float32)
-y_valid= y_valid.astype(np.float32)
+terror_usa['text'] = terror_usa['date'].dt.strftime('%B %-d, %Y') + '<br>' +                     terror_usa['fatalities'].astype(str) + ' Killed, ' +                     terror_usa['injuries'].astype(str) + ' Injured'
+
+fatality = dict(
+           type = 'scattergeo',
+           locationmode = 'USA-states',
+           lon = terror_usa[terror_usa.fatalities > 0]['longitude'],
+           lat = terror_usa[terror_usa.fatalities > 0]['latitude'],
+           text = terror_usa[terror_usa.fatalities > 0]['text'],
+           mode = 'markers',
+           name = 'Fatalities',
+           hoverinfo = 'text+name',
+           marker = dict(
+               size = terror_usa[terror_usa.fatalities > 0]['fatalities'] ** 0.255 * 8,
+               opacity = 0.95,
+               color = 'rgb(240, 140, 45)')
+           )
+        
+injury = dict(
+         type = 'scattergeo',
+         locationmode = 'USA-states',
+         lon = terror_usa[terror_usa.fatalities == 0]['longitude'],
+         lat = terror_usa[terror_usa.fatalities == 0]['latitude'],
+         text = terror_usa[terror_usa.fatalities == 0]['text'],
+         mode = 'markers',
+         name = 'Injuries',
+         hoverinfo = 'text+name',
+         marker = dict(
+             size = (terror_usa[terror_usa.fatalities == 0]['injuries'] + 1) ** 0.245 * 8,
+             opacity = 0.85,
+             color = 'rgb(20, 150, 187)')
+         )
+
+layout = dict(
+         title = 'Terrorist Attacks by Latitude/Longitude in United States (1970-2015)',
+         showlegend = True,
+         legend = dict(
+             x = 0.85, y = 0.4
+         ),
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             showland = True,
+             landcolor = 'rgb(250, 250, 250)',
+             subunitwidth = 1,
+             subunitcolor = 'rgb(217, 217, 217)',
+             countrywidth = 1,
+             countrycolor = 'rgb(217, 217, 217)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+         )
+
+data = [fatality, injury]
+figure = dict(data = data, layout = layout)
+iplot(figure)
 
 
-# ## Define a reset function
-# 
-# This is here for iterative design purposes. If you define the neural network and don't do exactly how you want, then try to do it again without resetting the graph, then funny things can happen as tensorflow will try to patch the new onto the old. We must therefore always throw away the old!
+# Terrorist Attacks by Year
+# -------------------------
 
 # In[ ]:
 
 
-#for stability
-def reset_graph(seed=42):
-    tf.reset_default_graph()
-    tf.set_random_seed(seed)
-    np.random.seed(seed)
+# terrorist attacks by year
+terror_peryear = np.asarray(terror_usa.groupby('year').year.count())
 
-reset_graph()
+terror_years = np.arange(1970, 2016)
+# terrorist attacks in 1993 missing from database
+terror_years = np.delete(terror_years, [23])
+
+trace = [go.Scatter(
+         x = terror_years,
+         y = terror_peryear,
+         mode = 'lines',
+         line = dict(
+             color = 'rgb(240, 140, 45)',
+             width = 3)
+         )]
+
+layout = go.Layout(
+         title = 'Terrorist Attacks by Year in United States (1970-2015)',
+         xaxis = dict(
+             rangeslider = dict(thickness = 0.05),
+             showline = True,
+             showgrid = False
+         ),
+         yaxis = dict(
+             range = [0.1, 425],
+             showline = True,
+             showgrid = False)
+         )
+
+figure = dict(data = trace, layout = layout)
+iplot(figure)
 
 
-# ## Set necessary paramaters/hyperparamaters
-# 
-# For this model I'm using a slow learning rate (0.005) and a high number of epochs (2500).
-# 
-# The input to the network is the length * width of the image (# of pixels).
-# The dropout is used to prevent overfitting by randomly dropping components of neural network. 
-# 
-
-# In[ ]:
-
-
-print('designing model')
-# Training Parameters
-learning_rate = 0.005
-n_epochs = 2500 # changed to 2500 for a LB score of ~2.69
-
-
-# Network Parameters
-num_input = 75*75 #size of the images
-num_classes = 2 # Binary
-dropout = 0.4 # Dropout, probability to keep units
-
-
-# ## Design the convolutional neural network
-# 
-# Here we get to the design of the network, first set is to design the graph in tensorflow. The variables X and y below are placeholders for the actual data we will pass in to the network. Note the shape of X is (None, 75, 75, 2). The None is so that the # of rows is flexiable, the 75,75 is the pixel dimensions of the image and the 2 is because there are two channels of image data being passed in. Note y has shape=(None) because it will be a 1-D vector with one input for each row. If we had multiple classes this could be changed to shape=(None, 5) (for 5 classes).
-# 
-# I use the tensorflow layers API because it is easier to understand the makeup of the network and also easier to design the network.
-# 
-# The network used here uses an initial set of convolutional layers, followed by a pooling step and several additional fully connected layers. The second to last layer applies dropout, which we defined as 0.3. Throughout the network the rectified linear unit (ReLU) activation function(https://en.wikipedia.org/wiki/Rectifier_(neural_networks)) is used, along with an He Kernel initializer (https://www.cv-foundation.org/openaccess/content_iccv_2015/papers/He_Delving_Deep_into_ICCV_2015_paper.pdf).
-# The Sigmoid activation function is important for the final layer as this lets us get meaningful probabilities returned from the network.
+# Terrorist Attacks per Capita
+# ----------------------------
 
 # In[ ]:
 
 
-X = tf.placeholder(tf.float32, shape=(None, 75, 75, 2), name="X")
-y = tf.placeholder(tf.int64, shape=(None), name="y")
+us_states = np.asarray(['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA',
+                        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA',
+                        'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
+                        'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX',
+                        'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'])
+
+# state population estimates for July 2015 from US Census Bureau
+state_population = np.asarray([4858979, 738432, 6828065, 2978204, 39144818, 5456574,
+                               3590886, 945934, 646449, 20271272, 10214860, 1431603,
+                               1654930, 12859995, 6619680, 3123899, 2911641, 4425092,
+                               4670724, 1329328, 6006401, 6794422, 9922576, 5489594,
+                               2992333, 6083672, 1032949, 1896190, 2890845, 1330608,
+                               8958013, 2085109, 19795791, 10042802, 756927, 11613423,
+                               3911338, 4028977, 12802503, 1056298, 4896146, 858469,
+                               6600299, 27469114, 2995919, 626042, 8382993, 7170351,
+                               1844128, 5771337, 586107])
+
+# terrorist attacks per 100,000 people in state
+terror_perstate = np.asarray(terror_usa.groupby('state').state.count())
+terror_percapita = np.round(terror_perstate / state_population * 100000, 2)
+# District of Columbia outlier (1 terrorist attack per 10,000 people) adjusted
+terror_percapita[8] = round(terror_percapita[8] / 6, 2)
+
+terror_scale = [[0, 'rgb(252, 232, 213)'], [1, 'rgb(240, 140, 45)']]
+
+data = [dict(
+        type = 'choropleth',
+        autocolorscale = False,
+        colorscale = terror_scale,
+        showscale = False,
+        locations = us_states,
+        locationmode = 'USA-states',
+        z = terror_percapita,
+        marker = dict(
+            line = dict(
+                color = 'rgb(255, 255, 255)',
+                width = 2)
+            )
+        )]
+
+layout = dict(
+         title = 'Terrorist Attacks per 100,000 People in United States (1970-2015)',
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             countrycolor = 'rgb(255, 255, 255)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+         )
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
 
 
-with tf.variable_scope('ConvNet'):
+# Terrorist Attacks by Target
+# ---------------------------
 
-    he_init = tf.contrib.layers.variance_scaling_initializer()
+# In[ ]:
 
-    # Convolution Layer with 32 filters and a kernel size of 5
-    conv1 = tf.layers.conv2d(X, filters=32,  kernel_size=[5, 5], activation=tf.nn.relu)
-    # Max Pooling 
-    pool1 = tf.layers.max_pooling2d(conv1, pool_size=[2, 2], strides=2)
 
-    conv2 = tf.layers.conv2d(pool1, filters=64,  kernel_size=[3,3], activation=tf.nn.relu)
-    pool2 = tf.layers.max_pooling2d(conv2, pool_size=[2, 2], strides=2)
+# terrorist attack targets grouped in categories
+target_codes = []
 
-    conv3 = tf.layers.conv2d(pool2, filters=128, kernel_size=[3,3], activation=tf.nn.relu)
-    pool3 = tf.layers.max_pooling2d(conv3, pool_size=[2, 2], strides=2)
+for attack in terror_usa['target'].values:
+    if attack in ['Business', 'Journalists & Media', 'NGO']:
+        target_codes.append(1)
+    elif attack in ['Government (General)', 'Government (Diplomatic)']:
+        target_codes.append(2)
+    elif attack == 'Abortion Related':
+        target_codes.append(4)
+    elif attack == 'Educational Institution':
+        target_codes.append(5)
+    elif attack == 'Police':
+        target_codes.append(6)
+    elif attack == 'Military':
+        target_codes.append(7)
+    elif attack == 'Religious Figures/Institutions':
+        target_codes.append(8)
+    elif attack in ['Airports & Aircraft', 'Maritime', 'Transportation']:
+        target_codes.append(9)
+    elif attack in ['Food or Water Supply', 'Telecommunication', 'Utilities']:
+        target_codes.append(10)
+    else:
+        target_codes.append(3)
 
-    conv4 = tf.layers.conv2d(pool3, filters=256, kernel_size=[3,3], activation=tf.nn.relu)
-    pool4 = tf.layers.max_pooling2d(conv4, pool_size=[2, 2], strides=2)
+terror_usa['target'] = target_codes
+target_categories = ['Business', 'Government', 'Individuals', 'Healthcare', 'Education',
+                     'Police', 'Military', 'Religion', 'Transportation', 'Infrastructure']
+
+# terrorist attacks by target
+target_count = np.asarray(terror_usa.groupby('target').target.count())
+target_percent = np.round(target_count / sum(target_count) * 100, 2)
+
+# terrorist attack fatalities by target
+target_fatality = np.asarray(terror_usa.groupby('target')['fatalities'].sum())
+target_yaxis = np.asarray([1.33, 2.36, 2.98, 0.81, 1.25, 1.71, 1.31, 1.53, 1.34, 0])
+
+# terrorist attack injuries by target
+target_injury = np.asarray(terror_usa.groupby('target')['injuries'].sum())
+target_xaxis = np.log10(target_injury)
+
+target_text = []
+for i in range(0, 10):
+    target_text.append(target_categories[i] + ' (' + target_percent[i].astype(str) 
+                       + '%)<br>' + target_fatality[i].astype(str) + ' Killed, '
+                       + target_injury[i].astype(str) + ' Injured')
+
+data = [go.Scatter(
+        x = target_injury,
+        y = target_fatality,
+        text = target_text,
+        mode = 'markers',
+        hoverinfo = 'text',
+        marker = dict(
+            size = target_count / 6.5,
+            opacity = 0.9,
+            color = 'rgb(240, 140, 45)')
+        )]
+
+layout = go.Layout(
+         title = 'Terrorist Attacks by Target in United States (1970-2015)',
+         xaxis = dict(
+             title = 'Injuries',
+             type = 'log',
+             range = [1.36, 3.25],
+             tickmode = 'auto',
+             nticks = 2,
+             showline = True,
+             showgrid = False
+         ),
+         yaxis = dict(
+             title = 'Fatalities',
+             type = 'log',
+             range = [0.59, 3.45],
+             tickmode = 'auto',
+             nticks = 4,
+             showline = True,
+             showgrid = False)
+         )
+
+annotations = []
+for i in range(0, 10):
+    annotations.append(dict(x=target_xaxis[i], y=target_yaxis[i],
+                            xanchor='middle', yanchor='top',
+                            text=target_categories[i], showarrow=False))
+layout['annotations'] = annotations
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
+
+
+# Terrorist Attacks by Weapon
+# ---------------------------
+
+# In[ ]:
+
+
+# terrorist attack weapons grouped in categories
+weapon_codes = []
+
+for attack in terror_usa['weapon'].values:
+    if attack in ['Explosives/Bombs/Dynamite', 'Sabotage Equipment']:
+        weapon_codes.append(1)
+    elif attack == 'Incendiary':
+        weapon_codes.append(2)
+    elif attack in ['Firearms', 'Fake Weapons']:
+        weapon_codes.append(3)
+    elif attack == 'Melee':
+        weapon_codes.append(5)
+    elif attack == 'Biological':
+        weapon_codes.append(6)
+    elif attack in ['Chemical', 'Radiological']:
+        weapon_codes.append(7)
+    elif 'Vehicle' in attack:
+        weapon_codes.append(8)
+    else:
+        weapon_codes.append(4)
+
+terror_usa['weapon'] = weapon_codes
+weapon_categories = ['Explosives', 'Flammables', 'Firearms', 'Miscellaneous',
+                     'Knives', 'Bacteria/Viruses', 'Chemicals', 'Vehicles']
+
+# terrorist attacks by weapon
+weapon_count = np.asarray(terror_usa.groupby('weapon').weapon.count())
+weapon_percent = np.round(weapon_count / sum(weapon_count) * 100, 2)
+
+# terrorist attack fatalities by weapon
+weapon_fatality = np.asarray(terror_usa.groupby('weapon')['fatalities'].sum())
+weapon_yaxis = np.asarray([1.93, 1.02, 2.28, 0.875, 0.945, 0.83, 0.835, 3.2])
+
+# terrorist attack injuries by weapon
+weapon_injury = np.asarray(terror_usa.groupby('weapon')['injuries'].sum())
+weapon_xaxis = np.log10(weapon_injury)
+
+weapon_text = []
+for i in range(0, 8):
+    weapon_text.append(weapon_categories[i] + ' (' + weapon_percent[i].astype(str) 
+                       + '%)<br>' + weapon_fatality[i].astype(str) + ' Killed, '
+                       + weapon_injury[i].astype(str) + ' Injured')
+
+weapon_fatality[6] = 7
     
-    # Flatten the data to a 1-D vector for the fully connected layer
-    fc1 = tf.contrib.layers.flatten(pool4)
+data = [go.Scatter(
+        x = weapon_injury,
+        y = weapon_fatality,
+        text = weapon_text,
+        mode = 'markers',
+        hoverinfo = 'text',
+        marker = dict(
+            size = (weapon_count + 50) / 10,
+            opacity = 0.9,
+            color = 'rgb(240, 140, 45)')
+        )]
 
-    # Fully connected layer 
-    fc2 = tf.layers.dense(fc1, 32, 
-                        kernel_initializer=he_init, activation=tf.nn.relu)
+layout = go.Layout(
+         title = 'Terrorist Attacks by Weapon in United States (1970-2015)',
+         xaxis = dict(
+             title = 'Injuries',
+             type = 'log',
+             range = [0.45, 3.51],
+             tickmode = 'auto',
+             nticks = 4,
+             showline = True,
+             showgrid = False
+         ),
+         yaxis = dict(
+             title = 'Fatalities',
+             type = 'log',
+             range = [0.65, 3.33],
+             tickmode = 'auto',
+             nticks = 3,
+             showline = True,
+             showgrid = False)
+         )
 
-    # Apply Dropout 
-    fc3 = tf.layers.dropout(fc2, rate=dropout)
+annotations = []
+for i in range(0, 8):
+    annotations.append(dict(x=weapon_xaxis[i], y=weapon_yaxis[i],
+                            xanchor='middle', yanchor='top',
+                            text=weapon_categories[i], showarrow=False))
+layout['annotations'] = annotations
 
-    logits = tf.layers.dense(fc3, num_classes, activation=tf.nn.sigmoid)
-
-
-# ## Define the loss function
-# 
-# With the network defined we next define the loss function which compares the predicted values to the actual values of the training set. The sparse_softmax_cross_entropy_with_logits function used here computes the sparse softmax cross entropy between logits and labels and the reduce_mean function is then used to compute the mean of the tensor.
-# 
-
-# In[ ]:
-
-
-with tf.name_scope("loss"):
-    xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
-    loss = tf.reduce_mean(xentropy, name="loss")
-
-
-# ## Define the training method
-# 
-# Gradient descent is defined as the training method used to minimize the loss function
-
-# In[ ]:
-
-
-with tf.name_scope("train"):
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-    training_op = optimizer.minimize(loss)
-
-
-# ## Define the evalutation method
-# 
-# This explains the evaluation method better then I can, so have a look if you're curious about how tf.nn.in_top_k() works!
-# 
-# https://www.tensorflow.org/versions/r0.12/api_docs/python/nn/evaluation
-
-# In[ ]:
-
-
-with tf.name_scope("eval"):
-    correct = tf.nn.in_top_k(logits, y, 1)
-    accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
-
-
-# Next we initialize the network.
-# I've commented out the saver portion, I use this when running the network locally to maintain a copy of the model after training (so we don't have to start from scratch each time). The saver, and corresponding use lines below are turned off because there is no need to save the model to memory when I run on Kaggle (you can turn them on though).
-
-# In[ ]:
-
-
-init = tf.global_variables_initializer()
-#saver = tf.train.Saver()
-
-
-# ## Train the model
-# 
-# Recall the number of epochs was defined above as 2500, so the model will be trained on the entire training set for 2500 iterations. Here I have it print the training and testing accuracy after each epoch.
-# 
-# Here we initiate the model and for each epoch we use sess.run() to pass the data into the model and train the network. Predictions for the train and validation data are then made and the accuracy is assessed and printed to the screen.
-
-# In[ ]:
-
-
-print('training model\n')
-with tf.Session() as sess:
-    init.run()
-    for epoch in range(n_epochs):
-        sess.run(training_op, feed_dict={X: X_train, y: y_train})   
-        acc_train = accuracy.eval(feed_dict={X: X_train, y: y_train})
-        acc_test = accuracy.eval(feed_dict={X: X_valid,
-                                            y: y_valid})
-    
-        print(epoch, "Train accuracy:", acc_train, "Validation accuracy:", acc_test)
-    save_path = saver.save(sess, "./cam_iceberg_model_final.ckpt")
-
-
-# ## Prepare the test data
-# 
-# As we did with the training and validation data, before making predictions I convert the type of the test data to float32.
-# 
-
-# In[ ]:
-
-
-#convert the test images to float32
-test_images =test_images.astype(np.float32) 
-test_images.shape
-
-
-# ## Make predictions
-# 
-# The last line y_pred = Z[:,1] selects the second column of the predictions because we want 'probability of iceberg' not 'probability of not iceberg' which would be column 0.
-
-# In[ ]:
-
-
-
-print('making predictions\n')
-#make external predictions on the test_dat
-with tf.Session() as sess:
-    saver.restore(sess, "./cam_iceberg_model_final.ckpt") # or better, use save_path
-    Z = logits.eval(feed_dict={X: test_images}) #outputs switched to logits
-    y_pred = Z[:,1]
-
-
-
-# ## Write output to file
-# 
-# Lastly we take the predictions and construct a dataframe which we output to a .csv and can then submit for evalutation!
-
-# In[ ]:
-
-
-output = pd.DataFrame(test_df['id'])
-output['is_iceberg'] = y_pred
-
-output.to_csv('cam_tf_cnn.csv', index=False)
+figure = dict(data = data, layout = layout)
+iplot(figure)
 

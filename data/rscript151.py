@@ -1,64 +1,50 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Thu Sep 17 16:09:21 2015
 
-@author: Dipayan
-"""
-
-
-from pandas import Series, DataFrame
 import pandas as pd
-import numpy as np
-import nltk
-import re
-from nltk.stem import WordNetLemmatizer
-from sklearn.svm import LinearSVC
-from sklearn.metrics import classification_report
-import sklearn.metrics
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn import grid_search
-from sklearn.linear_model import LogisticRegression
+from datetime import timedelta
 
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
 
-# A combination of Word lemmatization + LinearSVC model finally pushes the accuracy score past 80%
+train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                    skiprows=range(1, 101688779) #Skip dates before 2017-01-01
+                    )
 
-traindf = pd.read_json("../input/train.json")
-traindf['ingredients_clean_string'] = [' , '.join(z).strip() for z in traindf['ingredients']]  
-traindf['ingredients_string'] = [' '.join([WordNetLemmatizer().lemmatize(re.sub('[^A-Za-z]', ' ', line)) for line in lists]).strip() for lists in traindf['ingredients']]       
+train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
 
-testdf = pd.read_json("../input/test.json") 
-testdf['ingredients_clean_string'] = [' , '.join(z).strip() for z in testdf['ingredients']]
-testdf['ingredients_string'] = [' '.join([WordNetLemmatizer().lemmatize(re.sub('[^A-Za-z]', ' ', line)) for line in lists]).strip() for lists in testdf['ingredients']]       
+# creating records for all items, in all markets on all dates
+# for correct calculation of daily unit sales averages.
+u_dates = train.date.unique()
+u_stores = train.store_nbr.unique()
+u_items = train.item_nbr.unique()
+train.set_index(["date", "store_nbr", "item_nbr"], inplace=True)
+train = train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=["date", "store_nbr", "item_nbr"]
+    )
+)
 
+del u_dates, u_stores, u_items
 
+train.loc[:, "unit_sales"].fillna(0, inplace=True) # fill NaNs
+train.reset_index(inplace=True) # reset index and restoring unique columns  
+lastdate = train.iloc[train.shape[0]-1].date
 
-corpustr = traindf['ingredients_string']
-vectorizertr = TfidfVectorizer(stop_words='english',
-                             ngram_range = ( 1 , 1 ),analyzer="word", 
-                             max_df = .57 , binary=False , token_pattern=r'\w+' , sublinear_tf=False)
-tfidftr=vectorizertr.fit_transform(corpustr).todense()
-corpusts = testdf['ingredients_string']
-vectorizerts = TfidfVectorizer(stop_words='english')
-tfidfts=vectorizertr.transform(corpusts)
+#Load test
+test = pd.read_csv("../input/test.csv", usecols=[0,2,3], dtype=dtypes)
+test = test.set_index(['item_nbr', 'store_nbr'])
+ltest = test.shape[0]
 
-predictors_tr = tfidftr
+#Moving Averages
+for i in [1,3,7,14,28,56,112,224]:
+    val='MA'+str(i)
+    tmp = train[train.date>lastdate-timedelta(int(i))]
+    tmp1 = tmp.groupby(['item_nbr', 'store_nbr'])['unit_sales'].mean().to_frame(val)
+    test = test.join(tmp1, how='left')
 
-targets_tr = traindf['cuisine']
-
-predictors_ts = tfidfts
-
-
-#classifier = LinearSVC(C=0.80, penalty="l2", dual=False)
-parameters = {'C':[1, 10]}
-#clf = LinearSVC()
-clf = LogisticRegression()
-
-classifier = grid_search.GridSearchCV(clf, parameters)
-
-classifier=classifier.fit(predictors_tr,targets_tr)
-
-predictions=classifier.predict(predictors_ts)
-testdf['cuisine'] = predictions
-testdf = testdf.sort('id' , ascending=True)
-
-testdf[['id' , 'ingredients_clean_string' , 'cuisine' ]].to_csv("submission.csv")
+#Median of MAs
+test['unit_sales']=test.iloc[:,1:].median(axis=1)
+test.loc[:, "unit_sales"].fillna(0, inplace=True)
+test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) # restoring unit values 
+test[['id','unit_sales']].to_csv('median_ma8.csv.gz', index=False, float_format='%.3f', compression='gzip')

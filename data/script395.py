@@ -1,212 +1,583 @@
 
 # coding: utf-8
 
-# This notebook shows how you can use description to improve your model. We will be using description, as the only feature for now.
-
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-train = pd.read_json("../input/train.json")
-test = pd.read_json("../input/test.json")
-
-
-# In[ ]:
-
-
-# We need listing_id, description and interest_level for this notebook
-train = train[['listing_id','description','interest_level']]
-test = test[['listing_id','description']]
-
-train['flag'] = 'train'
-test['flag'] = 'test'
-full_data = pd.concat([train,test])
-
-
-# In[ ]:
-
-
-from nltk.stem import PorterStemmer
-import re
-
-
-# > Stemming is the process of reducing inflected (or sometimes derived) words to their word stem. Example: gardens to garden.
-
-# In[ ]:
-
-
-# Removes symbols, numbers and stem the words to reduce dimentional space
-stemmer = PorterStemmer()
-
-def clean(x):
-    regex = re.compile('[^a-zA-Z ]')
-    # For user clarity, broken it into three steps
-    i = regex.sub(' ', x).lower()
-    i = i.split(" ") 
-    i= [stemmer.stem(l) for l in i]
-    i= " ".join([l.strip() for l in i if (len(l)>2) ]) # Keeping words that have length greater than 2
-    return i
-
-
-# In[ ]:
-
-
-# This takes some time to run. It would be helpful if someone can help me optimize clean() function.
-full_data['description_new'] = full_data.description.apply(lambda x: clean(x))
-
-
-# In[ ]:
-
-
-full_data[['description','description_new']].head()
-
-
-# We have removed all punctuation and numbers, as we are only interested in words for now.
-
-# ### Using CountVectorizer
-# We can use CountVectorizer or tfidfvectorizer for building a word matrix. For me countvectorizer gave better performance.
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import CountVectorizer #Can use tfidffvectorizer as well
-
-cvect_desc = CountVectorizer(stop_words='english', max_features=200)
-full_sparse = cvect_desc.fit_transform(full_data.description_new)
- # Renaming words to avoid collisions with other feature names in the model
-col_desc = ['desc_'+ i for i in cvect_desc.get_feature_names()] 
-count_vect_df = pd.DataFrame(full_sparse.todense(), columns=col_desc)
-full_data = pd.concat([full_data.reset_index(),count_vect_df],axis=1)
-
-
-# In[ ]:
-
-
-full_data.info()
-
-
-# ### Running Cross Validation
-
-# In[ ]:
-
-
-train =(full_data[full_data.flag=='train'])
-test =(full_data[full_data.flag=='test'])
-
-
-# In[ ]:
-
-
-labels = {'high':0, 'medium':1, 'low':2}
-train['interest_level'] = train.interest_level.apply(lambda x: labels[x])
-
-
-# In[ ]:
-
-
-feat = train.drop(['interest_level','flag','listing_id','description','index','description_new'],axis=1).columns.values
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import GradientBoostingClassifier  as GBM
-from sklearn.ensemble import RandomForestClassifier  as RF
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import log_loss
-
-
-# In[ ]:
-
-
-def run_mod(train_X, test_X,train_Y):
-    reg = GBM(max_features = 'auto',n_estimators=200,random_state=1)
-    reg.fit(train_X,train_Y)
-    pred = reg.predict_proba(test_X)
-    imp = reg.feature_importances_
-    return pred,imp
-
-
-# In[ ]:
-
-
-def cross_val(train,feat,split):
-    cv_scores = []
-    importances = []
-    # Cross Validation preprocessing
-    train_X = train[feat]
-    train_Y = train['interest_level']
-
-    train_X = train_X.as_matrix()
-    train_Y = train_Y.as_matrix()
-
-    test_X = test[feat]
-    test_X = test_X.as_matrix()
-
-    kf = StratifiedKFold(n_splits=split, shuffle=True, random_state=1)
-    for dev_index, val_index in kf.split(train_X,train_Y):
-            train_X_X, test_X_X = train_X[dev_index,:], train_X[val_index,:]
-            train_Y_Y, test_Y_Y = train_Y[dev_index,], train_Y[val_index,]
-            pred,imp = run_mod(train_X_X, test_X_X,train_Y_Y)
-            cv_scores.append(log_loss(test_Y_Y, pred))
-            importances.append(imp)
-    return np.mean(cv_scores),importances
-#print np.average(importances,axis=0)
-
-
-# In[ ]:
-
-
-cv_score,imp = cross_val(train,feat,3)
-
-
-# In[ ]:
-
-
-cv_score
-
-
-# In[ ]:
-
-
-# Lets chaeck the importance of words
-importances = list(np.average(imp,axis=0))
-features = cvect_desc.get_feature_names()
-df = pd.DataFrame({'words':features,'imp':importances}).sort_values(by='imp',ascending=False).head(30)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,15))
-sns.barplot(y=df.words,x=df.imp)
-# Remember, these are stemmed words
-
-
-# * Well, the score is using description and an untuned GBM. But a tuned one dies on me in this kernal (though it has score of 0.71). 
-# * It would be great if someone can post what score they get using XGB.
-# * I think it is a good start for someone just starting out with text data. Similar transformation can be done with column feature.
-# * It would be great if someone can help me optimize the clean() function.
+# # Introduction
 # 
-# Thanks!
+# The aim of this notebook is to play around with network diagrams and D3.js powered force directed graphs of the Spooky Author dataset. Namely, we will be looking at network graphs on the top bigrams and trigrams attributed to each Author via the NetworkX package. After which, the brilliant D3.js javascript library will then be used to generate interactive force directed graphs on a host of other summary numbers - (eg. top stopwords attributed to each Author etc).
+# 
+# **1. Network of Trigrams and Bigrams**:  Generating Trigrams and Bigram via the NetworkX package.
+# 
+# **2. Force-directed graphs with D3.js**: Plotting dynamic visuals with D3.js 
+
+# In[ ]:
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import networkx as nx
+import nltk
+from nltk.util import ngrams
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# In[ ]:
+
+
+train = pd.read_csv("../input/train.csv")
+
+
+# # 1. Networks of Tri-grams and Bi-grams
+# 
+# For the first chapter, we will investigate the top Tri-and-Bi grams associated to each author and perhaps visualize this relationship more intuitively with a network diagram.
+# 
+# **Function to generate ngram value counts**
+
+# In[ ]:
+
+
+def generate_ngrams(text, n=2):
+    words = text.split()
+    iterations = len(words) - n + 1
+    for i in range(iterations):
+       yield words[i:i + n]
+
+
+# ## 1a. Generating network of Trigram counts
+# 
+# For starters, I have hidden the code for creating the various dataframes just to keep the code tighter but essentially, I save the ngrams counts into a dictionary which simply feeds into a Pandas dataframe. Taking a quick peek into the top 3 Trigrams attributed to the authors we see the following:
+
+# In[ ]:
+
+
+# DataFrame for Mary Shelley
+ngrams = {}
+for title in train[train.author=="MWS"]['text']:
+        for ngram in generate_ngrams(title, 3):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_mws_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_mws_df.columns = ['count']
+ngrams_mws_df['author'] = 'Mary Shelley'
+ngrams_mws_df.reset_index(level=0, inplace=True)
+
+# DataFrame for Edgar Allen Poe
+ngrams = {}
+for title in train[train.author=="EAP"]['text']:
+        for ngram in generate_ngrams(title, 3):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_eap_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_eap_df.columns = ['count']
+ngrams_eap_df['author'] = 'Edgar Allen Poe'
+ngrams_eap_df.reset_index(level=0, inplace=True)
+
+# DataFrame for HP Lovecraft
+ngrams = {}
+for title in train[train.author=="HPL"]['text']:
+        for ngram in generate_ngrams(title, 3):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_hpl_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_hpl_df.columns = ['count']
+ngrams_hpl_df['author'] = 'HP lovecraft'
+ngrams_hpl_df.reset_index(level=0, inplace=True)
+
+
+# In[ ]:
+
+
+ngrams_eap_df.sort_values(by='count', ascending=False).head(3)
+
+
+# In[ ]:
+
+
+ngrams_hpl_df.sort_values(by='count', ascending=False).head(3)
+
+
+# In[ ]:
+
+
+ngrams_mws_df.sort_values(by='count', ascending=False).head(3)
+
+
+# ## NetworkX Graphs
+# 
+# Cool. Now that we have generated our Trigram counts on an author basis we can start generating our NetworkX graphs. The thing to note here is that we will be returning the top 20 Trigrams attributed to each author.
+
+# In[ ]:
+
+
+trigram_df = pd.concat([ngrams_eap_df.sort_values(by='count', ascending=False).head(20),
+                        ngrams_hpl_df.sort_values(by='count', ascending=False).head(20),
+                        ngrams_mws_df.sort_values(by='count', ascending=False).head(20)])
+
+
+# NetworkX contains a very convenient function which takes in a Pandas dataframe as input where you are able to the specify the source and target columns.
+
+# In[ ]:
+
+
+g = nx.from_pandas_dataframe(trigram_df,source='author',target='index')
+print(nx.info(g))
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(20, 20))
+cmap = plt.cm.coolwarm
+colors = [n for n in range(len(g.nodes()))]
+#k = 0.0319
+k = 0.14
+pos=nx.spring_layout(g, k=k)
+nx.draw_networkx(g,pos, node_size=trigram_df['count'].values*150, cmap = cmap, 
+                 node_color=colors, edge_color='grey', font_size=15, width=2, alpha=1)
+plt.title("Network diagram of Top 20 Trigrams w/o Stopwords removed attributed to each Author",
+         fontsize=18)
+plt.show()
+
+
+# From the network graph we can see that there are certain popular trigrams used recurringly by our three spooky authors. These trigrams however seem commonplace in the sense that they involve combinations of very common words, therefore a higher probability of being shared by the same author. Perhaps it might also be interesting to observe the trigram network after removing stopwords and therefore this will be exactly what we will do next.
+# 
+# ## Trigrams with stopword cleansing
+# 
+# 
+
+# ---
+
+# ## 1b.Network of Bigram counts
+# 
+# Following a similar procedure to the trigram network plot, we generate our top 20 bigrams attributed to each author. Unhide the cell below for the code.
+
+# In[ ]:
+
+
+# DataFrame for Mary Shelley
+ngrams = {}
+for title in train[train.author=="MWS"]['text']:
+        for ngram in generate_ngrams(title, 2):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_mws_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_mws_df.columns = ['count']
+ngrams_mws_df['author'] = 'Mary Shelley'
+ngrams_mws_df.reset_index(level=0, inplace=True)
+
+# DataFrame for Edgar Allen Poe
+ngrams = {}
+for title in train[train.author=="EAP"]['text']:
+        for ngram in generate_ngrams(title, 2):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_eap_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_eap_df.columns = ['count']
+ngrams_eap_df['author'] = 'Edgar Allen Poe'
+ngrams_eap_df.reset_index(level=0, inplace=True)
+
+# DataFrame for HP Lovecraft
+ngrams = {}
+for title in train[train.author=="HPL"]['text']:
+        for ngram in generate_ngrams(title, 2):
+            ngram = ' '.join(ngram)
+            if ngram in ngrams:
+                ngrams[ngram] += 1
+            else:
+                ngrams[ngram] = 1
+
+ngrams_hpl_df = pd.DataFrame.from_dict(ngrams, orient='index')
+ngrams_hpl_df.columns = ['count']
+ngrams_hpl_df['author'] = 'HP lovecraft'
+ngrams_hpl_df.reset_index(level=0, inplace=True)
+
+
+# In[ ]:
+
+
+bigram_df = pd.concat( [ngrams_eap_df.sort_values(by='count', ascending=False).head(20),
+                        ngrams_hpl_df.sort_values(by='count', ascending=False).head(20),
+                        ngrams_mws_df.sort_values(by='count', ascending=False).head(20)])
+
+
+# Generating the Bigram network (Top 20 Bigrams) we get:
+
+# In[ ]:
+
+
+del g
+g = nx.from_pandas_dataframe(bigram_df,source='author',target='index')
+plt.figure(figsize=(20, 20))
+cmap = plt.cm.RdYlGn
+colors = [n for n in range(len(g.nodes()))]
+plt.figure(figsize=(20, 20))
+k = 0.35
+pos=nx.spring_layout(g, k=k)
+nx.draw_networkx(g,pos, node_size=bigram_df['count'].values*6, cmap = cmap, 
+                 node_color=colors, edge_color='grey', font_size=15, width=3)
+plt.title("Network diagram of Top 20 Bigrams attributed to each Author", fontsize=16)
+plt.show()
+
+
+# # 2. Force-directed graphs with D3.js 
+# 
+# The following force directed graph was inspired by Mike Bostock's site on D3.js examples : [Force-Directed Graph](http://bl.ocks.org/mbostock/2706022), so do check it out as there are a lot of brilliant D3 example visuals on his page for one to adapt and play around with.
+# 
+
+# In[ ]:
+
+
+import json, random
+import IPython.display
+from IPython.core.display import display, HTML, Javascript
+import json, random
+from string import Template
+
+
+# The code to generate the top 20 stopwords attributed to each author is given via the follow cell:
+
+# In[ ]:
+
+
+stopwords = {
+"nodes": [
+ {"id": "Edgar Allen Poe", "group": 1},
+ {"id": "HP Lovecraft", "group": 2},
+ {"id": "Mary Shelley", "group": 3},
+ {"id": "and"	, "group": 1},
+ {"id": "is"	, "group": 1},
+ {"id": "it"	, "group": 1},
+ {"id": "an"	, "group": 1},
+ {"id": "as"	, "group": 1},
+ {"id": "at"	, "group": 1},
+ {"id": "have"	, "group": 1},
+ {"id": "in"	, "group": 1},
+ {"id": "from"	, "group": 1},
+ {"id": "for"	, "group": 1},
+ {"id": "no"	, "group": 1},
+ {"id": "had"	, "group": 1},
+ {"id": "to"	, "group": 1},
+ {"id": "which" , "group": 1},
+ {"id": "was"	, "group": 1},
+ {"id": "be"	, "group": 1},
+ {"id": "his"	, "group": 1},
+ {"id": "that"	, "group": 1},
+ {"id": "but"	, "group": 1},
+ {"id": "not"	, "group": 1},
+ {"id": "with"	, "group": 1},
+ {"id": "by"	, "group": 1},
+ {"id": "he"	, "group": 1},
+ {"id": "a"		, "group": 1},
+ {"id": "this"	, "group": 1},
+ {"id": "of"	, "group": 1},
+ {"id": "so"	, "group": 1},
+ {"id": "the"	, "group": 1},
+ {"id": "my"	, "group": 1},
+ {"id": "or"	, "group": 1},
+ {"id": "and"   , "group": 2},
+ {"id": "all"   , "group": 2},
+ {"id": "it"    , "group": 2},
+ {"id": "an"    , "group": 2},
+ {"id": "as"    , "group": 2},
+ {"id": "at"    , "group": 2},
+ {"id": "in"    , "group": 2},
+ {"id": "from"  , "group": 2},
+ {"id": "for"	, "group": 2},
+ {"id": "had"	, "group": 2},
+ {"id": "to"	, "group": 2},
+ {"id": "which"	, "group": 2},
+ {"id": "was"	, "group": 2},
+ {"id": "be"	, "group": 2},
+ {"id": "his"	, "group": 2},
+ {"id": "that"	, "group": 2},
+ {"id": "but"	, "group": 2},
+ {"id": "me"	, "group": 2},
+ {"id": "they"	, "group": 2},
+ {"id": "not"	, "group": 2},
+ {"id": "with"	, "group": 2},
+ {"id": "by"	, "group": 2},
+ {"id": "he"	, "group": 2},
+ {"id": "a"		, "group": 2},
+ {"id": "on"	, "group": 2},
+ {"id": "of"	, "group": 2},
+ {"id": "were"	, "group": 2},
+ {"id": "the"	, "group": 2},
+ {"id": "my"	, "group": 2},
+ {"id": "or"	, "group": 2},
+ {"id": "and"	, "group": 3},
+ {"id": "be"	, "group": 3},
+ {"id": "is"	, "group": 3},
+ {"id": "it"	, "group": 3},
+ {"id": "as"	, "group": 3},
+ {"id": "in"	, "group": 3},
+ {"id": "from"	, "group": 3},
+ {"id": "for"	, "group": 3},
+ {"id": "had"	, "group": 3},
+ {"id": "to"	, "group": 3},
+ {"id": "which"	, "group": 3},
+ {"id": "you"	, "group": 3},
+ {"id": "was"	, "group": 3},
+ {"id": "me"	, "group": 3},
+ {"id": "his"	, "group": 3},
+ {"id": "that"	, "group": 3},
+ {"id": "but"	, "group": 3},
+ {"id": "not"	, "group": 3},
+ {"id": "with"	, "group": 3},
+ {"id": "by"	, "group": 3},
+ {"id": "he"	, "group": 3},
+ {"id": "a"		, "group": 3},
+ {"id": "on"	, "group": 3},
+ {"id": "her"	, "group": 3},
+ {"id": "this"	, "group": 3},
+ {"id": "of"	, "group": 3},
+ {"id": "she"	, "group": 3},
+ {"id": "were"	, "group": 3},
+ {"id": "the"	, "group": 3},
+ {"id": "my"	, "group": 3}
+],
+"links": [
+ {"source": "Edgar Allen Poe", "target": "and"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "is"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "it"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "an"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "as"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "at"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "have"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "in"	, "value": 1},	
+ {"source": "Edgar Allen Poe", "target": "from"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "for"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "no"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "had"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "to"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "which", "value": 1},
+ {"source": "Edgar Allen Poe", "target": "was"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "be"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "his"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "that"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "but"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "not"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "with"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "by"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "he"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "a"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "this"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "of"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "so"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "the"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "my"	, "value": 1},
+ {"source": "Edgar Allen Poe", "target": "or"	, "value": 1},
+ {"source": "HP Lovecraft", "target": "and"   	, "value": 2},
+ {"source": "HP Lovecraft", "target": "all"   	, "value": 2},
+ {"source": "HP Lovecraft", "target": "it"    	, "value": 2},
+ {"source": "HP Lovecraft", "target": "an"    	, "value": 2},
+ {"source": "HP Lovecraft", "target": "as"    	, "value": 2},
+ {"source": "HP Lovecraft", "target": "at"    	, "value": 2},
+ {"source": "HP Lovecraft", "target": "in"    	, "value": 2},
+ {"source": "HP Lovecraft", "target": "from"  	, "value": 2},
+ {"source": "HP Lovecraft", "target": "for"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "had"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "to"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "which"	, "value": 2},
+ {"source": "HP Lovecraft", "target": "was"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "be"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "his"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "that"	, "value": 2},
+ {"source": "HP Lovecraft", "target": "but"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "me"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "they"	, "value": 2},
+ {"source": "HP Lovecraft", "target": "not"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "with"	, "value": 2},
+ {"source": "HP Lovecraft", "target": "by"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "he"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "a"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "on"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "of"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "were"	, "value": 2},
+ {"source": "HP Lovecraft", "target": "the"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "my"		, "value": 2},
+ {"source": "HP Lovecraft", "target": "or"		, "value": 2},
+ {"source": "Mary Shelley", "target": "and"		, "value": 3},
+ {"source": "Mary Shelley", "target": "be"		, "value": 3},
+ {"source": "Mary Shelley", "target": "is"		, "value": 3},
+ {"source": "Mary Shelley", "target": "it"		, "value": 3},
+ {"source": "Mary Shelley", "target": "as"		, "value": 3},
+ {"source": "Mary Shelley", "target": "in"		, "value": 3},
+ {"source": "Mary Shelley", "target": "from"	, "value": 3},
+ {"source": "Mary Shelley", "target": "for"		, "value": 3},
+ {"source": "Mary Shelley", "target": "had"		, "value": 3},
+ {"source": "Mary Shelley", "target": "to"		, "value": 3},
+ {"source": "Mary Shelley", "target": "which"	, "value": 3},
+ {"source": "Mary Shelley", "target": "you"		, "value": 3},
+ {"source": "Mary Shelley", "target": "was"		, "value": 3},
+ {"source": "Mary Shelley", "target": "me"		, "value": 3},
+ {"source": "Mary Shelley", "target": "his"		, "value": 3},
+ {"source": "Mary Shelley", "target": "that"	, "value": 3},
+ {"source": "Mary Shelley", "target": "but"		, "value": 3},
+ {"source": "Mary Shelley", "target": "not"		, "value": 3},
+ {"source": "Mary Shelley", "target": "with"	, "value": 3},
+ {"source": "Mary Shelley", "target": "by"		, "value": 3},
+ {"source": "Mary Shelley", "target": "he"		, "value": 3},
+ {"source": "Mary Shelley", "target": "a"		, "value": 3},
+ {"source": "Mary Shelley", "target": "on"		, "value": 3},
+ {"source": "Mary Shelley", "target": "her"		, "value": 3},
+ {"source": "Mary Shelley", "target": "this"	, "value": 3},
+ {"source": "Mary Shelley", "target": "of"		, "value": 3},
+ {"source": "Mary Shelley", "target": "she"		, "value": 3},
+ {"source": "Mary Shelley", "target": "were"	, "value": 3},
+ {"source": "Mary Shelley", "target": "the"		, "value": 3},
+ {"source": "Mary Shelley", "target": "my"		, "value": 3}
+ ]
+ }
+with open('stopwords.json', 'w') as outfile:  
+    json.dump(stopwords, outfile)
+
+
+# Uncomment the hidden cell below to see the HTML code embedding as a string:
+
+# In[ ]:
+
+
+html_string = """
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.links line {
+  stroke: #999;
+  stroke-opacity: 0.6;
+}
+
+.nodes circle {
+  stroke: #fff;
+  stroke-width: 3px;
+}
+
+text {
+  font-family: sans-serif;
+  font-size: 12px;
+}
+
+</style>
+<svg width="960" height="500"></svg>
+"""
+js_string="""
+ require.config({
+    paths: {
+        d3: "https://d3js.org/d3.v4.min"
+     }
+ });
+
+  require(["d3"], function(d3) {
+
+  var svg = d3.select("svg"),
+    width = +svg.attr("width"),
+    height = +svg.attr("height");
+
+var color = d3.scaleOrdinal(d3.schemeCategory20);
+
+var simulation = d3.forceSimulation()
+    .force("link", d3.forceLink().distance(170).strength(0.5).id(function(d) { return d.id; }))
+    .force("charge", d3.forceManyBody())
+    .force("center", d3.forceCenter(width/2 , height/2 ));
+
+d3.json("stopwords.json", function(error, graph) {
+  if (error) throw error;
+
+  var link = svg.append("g")
+      .attr("class", "links")
+    .selectAll("line")
+    .data(graph.links)
+    .enter().append("line")
+      .attr("stroke-width", function(d) { return Math.sqrt(d.value); });
+
+  var node = svg.append("g")
+      .attr("class", "nodes")
+    .selectAll("g")
+    .data(graph.nodes)
+    .enter().append("g")
+    
+  var circles = node.append("circle")
+      .attr("r", 8)
+      .attr("fill", function(d) { return color(d.group); })
+      .call(d3.drag()
+          .on("start", dragstarted)
+          .on("drag", dragged)
+          .on("end", dragended));
+
+  var lables = node.append("text")
+      .text(function(d) {
+        return d.id;
+      })
+      .attr('x', 6)
+      .attr('y', 3);
+
+  node.append("title")
+      .text(function(d) { return d.id; });
+
+  simulation
+      .nodes(graph.nodes)
+      .on("tick", ticked);
+
+  simulation.force("link")
+      .links(graph.links);
+
+  function ticked() {
+    link
+        .attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+
+    node
+        .attr("transform", function(d) {
+          return "translate(" + d.x + "," + d.y + ")";
+        })
+  }
+});
+
+function dragstarted(d) {
+  if (!d3.event.active) simulation.alphaTarget(0.9).restart();
+  d.fx = d.x;
+  d.fy = d.y;
+}
+
+function dragged(d) {
+  d.fx = d3.event.x;
+  d.fy = d3.event.y;
+}
+
+function dragended(d) {
+  if (!d3.event.active) simulation.alphaTarget(0);
+  d.fx = null;
+  d.fy = null;
+}  
+    
+  });
+ """
+h = IPython.display.display(HTML(html_string))
+j = IPython.display.Javascript(js_string)
+IPython.display.display_javascript(j)
+
+
+# *[THE VISUALISATION IS INTERACTIVE SO PLEASE CLICK AND DRAG TO MOVE THE CIRCLES IN THE NETWORK]*
+
+# # *To be continued*

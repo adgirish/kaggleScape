@@ -1,257 +1,172 @@
 
 # coding: utf-8
 
+# # Visualizing Word Vectors with t-SNE
+# 
+# TSNE is pretty useful when it comes to visualizing similarity between objects. It works by taking a group of high-dimensional (100 dimensions via Word2Vec) vocabulary word feature vectors, then compresses them down to 2-dimensional x,y coordinate pairs. The idea is to keep similar words close together on the plane, while maximizing the distance between dissimilar words. 
+# 
+# ### Steps
+# 
+# 1. Clean the data
+# 2. Build a corpus
+# 3. Train a Word2Vec Model
+# 4. Visualize t-SNE representations of the most common words 
+# 
+# Credit: Some of the code was inspired by this awesome [NLP repo][1]. 
+# 
+# 
+# 
+# 
+#   [1]: https://github.com/rouseguy/DeepLearningNLP_Py
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import pandas as pd
+pd.options.mode.chained_assignment = None 
+import numpy as np
+import re
+import nltk
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns
+from gensim.models import word2vec
+
+from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+data = pd.read_csv('../input/train.csv').sample(50000, random_state=23)
 
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+STOP_WORDS = nltk.corpus.stopwords.words()
+
+def clean_sentence(val):
+    "remove chars that are not letters or numbers, downcase, then remove stop words"
+    regex = re.compile('([^\s\w]|_)+')
+    sentence = regex.sub('', val).lower()
+    sentence = sentence.split(" ")
+    
+    for word in list(sentence):
+        if word in STOP_WORDS:
+            sentence.remove(word)  
+            
+    sentence = " ".join(sentence)
+    return sentence
+
+def clean_dataframe(data):
+    "drop nans, then apply 'clean_sentence' function to question1 and 2"
+    data = data.dropna(how="any")
+    
+    for col in ['question1', 'question2']:
+        data[col] = data[col].apply(clean_sentence)
+    
+    return data
+
+data = clean_dataframe(data)
+data.head(5)
 
 
 # In[ ]:
 
 
-train.head()
+def build_corpus(data):
+    "Creates a list of lists containing words from each sentence"
+    corpus = []
+    for col in ['question1', 'question2']:
+        for sentence in data[col].iteritems():
+            word_list = sentence[1].split(" ")
+            corpus.append(word_list)
+            
+    return corpus
+
+corpus = build_corpus(data)        
+corpus[0:2]
 
 
-# Looks we have features named **ps_ind_xx** which are mostly hidden for security reasons. But this aint stopping a data scientist analyse the dataset. Let's layout our steps to analyse EDA
+# # Word 2 Vec
 # 
-# 1. ** Retrive information on all the column types.**
-# 2. **Hunt down the NaN or Null values in the dataset. **
-# 3. **Visualizing Binary and Categorical Features seperately**
-# 4. **Study continously varying features**
-
-# ## Step 1: Retrive information on all the column types.
-#  
+# The Word to Vec model produces a vocabulary, with each word being represented by an n-dimensional numpy array (100 values in this example)
 
 # In[ ]:
 
 
-# Get information on names of columns
-# Only taking till 5 index,
-# as names might populate the code output and is not intuitive for this simple EDA
-train.columns[:5]
+model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=200, workers=4)
+model.wv['trump']
 
 
 # In[ ]:
 
 
-# Get those dtypes of those named columns
-train.dtypes[:5] 
+def tsne_plot(model):
+    "Creates and TSNE model and plots it"
+    labels = []
+    tokens = []
 
+    for word in model.wv.vocab:
+        tokens.append(model[word])
+        labels.append(word)
+    
+    tsne_model = TSNE(perplexity=40, n_components=2, init='pca', n_iter=2500, random_state=23)
+    new_values = tsne_model.fit_transform(tokens)
 
-# To be honest. I honestly can't interpret the information clearly with two plain black outputs! Let's build a panda data frame of names of columns and their types.
+    x = []
+    y = []
+    for value in new_values:
+        x.append(value[0])
+        y.append(value[1])
+        
+    plt.figure(figsize=(16, 16)) 
+    for i in range(len(x)):
+        plt.scatter(x[i],y[i])
+        plt.annotate(labels[i],
+                     xy=(x[i], y[i]),
+                     xytext=(5, 2),
+                     textcoords='offset points',
+                     ha='right',
+                     va='bottom')
+    plt.show()
+
 
 # In[ ]:
 
 
-df_dtypes = pd.DataFrame({'Feature': train.columns , 'Data Type': train.dtypes.values})
+tsne_plot(model)
 
 
 # In[ ]:
 
 
-df_dtypes.head(15)
+# A more selective model
+model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=500, workers=4)
+tsne_plot(model)
 
 
-# Looks good to me. And when I checked the full dataframe there are no **strings**, **object**, and **time-type** as they are already proccesed as given in the Description, 
+# In[ ]:
+
+
+# A less selective model
+model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=100, workers=4)
+tsne_plot(model)
+
+
+# # It's Becoming Hard to Read
 # 
-# > **Data Description**
-# > In this competition, you will predict the probability that an auto insurance policy holder files a claim.
-# > 
-# > In the train and test data, features that belong to similar groupings are tagged as such in the feature names (e.g., ind, reg, car, calc). In addition, feature names include the postfix bin to indicate binary features and cat to indicate categorical features. Features without these designations are either continuous or ordinal. Values of -1 indicate that the feature was missing from the observation. The target columns signifies whether or not a claim was filed for that policy holder.
+# With a dataset this large, its difficult to make an easy-to-read TSNE visualization. What you can do is use the model to look up the most similar words from any given point. 
 
 # In[ ]:
 
 
-## Fixing -1 with NaN values
-train_v1 = train.replace(-1, np.NaN)
-test_v1 = test.replace(-1, np.NaN)
+model.most_similar('trump')
 
 
-# ## Step 2 : Hunt down the NaN or Null values in the dataset
+# In[ ]:
+
+
+model.most_similar('universe')
+
+
+# # The End
 # 
-#  
-
-# In[ ]:
-
-
-plt.figure(figsize=(18,7))
-sns.heatmap(train_v1.head(100).isnull() == True, cmap='viridis')
-
-
-# **Explaning the code :**
-# 1. **train.isnull() == True** - Returns a matrix of True and False values. **True** if a cell is Null, **False** if not null.
-# 2. **cmap='viridis'**   -  Color scheme for the heatmap. This one is my favorite. 
-
-# The yellow bars indicate the presence of NaN values. It seems like few processed categorical have missing values.
-
-# In[ ]:
-
-
-have_null_df = pd.DataFrame(train_v1.isnull().any(), columns=['Have Null?']).reset_index()
-
-
-# In[ ]:
-
-
-have_null_df[have_null_df['Have Null?'] == True]['index']
-
-
-# Looks like we are having the complete list of columns to be **busted**. Filling these Null values can have a greater significance in your score.  
-
-# **Dropping all the NaN values for initial EDA**
-
-# In[ ]:
-
-
-train_v1.dropna(inplace=True)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(16,11))
-sns.heatmap(train_v1.head(100).corr(), cmap='viridis')
-
-
-# **We are having these empty white spaces because the heatmap is plotted with correlation between the binary, interger and categorical feature. This form of representation is hard to interpret. Let's divide our columns into seperate groups to carry our further analysis.
-# **
-
-# ## Step 3: Visualizing Binary and Categorical Features seperately
-
-# In[ ]:
-
-
-binary_feat = [c for c in train_v1.columns if c.endswith("bin")]
-categorical_feat = [c for c in train_v1.columns if c.endswith("cat")]
-
-
-# ### Binary features  countplots
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,20))
-for i, c in enumerate(binary_feat):
-    ax = plt.subplot(6,3,i+1)
-    sns.countplot(train_v1[c])
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-# ### Categorical Countplots
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,20))
-for i, c in enumerate(categorical_feat):
-    ax = plt.subplot(6,3,i+1)
-    sns.countplot(train_v1[c])
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-# The count plot of ps_car_11_cat seems to have lot of categories. Let's check out the zoomed version of the graph
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,6))
-sns.countplot(train_v1['ps_car_11_cat'])
-
-
-# We can see spike in the right end of the plot. Let's check the number of unique valies in **ps_car_11_cat**
-
-# In[ ]:
-
-
-print ("There are {} unique values for ps_car_11_cat" .format(train_v1['ps_car_11_cat'].nunique()))
-
-
-# Now, that are too many number categories. Let's see the top 10 highest counted categories...
-
-# In[ ]:
-
-
-train_v1['ps_car_11_cat'].value_counts().head(10)
-
-
-# ## Step 4: Study continously varying features
-
-# In[ ]:
-
-
-continuous_feat= [i for i in train_v1.columns if 
-                    ((i not in binary_feat) and (i not in categorical_feat) and (i not in ["target", "id"]))]
-
-
-# In[ ]:
-
-
-train_v1[continuous_feat].head(5)
-
-
-# In[ ]:
-
-
-ind_feat = [c for c in continuous_feat if c.startswith("ps_ind")]
-reg_feat = [c for c in continuous_feat if c.startswith("ps_reg")]
-car_feat = [c for c in continuous_feat if c.startswith("ps_car")]
-calc_feat = [c for c in continuous_feat if c.startswith("ps_calc")]
-target = ['target']
-
-
-# Time to check the correlation with our **target value**.
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,11))
-sns.heatmap(train_v1[ind_feat+ calc_feat + car_feat + reg_feat + target].corr(), cmap= plt.cm.inferno)
-
-
-# Hmm.. Something clicked at top left and bottom right portion. Let's remove calc_feat and observe the heatmap
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,11))
-sns.heatmap(train_v1[ind_feat+ car_feat + reg_feat + target].corr(), cmap= 'viridis', annot=True)
-
-
-# **That's all for today. This notebook shall be updated biweekly with new information and dept EDA.**
-# 
-# **Next update - 3 Oct, 2017**
-
-# **#TODO** list for this notebook
-# 1. Detailed EDA
-# 2. Feature Importance through various models and their ensemble importance.
-# 3. Explaining how to choose the best ML model / ensemble methods.
-# 4. Parameters tuning and Hyper parameters setting.
-
-# Feel free to brainstrom ideas and other queries in the comment section.
-# 
-# ***P.S - This is my first Kaggle EDA Kernel. Upvotes are extremly appreciated! ***
+# Good luck!

@@ -1,96 +1,80 @@
 import pandas as pd
-from os import getcwd
-from os.path import join
-import matplotlib.pyplot as plt
-from haversine import haversine
-import sqlite3
+import numpy as np
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
 
+# Read in our input data
+df_train = pd.read_csv('../input/train.csv')
+df_test = pd.read_csv('../input/test.csv')
 
-plt.rcParams['font.size'] = 12
-plt.rcParams['figure.figsize'] = [16, 12]
-north_pole = (90,0)
-weight_limit = 1000.0
+# This prints out (rows, columns) in each dataframe
+print('Train shape:', df_train.shape)
+print('Test shape:', df_test.shape)
 
-f_ = 0.0
-t_ = 0
-d_ = 0.0
+print('Columns:', df_train.columns)
 
-gifts = pd.read_csv("../input/gifts.csv").fillna(" ")
-c = sqlite3.connect(":memory:")
-gifts.to_sql("gifts",c)
-cu = c.cursor()
-cu.execute("ALTER TABLE gifts ADD COLUMN 'TripId' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'i' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'j' INT;")
-c.commit()
+y_train = df_train['target'].values
+id_train = df_train['id'].values
+id_test = df_test['id'].values
 
-i_ = 0
-j_ = 0
-n = 90
-for i in range(90,-90,int(-180/n)):
-    i_ += 1
-    j_ = 0
-    for j in range(180,-180,int(-360/n)):
-        j_ += 1
-        cu = c.cursor()
-        cu.execute("UPDATE gifts SET i=" + str(i_) + ", j=" + str(j_) + " WHERE ((Latitude BETWEEN " + str(i - (180/n)) + " AND  " + str(i) + ") AND (Longitude BETWEEN " + str(j - (360/n)) + " AND  " + str(j) + "));")
-        c.commit()
+# We drop these variables as we don't want to train on them
+# The other 57 columns are all numerical and can be trained on without preprocessing
+x_train = df_train.drop(['target', 'id'], axis=1)
+x_test = df_test.drop(['id'], axis=1)
 
-trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY j DESC, Longitude ASC, Latitude ASC LIMIT 94) ORDER BY Latitude DESC",c)
+# Take a random 20% of the dataset as validation data
+x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=4242)
+print('Train samples: {} Validation samples: {}'.format(len(x_train), len(x_valid)))
 
+# Convert our data into XGBoost format
+d_train = xgb.DMatrix(x_train, y_train)
+d_valid = xgb.DMatrix(x_valid, y_valid)
+d_test = xgb.DMatrix(x_test)
 
-while len(trips.GiftId)>0:
-    g = []
-    t_ += 1
-    w_ = 0.0
-    l_ = north_pole
-    for i in range(len(trips.GiftId)):
-        if (w_ + float(trips.Weight[i]))<= weight_limit:
-            w_ += float(trips.Weight[i])
-            d_ += haversine(l_, (trips.Latitude[i],trips.Longitude[i]))
-            f_ += d_ * trips.Weight[i]
-            l_ = (trips.Latitude[i],trips.Longitude[i])
-            g.append(trips.GiftId[i])
-    d_ += haversine(l_, north_pole)
-    f_ += d_ * 10  # sleigh weight for whole trip
-    # print(t_,d_,f_)
-    cu = c.cursor()
-    cu.execute("UPDATE gifts SET TripId = " + str(t_) + " WHERE GiftId IN(" + (",").join(map(str,g)) + ");")
-    c.commit()
+# Set xgboost parameters
+params = {}
+params['objective'] = 'binary:logistic'
+params['eta'] = 0.02
+params['silent'] = True
+params['max_depth'] = 6
+params['subsample'] = 0.9
+params['colsample_bytree'] = 0.9
 
-    trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY j DESC, Longitude ASC, Latitude ASC LIMIT 94) ORDER BY Latitude DESC",c)
-    d_ = 0.0
-    #break
+# Define the gini metric - from https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703#5897
+def gini(actual, pred, cmpcol = 0, sortcol = 1):
+    assert( len(actual) == len(pred) )
+    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
+    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
+    totalLosses = all[:,0].sum()
+    giniSum = all[:,0].cumsum().sum() / totalLosses
+    
+    giniSum -= (len(actual) + 1) / 2.
+    return giniSum / len(actual)
+ 
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
 
-all_trips = pd.read_sql("SELECT * FROM gifts ORDER BY TripId ASC, Latitude DESC;",c)
-fig = plt.figure()
-plt.scatter(all_trips['Longitude'], all_trips['Latitude'], c=all_trips['TripId'], cmap= plt.cm.viridis, alpha=0.8, s=8, linewidths=0)
-for t in all_trips.TripId.unique():
-    trip = all_trips[all_trips['TripId'] == t]
-    plt.plot(trip['Longitude'], trip['Latitude'], 'k.-', alpha=0.1)
+# Create an XGBoost-compatible metric from Gini
 
-plt.colorbar()
-plt.grid()
-plt.title('Trips')
-plt.tight_layout()
-fig.savefig('Trips.png', dpi=300)
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = gini_normalized(labels, preds)
+    return [('gini', gini_score)]
 
-fig = plt.figure()
-plt.scatter(all_trips['Longitude'].values, all_trips['Latitude'].values, c='k', alpha=0.1, s=1, linewidths=0)
-for t in all_trips.TripId.unique():
-    previous_location = north_pole
-    trip = all_trips[all_trips['TripId'] == t]
-    i = 0
-    for _, gift in trip.iterrows():
-        plt.plot([previous_location[1], gift['Longitude']], [previous_location[0], gift['Latitude']],
-                 color=plt.cm.copper_r(i/90.), alpha=0.1)
-        previous_location = tuple(gift[['Latitude', 'Longitude']])
-        i += 1
-    plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0)
+# This is the data xgboost will test on after eachboosting round
+watchlist = [(d_train, 'train'), (d_valid, 'valid')]
 
-plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0, label='TripEnds')
-plt.legend(loc='upper right')
-plt.grid()
-plt.title('TripOrder')
-plt.tight_layout()
-fig.savefig('TripsinOrder.png', dpi=300)
+# Train the model! We pass in a max of 10,000 rounds (with early stopping after 100)
+# and the custom metric (maximize=True tells xgb that higher metric is better)
+mdl = xgb.train(params, d_train, 10000, watchlist, early_stopping_rounds=100, feval=gini_xgb, maximize=True, verbose_eval=10)
+
+# Predict on our test data
+p_test = mdl.predict(d_test)
+
+# Create a submission file
+sub = pd.DataFrame()
+sub['id'] = id_test
+sub['target'] = p_test
+sub.to_csv('xgb1.csv', index=False)
+
+print(sub.head())

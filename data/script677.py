@@ -1,805 +1,588 @@
 
 # coding: utf-8
 
-# This notebook shows a way to obtain atomic coordinates from xyz files. We can calculate bond lengths, bond angles, coordination numbers, and so on from atomic coordinates. Some of them might be able to be used as good features. 
+# I will do some explorations through the Loan Club Data. 
 # 
-# ![monoclinic_and_hexagonal](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/monoclinic_and_hexagonal.png?raw=true)
-# 
-# 1. Reading geometry files
-# 2. Reduced coordinates
-# 3. Geometrical properties
+# English is not my native language, so sorry about if you see any error
 
-# # Reading geometry files
-# 
-# [Jmol](http://jmol.sourceforge.net) is an open source molecular viewer. Jmol can load xyz geometry files directly.
-# 
-# ![train 1 geometry](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/geometry.jpg?raw=true)
-# 
-# This figure is a visualization example of **train/1/gemometry.xyz**.
+# Do you wanna see anothers interesting dataset analysis? <a href="https://www.kaggle.com/kabure/kernels">Click here</a> <br>
+# Please, give your feedback and if you like this Kernel  <b>votes up </b> =)
 # 
 
-# In[1]:
+# <b>About the dataset</b> <br>
+# These files contain complete loan data for all loans issued through the 2007-2015, including the current loan status (Current, Late, Fully Paid, etc.) and latest payment information. The file containing loan data through the "present" contains complete loan data for all loans issued through the previous completed calendar quarter. Additional features include credit scores, number of finance inquiries, address including zip codes, and state, and collections among others. The file is a matrix of about 890 thousand observations and 75 variables. A data dictionary is provided in a separate file.
+
+# <h2> Importing the Librarys </h2> 
+
+# In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib import rcParams
+
+#To plot figs on jupyter
+get_ipython().run_line_magic('matplotlib', 'inline')
+# figure size in inches
+rcParams['figure.figsize'] = 8,6
+
+
+# <h2> Importing our dataset</h2> 
+
+# In[ ]:
+
+
+df_loan = pd.read_csv("../input/loan.csv",low_memory=False)
+
+
+# Looking the infos of our dataset
+
+# In[ ]:
+
+
+df_loan.info()
+
+
+# <h2> Knowing our data </h2> 
+
+# In[ ]:
+
+
+df_loan.head()
+
+
+# <h2> Column names </h2> 
+
+# In[ ]:
+
+
+print(df_loan.columns)
+
+
+# <h2> Unique values </h2> 
+
+# In[ ]:
+
+
+#Let's see the data shape and NaN values
+print(df_loan.shape)
+print(df_loan.isnull().sum().value_counts())
+
+
+# I will hand with Na's later
+
+# <h2>Let's start by the distribuition of the LOAN AMOUNT  </h2>
+
+# In[ ]:
+
+
+#I will start looking the loan_amnt column
+plt.figure(figsize=(12,6))
+
+plt.subplot(121)
+g = sns.distplot(df_loan["loan_amnt"])
+g.set_xlabel("", fontsize=12)
+g.set_ylabel("Frequency Dist", fontsize=12)
+g.set_title("Frequency Distribuition", fontsize=20)
+
+plt.subplot(122)
+g1 = sns.violinplot(y="loan_amnt", data=df_loan, 
+               inner="quartile", palette="hls")
+g1.set_xlabel("", fontsize=12)
+g1.set_ylabel("Amount Dist", fontsize=12)
+g1.set_title("Amount Distribuition", fontsize=20)
+
+plt.show()
+
+
+# <h2>Another interesting value to a Loan is the interest rate. Let's look this colum: </h2>
+
+# In[ ]:
+
+
+df_loan['int_round'] = df_loan['int_rate'].round(0).astype(int)
+
+plt.figure(figsize = (10,8))
+
+#Exploring the Int_rate
+plt.subplot(211)
+g = sns.distplot(np.log(df_loan["int_rate"]))
+g.set_xlabel("", fontsize=12)
+g.set_ylabel("Distribuition", fontsize=12)
+g.set_title("Int Rate Log distribuition", fontsize=20)
+
+plt.subplot(212)
+g1 = sns.countplot(x="int_round",data=df_loan, 
+                   palette="Set2")
+g1.set_xlabel("Int Rate", fontsize=12)
+g1.set_ylabel("Count", fontsize=12)
+g1.set_title("Int Rate Normal Distribuition", fontsize=20)
+
+plt.subplots_adjust(wspace = 0.2, hspace = 0.6,top = 0.9)
+
+plt.show()
+
+
+# We can clearly see that the Int rate have a interesting distribuition
+
+# <h1>Some exploration of loan_status</h1><br>
+# Understanding the default
+# 
+
+# In[ ]:
+
+
+df_loan.loc[df_loan.loan_status ==             'Does not meet the credit policy. Status:Fully Paid', 'loan_status'] = 'NMCP Fully Paid'
+df_loan.loc[df_loan.loan_status ==             'Does not meet the credit policy. Status:Charged Off', 'loan_status'] = 'NMCP Charged Off'
+
+
+# <h2>Loan Status Distribuition</h2>
+
+# In[ ]:
+
+
+print(df_loan.loan_status.value_counts())
+
+plt.figure(figsize = (12,14))
+
+plt.subplot(311)
+g = sns.countplot(x="loan_status", data=df_loan)
+g.set_xticklabels(g.get_xticklabels(),rotation=45)
+g.set_xlabel("", fontsize=12)
+g.set_ylabel("Count", fontsize=15)
+g.set_title("Loan Status Count", fontsize=20)
+
+plt.subplot(312)
+g1 = sns.boxplot(x="loan_status", y="total_acc", data=df_loan)
+g1.set_xticklabels(g1.get_xticklabels(),rotation=45)
+g1.set_xlabel("", fontsize=12)
+g1.set_ylabel("Total Acc", fontsize=15)
+g1.set_title("Duration Count", fontsize=20)
+
+plt.subplot(313)
+g2 = sns.violinplot(x="loan_status", y="loan_amnt", data=df_loan)
+g2.set_xticklabels(g2.get_xticklabels(),rotation=45)
+g2.set_xlabel("Duration Distribuition", fontsize=15)
+g2.set_ylabel("Count", fontsize=15)
+g2.set_title("Loan Amount", fontsize=20)
+
+plt.subplots_adjust(wspace = 0.2, hspace = 0.7,top = 0.9)
+
+plt.show()
+
+
+# <h2>ISSUE_D</h2>
+# 
+# Going depth in the default exploration to see the amount and counting though the <b>ISSUE_D </b>,<br>
+# that is: <i><b> The month which the loan was funded</b></i>
+
+# In[ ]:
+
+
+df_loan['issue_month'], df_loan['issue_year'] = df_loan['issue_d'].str.split('-', 1).str
+
+
+# In[ ]:
+
+
+months_order = ["Jan", "Feb", "Mar", "Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+df_loan['issue_month'] = pd.Categorical(df_loan['issue_month'],categories=months_order, ordered=True)
+
+#Issue_d x loan_amount
+plt.figure(figsize = (14,6))
+
+g = sns.pointplot(x='issue_month', y='loan_amnt', 
+                  data=df_loan, 
+                  hue='loan_status')
+g.set_xticklabels(g.get_xticklabels(),rotation=90)
+g.set_xlabel("Duration Distribuition", fontsize=15)
+g.set_ylabel("Mean amount", fontsize=15)
+g.legend(loc='best')
+g.set_title("Loan Amount by Months", fontsize=20)
+plt.show()
+
+
+# Looking the years
+
+# In[ ]:
+
+
+plt.figure(figsize = (14,6))
+#Looking the count of defaults though the issue_d that is The month which the loan was funded
+g = sns.countplot(x='issue_year', data=df_loan,
+                  hue='loan_status')
+g.set_xticklabels(g.get_xticklabels(),rotation=90)
+g.set_xlabel("Dates", fontsize=15)
+g.set_ylabel("Count", fontsize=15)
+g.legend(loc='upper left')
+g.set_title("Analysing Loan Status by Years", fontsize=20)
+plt.show()
+
+
+# <h2> Taking a look of Default counting  through the Years column </h2>
+
+# In[ ]:
+
+
+plt.figure(figsize = (14,6))
+#Looking the count of defaults though the issue_d that is The month which the loan was funded
+g = sns.countplot(x='issue_year', data=df_loan[df_loan['loan_status'] =='Default'])
+g.set_xticklabels(g.get_xticklabels(),rotation=90)
+g.set_xlabel("Dates", fontsize=15)
+g.set_ylabel("Count", fontsize=15)
+g.legend(loc='upper left')
+g.set_title("Analysing Defaults Count by Time", fontsize=20)
+plt.show()
+
+
+# Interesting, maybe anything happens in Dec'14. It's the most frequent Defaults in our data.
+
+# <h2> Now let's take a look on the crosstab using a heatmap to better see this</h2>
+
+# In[ ]:
+
+
+#Exploring the loan_status x purpose
+purp_loan= ['purpose', 'loan_status']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[purp_loan[0]], df_loan[purp_loan[1]]).style.background_gradient(cmap = cm)
+
+
+# In[ ]:
+
+
+loan_grade = ['loan_status', 'grade']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[loan_grade[0]], df_loan[loan_grade[1]]).style.background_gradient(cmap = cm)
+
+
+# In[ ]:
+
+
+loan_home = ['loan_status', 'home_ownership']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[loan_home[0]], df_loan[loan_home[1]]).style.background_gradient(cmap = cm)
+
+
+# In[ ]:
+
+
+#Looking the 'verification_status' column that is the Indicates 
+#if the co-borrowers' joint income was verified by LC, not verified, or if the income source was verified
+loan_verification = ['loan_status', 'verification_status']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[loan_verification[0]], df_loan[loan_verification[1]]).style.background_gradient(cmap = cm)
+
+
+# <h2>Looking verification status using plotly library</h2>
+
+# In[ ]:
+
+
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
 import warnings
-warnings.filterwarnings("ignore")
+from collections import Counter
 
+#First plot
+trace0 = go.Bar(
+    x = df_loan['verification_status'].value_counts().index.values,
+    y = df_loan['verification_status'].value_counts().values,
+    marker=dict(
+        color=df_loan['verification_status'].value_counts().values,
+        colorscale = 'Viridis'
+    ),
+)
 
-# In[2]:
+data = [trace0]
 
+layout = go.Layout(
+    yaxis=dict(
+        title='Count'
+    ),
+    xaxis=dict(
+        title='Status'
+    ),
+    title='Verification Status Count'
+)
 
-df_train = pd.read_csv("../input/train.csv")
-df_train["dataset"] = "train"
-df_test = pd.read_csv("../input/test.csv")
-df_test["dataset"] = "test"
-df_crystals = pd.concat([df_train, df_test], ignore_index=True)
+fig = go.Figure(data=data, layout=layout)
 
+py.iplot(fig, filename='verification-bar')
 
-# In[3]:
 
+# <h2>Looking the column INSTALLMENT that is: </h2> <br>
+# <i>The monthly payment owed by the borrower if the loan originates.</i>
 
-df_crystals.head()
+# In[ ]:
 
 
-# In[4]:
+sns.distplot(df_loan['installment'])
+plt.show()
 
 
-df_crystals.tail()
+# <h2>Crossing the Loan Status and Installment</h2>
 
+# In[ ]:
 
-# In[5]:
 
+plt.figure(figsize = (12,6))
 
-# Orthorhombic (kappa-Al2O3 type)
-row_id = 0
+g = sns.violinplot(x='loan_status', y="installment",
+                   data=df_loan)
+g.set_xticklabels(g.get_xticklabels(),rotation=45)
+g.set_xlabel("", fontsize=12)
+g.set_ylabel("Installment Dist", fontsize=15)
+g.set_title("Loan Status by Installment", fontsize=20)
 
-# Monoclinic (beta-Ga2O3 type)
-#row_id = 19
+plt.show()
 
-# Hexagonal (hcp type)
-#row_id = 660
 
-# The first row in the test dataset
-#row_id = len(df_train)
+# In[ ]:
 
-row_id
 
+#Exploring the loan_status x Application_type
+loan_application = ['loan_status', 'application_type']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[loan_application[0]], df_loan[loan_application[1]]).style.background_gradient(cmap = cm)
 
-# In[6]:
 
+# <h2>Distribuition of Application_tye thought the Loan Amount and Interest Rate</h2>
 
-lattice_columns = ["lattice_vector_1_ang", "lattice_vector_2_ang", "lattice_vector_3_ang", "lattice_angle_alpha_degree", "lattice_angle_beta_degree", "lattice_angle_gamma_degree"]
-df_crystals.loc[row_id, lattice_columns]
+# In[ ]:
 
 
-# You can see the lattice constants $a$, $b$, $c$, $\alpha$, $\beta$, and $\gamma$ in the above visualization equal to ones in the CSV file. 
+plt.figure(figsize = (12,14))
+#The amount and int rate x application_type 
+plt.subplot(211)
+g = sns.violinplot(x="application_type", y="loan_amnt",data=df_loan, 
+            palette="hls")
+g.set_title("Application Type - Loan Amount", fontsize=20)
+g.set_xlabel("", fontsize=15)
+g.set_ylabel("Loan Amount", fontsize=15)
 
-# In[7]:
+plt.subplot(212)
+g1 = sns.violinplot(x="application_type", y="int_rate",data=df_loan,
+               palette="hls")
+g1.set_title("Application Type - Interest Rate", fontsize=20)
+g1.set_xlabel("", fontsize=15)
+g1.set_ylabel("Int Rate", fontsize=15)
 
+plt.subplots_adjust(wspace = 0.4, hspace = 0.4,top = 0.9)
 
-def get_xyz_data(filename):
-    pos_data = []
-    lat_data = []
-    with open(filename) as f:
-        for line in f.readlines():
-            x = line.split()
-            if x[0] == 'atom':
-                pos_data.append([np.array(x[1:4], dtype=np.float),x[4]])
-            elif x[0] == 'lattice_vector':
-                lat_data.append(np.array(x[1:4], dtype=np.float))
-    return pos_data, np.array(lat_data)
+plt.show()
 
 
-# In[8]:
+# <h2>Looking the Home Ownership by Loan_Amount</h2>
 
+# In[ ]:
 
-idx = df_crystals.id.values[row_id]
-dataset = df_crystals.dataset.values[row_id]
-fn = "../input/{}/{}/geometry.xyz".format(dataset, idx)
-crystal_xyz, crystal_lat = get_xyz_data(fn)
 
+plt.figure(figsize = (10,6))
 
-# In[9]:
+g = sns.violinplot(x="home_ownership",y="loan_amnt",data=df_loan,
+               kind="violin",
+               split=True,palette="hls",
+               hue="application_type")
+g.set_title("Homer Ownership - Loan Distribuition", fontsize=20)
+g.set_xlabel("", fontsize=15)
+g.set_ylabel("Loan Amount", fontsize=15)
 
+plt.show()
 
-crystal_xyz
 
+# <h2> Looking the Purpose distribuition  </h2>
 
-# This list conatins pairs of the position vector $(X, Y, Z)$ and the element symbol.
+# In[ ]:
 
-# In[10]:
 
+# Now will start exploring the Purpose variable
+print("Purposes count description: ")
+print(pd.crosstab(df_loan.purpose, df_loan.application_type))
 
-crystal_lat
+plt.figure(figsize = (12,8))
 
+plt.subplot(211)
+g = sns.countplot(x="purpose",data=df_loan,
+                  palette='hls')
+g.set_xticklabels(g.get_xticklabels(),rotation=45)
+g.set_title("Application Type - Loan Amount", fontsize=20)
+g.set_xlabel("", fontsize=15)
+g.set_ylabel("Loan Amount", fontsize=15)
 
-# This matirx is $(\textbf{a}_1, \textbf{a}_2, \textbf{a}_3)^t$ where $\textbf{a}_i$ is $i$-th lattice vector.
+plt.subplot(212)
+g1 = sns.violinplot(x="purpose",y="loan_amnt",data=df_loan,
+               hue="application_type", split=True)
+g1.set_xticklabels(g1.get_xticklabels(),rotation=45)
+g1.set_title("Application Type - Loan Amount", fontsize=20)
+g1.set_xlabel("", fontsize=15)
+g1.set_ylabel("Loan Amount", fontsize=15)
 
-# In[11]:
+plt.subplots_adjust(wspace = 0.2, hspace = 0.8,top = 0.9)
+plt.show()
 
 
-def length(v):
-    return np.linalg.norm(v)
+# <h2>Looking the Grade<h2>
 
-def unit_vector(vector):
-    return vector / length(vector)
+# I will explore some variables.<br>
+# the first variable I will explore is GRADE.<br>
+# description of grade: <b>LC assigned loan grade</b>
 
-def angle_between(v1, v2):
-    v1_u = unit_vector(v1)
-    v2_u = unit_vector(v2)
-    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+# In[ ]:
 
-def angle_deg_between(v1, v2):
-    return np.degrees(angle_between(v1, v2))
 
-def get_lattice_constants(lattice_vectors):
-    lat_const_series = pd.Series()
-    for i in range(3):
-        lat_const_series["lattice_vector_"+str(i+1)+"_ang"] = length(lattice_vectors[i])
-    lat_const_series["lattice_angle_alpha_degree"] = angle_deg_between(lattice_vectors[1],lattice_vectors[2])
-    lat_const_series["lattice_angle_beta_degree"] = angle_deg_between(lattice_vectors[2],lattice_vectors[0])
-    lat_const_series["lattice_angle_gamma_degree"] = angle_deg_between(lattice_vectors[0],lattice_vectors[1])
-    return lat_const_series
+fig, ax = plt.subplots(3,1, figsize=(14,10))
+sns.boxplot(x="grade", y="loan_amnt", data=df_loan,
+            palette="hls",ax=ax[0], hue="application_type", 
+            order=["A",'B','C','D','E','F', 'G'])
+sns.violinplot(x='grade', y="int_rate",data=df_loan, 
+              hue="application_type", palette = "hls", ax=ax[1], 
+            order=["A",'B','C','D','E','F', 'G'])
+sns.lvplot(x="sub_grade", y="loan_amnt",data=df_loan, 
+               palette="hls", ax=ax[2])
 
+plt.show()
 
-# In[12]:
 
+# Very very inteWe can clearly see difference patterns between Individual and Joint applications
 
-get_lattice_constants(crystal_lat)
+# <h1>Let's look the Employment title Distribuition </h1>
 
+# In[ ]:
 
-# You can see the lattice constants again.
 
-# # Reduced coordinates
+#First plot
+trace0 = go.Bar(
+    x = df_loan.emp_title.value_counts()[:40].index.values,
+    y = df_loan.emp_title.value_counts()[:40].values,
+    marker=dict(
+        color=df_loan.emp_title.value_counts()[:40].values
+    ),
+)
 
-# When the reduced coordinate is donated as $\textbf{r} = (x, y, z)^t$, the position vector $\textbf{R}$ is expressed using the lattice vectors $\textbf{a}_i$ as following:
-# 
-# $\textbf{R} = (X, Y, Z)^t = x \textbf{a}_1 + y \textbf{a}_2 + z \textbf{a}_3 = A \textbf{r}$
-# 
-# where $A =(\textbf{a}_1, \textbf{a}_2, \textbf{a}_3)$. The reduced coordinate is obtained from:
-# 
-# $\textbf{r} = A^{-1} \textbf{R}$.
-# 
-# $B = A^{-1} =(\textbf{b}_1, \textbf{b}_2, \textbf{b}_3)^t$ where $\textbf{b}_i$ is the $i$-th reciprocal lattice vector.
+data = [trace0]
 
-# In[13]:
+layout = go.Layout(
+    yaxis=dict(
+        title='Count'
+    ),
+    xaxis=dict(
+        title='Employment name'
+    ),
+    title='TOP 40 Employment Title'
+)
 
+fig = go.Figure(data=data, layout=layout)
 
-A = np.transpose(crystal_lat)
-R = crystal_xyz[0][0]
-print("The lattice vectors:")
-print(A)
-print("The position vector:")
-print(R)
+py.iplot(fig, filename='emp-title-bar')
 
 
-# In[14]:
+# <h2>And, whats the most frequent Title in our Dataset? </h2>
 
+# In[ ]:
 
-from numpy.linalg import inv
-B = inv(A)
-print("The reciprocal lattice vectors:")
-print(B)
 
+#First plot
+trace0 = go.Bar(
+    x = df_loan.title.value_counts()[:40].index.values,
+    y = df_loan.title.value_counts()[:40].values,
+    marker=dict(
+        color=df_loan.title.value_counts()[:40].values
+    ),
+)
 
-# In[15]:
+data = [trace0]
 
+layout = go.Layout(
+    yaxis=dict(
+        title='Count'
+    ),
+    xaxis=dict(
+        title='Employment name'
+    ),
+    title='TOP 40 Employment Title'
+)
 
-r = np.matmul(B, R)
-print("The reduced coordinate vector:")
-print(r)
+fig = go.Figure(data=data, layout=layout)
 
+py.iplot(fig, filename='emp-title-bar')
 
-# # Geometrical properties
 
-# Crystalline materials are made of periodic cells. Therefore, geometrical properties must be calculated with consideration for the periodicity. The vector between two atoms $i$ and $j$ is expressed as:
-# 
-# $\textbf{r}_{ij} =  \textbf{r}_{i} - \textbf{r}_{j} + (l, m, n)^t$
-# 
-# where $l$, $m$, and $n$ are any integer value. The real-space vector of the atom pair is
-# 
-# $\textbf{R}_{ij} = A \textbf{r}_{ij}$.
-# 
-# ## Spatial distance
-# 
-# $d_{ij} = \min_{l,m,n} \mid \textbf{R}_{ij} \mid$
+# <h2>Emp lenght crossed by some columns</h2>
 
-# In[16]:
+# In[ ]:
 
 
-def get_shortest_distances(reduced_coords, amat):
-    natom = len(reduced_coords)
-    dists = np.zeros((natom, natom))
-    Rij_min = np.zeros((natom, natom, 3))
+# emp_lenght description: 
+# Employment length in years. Possible values are between 0 and 10 where 0 means 
+# less than one year and 10 means ten or more years. 
 
-    for i in range(natom):
-        for j in range(i):
-            rij = reduced_coords[i][0] - reduced_coords[j][0]
-            d_min = np.inf
-            R_min = np.zeros(3)
-            for l in range(-1, 2):
-                for m in range(-1, 2):
-                    for n in range(-1, 2):
-                        r = rij + np.array([l, m, n])
-                        R = np.matmul(amat, r)
-                        d = length(R)
-                        if d < d_min:
-                            d_min = d
-                            R_min = R
-            dists[i, j] = d_min
-            dists[j, i] = dists[i, j]
-            Rij_min[i, j] = R_min
-            Rij_min[j, i] = -Rij_min[i, j]
-    return dists, Rij_min
+print(pd.crosstab(df_loan["emp_length"], df_loan["application_type"]))
 
+fig, ax = plt.subplots(2,1, figsize=(12,10))
+g = sns.boxplot(x="emp_length", y="int_rate", data=df_loan,
+              palette="hls",ax=ax[0],
+               order=["n/a",'< 1 year','1 year','2 years','3 years','4 years', '5 years',
+                      '6 years', '7 years', '8 years','9 years','10+ years'])
 
-# In[17]:
+z = sns.violinplot(x="emp_length", y="loan_amnt",data=df_loan, 
+               palette="hls", ax=ax[1],
+               order=["n/a",'< 1 year','1 year','2 years','3 years','4 years', '5 years',
+                      '6 years', '7 years', '8 years','9 years','10+ years'])
+               
+plt.legend(loc='upper left')
+plt.show()
 
 
-crystal_red = [[np.matmul(B, R), symbol] for (R, symbol) in crystal_xyz]
-crystal_dist, crystal_Rij = get_shortest_distances(crystal_red, A)
-crystal_dist
+# Interesting! We can see that the years do not influence the interest rate but it have a difference considering the loan_amount
 
+# <h2>Terms column</h2>
 
-# In[18]:
+# In[ ]:
 
 
-import seaborn as sns
-sns.heatmap(crystal_dist)
+print('Term x application type Description')
+print(pd.crosstab(df_loan.term, df_loan.application_type))
 
+#First plot
+trace0 = go.Bar(
+    x = df_loan.term.value_counts().index.values,
+    y = df_loan.term.value_counts().values,
+    marker=dict(
+        color=df_loan.term.value_counts().values
+    ),
+)
 
-# In[19]:
+data = [trace0]
 
+layout = go.Layout(
+    yaxis=dict(
+        title='Count'
+    ),
+    xaxis=dict(
+        title='Term name'
+    ),
+    title='Term Distribuition'
+)
 
-def get_min_length(distances, A_atoms, B_atoms):
-    A_B_length = np.inf
-    for i in A_atoms:
-        for j in B_atoms:
-            d = distances[i, j]
-            if d > 1e-8 and d < A_B_length:
-                A_B_length = d
-    
-    return A_B_length
+fig = go.Figure(data=data, layout=layout)
 
+py.iplot(fig, filename='Term-bar')
 
-# In[20]:
 
+# <h2>Looking the heatmap cross tab of Adress State x Loan Status<h2>
 
-natom = len(crystal_red)
-al_atoms = [i for i in range(natom) if crystal_red[i][1] == 'Al']
-ga_atoms = [i for i in range(natom) if crystal_red[i][1] == 'Ga']
-in_atoms = [i for i in range(natom) if crystal_red[i][1] == 'In']
-o_atoms = [i for i in range(natom) if crystal_red[i][1] == 'O']
+# In[ ]:
 
 
-# In[21]:
+#Exploring the State Adress x Loan Status
+adress_loan = ['addr_state', 'loan_status']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_loan[adress_loan[0]], df_loan[adress_loan[1]]).style.background_gradient(cmap = cm)
 
 
-if len(al_atoms):
-    print("Al-O min length:", get_min_length(crystal_dist, al_atoms, o_atoms))
-if len(ga_atoms):
-    print("Ga-O min length:", get_min_length(crystal_dist, ga_atoms, o_atoms))
-if len(in_atoms):
-    print("In-O min length:", get_min_length(crystal_dist, in_atoms, o_atoms))
-
-
-# ~~The minimun lengths between metal and oxygen atoms can be used for estimating the threshold of connections in the crystal graph.  However, the current version of this notebook does not use the suggested method yet.~~ (I introduced the function get_factor which appears below.)
-
-# ## Histogram of distances
-
-# In[22]:
-
-
-hist_dist = plt.hist(crystal_dist.flatten(), bins=100)
-_ = plt.title("Histogram of the shortest distances")
-
-
-# In[23]:
-
-
-def get_distances(r, amat, l_max=3, m_max=3, n_max=3, R_max=20.0):
-    distances = []
-    for l in range(-l_max, l_max+1):
-        for m in range(-m_max, m_max+1):
-            for n in range(-n_max, n_max+1):
-                R = np.matmul(amat, r + np.array([l, m, n]))
-                d = length(R)
-                if d < R_max:
-                    distances.append(d)
-                    
-    return distances
-
-
-# Note that optimal values of `l_max`, `m_max`, and `n_max` depend on both the maximum radius `R_max` and the lattice matrix `amat`. A larger `R_max` or a smaller cell requires larger `l_max`, `m_max`, and `n_max`. You can simply estimate them from $l_{\rm max} > R_{\rm max} / a$ where $a$ is the lattice constant. In general, $l_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_1\mid$, $m_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_2\mid$, and $n_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_3\mid$ where ${\bf b }_i$ is the $i$-th reciprocal lattice vector.
-
-# In[24]:
-
-
-def get_optimal_lmn(bmat, R_max=20.0):
-    lmn = dict()
-    lmn["l_max"] = int(length(bmat[0]) * R_max) + 1
-    lmn["m_max"] = int(length(bmat[1]) * R_max) + 1
-    lmn["n_max"] = int(length(bmat[2]) * R_max) + 1
-    lmn["R_max"] = R_max
-
-    return lmn
-
-
-# In[25]:
-
-
-opt_lmn = get_optimal_lmn(B)
-
-print(opt_lmn)
-
-
-# In[26]:
-
-
-natom = len(crystal_red)
-m_atoms = [i for i in range(natom) if crystal_red[i][1] != 'O']
-o_atoms = [i for i in range(natom) if crystal_red[i][1] == 'O']
-
-m_o_distances = []
-for i in m_atoms:
-    for j in o_atoms:
-        rij = np.matmul(B, crystal_Rij[i, j])
-        m_o_distances += get_distances(rij, A, **opt_lmn)
-
-
-# In[27]:
-
-
-m_m_distances = []
-for i in m_atoms:
-    for j in m_atoms:
-        rij = np.matmul(B, crystal_Rij[i, j])
-        m_m_distances += get_distances(rij, A, **opt_lmn)
-
-
-# In[28]:
-
-
-o_o_distances = []
-for i in o_atoms:
-    for j in o_atoms:
-        rij = np.matmul(B, crystal_Rij[i, j])
-        o_o_distances += get_distances(rij, A, **opt_lmn)
-
-
-# In[29]:
-
-
-plt.figure(figsize=(6,12))
-
-ax1 = plt.subplot(311)
-hist_m_o_dist = plt.hist(m_o_distances, bins=100, range=(0, 20))
-plt.text(0.1, 0.9, "Metal-Oxygen", fontsize=12, transform=ax1.transAxes)
-
-plt.title("Histogram of distances")
-
-ax2 = plt.subplot(312)
-hist_m_m_dist = plt.hist(m_m_distances, bins=100, range=(0, 20))
-plt.text(0.1, 0.9, "Metal-Metal", fontsize=12, transform=ax2.transAxes)
-
-ax3 = plt.subplot(313)
-hist_o_o_dist = plt.hist(o_o_distances, bins=100, range=(0, 20))
-plt.xlabel("Radius (Å)", fontsize=12)
-_ = plt.text(0.1, 0.9, "Oxygen-Oxygen", fontsize=12, transform=ax3.transAxes)
-
-
-# ## Radiral distribution function
-# 
-# You can find the definition at Wikipedia: [Radial distribution function](https://en.wikipedia.org/wiki/Radial_distribution_function) and [Pair distribution function](https://en.wikipedia.org/wiki/Pair_distribution_function).
-
-# In[30]:
-
-
-def get_rdf(hist_x, hist_r, density, natom):
-    dr = hist_r[1] - hist_r[0]
-    factor = 1.0 / ( 4 * np.pi * dr * density * natom)
-    rad = []
-    rdf = []
-    for i in range(len(hist_x)):
-        r = (hist_r[i] + hist_r[i+1])/2
-        rad.append(r)
-        v = factor * hist_x[i] / r**2
-        rdf.append(v)
-    
-    return rad, rdf
-
-
-# In[31]:
-
-
-vol = np.linalg.det(A)
-print("Volume:", vol)
-m_count = len(m_atoms)
-m_density = m_count/vol
-print("Metal count and density:", m_count, m_density)
-o_count = len(o_atoms)
-o_density = o_count/vol
-print("Oxygen count and density:", o_count, o_density)
-
-m_o_hist_x, m_o_hist_r, _ = hist_m_o_dist
-m_o_rad, m_o_rdf = get_rdf(m_o_hist_x, m_o_hist_r, o_density, m_count)
-
-m_m_hist_x, m_m_hist_r, _ = hist_m_m_dist
-m_m_hist_x[0] = 0
-m_m_rad, m_m_rdf = get_rdf(m_m_hist_x, m_m_hist_r, m_density, m_count)
-
-o_o_hist_x, o_o_hist_r, _ = hist_o_o_dist
-o_o_hist_x[0] = 0
-o_o_rad, o_o_rdf = get_rdf(o_o_hist_x, o_o_hist_r, o_density, o_count)
-
-
-# In[32]:
-
-
-plt.hlines(1, 0, 20)
-plt.plot(m_o_rad, m_o_rdf, label="M-O")
-plt.plot(m_m_rad, m_m_rdf, label="M-M")
-plt.plot(o_o_rad, o_o_rdf, label="O-O")
-plt.xlim(0, 20)
-plt.ylim(0, 6)
-plt.legend()
-plt.xlabel("Radius (Å)", fontsize=12)
-_ = plt.title("Radial Distribution Functions")
-
-
-# You can see RDFs converge on 1 upon the increase of the radius.
-
-# ## Crystal graph
-# 
-# If you are in a hurry, please read the paper about the crytal graph: https://arxiv.org/abs/1710.10324
-# 
-# When at least one of the cell edges is smaller than double the minumun distance between metal and oxygen atoms, the crytal graph becomes unpreferable. In such cases, this notebook uses [the supercell method][a].
-# 
-# [a]: https://en.wikipedia.org/wiki/Supercell_(crystal)
-
-# In[33]:
-
-
-def get_supercell(reduced_coords, amat, l_max, m_max, n_max):
-    sc_indeces = np.array([l_max, m_max, n_max])
-    sc_amat = amat * sc_indeces
-    sc_red = []
-    for l in range(l_max):
-        for m in range(m_max):
-            for n in range(n_max):
-                for rc in reduced_coords:
-                    x = rc[0] + np.array([l, m, n])
-                    x /= sc_indeces
-                    sc_red.append([x, rc[1]])
-
-    return sc_red, sc_amat
-
-
-# In[34]:
-
-
-sc_lmn = get_optimal_lmn(B, R_max=3.6)
-print("Supercell:", sc_lmn)
-
-del sc_lmn["R_max"]
-sc_red, sc_A = get_supercell(crystal_red, A, **sc_lmn)
-
-sc_dist, sc_Rij = get_shortest_distances(sc_red, sc_A)
-
-natom = len(sc_red)
-m_atoms = [i for i in range(natom) if sc_red[i][1] != 'O']
-o_atoms = [i for i in range(natom) if sc_red[i][1] == 'O']
-
-
-# In[35]:
-
-
-import networkx as nx
-#
-# Database of Ionic Radii
-# http://abulafia.mt.ic.ac.uk/shannon/ptable.php
-#
-# Coordination IV
-R_O = 1.35
-#
-# Coordination VI
-R_Al = 0.535
-R_Ga = 0.62
-R_In = 0.8
-#
-R_ionic = { "O" : R_O, "Al" : R_Al, "Ga" : R_Ga, "In" : R_In }
-
-def get_crytal_graph(reduced_coords, dists, factor=1.5):
-    natom = len(reduced_coords)
-    G = nx.Graph()
-    for i in range(natom):
-        symbol_i = reduced_coords[i][1]
-        for j in range(i):
-            symbol_j = reduced_coords[j][1]
-            if (symbol_i == "O" and symbol_j != "O") or (symbol_i != "O" and symbol_j == "O"):
-                node_i = symbol_i + "_" + str(i)
-                node_j = symbol_j + "_" + str(j)
-                R_max = (R_ionic[symbol_i] + R_ionic[symbol_j]) * factor
-                if dists[i, j] < R_max:
-                    G.add_edge(node_i, node_j)
-    
-    return G
-
-
-# If you find lack or excess of connections, you shoud adjust `factor`. Maybe, close-packed lattices require a lower value than the defalut value. For a hcp-like lattice, I used `factor=1.2`.
-# 
-# I recommend the factor that depends on the spacegroup and the gamma:
-
-# In[36]:
-
-
-def get_factor(spacegroup, gamma):
-    if spacegroup == 12:
-        return 1.4
-    elif spacegroup == 33:
-        return 1.4
-    elif spacegroup == 167:
-        return 1.5
-    elif spacegroup == 194:
-        return 1.3
-    elif spacegroup == 206:
-        return 1.5
-    elif spacegroup == 227:
-        if gamma < 60:
-            return 1.4
-        else:
-            return 1.5
-    else:
-        raise NameError('get_factor does not support the spacegroup: {}'.format(spacegroup))
-
-
-# In[39]:
-
-
-spacegroup = df_crystals.spacegroup.values[row_id]
-angle_gamma = df_crystals.lattice_angle_gamma_degree.values[row_id]
-cg_factor = get_factor(spacegroup, angle_gamma)
-G = get_crytal_graph(sc_red, sc_dist, factor=cg_factor)
-
-print("Node count:", G.number_of_nodes())
-print("Edge count:", G.number_of_edges())
-
-for i in range(natom):
-    symbol_i = sc_red[i][1]
-    node_i = symbol_i + "_" + str(i)
-    crdn_i = list(G.neighbors(node_i))
-    print(node_i, len(crdn_i), crdn_i)
-
-
-# There are 4, 6-coordinated Al and Ga atoms, and 3, 4, 5-coordinated O atoms.
-
-# In[40]:
-
-
-plt.figure(figsize=(10,10)) 
-nx.draw_spring(G, with_labels=True, node_size=800, font_size=8)
-
-
-# All edges of the crystal graph are imported as bonds in the below gemometry figure.
-# ![Crystal graph to Jmol viewer](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/geometry_add2.jpg?raw=true)
-# 
-# You can generate the bonds for Jmol using the following script:  
-
-# In[41]:
-
-
-def generate_jmol_bonds(G, xyz_coords, reduced_coords, amat,
-                        jmol_bonds_fn="./jmol_bonds.spt",
-                        jmol_xyz_fn = "./jmol_geometry.xyz"):
-    add_atoms = []
-    na = len(reduced_coords)
-    with open(jmol_bonds_fn, "w") as f:
-        f.write("set autobond off\n")
-        f.write("load \"{}\"\n".format(jmol_xyz_fn))
-        f.write("background [x0000cc]\n")
-        f.write("set bondradiusmilliangstroms 100\n")
-        f.write("set perspectiveDepth true\n")
-        for e in G.edges():
-            e1 = e[0].split("_")
-            e2 = e[1].split("_")
-            i = int(e1[1])
-            j = int(e2[1])
-            red = reduced_coords[i][0] - reduced_coords[j][0]
-            if np.sum(np.abs(red) > 0.5) > 0:
-                sign_vec = [0] * 3
-                for k in range(3):
-                    if red[k] > 0.5:
-                        sign_vec[k] = 1
-                    elif red[k] < -0.5:
-                        sign_vec[k] = -1
-                lat_vec = np.matmul(amat, sign_vec)
-                xyz_i = xyz_coords[i][0] - lat_vec
-                ii = na
-                na += 1
-                add_atoms.append([xyz_i, e1[0]])
-                xyz_j = xyz_coords[j][0] + lat_vec
-                jj = na
-                na += 1
-                add_atoms.append([xyz_j, e2[0]])
-                atom1 = e1[0]+str(i+1)
-                atom2 = e2[0]+str(jj+1)
-                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
-                atom1 = e1[0]+str(ii+1)
-                atom2 = e2[0]+str(j+1)
-                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
-            else:
-                atom1 = e1[0]+str(i+1)
-                atom2 = e2[0]+str(j+1)
-                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
-
-    with open(jmol_xyz_fn, "w") as f:
-        f.write("#=================================\n")
-        f.write("#Created using the Crystal Graph\n")
-        f.write("#=================================\n")
-        for i in range(3):
-            f.write("lattice_vector {} {} {}\n".format(amat[0,i], amat[1,i], amat[2,i]))
-        for atom in xyz_coords:
-            f.write("atom {} {} {} {}\n".format(atom[0][0], atom[0][1], atom[0][2], atom[1]))
-        for atom in add_atoms:
-            f.write("atom {} {} {} {}\n".format(atom[0][0], atom[0][1], atom[0][2], atom[1]))
-
-
-# In[42]:
-
-
-sc_xyz = [ [np.matmul(sc_A, atom[0]), atom[1]] for atom in sc_red]
-generate_jmol_bonds(G, sc_xyz, sc_red, sc_A)
-
-
-# In[43]:
-
-
-# Please see `Output` of this notebook or uncomment the following two lines.
-#with open("jmol_bonds.spt") as f:
-#    print(f.read())
-
-
-# In[44]:
-
-
-# Please see `Output` of this notebook or uncomment the following two lines.
-#with open("jmol_geometry.xyz") as f:
-#    print(f.read())
-
-
-# Put the two files, **jmol_bonds.spt** and **jmol_geometry.xyz** on the same directory, and run Jmol as:
-# 
-# `java -Xmx512m -jar /your/installed/directory/Jmol.jar jmol_bonds.spt`
-# 
-# Note that `/your/installed/directory` is different for each person.
-
-# ## Graph distance
-
-# In[45]:
-
-
-path_lengths = np.ones((natom, natom), dtype=np.int)
-for i in range(natom):
-    atom_i = sc_red[i][1] + "_" + str(i)
-    for j in range(i):
-        atom_j = sc_red[j][1] + "_" + str(j)
-        path_lengths[i, j] = nx.shortest_path_length(G, atom_i, atom_j)
-        path_lengths[j, i] = path_lengths[i, j]
-path_lengths
-
-
-# In[46]:
-
-
-import seaborn as sns
-sns.heatmap(path_lengths)
-
-
-# ## Histogram of angles
-
-# In[49]:
-
-
-def get_angles(G, Rij, atom1):
-    angles = []
-    crdn1 = list(G.neighbors(atom1))
-    crdn1_indeces = [int(atom.split("_")[1]) for atom in crdn1]
-    i1 = int(atom1.split("_")[1])
-    for i in range(len(crdn1)):
-        i2 = crdn1_indeces[i]
-        v2 = Rij[i2, i1]
-        for j in range(i):
-            i3 = crdn1_indeces[j]
-            v3 = Rij[i3, i1]
-            angle = angle_deg_between(v2, v3)
-            angles.append(angle)
-            #print(atom1, crdn1[i], crdn1[j], angle, length(v2), length(v3))
-    return angles       
-
-
-# In[50]:
-
-
-o_m_o_angles = []
-for i in m_atoms:
-    atom = sc_red[i][1] + "_" + str(i)
-    o_m_o_angles += get_angles(G, sc_Rij, atom)
-
-m_o_m_angles = []
-for i in o_atoms:
-    atom = sc_red[i][1] + "_" + str(i)
-    m_o_m_angles += get_angles(G, sc_Rij, atom)
-
-
-# In[51]:
-
-
-plt.figure(figsize=(6,8))
-
-ax1 = plt.subplot(211)
-hist_m_angle = plt.hist(o_m_o_angles, bins=100, range=(60,180))
-plt.text(0.55, 0.9, "Oxygen-Metal-Oxygen", fontsize=12, transform=ax1.transAxes)
-plt.title("Histogram of angles")
-
-ax2 = plt.subplot(212)
-hist_o_angle = plt.hist(m_o_m_angles, bins=100, range=(60,180))
-plt.text(0.55, 0.9, "Metal-Oxygen-Metal", fontsize=12, transform=ax2.transAxes)
-_ = plt.xlabel("θ (degree)", fontsize=12)
-
-
-# ## Histogram of dihedral angles
-# 
-# You can find the definition at Wikipedia: [Dihedral_angle](https://en.wikipedia.org/wiki/Dihedral_angle)
-
-# In[52]:
-
-
-def get_dihedral_angles(G, Rij, atom1, atom2):
-    dihedral_angles = []
-    crdn1 = list(G.neighbors(atom1))
-    crdn2 = list(G.neighbors(atom2))
-    crdn1.remove(atom2)
-    crdn2.remove(atom1)
-    for c1 in crdn1:
-        for c2 in crdn2:
-            if c1 == c2: continue
-            j1 = int(atom1.split("_")[1])
-            j2 = int(atom2.split("_")[1])
-            i1 = int(c1.split("_")[1])
-            i2 = int(c2.split("_")[1])
-            v0 = Rij[i1, i2]
-            v1 = Rij[i1, j1]
-            v2 = Rij[i2, j2]
-            uv0 = unit_vector(v0)
-            w1 = v1 - np.dot(v1, uv0) * uv0
-            w2 = v2 - np.dot(v2, uv0) * uv0
-            if length(w1) < 1e-8 or length(w2) < 1e-8: continue
-            angle = angle_deg_between(w1, w2)
-            dihedral_angles.append(angle)
-            #print(atom1, atom2, c1, c2, angle, length(v0), length(v1), length(v2), length(w1), length(w2))
-    
-    return dihedral_angles
-
-
-# In[53]:
-
-
-train_dihedral = []
-for i in m_atoms:
-    atom1 = sc_red[i][1] + "_" + str(i)
-    for atom2 in G.neighbors(atom1):
-        train_dihedral += get_dihedral_angles(G, sc_Rij, atom1, atom2)
-
-
-# In[54]:
-
-
-hist_dihedral = plt.hist(train_dihedral, bins=100)
-ax = plt.axes()
-plt.text(0.45, 0.9, "Metal-Oxygen-Metal-Oxygen", fontsize=12, transform=ax.transAxes)
-_ = plt.title("Histogram of dihedral angles")
-_ = plt.xlabel("φ (degree)", fontsize=12)
-
+# <h1> Someone can tell me about plot the map using the initials? 

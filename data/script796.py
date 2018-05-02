@@ -1,361 +1,363 @@
 
 # coding: utf-8
 
-# An Exploratory Kernel for the Porto Seguro Competition. 
+# # Goal
+# So the excellent [original kernel](https://www.kaggle.com/gaborvecsei/basic-pure-computer-vision-segmentation-lb-0-229) put together by [Gabor](https://www.kaggle.com/gaborvecsei) gets 0.229 "without even using the training data" which is a great result, but what if we use the training data.  
+# ## Overview
+# The idea is to take the parameters found in the original kernel and try to improve them using the IOU score as the ground criteria.
+# 1. Get a cross-validation setup working that gives us a similar value to the 0.229
+# 1. Rewrite the threshold and label methods to take all of their parameters
+# 1. Use scipy.optimize (probably sk-optimize would be better, but we'll keep it simple here) to improve the values
+# 1. Predict and submit
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
+from os.path import join
+import cv2
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-df = pd.read_csv('../input/train.csv')
-df.head()
-
-
-# ## Regex and Data Wrangling
-
-# In order to isolate logically related features (i.e. ind, reg, car, calc), and discriminate among categorical, binary and continuous properties we need a bunch of regular expressions to filter key words in the column names.
-
-# In[ ]:
-
-
-import re
-def istype(name,_type):
-    match = re.search('^.*'+_type+'.*$',name)
-    if match:
-        return True
-    else:
-        return False
-    
-def notBinOrCat(name):
-    match = re.search('^.*bin.*$',name)
-    if match:
-        return False
-    else:
-        match = re.search('^.*cat.*$',name)
-        if match:
-            return False
-        else:
-            return True
-
-
-# The following lists of column names may come in handy.
-
-# In[ ]:
-
-
-ind_cols = [col for col in df.columns if istype(col,'ind')]
-reg_cols = [col for col in df.columns if istype(col,'reg')]
-car_cols = [col for col in df.columns if istype(col,'car')]
-calc_cols= [col for col in df.columns if istype(col,'calc')]
-
-ind_cat = [col for col in ind_cols if istype(col,'cat')]
-reg_cat = [col for col in reg_cols if istype(col,'cat')]
-car_cat = [col for col in car_cols if istype(col,'cat')]
-calc_cat= [col for col in calc_cols if istype(col,'cat')]
-
-ind_bin = [col for col in ind_cols if istype(col,'bin')]
-reg_bin = [col for col in reg_cols if istype(col,'bin')]
-car_bin = [col for col in car_cols if istype(col,'bin')]
-calc_bin= [col for col in calc_cols if istype(col,'bin')]
-
-ind_con = [col for col in ind_cols if not (istype(col,'bin') or istype(col,'cat'))]
-reg_con = [col for col in reg_cols if not (istype(col,'bin') or istype(col,'cat'))]
-car_con = [col for col in car_cols if not (istype(col,'bin') or istype(col,'cat'))]
-calc_con= [col for col in calc_cols if not (istype(col,'bin') or istype(col,'cat'))]
-
-
-
-# ## Target
-
-# In[ ]:
-
-
-df['target'].unique()
-
-
-# There are FAR less ones than zeros
-
-# In[ ]:
-
-
-import seaborn as sns
+from glob import glob
+import os
+from skimage.io import imread
 import matplotlib.pyplot as plt
-thist = df.groupby(['target'],as_index=False).count()['id']
-fig,axarr = plt.subplots(1,1,figsize=(12,6))
-sns.barplot(x=thist.index,y=thist.values)
-
-
-# I could be wrong but, in my opinion this is too much imbalanced.
-# See https://machinelearningmastery.com/tactics-to-combat-imbalanced-classes-in-your-machine-learning-dataset/ for more information on possible problems related to imbalanced datasets.
-# Let's create a reduced datase. We use the sample function to randomly choose 25000 recordes having target 0.
-# 
-# Finally w use sample again to shuffle positives and negatives.
-
-# In[ ]:
-
-
-zeros = df[df['target']==0].sample(n=25000)
-ones = df[df['target']==1]
-rdf = pd.concat([zeros,ones],axis=0)
-
-thist = rdf.groupby(['target'],as_index=False).count()['id']
-fig,axarr = plt.subplots(1,1,figsize=(12,6))
-sns.barplot(x=thist.index,y=thist.values)
-rdf = rdf.sample(frac=1)
-plt.show()
-
-
-# ## Binary Features
-
-# Here is a nice histogram showing how many times each binary proerty occurs with 1 value in the dataset.
-
-# In[ ]:
-
-
-f,axarray = plt.subplots(1,1,figsize=(15,8))
-plt.xticks(rotation = 'vertical')
-ibh = df[ind_bin].sum()
-cbh = df[calc_bin].sum()
-bins = pd.concat([ibh,cbh],axis=0)
-sns.barplot(x=bins.values,y=bins.index,orient='h')
-
-
-# Clusters of binary properties exhibit some kind of correlation.
-
-# In[ ]:
-
-
-f,axarray = plt.subplots(1,2,figsize=(15,6))
-plt.xticks(rotation='vertical')
-sns.heatmap(df[ind_bin].corr(),ax=axarray[0],cmap="YlGnBu")
-sns.heatmap(df[calc_bin].corr(),ax=axarray[1],cmap="YlGnBu")
-
-
-# ## Continuous
-
-# In[ ]:
-
-
-f,axarray = plt.subplots(2,2,figsize=(15,12))
-plt.xticks(rotation='vertical')
-sns.heatmap(df[car_con].corr(),ax=axarray[0][0],cmap="YlGnBu")
-sns.heatmap(df[ind_con].corr(),ax=axarray[0][1],cmap="YlGnBu")
-sns.heatmap(df[reg_con].corr(),ax=axarray[1][0],cmap="YlGnBu")
-sns.heatmap(df[calc_con].corr(),ax=axarray[1][1],cmap="YlGnBu")
-plt.show()
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+dsb_data_dir = os.path.join('..', 'input')
+stage_label = 'stage1'
 
 
 # In[ ]:
 
 
-sns.pairplot(df[car_con][0:500],markers="+")
+all_images = glob(os.path.join(dsb_data_dir, 'stage1_*', '*', '*', '*'))
+img_df = pd.DataFrame({'path': all_images})
+img_id = lambda in_path: in_path.split('/')[-3]
+img_type = lambda in_path: in_path.split('/')[-2]
+img_group = lambda in_path: in_path.split('/')[-4].split('_')[1]
+img_stage = lambda in_path: in_path.split('/')[-4].split('_')[0]
+img_df['ImageId'] = img_df['path'].map(img_id)
+img_df['ImageType'] = img_df['path'].map(img_type)
+img_df['TrainingSplit'] = img_df['path'].map(img_group)
+img_df['Stage'] = img_df['path'].map(img_stage)
+img_df.sample(2)
 
 
-# let's check how the target classes are distributd among the CAR continuous features
-
-# In[ ]:
-
-
-tmp = pd.concat([df['target'],df[car_con]],axis=1)
-sns.pairplot(tmp[0:500],hue='target',palette="husl")
-
-
-# let's check how the target classes are distributd among the REG continuous features
-
-# In[ ]:
-
-
-tmp = pd.concat([df['target'],df[reg_con]],axis=1)
-sns.pairplot(tmp[0:500],hue='target',palette="husl")
-
-
-# let's check how the target classes are distributd among the IND continuous features
+# # Process and Import Training Data
+# Here we load in the training data images and labels. We load the label images into a single index colored integer image.
 
 # In[ ]:
 
 
-tmp = pd.concat([df['target'],df[ind_con]],axis=1)
-sns.pairplot(tmp[0:500],hue='target',palette="husl")
+get_ipython().run_cell_magic('time', '', 'train_df = img_df.query(\'TrainingSplit=="train"\')\ntrain_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in train_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'masks\'] = n_rows.query(\'ImageType == "masks"\')[\'path\'].values.tolist()\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    train_rows += [c_row]\ntrain_img_df = pd.DataFrame(train_rows)    \nIMG_CHANNELS = 3\ndef read_and_stack(in_img_list):\n    return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in enumerate(in_img_list, 1)], 0), 0)\n\ndef read_hist_bw(in_img_list):\n    return cv2.imread(in_img_list[0], cv2.IMREAD_GRAYSCALE)\ntrain_img_df[\'images\'] = train_img_df[\'images\'].map(read_hist_bw)\ntrain_img_df[\'masks\'] = train_img_df[\'masks\'].map(read_and_stack).map(lambda x: x.astype(int))\ntrain_img_df.sample(1)')
 
 
 # In[ ]:
 
 
-tmp = pd.concat([df['target'],df[calc_con]],axis=1)
-sns.pairplot(tmp[0:500],hue='target',palette="husl")
-
-
-# #### Continuous Features Importance
-
-# In[ ]:
-
-
-from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn import svm
-
-clf = RandomForestClassifier(n_estimators = 50,random_state=0)
-clf.fit(rdf[car_con],rdf['target'])
-importances = clf.feature_importances_
-indices = np.argsort(importances)[::-1]
-for i in range(len(indices)):
-    print (car_con[indices[i]],importances[indices[i]])
+for _, c_row in train_img_df.sample(1).iterrows():
+    fig, (ax1, ax2) = plt.subplots(1,2, figsize = (8, 4))
+    ax1.imshow(c_row['images'], cmap = 'bone')
+    ax2.imshow(c_row['masks'], cmap = 'nipy_spectral')
 
 
 # In[ ]:
 
 
-clf = RandomForestClassifier(n_estimators = 50,random_state=0)
-clf.fit(rdf[ind_con],rdf['target'])
-importances = clf.feature_importances_
-indices = np.argsort(importances)[::-1]
-for i in range(len(indices)):
-    print (ind_con[indices[i]],importances[indices[i]])
+from sklearn.model_selection import train_test_split
+train_split_df, valid_split_df = train_test_split(train_img_df, 
+                                                  test_size = 0.4, 
+                                                  random_state = 2018,
+                                                  # ensures both splits have the different sized images
+                                                  stratify = train_img_df['images'].map(lambda x: '{}'.format(np.shape))
+                                                 )
+print('train', train_split_df.shape, 'valid', valid_split_df.shape)
+
+
+# Here are the two functions from the original kernel
+
+# In[ ]:
+
+
+def gabor_threshold(image_gray):
+    image_gray = cv2.GaussianBlur(image_gray, (7, 7), 1)
+    ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU)
+    
+    _, cnts, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+    max_cnt_area = cv2.contourArea(cnts[0])
+    
+    if max_cnt_area > 50000:
+        ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+    
+    return thresh
+
+def gabor_apply_morphology(thresh):
+    mask = cv2.dilate(thresh, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5)))
+    mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5)))
+    return mask
+
+def gabor_pipeline(in_img):
+    thresh = gabor_threshold(in_img)
+    return gabor_apply_morphology(thresh)
+
+
+# > # IOU Metric
+# [This kernel](https://www.kaggle.com/aglotero/another-iou-metric) has a nice IOU implementation that we just copy here
+
+# In[ ]:
+
+
+from skimage.morphology import label
+def iou_metric(y_true_in, y_pred_in, print_table=False):
+    labels = y_true_in
+    y_pred = label(y_pred_in > 0.5)
+    
+    true_objects = len(np.unique(labels))
+    pred_objects = len(np.unique(y_pred))
+
+    intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
+
+    # Compute areas (needed for finding the union between all objects)
+    area_true = np.histogram(labels, bins = true_objects)[0]
+    area_pred = np.histogram(y_pred, bins = pred_objects)[0]
+    area_true = np.expand_dims(area_true, -1)
+    area_pred = np.expand_dims(area_pred, 0)
+
+    # Compute union
+    union = area_true + area_pred - intersection
+
+    # Exclude background from the analysis
+    intersection = intersection[1:,1:]
+    union = union[1:,1:]
+    union[union == 0] = 1e-9
+
+    # Compute the intersection over union
+    iou = intersection / union
+
+    # Precision helper function
+    def precision_at(threshold, iou):
+        matches = iou > threshold
+        true_positives = np.sum(matches, axis=1) == 1   # Correct objects
+        false_positives = np.sum(matches, axis=0) == 0  # Missed objects
+        false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
+        tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
+        return tp, fp, fn
+
+    # Loop over IoU thresholds
+    prec = []
+    if print_table:
+        print("Thresh\tTP\tFP\tFN\tPrec.")
+    for t in np.arange(0.5, 1.0, 0.05):
+        tp, fp, fn = precision_at(t, iou)
+        if (tp + fp + fn) > 0:
+            p = tp / (tp + fp + fn)
+        else:
+            p = 0
+        if print_table:
+            print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
+        prec.append(p)
+    
+    if print_table:
+        print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
+    return np.mean(prec)
+
+
+# # Wrap Everything Up
+# We have a single function to evaluate the IOU of a model on a dataset
+
+# In[ ]:
+
+
+def calculate_iou(in_df, thresh_func):
+    pred_masks = valid_split_df['images'].map(thresh_func).values
+    gt_masks = valid_split_df['masks'].values
+    all_ious = [iou_metric(cur_gt, cur_pred, print_table=False) for cur_gt, cur_pred in 
+            zip(gt_masks, pred_masks)]
+    return np.mean(all_ious)
+
+
+# # Estimate our IOU with the Gabor Model
+# Here we see the result is 0.35 which is quite a bit higher than the actual 0.229, so we have to be aware the value isn't super reliable.
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', "print('IOU', calculate_iou(valid_split_df, gabor_pipeline))")
+
+
+# # Define a Parametric Model
+# Here we take the basic Gabor pipeline and allow the important parameters to be adjusted so they can consequently be optimized
+
+# In[ ]:
+
+
+def parametric_pipeline(image_gray, 
+                       blur_sigma = 1, 
+                        dilate_iters = 1,
+                       dilate_size = 5, 
+                       erode_size = 5):
+    # some functions don't like floats
+    blur_sigma = np.clip(blur_sigma, 0.01, 100)
+    blur_size = int(2*round(3*blur_sigma)+1)
+    dilate_size = int(dilate_size)
+    erode_size = int(erode_size)
+    dilate_iters = int(dilate_iters)
+    if blur_size>0:
+        image_gray = cv2.GaussianBlur(image_gray, (blur_size, blur_size), blur_sigma)
+    
+    ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU)
+    _, cnts, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+    max_cnt_area = cv2.contourArea(cnts[0])
+    
+    if max_cnt_area > 50000:
+        ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+    mask = thresh
+    for i in range(dilate_iters):
+        if dilate_size>0:
+            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size)))
+        if erode_size>0:
+            mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_size, erode_size)))
+    return mask
+
+
+# # Optimization
+# A very simple optimization routine with no knowledge about morphology, integer steps, iterations or anything else. It just serves as an example of how such a pipeline can be optimized. At the very least some random search would probably improve the results
+
+# In[ ]:
+
+
+from scipy.optimize import fmin
+from tqdm import tqdm
+base_x0_min = [0, 0, 0, 0]
+base_x0_max = [10, 10, 15, 15]
+
+def random_search_fmin(random_restart = 5, search_steps = 5):
+    results = []
+    base_x0 = (1, 1, 5, 5) # starting point
+    for _ in tqdm(range(random_restart)):
+        def inv_iou_func(scale_x0):
+            x0 = [s*x/10 for s,x in zip(scale_x0, base_x0)]
+            # score it on the training data
+            try:
+                score = calculate_iou(train_split_df, 
+                                      lambda x: parametric_pipeline(x, *x0))
+            except Exception as e:
+                print('Arguments:', ' '.join(['%1.1f' % xi for xi in x0]))
+                raise ValueError(e)
+            print('Arguments:', ' '.join(['%1.1f' % xi for xi in x0]), 
+                  'IOU: %2.3f' % score)
+            return 1-score # since we are minimizing the result
+
+        opt_scalars = fmin(inv_iou_func, 
+                          (10, 10, 10, 10), 
+                           xtol = 0.1,
+                          maxiter = search_steps)
+        
+        opt_params = [s*x/10 for s,x in zip(opt_scalars, base_x0)]
+        results += [(calculate_iou(train_split_df, 
+                                  lambda x: parametric_pipeline(x, *opt_params)), 
+                     opt_params)]
+        # pick a new random spot to iterate from
+        base_x0 = [np.random.choice(np.linspace(x_start, x_end, 10))
+                   for x_start, x_end in zip(base_x0_min, base_x0_max)]
+    n_out = sorted(results, key = lambda x: 1-x[0])
+    return n_out[0][1], n_out
 
 
 # In[ ]:
 
 
-clf = RandomForestClassifier(n_estimators = 50,random_state=0)
-clf.fit(rdf[reg_con],rdf['target'])
-importances = clf.feature_importances_
-indices = np.argsort(importances)[::-1]
-for i in range(len(indices)):
-    print (reg_con[indices[i]],importances[indices[i]])
+get_ipython().run_cell_magic('time', '', 'opt_params, results = random_search_fmin(5, 8)')
+
+
+# # Calculate the Score on Hold-Out (validation)
+# Here we calculate the score on the validation to see if we actually improved anything
+
+# In[ ]:
+
+
+print('IOU', calculate_iou(valid_split_df, 
+                           lambda x: parametric_pipeline(x, *opt_params)))
+
+
+# Now we load the test images and apply the algorithm to them
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'test_df = img_df.query(\'TrainingSplit=="test"\')\ntest_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in test_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    test_rows += [c_row]\ntest_img_df = pd.DataFrame(test_rows)    \n\ntest_img_df[\'images\'] = test_img_df[\'images\'].map(read_hist_bw)\nprint(test_img_df.shape[0], \'images to process\')\ntest_img_df.sample(1)')
 
 
 # In[ ]:
 
 
-clf = RandomForestClassifier(n_estimators = 50,random_state=0)
-clf.fit(rdf[calc_con],rdf['target'])
-importances = clf.feature_importances_
-indices = np.argsort(importances)[::-1]
-for i in range(len(indices)):
-    print (calc_con[indices[i]],importances[indices[i]])
-
-
-# ## Categorical
-
-# In[ ]:
-
-
-fig,axarray = plt.subplots(3,1,figsize=(15,15))
-ind_cat_2_hist = df[df['target']==0].groupby(['ps_ind_02_cat'],as_index=False).count()
-ind_cat_4_hist = df[df['target']==0].groupby(['ps_ind_04_cat'],as_index=False).count()
-ind_cat_5_hist = df[df['target']==0].groupby(['ps_ind_05_cat'],as_index=False).count()
-sns.barplot(x=ind_cat_2_hist['ps_ind_02_cat'],y=ind_cat_2_hist['id'],ax=axarray[0])
-sns.barplot(x=ind_cat_4_hist['ps_ind_04_cat'],y=ind_cat_4_hist['id'],ax=axarray[1])
-sns.barplot(x=ind_cat_5_hist['ps_ind_05_cat'],y=ind_cat_5_hist['id'],ax=axarray[2])
+get_ipython().run_cell_magic('time', '', "test_img_df['masks'] = test_img_df['images'].map(lambda x: \n                                                 parametric_pipeline(x, *opt_params))")
 
 
 # In[ ]:
 
 
-fig,axarray = plt.subplots(3,1,figsize=(15,15))
-ind_cat_2_hist = df[df['target']==1].groupby(['ps_ind_02_cat'],as_index=False).count()
-ind_cat_4_hist = df[df['target']==1].groupby(['ps_ind_04_cat'],as_index=False).count()
-ind_cat_5_hist = df[df['target']==1].groupby(['ps_ind_05_cat'],as_index=False).count()
-sns.barplot(x=ind_cat_2_hist['ps_ind_02_cat'],y=ind_cat_2_hist['id'],ax=axarray[0])
-sns.barplot(x=ind_cat_4_hist['ps_ind_04_cat'],y=ind_cat_4_hist['id'],ax=axarray[1])
-sns.barplot(x=ind_cat_5_hist['ps_ind_05_cat'],y=ind_cat_5_hist['id'],ax=axarray[2])
+n_img = 3
+fig, m_axs = plt.subplots(2, n_img, figsize = (12, 6))
+for (_, d_row), (c_im, c_lab) in zip(test_img_df.sample(n_img).iterrows(), 
+                                     m_axs.T):
+    c_im.imshow(d_row['images'])
+    c_im.axis('off')
+    c_im.set_title('Microscope')
+    
+    c_lab.imshow(d_row['masks'])
+    c_lab.axis('off')
+    c_lab.set_title('Predicted')
 
 
 # In[ ]:
 
 
-inddummies = pd.get_dummies(rdf['ps_ind_02_cat'],prefix="ind_02")
-inddummies = pd.concat([inddummies,pd.get_dummies(rdf['ps_ind_04_cat'],prefix="ind_04")],axis=1)
-inddummies = pd.concat([inddummies,pd.get_dummies(rdf['ps_ind_05_cat'],prefix="ind_05")],axis=1)
+def rle_encoding(x):
+    '''
+    x: numpy array of shape (height, width), 1 - mask, 0 - background
+    Returns run length as list
+    '''
+    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
+    run_lengths = []
+    prev = -2
+    for b in dots:
+        if (b>prev+1): run_lengths.extend((b+1, 0))
+        run_lengths[-1] += 1
+        prev = b
+    return run_lengths
+
+def prob_to_rles(x, cut_off = 0.5):
+    lab_img = label(x>cut_off)
+    if lab_img.max()<1:
+        lab_img[0,0] = 1 # ensure at least one prediction per image
+    for i in range(1, lab_img.max()+1):
+        yield rle_encoding(lab_img==i)
 
 
 # In[ ]:
 
 
-cardummies = pd.get_dummies(rdf['ps_car_01_cat'],prefix="car_01")
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_02_cat'],prefix="car_02")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_03_cat'],prefix="car_03")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_04_cat'],prefix="car_04")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_05_cat'],prefix="car_05")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_06_cat'],prefix="car_06")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_07_cat'],prefix="car_07")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_08_cat'],prefix="car_08")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_09_cat'],prefix="car_09")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_10_cat'],prefix="car_10")],axis=1)
-cardummies = pd.concat([cardummies,pd.get_dummies(rdf['ps_car_11_cat'],prefix="car_11")],axis=1)
+test_img_df['rles'] = test_img_df['masks'].map(lambda x: list(prob_to_rles(x)))
 
 
 # In[ ]:
 
 
-car_cat
+out_pred_list = []
+for _, c_row in test_img_df.iterrows():
+    for c_rle in c_row['rles']:
+        out_pred_list+=[dict(ImageId=c_row['ImageId'], 
+                             EncodedPixels = ' '.join(np.array(c_rle).astype(str)))]
+out_pred_df = pd.DataFrame(out_pred_list)
+print(out_pred_df.shape[0], 'regions found for', test_img_df.shape[0], 'images')
+out_pred_df.sample(3)
 
 
 # In[ ]:
 
 
-fig,axarray = plt.subplots(3,1,figsize=(15,15))
-ind_car_1_hist = df[df['target']==1].groupby(['ps_car_01_cat'],as_index=False).count()
-ind_car_2_hist = df[df['target']==1].groupby(['ps_car_02_cat'],as_index=False).count()
-ind_car_3_hist = df[df['target']==1].groupby(['ps_car_03_cat'],as_index=False).count()
-ind_car_1_hist = df[df['target']==1].groupby(['ps_car_01_cat'],as_index=False).count()
-ind_car_2_hist = df[df['target']==1].groupby(['ps_car_02_cat'],as_index=False).count()
-ind_car_3_hist = df[df['target']==1].groupby(['ps_car_03_cat'],as_index=False).count()
+out_pred_df[['ImageId', 'EncodedPixels']].to_csv('predictions.csv', index = False)
 
-
-
-sns.barplot(x=ind_car_1_hist['ps_car_01_cat'],y=ind_car_1_hist['id'],ax=axarray[0])
-sns.barplot(x=ind_car_2_hist['ps_car_02_cat'],y=ind_car_2_hist['id'],ax=axarray[1])
-sns.barplot(x=ind_car_3_hist['ps_car_03_cat'],y=ind_car_3_hist['id'],ax=axarray[2])
-
-
-# Work in Progress...
-
-# In[ ]:
-
-
-fig,axarray = plt.subplots(11,1,figsize=(15,15))
-ind_car_1_hist = df[df['target']==1].groupby(['ps_car_01_cat'],as_index=False).count()
-ind_car_2_hist = df[df['target']==1].groupby(['ps_car_02_cat'],as_index=False).count()
-ind_car_3_hist = df[df['target']==1].groupby(['ps_car_03_cat'],as_index=False).count()
-ind_car_4_hist = df[df['target']==1].groupby(['ps_car_04_cat'],as_index=False).count()
-ind_car_5_hist = df[df['target']==1].groupby(['ps_car_05_cat'],as_index=False).count()
-ind_car_6_hist = df[df['target']==1].groupby(['ps_car_06_cat'],as_index=False).count()
-ind_car_7_hist = df[df['target']==1].groupby(['ps_car_07_cat'],as_index=False).count()
-ind_car_8_hist = df[df['target']==1].groupby(['ps_car_08_cat'],as_index=False).count()
-ind_car_9_hist = df[df['target']==1].groupby(['ps_car_09_cat'],as_index=False).count()
-ind_car_10_hist = df[df['target']==1].groupby(['ps_car_10_cat'],as_index=False).count()
-ind_car_11_hist = df[df['target']==1].groupby(['ps_car_11_cat'],as_index=False).count()
-
-sns.barplot(x=ind_car_1_hist['ps_car_01_cat'],y=ind_car_1_hist['id'],ax=axarray[0])
-sns.barplot(x=ind_car_2_hist['ps_car_02_cat'],y=ind_car_2_hist['id'],ax=axarray[1])
-sns.barplot(x=ind_car_3_hist['ps_car_03_cat'],y=ind_car_3_hist['id'],ax=axarray[2])
-sns.barplot(x=ind_car_4_hist['ps_car_04_cat'],y=ind_car_4_hist['id'],ax=axarray[3])
-sns.barplot(x=ind_car_5_hist['ps_car_05_cat'],y=ind_car_5_hist['id'],ax=axarray[4])
-sns.barplot(x=ind_car_6_hist['ps_car_06_cat'],y=ind_car_6_hist['id'],ax=axarray[5])
-sns.barplot(x=ind_car_7_hist['ps_car_07_cat'],y=ind_car_7_hist['id'],ax=axarray[6])
-sns.barplot(x=ind_car_8_hist['ps_car_08_cat'],y=ind_car_8_hist['id'],ax=axarray[7])
-sns.barplot(x=ind_car_9_hist['ps_car_09_cat'],y=ind_car_9_hist['id'],ax=axarray[8])
-sns.barplot(x=ind_car_10_hist['ps_car_10_cat'],y=ind_car_10_hist['id'],ax=axarray[9])
-sns.barplot(x=ind_car_11_hist['ps_car_11_cat'],y=ind_car_11_hist['id'],ax=axarray[10])
-
-
-# work in progress

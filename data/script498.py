@@ -1,569 +1,260 @@
 
 # coding: utf-8
 
-# # Porto Seguro’s Safe Driver Prediction
-# 
-# 
-# <br><font color=blue>The aim of this compitation is to predict probability that a driver will intiate an auto insurance claim next year.A more accurate prediction will allow them to further tailor their prices, and hopefully make auto insurance coverage more accessible to more drivers. </font>
-# 
-# 
-# **Steps**
-# 
-# 1. [Read data set](#Read-data-set)
-# 2. [Explore data set](#Explore-data-set)
-# 3. [Co relation plot](#CORELATION-PLOT)
-# 4. [Missing value is data set](#Missing-value-is-data-set)
-# 5. [Convert variables into category type](#Convert-variables-into-category-type)
-# 6. [Univariate analysis](#Univariate-analysis)
-# 7. [Median and mean for categorical data](#Median-and-mean-for-categorical-data)
-# 8. [Determine outliers in dataset](#Determine-outliers-in-dataset)
-# 9. [One Hot Encoding](#One-Hot-Encoding)
-# 10. [Split data set](#Split-data-set)
-# 11. [Hyperparameter tuning](#Hyperparameter-tuning)
-# 12. [Logistic Regression model](#Logistic-Regression-model)
-# 13. [Model performance](#Model-performance)
-# 14. [Reciever Operating Charactaristics](#Reciever-Operating-Charactaristics)
-# 15. [Predict for unseen data set](#Predict-for-unseen-data-set)
-
-# # Import library
+# This script shows the full training and prediction pipeline for a pixel-based classifier: we create a mask, train logistic regression on one-pixel patches, make prediction for all pixels, create and smooth polygons from pixels.
 
 # In[ ]:
 
 
-#Import library
+from collections import defaultdict
+import csv
+import sys
+
+import cv2
+from shapely.geometry import MultiPolygon, Polygon
+import shapely.wkt
+import shapely.affinity
 import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
+import tifffile as tiff
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import confusion_matrix, roc_auc_score ,roc_curve,auc
-from sklearn.model_selection import StratifiedKFold,GridSearchCV
-import missingno as mssno
-seed =45
-get_ipython().run_line_magic('matplotlib', 'inline')
+csv.field_size_limit(sys.maxsize);
 
 
-# # Read data set
+# We'll work on buildings (class 1) from image 6120_2_2. Fist load grid sizes and polygons.
 
 # In[ ]:
 
 
-path = '../input/'
-#path = ''
-train = pd.read_csv(path+'train.csv',na_values=-1)
-test = pd.read_csv(path+'test.csv',na_values=-1)
-print('Number rows and columns:',train.shape)
-print('Number rows and columns:',test.shape)
+IM_ID = '6120_2_2'
+POLY_TYPE = '1'  # buildings
+
+# Load grid size
+x_max = y_min = None
+for _im_id, _x, _y in csv.reader(open('../input/grid_sizes.csv')):
+    if _im_id == IM_ID:
+        x_max, y_min = float(_x), float(_y)
+        break
+
+# Load train poly with shapely
+train_polygons = None
+for _im_id, _poly_type, _poly in csv.reader(open('../input/train_wkt_v4.csv')):
+    if _im_id == IM_ID and _poly_type == POLY_TYPE:
+        train_polygons = shapely.wkt.loads(_poly)
+        break
+
+# Read image with tiff
+im_rgb = tiff.imread('../input/three_band/{}.tif'.format(IM_ID)).transpose([1, 2, 0])
+im_size = im_rgb.shape[:2]
 
 
-# # Explore data set
-
-# In[ ]:
-
-
-train.head(3).T
-
-
-# # Target varaiable
-
-# In[ ]:
-
-
-plt.figure(figsize=(10,3))
-sns.countplot(train['target'],palette='rainbow')
-plt.xlabel('Target')
-
-train['target'].value_counts()
-
-
-# The 'target' variable in imbalanced 
-
-# # CORELATION PLOT
+# Scale polygons to match image:
 
 # In[ ]:
 
 
-cor = train.corr()
-plt.figure(figsize=(16,10))
-sns.heatmap(cor,cmap='Set1')
+def get_scalers():
+    h, w = im_size  # they are flipped so that mask_for_polygons works correctly
+    w_ = w * (w / (w + 1))
+    h_ = h * (h / (h + 1))
+    return w_ / x_max, h_ / y_min
+
+x_scaler, y_scaler = get_scalers()
+
+train_polygons_scaled = shapely.affinity.scale(
+    train_polygons, xfact=x_scaler, yfact=y_scaler, origin=(0, 0, 0))
 
 
-# #  ps calc  *  value as 0 relation with remaining varialble
-
-# In[ ]:
-
-
-ps_cal = train.columns[train.columns.str.startswith('ps_calc')] 
-train = train.drop(ps_cal,axis =1)
-test = test.drop(ps_cal,axis=1)
-train.shape
-
-
-# # Missing value is data set
-
-# """Values of -1 indicate that the feature was missing from the observation. 
-# The target columns signifies whether or not a claim was filed for that policy holder.""
+# Create a mask from polygons:
 
 # In[ ]:
 
 
-k= pd.DataFrame()
-k['train']= train.isnull().sum()
-k['test'] = test.isnull().sum()
-fig,ax = plt.subplots(figsize=(16,5))
-k.plot(kind='bar',ax=ax)
+def mask_for_polygons(polygons):
+    img_mask = np.zeros(im_size, np.uint8)
+    if not polygons:
+        return img_mask
+    int_coords = lambda x: np.array(x).round().astype(np.int32)
+    exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
+    interiors = [int_coords(pi.coords) for poly in polygons
+                 for pi in poly.interiors]
+    cv2.fillPoly(img_mask, exteriors, 1)
+    cv2.fillPoly(img_mask, interiors, 0)
+    return img_mask
+
+train_mask = mask_for_polygons(train_polygons_scaled)
 
 
-# Missing value in test train data set are in same propotion and same column
-
-# In[ ]:
-
-
-mssno.bar(train,color='y',figsize=(16,4),fontsize=12)
-
-
-# In[ ]:
-
-
-mssno.bar(test,color='b',figsize=(16,4),fontsize=12)
-
+# A helper for nicer display
 
 # In[ ]:
 
 
-mssno.matrix(train)
+def scale_percentile(matrix):
+    w, h, d = matrix.shape
+    matrix = np.reshape(matrix, [w * h, d]).astype(np.float64)
+    # Get 2nd and 98th percentile
+    mins = np.percentile(matrix, 1, axis=0)
+    maxs = np.percentile(matrix, 99, axis=0) - mins
+    matrix = (matrix - mins[None, :]) / maxs[None, :]
+    matrix = np.reshape(matrix, [w, h, d])
+    matrix = matrix.clip(0, 1)
+    return matrix
 
 
-# In[ ]:
-
-
-def missing_value(df):
-    col = df.columns
-    for i in col:
-        if df[i].isnull().sum()>0:
-            df[i].fillna(df[i].mode()[0],inplace=True)
-
-
-# In[ ]:
-
-
-missing_value(train)
-missing_value(test)
-
-
-# # Convert variables into category type
+# Check that image and mask are aligned.
+# Image:
 
 # In[ ]:
 
 
-def basic_details(df):
-    b = pd.DataFrame()
-    #b['Missing value'] = df.isnull().sum()
-    b['N unique value'] = df.nunique()
-    b['dtype'] = df.dtypes
-    return b
-basic_details(train)
+tiff.imshow(255 * scale_percentile(im_rgb[2900:3200,2000:2300]));
 
 
-# ###### The unique value of "ps_car_11_cat" is maximum in the data set is 104
+# And mask:
 
 # In[ ]:
 
 
-def category_type(df):
-    col = df.columns
-    for i in col:
-        if df[i].nunique()<=104:
-            df[i] = df[i].astype('category')
-category_type(train)
-category_type(test)
+def show_mask(m):
+    # hack for nice display
+    tiff.imshow(255 * np.stack([m, m, m]));
+show_mask(train_mask[2900:3200,2000:2300])
 
 
-# # Univariate analysis
+# Now, let's train a very simple logistic regression classifier, just to get some noisy prediction to show how output mask is processed.
 
 # In[ ]:
 
 
-cat_col = [col for col in train.columns if '_cat' in col]
-print(cat_col)
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import average_precision_score
+
+xs = im_rgb.reshape(-1, 3).astype(np.float32)
+ys = train_mask.reshape(-1)
+pipeline = make_pipeline(StandardScaler(), SGDClassifier(loss='log'))
+
+print('training...')
+# do not care about overfitting here
+pipeline.fit(xs, ys)
+pred_ys = pipeline.predict_proba(xs)[:, 1]
+print('average precision', average_precision_score(ys, pred_ys))
+pred_mask = pred_ys.reshape(train_mask.shape)
 
 
-# In[ ]:
-
-
-fig ,ax = plt.subplots(1,2,figsize=(14,4))
-ax1,ax2, = ax.flatten()
-sns.countplot(train['ps_ind_02_cat'],palette='rainbow',ax=ax1)
-sns.countplot(train['ps_ind_04_cat'],palette='summer',ax=ax2)
-fig,ax = plt.subplots(figsize=(14,4))
-sns.countplot(train['ps_ind_05_cat'],palette='rainbow',ax=ax)
-
-
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,8))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.countplot(train['ps_car_01_cat'],palette='rainbow',ax=ax1)
-sns.countplot(train['ps_car_02_cat'],palette='summer',ax=ax2)
-sns.countplot(train['ps_car_03_cat'],palette='summer',ax=ax3)
-sns.countplot(train['ps_car_04_cat'],palette='rainbow',ax=ax4)
-
+# Now check predictions:
 
 # In[ ]:
 
 
-fig,ax = plt.subplots(2,2,figsize = (14,7))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.countplot(train['ps_car_05_cat'],palette='summer',ax=ax1)
-sns.countplot(train['ps_car_06_cat'],palette='rainbow',ax=ax2)
-sns.countplot(train['ps_car_07_cat'],palette='summer',ax=ax3)
-sns.countplot(train['ps_car_08_cat'],palette='rainbow',ax=ax4)
+show_mask(pred_mask[2900:3200,2000:2300])
 
+
+# We must choose a threshold to turn it into a binary mask:
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(1,2,figsize=(14,6))
-ax1,ax2 = ax.flatten()
-sns.countplot(train['ps_car_09_cat'],palette='rainbow',ax=ax1)
-sns.countplot(train['ps_car_10_cat'],palette='gist_rainbow',ax=ax2)
-fig,ax = plt.subplots(figsize=(15,6))
-sns.countplot(train['ps_car_11_cat'],palette='rainbow',ax=ax)
+threshold = 0.3
+pred_binary_mask = pred_mask >= threshold
+show_mask(pred_binary_mask[2900:3200,2000:2300])
 
 
-# In[ ]:
-
-
-bin_col = [col for col in train.columns if 'bin' in col]
-print(bin_col)
-
+# Now it's possible to check Jaccard on the pixel level:
 
 # In[ ]:
 
 
-fig,ax = plt.subplots(3,3,figsize=(15,14),sharex='all')
-ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8,ax9 = ax.flatten()
-sns.countplot(train['ps_ind_06_bin'],palette='rainbow',ax=ax1)
-sns.countplot(train['ps_ind_07_bin'],palette='summer',ax=ax2)
-sns.countplot(train['ps_ind_08_bin'],palette='gist_rainbow',ax=ax3)
-sns.countplot(train['ps_ind_09_bin'],palette='summer',ax=ax4)
-sns.countplot(train['ps_ind_10_bin'],palette='rainbow',ax=ax5)
-sns.countplot(train['ps_ind_11_bin'],palette='gist_rainbow',ax=ax6)
-sns.countplot(train['ps_ind_12_bin'],palette='coolwarm',ax=ax7)
-sns.countplot(train['ps_ind_13_bin'],palette='gist_rainbow',ax=ax8)
-sns.countplot(train['ps_ind_16_bin'],palette='rainbow',ax=ax9)
+# check jaccard on the pixel level
+tp, fp, fn = (( pred_binary_mask &  train_mask).sum(),
+              ( pred_binary_mask & ~train_mask).sum(),
+              (~pred_binary_mask &  train_mask).sum())
+print('Pixel jaccard', tp / (tp + fp + fn))
 
+
+# Next is the most interesting bit, creating polygons from bit masks. Please see inline comments:
 
 # In[ ]:
 
 
-fig,ax = plt.subplots(1,2,figsize=(14,6))
-ax1,ax2 = ax.flatten()
-sns.countplot(train['ps_ind_17_bin'],palette='coolwarm',ax=ax1)
-sns.countplot(train['ps_ind_18_bin'],palette='gist_rainbow',ax=ax2)
+def mask_to_polygons(mask, epsilon=10., min_area=10.):
+    # first, find contours with cv2: it's much faster than shapely
+    image, contours, hierarchy = cv2.findContours(
+        ((mask == 1) * 255).astype(np.uint8),
+        cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
+    # create approximate contours to have reasonable submission size
+    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True)
+                       for cnt in contours]
+    if not contours:
+        return MultiPolygon()
+    # now messy stuff to associate parent and child contours
+    cnt_children = defaultdict(list)
+    child_contours = set()
+    assert hierarchy.shape[0] == 1
+    # http://docs.opencv.org/3.1.0/d9/d8b/tutorial_py_contours_hierarchy.html
+    for idx, (_, _, _, parent_idx) in enumerate(hierarchy[0]):
+        if parent_idx != -1:
+            child_contours.add(idx)
+            cnt_children[parent_idx].append(approx_contours[idx])
+    # create actual polygons filtering by area (removes artifacts)
+    all_polygons = []
+    for idx, cnt in enumerate(approx_contours):
+        if idx not in child_contours and cv2.contourArea(cnt) >= min_area:
+            assert cnt.shape[1] == 1
+            poly = Polygon(
+                shell=cnt[:, 0, :],
+                holes=[c[:, 0, :] for c in cnt_children.get(idx, [])
+                       if cv2.contourArea(c) >= min_area])
+            all_polygons.append(poly)
+    # approximating polygons might have created invalid ones, fix them
+    all_polygons = MultiPolygon(all_polygons)
+    if not all_polygons.is_valid:
+        all_polygons = all_polygons.buffer(0)
+        # Sometimes buffer() converts a simple Multipolygon to just a Polygon,
+        # need to keep it a Multi throughout
+        if all_polygons.type == 'Polygon':
+            all_polygons = MultiPolygon([all_polygons])
+    return all_polygons
 
 
-# In[ ]:
-
-
-tot_cat_col = list(train.select_dtypes(include=['category']).columns)
-
-other_cat_col = [c for c in tot_cat_col if c not in cat_col+ bin_col]
-other_cat_col
-
-
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,6))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.countplot(data=train,x='ps_ind_01',palette='rainbow',ax=ax1)
-sns.countplot(data=train,x='ps_ind_03',palette='gist_rainbow',ax=ax2)
-sns.countplot(data=train,x='ps_ind_14',palette='gist_rainbow',ax=ax3)
-sns.countplot(data=train,x='ps_ind_15',palette='rainbow',ax=ax4)
-
-
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,6))
-ax1,ax2,ax3,ax4 =ax.flatten()
-sns.countplot(data=train,x='ps_reg_01',palette='gist_rainbow',ax=ax1)
-sns.countplot(data=train,x='ps_reg_02',palette='rainbow',ax=ax2)
-sns.countplot(data=train,x='ps_car_11',palette='summer',ax=ax3)
-sns.countplot(data=train,x='ps_car_15',palette='gist_rainbow',ax=ax4)
-plt.xticks(rotation=90)
-
-
-# In[ ]:
-
-
-num_col = [c for c in train.columns if c not in tot_cat_col]
-num_col.remove('id')
-num_col
-
+# Turn our prediction to polygons, and then turn back into a mask to check what it looks like:
 
 # In[ ]:
 
 
-train['ps_reg_03'].describe()
+pred_polygons = mask_to_polygons(pred_binary_mask)
+pred_poly_mask = mask_for_polygons(pred_polygons)
+show_mask(pred_poly_mask[2900:3200,2000:2300])
 
 
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,8))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.distplot(train['ps_reg_03'],bins=100,color='red',ax=ax1)
-sns.boxplot(x ='ps_reg_03',y='target',data=train,ax=ax2)
-sns.violinplot(x ='ps_reg_03',y='target',data=train,ax=ax3)
-sns.pointplot(x= 'ps_reg_03',y='target',data=train,ax=ax4)
-
-
-# ps_reg_03 has outlier data points
+# Now to create a submission we just scale back to original coordinates
 
 # In[ ]:
 
 
-train['ps_car_12'].describe()
+scaled_pred_polygons = shapely.affinity.scale(
+    pred_polygons, xfact=1 / x_scaler, yfact=1 / y_scaler, origin=(0, 0, 0))
 
 
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,8))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.distplot(train['ps_car_12'],bins=50,ax=ax1)
-sns.boxplot(x='ps_car_12',y='target',data=train,ax=ax2)
-sns.violinplot(x='ps_car_12',y='target',data=train,ax=ax3)
-sns.pointplot(x='ps_car_12',y='target',data=train,ax=ax4)
-
+# Checking submission size:
 
 # In[ ]:
 
 
-train['ps_car_13'].describe()
+dumped_prediction = shapely.wkt.dumps(scaled_pred_polygons)
+print('Prediction size: {:,} bytes'.format(len(dumped_prediction)))
+final_polygons = shapely.wkt.loads(dumped_prediction)
 
 
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,8))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.distplot(train['ps_car_13'],bins=120,ax=ax1)
-sns.boxplot(x='ps_car_13',y='target',data=train,ax=ax2)
-sns.violinplot(x='ps_car_13',y='target',data=train,ax=ax3)
-sns.pointplot(x='ps_car_13',y='target',data=train,ax=ax4)
-
+# Now the litmus test: check Jaccard compared to **original** polygons
+# 
 
 # In[ ]:
 
 
-train['ps_car_14'].describe()
+print('Final jaccard',
+      final_polygons.intersection(train_polygons).area /
+      final_polygons.union(train_polygons).area)
 
-
-# In[ ]:
-
-
-fig,ax = plt.subplots(2,2,figsize=(14,8))
-ax1,ax2,ax3,ax4 = ax.flatten()
-sns.distplot(train['ps_car_14'],bins=120,ax=ax1)
-sns.boxplot(x='ps_car_14',y='target',data=train,ax=ax2)
-sns.violinplot(x='ps_car_14',y='target',data=train,ax=ax3)
-sns.pointplot(x='ps_car_14',y='target',data=train,ax=ax4)
-
-
-# ## Median and mean for categorical data
-
-# In[ ]:
-
-
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol= [c for c in train.columns if train[c].nunique()>2]
-    dcol.remove('id')   
-    d_median = df[dcol].median(axis=0)
-    d_mean = df[dcol].mean(axis=0)
-    q1 = df[dcol].apply(np.float32).quantile(0.25)
-    q2 = df[dcol].apply(np.float32).quantile(0.5)
-    q3 = df[dcol].apply(np.float32).quantile(0.75)
-    
-    #Add mean and median column to data set having more then 2 categories
-    for c in dcol:
-        df[c+str('_median_range')] = (df[c].astype(np.float32).values > d_median[c]).astype(np.int8)
-        df[c+str('_mean_range')] = (df[c].astype(np.float32).values > d_mean[c]).astype(np.int8)
-        df[c+str('_q1')] = (df[c].astype(np.float32).values < q1[c]).astype(np.int8)
-        df[c+str('_q2')] = (df[c].astype(np.float32).values < q2[c]).astype(np.int8)
-        df[c+str('_q3')] = (df[c].astype(np.float32).values > q3[c]).astype(np.int8)
-    return df
-
-
-# In[ ]:
-
-
-train = transform_df(train)
-test = transform_df(test)
-
-
-# # Co relation plot
-
-# In[ ]:
-
-
-cor = train[num_col].corr()
-plt.figure(figsize=(10,4))
-sns.heatmap(cor,annot=True)
-plt.tight_layout()
-
-
-# # Determine outliers in dataset
-
-# In[ ]:
-
-
-def outlier(df,columns):
-    for i in columns:
-        quartile_1,quartile_3 = np.percentile(df[i],[25,75])
-        quartile_f,quartile_l = np.percentile(df[i],[1,99])
-        IQR = quartile_3-quartile_1
-        lower_bound = quartile_1 - (1.5*IQR)
-        upper_bound = quartile_3 + (1.5*IQR)
-        print(i,lower_bound,upper_bound,quartile_f,quartile_l)
-                
-        df[i].loc[df[i] < lower_bound] = quartile_f
-        df[i].loc[df[i] > upper_bound] = quartile_l
-        
-outlier(train,num_col)
-outlier(test,num_col) 
-
-
-# # One Hot Encoding
-
-# In[ ]:
-
-
-def OHE(df1,df2,column):
-    cat_col = column
-    #cat_col = df.select_dtypes(include =['category']).columns
-    len_df1 = df1.shape[0]
-    
-    df = pd.concat([df1,df2],ignore_index=True)
-    c2,c3 = [],{}
-    
-    print('Categorical feature',len(column))
-    for c in cat_col:
-        if df[c].nunique()>2 :
-            c2.append(c)
-            c3[c] = 'ohe_'+c
-    
-    df = pd.get_dummies(df, prefix=c3, columns=c2,drop_first=True)
-
-    df1 = df.loc[:len_df1-1]
-    df2 = df.loc[len_df1:]
-    print('Train',df1.shape)
-    print('Test',df2.shape)
-    return df1,df2
-
-
-# In[ ]:
-
-
-train1,test1 = OHE(train,test,tot_cat_col)
-
-
-# # Split data set
-
-# In[ ]:
-
-
-X = train1.drop(['target','id'],axis=1)
-y = train1['target'].astype('category')
-x_test = test1.drop(['target','id'],axis=1)
-del train1,test1
-
-
-# # Hyperparameter tuning 
-
-# In[ ]:
-
-
-#Grid search
-"""logreg = LogisticRegression(class_weight='balanced')
-param = {'C':[0.001,0.003,0.005,0.01,0.03,0.05,0.1,0.3,0.5,1]}
-clf = GridSearchCV(logreg,param,scoring='roc_auc',refit=True,cv=3)
-clf.fit(X,y)
-print('Best roc_auc: {:.4}, with best C: {}'.format(clf.best_score_, clf.best_params_['C'])) """
-
-
-# # Logistic Regression model
-# Logistic regression is used for modelling. The data set is split using Stratified Kfold. In each split model is created and predicted using that model. The final predicted value is average of all model. 
-
-# In[ ]:
-
-
-kf = StratifiedKFold(n_splits=5,random_state=seed,shuffle=True)
-pred_test_full=0
-cv_score=[]
-i=1
-for train_index,test_index in kf.split(X,y):    
-    print('\n{} of kfold {}'.format(i,kf.n_splits))
-    xtr,xvl = X.loc[train_index],X.loc[test_index]
-    ytr,yvl = y[train_index],y[test_index]
-    
-    lr = LogisticRegression(class_weight='balanced',C=0.003)
-    lr.fit(xtr, ytr)
-    pred_test = lr.predict_proba(xvl)[:,1]
-    score = roc_auc_score(yvl,pred_test)
-    print('roc_auc_score',score)
-    cv_score.append(score)
-    pred_test_full += lr.predict_proba(x_test)[:,1]
-    i+=1
-
-
-# # Model performance
-
-# In[ ]:
-
-
-print('Confusion matrix\n',confusion_matrix(yvl,lr.predict(xvl)))
-print('Cv',cv_score,'\nMean cv Score',np.mean(cv_score))
-
-
-# # Reciever Operating Charactaristics
-
-# In[ ]:
-
-
-proba = lr.predict_proba(xvl)[:,1]
-fpr,tpr, threshold = roc_curve(yvl,proba)
-auc_val = auc(fpr,tpr)
-
-plt.figure(figsize=(14,8))
-plt.title('Reciever Operating Charactaristics')
-plt.plot(fpr,tpr,'b',label = 'AUC = %0.2f' % auc_val)
-plt.legend(loc='lower right')
-plt.plot([0,1],[0,1],'r--')
-plt.ylabel('True positive rate')
-plt.xlabel('False positive rate')
-
-
-# # Predict for unseen data set
-
-# In[ ]:
-
-
-y_pred = pred_test_full/5
-submit = pd.DataFrame({'id':test['id'],'target':y_pred})
-#submit.to_csv('lr_porto.csv.gz',index=False,compression='gzip') 
-submit.to_csv('lr_porto.csv',index=False) 
-
-
-# In[ ]:
-
-
-submit.head()
-
-
-# # Thank you for visiting

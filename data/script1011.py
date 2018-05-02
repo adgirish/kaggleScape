@@ -1,368 +1,162 @@
 
 # coding: utf-8
 
-# **Hello everyone.This is a notebook comparing various regression models such as Ridge,Knn,Bayesian Regression,Decision Tree and SVM.**
-# *It is extremely beneficial for beginners to take a close look at the notebook so as to get an insight as to how different algorithms work and also which algorithms can perform better in some cases depending upon cases*
+# These are (unofficial) functions to read and view the competition files. Most of the information in the file header is identical across scans and thus not relevant to the competition.
+
+# ## Read header
 
 # In[ ]:
 
 
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-# Importing packages
-
-import os
-import pandas as pd
-from pandas import DataFrame,Series
-from sklearn import tree
-import matplotlib
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn import svm
-from sklearn.preprocessing import StandardScaler
-import statsmodels.formula.api as smf
-import statsmodels.api as sm
-from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns
-from sklearn import neighbors
-from sklearn import linear_model
-get_ipython().run_line_magic('matplotlib', 'inline')
+import os
+import matplotlib
+
+def read_header(infile):
+    """Read image header (first 512 bytes)
+    """
+    h = dict()
+    fid = open(infile, 'r+b')
+    h['filename'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 20))
+    h['parent_filename'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 20))
+    h['comments1'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 80))
+    h['comments2'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 80))
+    h['energy_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['config_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['file_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['trans_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['scan_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['data_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['date_modified'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 16))
+    h['frequency'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['mat_velocity'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['num_pts'] = np.fromfile(fid, dtype = np.int32, count = 1)
+    h['num_polarization_channels'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['spare00'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['adc_min_voltage'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['adc_max_voltage'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['band_width'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['spare01'] = np.fromfile(fid, dtype = np.int16, count = 5)
+    h['polarization_type'] = np.fromfile(fid, dtype = np.int16, count = 4)
+    h['record_header_size'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['word_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['word_precision'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['min_data_value'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['max_data_value'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['avg_data_value'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['data_scale_factor'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['data_units'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['surf_removal'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['edge_weighting'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['x_units'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['y_units'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['z_units'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['t_units'] = np.fromfile(fid, dtype = np.uint16, count = 1)
+    h['spare02'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['x_return_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_return_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_return_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['scan_orientation'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['scan_direction'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['data_storage_order'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['scanner_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['x_inc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_inc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_inc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['t_inc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['num_x_pts'] = np.fromfile(fid, dtype = np.int32, count = 1)
+    h['num_y_pts'] = np.fromfile(fid, dtype = np.int32, count = 1)
+    h['num_z_pts'] = np.fromfile(fid, dtype = np.int32, count = 1)
+    h['num_t_pts'] = np.fromfile(fid, dtype = np.int32, count = 1)
+    h['x_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_speed'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['x_acc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_acc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_acc'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['x_motor_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_motor_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_motor_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['x_encoder_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_encoder_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_encoder_res'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['date_processed'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 8))
+    h['time_processed'] = b''.join(np.fromfile(fid, dtype = 'S1', count = 8))
+    h['depth_recon'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['x_max_travel'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_max_travel'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['elevation_offset_angle'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['roll_offset_angle'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_max_travel'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['azimuth_offset_angle'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['adc_type'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['spare06'] = np.fromfile(fid, dtype = np.int16, count = 1)
+    h['scanner_radius'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['x_offset'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['y_offset'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['z_offset'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['t_delay'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['range_gate_start'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['range_gate_end'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['ahis_software_version'] = np.fromfile(fid, dtype = np.float32, count = 1)
+    h['spare_end'] = np.fromfile(fid, dtype = np.float32, count = 10)
+    return h
 
 
-# In[ ]:
-
-
-f = pd.read_csv("../input/movie_metadata.csv")
-
-
-# In[ ]:
-
-
-data=DataFrame(f)
-data.head()[:2]
-
-
-# *Getting non-object elements*
-# 
-
-# In[ ]:
-
-
-X_data=data.dtypes[data.dtypes!='object'].index
-X_train=data[X_data]
-X_train.head()[:2]
-
-
-# In[ ]:
-
-
-X_train.describe()
-
-
-# In[ ]:
-
-
-# Finding all the columns with NULL values
-
-np.sum(X_train.isnull())
-
-
-# In[ ]:
-
-
-# Filling all Null values
-X_train=X_train.fillna(0)
-columns=X_train.columns.tolist()
-y=X_train['imdb_score']
-X_train.drop(['imdb_score'],axis=1,inplace=True)
-X_train.head()[:2]
-
-
-# In[ ]:
-
-
-# GETTING Correllation matrix
-corr_mat=X_train.corr(method='pearson')
-plt.figure(figsize=(20,10))
-sns.heatmap(corr_mat,vmax=1,square=True,annot=True,cmap='cubehelix')
-
-
-# In[ ]:
-
-
-X_Train=X_train.values
-X_Train=np.asarray(X_Train)
-
-# Finding normalised array of X_Train
-X_std=StandardScaler().fit_transform(X_Train)
-
-
-# In[ ]:
-
-
-from sklearn.decomposition import PCA
-pca = PCA().fit(X_std)
-plt.plot(np.cumsum(pca.explained_variance_ratio_))
-plt.xlim(0,7,1)
-plt.xlabel('Number of components')
-plt.ylabel('Cumulative explained variance')
-
-
-# **Since 5 components can explain more than 70% of the variance, we choose the number of the components to be 5**
-
-# In[ ]:
-
-
-from sklearn.decomposition import PCA
-sklearn_pca=PCA(n_components=5)
-X_Train=sklearn_pca.fit_transform(X_std)
-
-sns.set(style='darkgrid')
-f, ax = plt.subplots(figsize=(8, 8))
-# ax.set_aspect('equal')
-ax = sns.kdeplot(X_Train[:,0], X_Train[:,1], cmap="Greens",
-          shade=True, shade_lowest=False)
-ax = sns.kdeplot(X_Train[:,1], X_Train[:,2], cmap="Reds",
-          shade=True, shade_lowest=False)
-ax = sns.kdeplot(X_Train[:,2], X_Train[:,3], cmap="Blues",
-          shade=True, shade_lowest=False)
-red = sns.color_palette("Reds")[-2]
-blue = sns.color_palette("Blues")[-2]
-green = sns.color_palette("Greens")[-2]
-ax.text(0.5, 0.5, "2nd and 3rd Projection", size=12, color=blue)
-ax.text(-4, 0.0, "1st and 3rd Projection", size=12, color=red)
-ax.text(2, 0, "1st and 2nd Projection", size=12, color=green)
-plt.xlim(-6,5)
-plt.ylim(-2,2)
-
+# ## Read image data
 
 # In[ ]:
 
 
-number_of_samples = len(y)
-np.random.seed(0)
-random_indices = np.random.permutation(number_of_samples)
-num_training_samples = int(number_of_samples*0.75)
-x_train = X_Train[random_indices[:num_training_samples]]
-y_train=y[random_indices[:num_training_samples]]
-x_test=X_Train[random_indices[num_training_samples:]]
-y_test=y[random_indices[num_training_samples:]]
-y_Train=list(y_train)
+def read_data(infile):
+    """Read any of the 4 types of image files, returns a numpy array of the image contents
+    """
+    extension = os.path.splitext(infile)[1]
+    h = read_header(infile)
+    nx = int(h['num_x_pts'])
+    ny = int(h['num_y_pts'])
+    nt = int(h['num_t_pts'])
+    fid = open(infile, 'rb')
+    fid.seek(512) #skip header
+    if extension == '.aps' or extension == '.a3daps':
+        if(h['word_type']==7): #float32
+            data = np.fromfile(fid, dtype = np.float32, count = nx * ny * nt)
+        elif(h['word_type']==4): #uint16
+            data = np.fromfile(fid, dtype = np.uint16, count = nx * ny * nt)
+        data = data * h['data_scale_factor'] #scaling factor
+        data = data.reshape(nx, ny, nt, order='F').copy() #make N-d image
+    elif extension == '.a3d':
+        if(h['word_type']==7): #float32
+            data = np.fromfile(fid, dtype = np.float32, count = nx * ny * nt)
+        elif(h['word_type']==4): #uint16
+            data = np.fromfile(fid, dtype = np.uint16, count = nx * ny * nt)
+        data = data * h['data_scale_factor'] #scaling factor
+        data = data.reshape(nx, nt, ny, order='F').copy() #make N-d image
+    elif extension == '.ahi':
+        data = np.fromfile(fid, dtype = np.float32, count = 2* nx * ny * nt)
+        data = data.reshape(2, ny, nx, nt, order='F').copy()
+        real = data[0,:,:,:].copy()
+        imag = data[1,:,:,:].copy()
+    fid.close()
+    if extension != '.ahi':
+        return data
+    else:
+        return real, imag
 
 
-# **Ridge Regression**
-
-# In[ ]:
-
-
-model=linear_model.Ridge()
-model.fit(x_train,y_train)
-y_predict=model.predict(x_train)
-
-error=0
-for i in range(len(y_Train)):
-    error+=(abs(y_Train[i]-y_predict[i])/y_Train[i])
-train_error_ridge=error/len(y_Train)*100
-print("Train error = "'{}'.format(train_error_ridge)+" percent in Ridge Regression")
-
-Y_test=model.predict(x_test)
-y_Predict=list(y_test)
-
-error=0
-for i in range(len(y_test)):
-    error+=(abs(y_Predict[i]-Y_test[i])/y_Predict[i])
-test_error_ridge=error/len(Y_test)*100
-print("Test error = "'{}'.format(test_error_ridge)+" percent in Ridge Regression")
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-
-preds = pd.DataFrame({"preds":model.predict(x_train), "true":y_train})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-plt.title("Residual plot in Ridge Regression")
-
-
-# **Knn Algorithm**
+# ## Example plotting function: .aps file animation
 
 # In[ ]:
 
 
-n_neighbors=5
-knn=neighbors.KNeighborsRegressor(n_neighbors,weights='uniform')
-knn.fit(x_train,y_train)
-y1_knn=knn.predict(x_train)
-y1_knn=list(y1_knn)
+matplotlib.rc('animation', html='html5')
 
-error=0
-for i in range(len(y_train)):
-    error+=(abs(y1_knn[i]-y_Train[i])/y_Train[i])
-train_error_knn=error/len(y_Train)*100
-print("Train error = "+'{}'.format(train_error_knn)+" percent"+" in Knn algorithm")
+def plot_image(path):
+    data = read_data(path)
+    fig = matplotlib.pyplot.figure(figsize = (16,16))
+    ax = fig.add_subplot(111)
+    def animate(i):
+        im = ax.imshow(np.flipud(data[:,:,i].transpose()), cmap = 'viridis')
+        return [im]
+    return matplotlib.animation.FuncAnimation(fig, animate, frames=range(0,data.shape[2]), interval=200, blit=True)
 
-y2_knn=knn.predict(x_test)
-y2_knn=list(y2_knn)
-error=0
-for i in range(len(y_test)):
-    error+=(abs(y2_knn[i]-Y_test[i])/Y_test[i])
-test_error_knn=error/len(Y_test)*100
-print("Test error = "'{}'.format(test_error_knn)+" percent"+" in knn algorithm")
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-preds = pd.DataFrame({"preds":knn.predict(x_train), "true":y_train})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-plt.title("Residual plot in Knn")
-
-
-# **Bayesian Regression**
-
-# In[ ]:
-
-
-reg = linear_model.BayesianRidge()
-reg.fit(x_train,y_train)
-y1_reg=reg.predict(x_train)
-y1_reg=list(y1_reg)
-y2_reg=reg.predict(x_test)
-y2_reg=list(y2_reg)
-
-error=0
-for i in range(len(y_train)):
-    error+=(abs(y1_reg[i]-y_Train[i])/y_Train[i])
-train_error_bay=error/len(y_Train)*100
-print("Train error = "+'{}'.format(train_error_bay)+" percent"+" in Bayesian Regression")
-
-error=0
-for i in range(len(y_test)):
-    error+=(abs(y2_reg[i]-Y_test[i])/Y_test[i])
-test_error_bay=(error/len(Y_test))*100
-print("Test error = "+'{}'.format(test_error_bay)+" percent"+" in Bayesian Regression")
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-preds = pd.DataFrame({"preds":reg.predict(x_train), "true":y_train})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-plt.title("Residual plot in Bayesian Regression")
-
-
-# **Decision Tree Regressor**
-
-# In[ ]:
-
-
-dec = tree.DecisionTreeRegressor(max_depth=1)
-dec.fit(x_train,y_train)
-y1_dec=dec.predict(x_train)
-y1_dec=list(y1_dec)
-y2_dec=dec.predict(x_test)
-y2_dec=list(y2_dec)
-
-error=0
-for i in range(len(y_train)):
-    error+=(abs(y1_dec[i]-y_Train[i])/y_Train[i])
-train_error_tree=error/len(y_Train)*100
-print("Train error = "+'{}'.format(train_error_tree)+" percent"+" in Decision Tree Regressor")
-
-error=0
-for i in range(len(y_test)):
-    error+=(abs(y1_dec[i]-Y_test[i])/Y_test[i])
-test_error_tree=error/len(Y_test)*100
-print("Test error = "'{}'.format(test_error_tree)+" percent in Decision Tree Regressor")
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-preds = pd.DataFrame({"preds":dec.predict(x_train), "true":y_train})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-plt.title("Residual plot in Decision Tree")
-
-
-# **SVM**
-
-# In[ ]:
-
-
-svm_reg=svm.SVR()
-svm_reg.fit(x_train,y_train)
-y1_svm=svm_reg.predict(x_train)
-y1_svm=list(y1_svm)
-y2_svm=svm_reg.predict(x_test)
-y2_svm=list(y2_svm)
-
-error=0
-for i in range(len(y_train)):
-    error+=(abs(y1_svm[i]-y_Train[i])/y_Train[i])
-train_error_svm=error/len(y_Train)*100
-print("Train error = "+'{}'.format(train_error_svm)+" percent"+" in SVM Regressor")
-
-error=0
-for i in range(len(y_test)):
-    error+=(abs(y2_svm[i]-Y_test[i])/Y_test[i])
-test_error_svm=error/len(Y_test)*100
-print("Test error = "'{}'.format(test_error_svm)+" percent in SVM Regressor")
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-preds = pd.DataFrame({"preds":knn.predict(x_train), "true":y_train})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-plt.title("Residual plot in SVM")
-
-
-# In[ ]:
-
-
-train_error=[train_error_ridge,train_error_knn,train_error_bay,train_error_tree,train_error_svm]
-test_error=[test_error_ridge,test_error_knn,test_error_bay,test_error_tree,test_error_svm]
-
-col={'Train Error':train_error,'Test Error':test_error}
-models=['Ridge Regression','Knn','Bayesian Regression','Decision Tree','SVM']
-df=DataFrame(data=col,index=models)
-df
-
-
-# In[ ]:
-
-
-df.plot(kind='bar')
-
-
-# **Seems that KNN turned out to be the winner.Its because of the fact that there are very large number of data points and and also  features are highly continuous**
-# *Moreover the dimentionality of the processed data is not too high*

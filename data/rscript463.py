@@ -1,93 +1,76 @@
-import kagglegym
-import numpy as np
 import pandas as pd
-# from sklearn import linear_model as lm
-from sklearn.linear_model import Ridge
+import numpy as np
+from scipy.optimize import minimize
+from sklearn.cross_validation import StratifiedShuffleSplit
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
+import os
 
-target = 'y'
+os.system("ls ../input")
 
-# The "environment" is our interface for code competitions
-env = kagglegym.make()
+train = pd.read_csv("../input/train.csv")
+print("Training set has {0[0]} rows and {0[1]} columns".format(train.shape))
 
-# We get our initial observation by calling "reset"
-observation = env.reset()
+labels = train['target']
+train.drop(['target', 'id'], axis=1, inplace=True)
 
-# Get the train dataframe
-train = observation.train
-mean_values = train.mean(axis=0)
-train.fillna(mean_values, inplace=True)
+print(train.head())
 
-# cols_to_use = ['technical_30', 'technical_20', 'fundamental_11']
+### we need a test set that we didn't train on to find the best weights for combining the classifiers
+sss = StratifiedShuffleSplit(labels, test_size=0.05, random_state=1234)
+for train_index, test_index in sss:
+    break
 
-# Observed with histograns:
-low_y_cut = -0.086093
-high_y_cut = 0.093497
+train_x, train_y = train.values[train_index], labels.values[train_index]
+test_x, test_y = train.values[test_index], labels.values[test_index]
 
-y_is_above_cut = (train.y > high_y_cut)
-y_is_below_cut = (train.y < low_y_cut)
-y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)
+### building the classifiers
+clfs = []
 
-ridge1 = Ridge() ## f11 only
-ridge2 = Ridge() ## t30 and f11
-ridge3 = Ridge() ## t20 and f11
-ridge4 = Ridge() ## t30, t20, f11
+rfc = RandomForestClassifier(n_estimators=50, random_state=4141, n_jobs=-1)
+rfc.fit(train_x, train_y)
+print('RFC LogLoss {score}'.format(score=log_loss(test_y, rfc.predict_proba(test_x))))
+clfs.append(rfc)
 
-train = train.loc[y_is_within_cut]
+### usually you'd use xgboost and neural nets here
 
-index1 = train.query("technical_30 == 0.0 & technical_20 == 0.0").index
-index2 = train.query("technical_30 != 0.0 & technical_20 == 0.0").index
-index3 = train.query("technical_30 == 0.0 & technical_20 != 0.0").index
-index4 = train.query("technical_30 != 0.0 & technical_20 != 0.0").index
+logreg = LogisticRegression()
+logreg.fit(train_x, train_y)
+print('LogisticRegression LogLoss {score}'.format(score=log_loss(test_y, logreg.predict_proba(test_x))))
+clfs.append(logreg)
 
-ridge1.fit(train.loc[index1, ["fundamental_11"]].values, train.loc[index1].y)
-ridge2.fit(train.loc[index2, ['technical_30', 'fundamental_11']].values, train.loc[index2].y)
-ridge3.fit(train.loc[index3, ['technical_20', 'fundamental_11']].values, train.loc[index3].y)
-ridge4.fit(train.loc[index4, ['technical_30', 'technical_20', 'fundamental_11']].values, train.loc[index4].y)
-
-
-# model = Ridge()
-# model.fit(np.array(train.loc[y_is_within_cut, cols_to_use].values), train.loc[y_is_within_cut, target])
-
-# ymean_dict = dict(train.groupby(["id"])["y"].mean())
-ymedian_dict = dict(train.groupby(["id"])["y"].median())
+rfc2 = RandomForestClassifier(n_estimators=50, random_state=1337, n_jobs=-1)
+rfc2.fit(train_x, train_y)
+print('RFC2 LogLoss {score}'.format(score=log_loss(test_y, rfc2.predict_proba(test_x))))
+clfs.append(rfc2)
 
 
-def get_weighted_y(series):
-    id, y = series["id"], series["y"]
-    # return 0.95 * y + 0.05 * ymean_dict[id] if id in ymean_dict else y
-    return 0.95 * y + 0.05 * ymedian_dict[id] if id in ymedian_dict else y
+### finding the optimum weights
 
+predictions = []
+for clf in clfs:
+    predictions.append(clf.predict_proba(test_x))
 
-while True:
-    observation.features.fillna(mean_values, inplace=True)
-    # test_x = np.array(observation.features[cols_to_use].values)
-    # observation.target.y = model.predict(test_x).clip(low_y_cut, high_y_cut)
+def log_loss_func(weights):
+    ''' scipy minimize will pass the weights as a numpy array '''
+    final_prediction = 0
+    for weight, prediction in zip(weights, predictions):
+            final_prediction += weight*prediction
+
+    return log_loss(test_y, final_prediction)
     
-    index1 = observation.features.query("technical_30 == 0.0 & technical_20 == 0.0").index
-    index2 = observation.features.query("technical_30 != 0.0 & technical_20 == 0.0").index
-    index3 = observation.features.query("technical_30 == 0.0 & technical_20 != 0.0").index
-    index4 = observation.features.query("technical_30 != 0.0 & technical_20 != 0.0").index
-    
-    if len(index1) > 0:
-        observation.target.loc[index1, 'y'] = ridge1.predict(observation.features.loc[index1, ["fundamental_11"]].values).clip(low_y_cut, high_y_cut)
-    if len(index2) > 0:
-        observation.target.loc[index2, 'y'] = ridge2.predict(observation.features.loc[index2, ['technical_30', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
-    if len(index3) > 0:
-        observation.target.loc[index3, 'y'] = ridge3.predict(observation.features.loc[index3, ['technical_20', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
-    if len(index4) > 0:
-        observation.target.loc[index4, 'y'] = ridge4.predict(observation.features.loc[index4, ['technical_30', 'technical_20', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
+#the algorithms need a starting value, right not we chose 0.5 for all weights
+#its better to choose many random starting points and run minimize a few times
+starting_values = [0.5]*len(predictions)
 
-    ## weighted y using average value
-    observation.target.y = observation.target.apply(get_weighted_y, axis = 1)
-    
-    #observation.target.fillna(0, inplace=True)
-    target = observation.target
-    timestamp = observation.features["timestamp"][0]
-    if timestamp % 100 == 0:
-        print("Timestamp #{}".format(timestamp))
+#adding constraints  and a different solver as suggested by user 16universe
+#https://kaggle2.blob.core.windows.net/forum-message-attachments/75655/2393/otto%20model%20weights.pdf?sv=2012-02-12&se=2015-05-03T21%3A22%3A17Z&sr=b&sp=r&sig=rkeA7EJC%2BiQ%2FJ%2BcMpcA4lYQLFh6ubNqs2XAkGtFsAv0%3D
+cons = ({'type':'eq','fun':lambda w: 1-sum(w)})
+#our weights are bound between 0 and 1
+bounds = [(0,1)]*len(predictions)
 
-    observation, reward, done, info = env.step(target)
-    if done:
-        break
-    
-print(info)
+res = minimize(log_loss_func, starting_values, method='SLSQP', bounds=bounds, constraints=cons)
+
+print('Ensamble Score: {best_score}'.format(best_score=res['fun']))
+print('Best Weights: {weights}'.format(weights=res['x']))

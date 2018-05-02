@@ -4,27 +4,87 @@
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-from IPython.core.interactiveshell import InteractiveShell
-InteractiveShell.ast_node_interactivity = "all"
-import IPython.display as display
+import pandas as pd
+import plotly
+plotly.__version__
+import plotly.plotly as py
+import plotly.graph_objs as go
+import numpy as np
+import os 
+import sys
 
+cwd=os.getcwd()
+cwd
+os.chdir('/kaggle/input/')
+all_list=os.listdir()
+if len(all_list)<12:
+    os.chdir('/kaggle/input/earn-your-6-figure-prize/')
+                  
 
-# # gaggle - (noun, gag·gle, \ ˈga-gəl \ )
-# 
-# ## Definition of gaggle
-# 1. flock; especially : a flock of geese when not in flight
-# 2. bunch of fresh kaggle accounts upvoting in last minute of kernel competitions :)
 
 # In[ ]:
 
 
-display.Image(filename='../input/gaggle_nature.jpg', width=1200)
-get_ipython().system('cp ../input/gaggle_nature.png .')
-display.Image(filename='../input/kaggle_gaggle.png', width=1200)
+FTHT6 = pd.read_csv('FT_HT6.csv')
 
 
-# ## Disclaimer
-# Even I have upvotes from novices or fresh accounts. The extreme share of fresh accounts on that particular kernel is certainly an outlier. However I don't want to blame anyone as I don't know their intentions.
-# 
-# Although the upvoter information is public I decided to hide the actual user names.
+# In[ ]:
+
+
+ranks6 = pd.read_csv('ranks6.csv')
+
+
+# In[ ]:
+
+
+winrate6 = pd.read_csv('winrate6.csv')
+
+
+# In[ ]:
+
+
+country6 = pd.read_csv('country6.csv')
+
+
+# In[ ]:
+
+
+names6 = pd.read_csv('names6.csv')
+fresults6 = pd.read_csv('fresults6.csv')
+
+
+# In[ ]:
+
+
+mask1 =  (FTHT6.iloc[:,1]>1.6) & (FTHT6.iloc[:,0]>2.4) & ((ranks6.iloc[:,0]-ranks6.iloc[:,1]).abs()>9)
+
+
+# In[ ]:
+
+
+mask2 = ((winrate6.iloc[:,0]-winrate6.iloc[:,1]).abs()>38) & ~((winrate6<35).all(1)) & (country6.iloc[:,0]!='England')
+
+
+# In[ ]:
+
+
+mask = mask1 & mask2
+
+
+# In[ ]:
+
+
+country6[mask]
+
+
+# In[ ]:
+
+
+fresults6[mask]
+
+
+# In[ ]:
+
+
+names6[mask]
+

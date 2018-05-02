@@ -1,205 +1,239 @@
-# Based on Bojan's -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
-# Changes:
-# 1. Split category_name into sub-categories
-# 2. Parallelize LGBM to 4 cores
-# 3. Increase the number of rounds in 1st LGBM
-# 4. Another LGBM with different seed for model and training split, slightly different hyper-parametes.
-# 5. Weights on ensemble
-# 6. SGDRegressor doesn't improve the result, going with only 1 Ridge and 2 LGBM
-#remove zero price items
-import pyximport; pyximport.install()
-import gc
-import time
-import numpy as np
+"""
+Classifying EEG signals with a convolutional neural network.
+
+@author: Anil Thomas
+"""
+
+import  logging
+import   os
+import  numpy as np
 import pandas as pd
-from sklearn.decomposition import TruncatedSVD
-#svd = TruncatedSVD(n_components=1000, random_state=42)
+from   multiprocessing import Pool
+from    sklearn.metrics import roc_auc_score as auc
+from     neon.datasets.dataset import Dataset
+from    neon.backends import gen_backend
+from   neon.experiments import FitExperiment as Fit
+from  neon.layers import FCLayer, DataLayer, CostLayer, ConvLayer, PoolingLayer
+from  neon.transforms import RectLin, Logistic, CrossEntropy
+from   neon.models import MLP
 
-from joblib import Parallel, delayed
+logging.basicConfig(level=30)
+logger = logging.getLogger()
 
-from scipy.sparse import csr_matrix, hstack
-
-from sklearn.linear_model import Ridge
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.linear_model import SGDRegressor
-import lightgbm as lgb
-
-NUM_BRANDS = 4500
-NUM_CATEGORIES = 1000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 90000
+# Train on the full dataset and generate a submission file if this flag
+# is set to False. Otherwise, just validate on a subset.
+validate = True
 
 
-def rmsle(y, y0):
-     assert len(y) == len(y0)
-     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
-    
-def split_cat(text):
-    try: return text.split("/")
-    except: return ("No Label", "No Label", "No Label")
-    
-def handle_missing_inplace(dataset):
-    dataset['general_cat'].fillna(value='missing', inplace=True)
-    dataset['subcat_1'].fillna(value='missing', inplace=True)
-    dataset['subcat_2'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
+class GalData(Dataset):
+    """
+    Load the EEG data. In order to conserve memory, the minibatches
+    are constructed on an on-demand basis. An instance of this class
+    is created for each subject.
+    """
+    def __init__(self, **kwargs):
+        self.nchannels = 32
+        self.nclasses = 6
+        self.__dict__.update(kwargs)
+        self.loaded = False
+        self.mean = None
+
+    def setwin(self, **kwargs):
+        self.__dict__.update(kwargs)
+        assert self.winsize % self.subsample == 0
+        # This many samples to be collected for a single observation.
+        # The samples are picked by subsampling over a window, the size
+        # of which is specified by winsize.
+        self.nsamples = self.winsize // self.subsample
+
+    def readfile(self, path, data, inds=None):
+        df = pd.read_csv(path, index_col=0)
+        filedata = np.float32(df.values)
+        data = filedata if data is None else np.vstack((data, filedata))
+        # Indices are saved to generate the submission file.
+        inds = df.index if inds is None else np.hstack((inds, df.index))
+        return data, inds
+
+    def readfiles(self, dirname, serlist):
+        """
+        Read the serieses specified by argument.
+        """
+        basepath = os.path.join(os.pardir, 'input', dirname)
+        data = labs = inds = None
+        for series in serlist:
+            filename = 'subj{}_series{}_data.csv'.format(self.subj, series)
+            path = os.path.join(basepath, filename)
+            data, inds = self.readfile(path, data, inds)
+            if dirname == 'train':
+                path = path.replace('data', 'events')
+                labs, _ = self.readfile(path, labs)
+            else:
+                nrows = data.shape[0]
+                labs = np.zeros((nrows, self.nclasses), dtype=np.float32)
+        return data, labs, inds
+
+    def prep(self, data):
+        # TODO: Add your pre-processing code here.
+        if self.mean is None:
+            self.mean = data.mean()
+            self.std = data.std()
+        data -= self.mean
+        data /= self.std
+        return data
+
+    def load(self, **kwargs):
+        if self.loaded:
+            return
+        self.__dict__.update(kwargs)
+        if validate:
+            train, trainlabs, _ = self.readfiles('train', [7])
+            test, testlabs, self.testinds = self.readfiles('train', [8])
+        else:
+            train, trainlabs, _ = self.readfiles('train', range(1, 9))
+            test, testlabs, self.testinds = self.readfiles('test', [9, 10])
+        self.inputs['train'] = self.prep(train)
+        self.targets['train'] = trainlabs
+        self.inputs['test'] = self.prep(test)
+        self.targets['test'] = testlabs
+        self.loaded = True
+
+    def init_mini_batch_producer(self, batch_size, setname, predict):
+        """
+        This is called by neon once before training and then to switch
+        from training to inference mode.
+        """
+        self.setname = setname
+        # Number of elements in a single observation.
+        obsize = self.nchannels * self.nsamples
+        self.batchdata = np.empty((obsize, self.batch_size))
+        self.batchtargets = np.empty((self.nclasses, self.batch_size))
+        self.devdata = self.backend.empty(self.batchdata.shape)
+        self.devtargets = self.backend.empty(self.batchtargets.shape)
+        nrows = self.inputs[setname].shape[0]
+        # We cannot use the first (winsize - 1) targets because there isn't
+        # enough data before their occurrence.
+        nbatches = (nrows - self.winsize + 1) // self.batch_size
+        # This variable contains a mapping to pick the right target given
+        # a zero-based index.
+        self.inds = np.arange(nbatches * self.batch_size) + self.winsize - 1
+        if predict is False:
+            # Shuffle the map of indices if we are training.
+            np.random.seed(0)
+            np.random.shuffle(self.inds)
+        return nbatches
+
+    def get_mini_batch(self, batch):
+        """
+        Called by neon when it needs the next minibatch.
+        """
+        inputs = self.inputs[self.setname]
+        targets = self.targets[self.setname]
+        lag = self.winsize - self.subsample
+        base = batch * self.batch_size
+        for col in range(self.batch_size):
+            # Use the saved mapping to retrieve the correct target.
+            end = self.inds[base + col]
+            self.batchtargets[:, col] = targets[end]
+            # We back up from the index of the target and sample over
+            # the defined window to construct an entire observation.
+            rowdata = inputs[end-lag:end+1:self.subsample]
+            # Transpose to make the data from each channel contiguous.
+            self.batchdata[:, col] = rowdata.T.ravel()
+        # Copy to the accelerator device (in case this is running on a GPU).
+        self.devdata[:] = self.batchdata
+        self.devtargets[:] = self.batchtargets
+        return self.devdata, self.devtargets
 
 
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
-    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
-    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
+class ConvNet(object):
+    """
+    The network definition.
+    """
+    def __init__(self, backend, dataset, subj):
+        ad = {
+            'type': 'adadelta',
+            'lr_params': {'rho': 0.9, 'epsilon': 1e-10}
+        }
+        self.layers = []
+        self.add(DataLayer(is_local=True, nofm=dataset.nchannels,
+                           ofmshape=[1, dataset.nsamples]))
+        self.add(ConvLayer(nofm=64, fshape=[1, 3],
+                           activation=RectLin(), lrule_init=ad))
+        self.add(PoolingLayer(op='max', fshape=[1, 2], stride=2))
+        self.add(FCLayer(nout=128, activation=RectLin(), lrule_init=ad))
+        self.add(FCLayer(nout=dataset.nclasses, activation=Logistic(),
+                         lrule_init=ad))
+        self.add(CostLayer(cost=CrossEntropy()))
+        self.model = MLP(num_epochs=1, batch_size=128, layers=self.layers)
+        self.backend = backend
+        self.dataset = dataset
+
+    def add(self, layer):
+        self.layers.append(layer)
+
+    def fit(self):
+        Fit(model=self.model, backend=self.backend, dataset=self.dataset).run()
+        return self
+
+    def predict(self):
+        ds = self.dataset
+        outputs, targets = self.model.predict_fullset(self.dataset, 'test')
+        predshape = (ds.inputs['test'].shape[0], ds.nclasses)
+        preds = np.zeros(predshape, dtype=np.float32)
+        labs = np.zeros_like(preds)
+        # The output returned by the network is less than the number of
+        # predictions to be made. We leave the missing predictions as zeros.
+        start = ds.winsize - 1
+        end = start + outputs.shape[1]
+        preds[start:end] = outputs.asnumpyarray().T
+        labs[start:end] = targets.asnumpyarray().T
+        return labs, preds, ds.testinds
 
 
-def to_categorical(dataset):
-    dataset['general_cat'] = dataset['general_cat'].astype('category')
-    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
-    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
+def run(subj):
+    """
+    Train and perform inference on data from a single subject.
+    """
+    try:
+        backend = gen_backend(rng_seed=0, gpu='nervanagpu')
+    except:
+        backend = gen_backend(rng_seed=0)
+    ds = GalData(subj=subj)
+    sumpreds = None
+    winlist = [1024] if validate else [768, 1024, 1280, 1536]
+    for winsize in winlist:
+        ds.setwin(winsize=winsize, subsample=16)
+        network = ConvNet(backend, ds, subj)
+        labs, preds, inds = network.fit().predict()
+        if sumpreds is None:
+            sumpreds = preds
+        else:
+            sumpreds += preds
+    if validate:
+        aucs = [auc(labs[:, i], sumpreds[:, i]) for i in range(ds.nclasses)]
+        print('Subject %d AUC %.4f' % (subj, np.mean(aucs)))
+    return labs, sumpreds, inds
 
-
-def main():
-    start_time = time.time()
-
-    train = pd.read_table('../input/train.tsv', engine='c')
-    test = pd.read_table('../input/test.tsv', engine='c')
-    print('[{}] Finished to load data'.format(time.time() - start_time))
-    print('Train shape: ', train.shape)
-    print('Test shape: ', test.shape)
-    nrow_test = train.shape[0] #-dftt.shape[0]
-    dftt = train[(train.price < 1.0)]
-    train = train.drop(train[(train.price < 1.0)].index)
-    del dftt['price']
-    nrow_train = train.shape[0] #-dftt.shape[0]
-    #nrow_test = train.shape[0] + dftt.shape[0]
-    y = np.log1p(train["price"])
-    merge: pd.DataFrame = pd.concat([train, dftt, test])
-    submission: pd.DataFrame = test[['test_id']]
-
-    del train
-    del test
-    gc.collect()
-    
-    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
-    zip(*merge['category_name'].apply(lambda x: split_cat(x)))
-    merge.drop('category_name', axis=1, inplace=True)
-    print('[{}] Split categories completed.'.format(time.time() - start_time))
-
-    handle_missing_inplace(merge)
-    print('[{}] Handle missing completed.'.format(time.time() - start_time))
-
-    cutting(merge)
-    print('[{}] Cut completed.'.format(time.time() - start_time))
-
-    to_categorical(merge)
-    print('[{}] Convert categorical completed'.format(time.time() - start_time))
-
-    cv = CountVectorizer(min_df=NAME_MIN_DF,ngram_range=(1, 2),
-                         stop_words='english')
-    X_name = cv.fit_transform(merge['name'])
-    print('[{}] Count vectorize `name` completed.'.format(time.time() - start_time))
-
-    cv = CountVectorizer()
-    X_category1 = cv.fit_transform(merge['general_cat'])
-    X_category2 = cv.fit_transform(merge['subcat_1'])
-    X_category3 = cv.fit_transform(merge['subcat_2'])
-    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
-
-    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                         ngram_range=(1, 2),
-                         stop_words='english')
-    X_description = tv.fit_transform(merge['item_description'])
-    print('[{}] TFIDF vectorize `item_description` completed.'.format(time.time() - start_time))
-
-    lb = LabelBinarizer(sparse_output=True)
-    X_brand = lb.fit_transform(merge['brand_name'])
-    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
-
-    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
-    print (X_dummies.shape, X_description.shape, X_brand.shape, X_category1.shape, X_category2.shape, X_category3.shape, X_name.shape)
-    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
-    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
-
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_test:]
-    
-    model = Ridge(alpha=.6, copy_X=True, fit_intercept=True, max_iter=100,
-      normalize=False, random_state=101, solver='auto', tol=0.01)
-    model.fit(X, y)
-    print('[{}] Train ridge completed'.format(time.time() - start_time))
-    predsR = model.predict(X=X_test)
-    print('[{}] Predict ridge completed'.format(time.time() - start_time))
-    
-    model = Ridge(solver='sag', fit_intercept=True)
-    model.fit(X, y)
-    print('[{}] Train ridge v2 completed'.format(time.time() - start_time))
-    predsR2 = model.predict(X=X_test)
-    print('[{}] Predict ridge v2 completed'.format(time.time() - start_time))
-
-    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.14, random_state = 144) 
-    d_train = lgb.Dataset(train_X, label=train_y)
-    d_valid = lgb.Dataset(valid_X, label=valid_y)
-    watchlist = [d_train, d_valid]
-    
-    params = {
-        'learning_rate': 0.65,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 60,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 1,
-        'feature_fraction': 0.4,
-        'bagging_fraction': 0.5,
-        'bagging_freq': 4,
-        'nthread': 4
-    }
-
-    params2 = {
-        'learning_rate': 0.85,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 130,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 2,
-        'feature_fraction': 0.4,
-        'bagging_fraction': 1,
-        'bagging_freq': 4,
-        'nthread': 4
-    }
-
-    model = lgb.train(params, train_set=d_train, num_boost_round=9500, valid_sets=watchlist, \
-    early_stopping_rounds=1000, verbose_eval=1000) 
-    predsL = model.predict(X_test)
-    
-    print('[{}] Predict lgb 1 completed.'.format(time.time() - start_time))
-    
-    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
-    d_train2 = lgb.Dataset(train_X2, label=train_y2)
-    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2)
-    watchlist2 = [d_train2, d_valid2]
-
-    model = lgb.train(params2, train_set=d_train2, num_boost_round=8000, valid_sets=watchlist2, \
-    early_stopping_rounds=500, verbose_eval=500) 
-    predsL2 = model.predict(X_test)
-
-    print('[{}] Predict lgb 2 completed.'.format(time.time() - start_time))
-
-    preds = (predsR*0.2 + predsL*0.3 + predsL2*0.3 + predsR2*0.2)
-
-    submission['price'] = np.expm1(preds)
-    submission.to_csv("submission_ridge_2xlgbm.csv", index=False)
 
 if __name__ == '__main__':
-    main()
+    print('\'validate\' is %s' % validate)
+    # Launch a separate process for each subject.
+    nsubjects = 12
+    pool = Pool()
+    results = pool.map(run, range(1, nsubjects + 1))
+    pool.close()
+    labs = np.vstack([tup[0] for tup in results])
+    preds = np.vstack([tup[1] for tup in results])
+    if validate:
+        # Compute AUC metric.
+        nclasses = labs.shape[1]
+        aucs = [auc(labs[:, i], preds[:, i]) for i in range(nclasses)]
+        print('Mean AUC %.4f' % np.mean(aucs))
+    else:
+        # Generate submission file.
+        columns = ['HandStart', 'FirstDigitTouch', 'BothStartLoadPhase',
+                   'LiftOff', 'Replace', 'BothReleased']
+        inds = np.hstack([tup[2] for tup in results])
+        subm = pd.DataFrame(index=inds, columns=columns, data=preds)
+        subm.to_csv('subm.csv', index_label='id', float_format='%.4f')
+    print('Done.')

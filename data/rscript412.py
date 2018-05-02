@@ -1,49 +1,79 @@
-import itertools
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import pandas as pd
-import numpy as np
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-df_train = pd.read_csv(
-    '../input/train.csv', usecols=[1, 2, 3, 4, 5], dtype={'onpromotion': str},
-    converters={'unit_sales': lambda u: float(u) if float(u) > 0 else 0},
-    skiprows=range(1, 124035460)
-)
+from matplotlib import animation
+from matplotlib import cm
+import matplotlib.pyplot as plt
 
-# log transform
-df_train["unit_sales"] = df_train["unit_sales"].apply(np.log1p)
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# Fill gaps in dates
-# Improved with the suggestion from Paulo Pinto
-u_dates = df_train.date.unique()
-u_stores = df_train.store_nbr.unique()
-u_items = df_train.item_nbr.unique()
-df_train.set_index(["date", "store_nbr", "item_nbr"], inplace=True)
-df_train = df_train.reindex(
-    pd.MultiIndex.from_product(
-        (u_dates, u_stores, u_items),
-        names=["date", "store_nbr", "item_nbr"]
-    )
-)
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Fill NAs
-df_train.loc[:, "unit_sales"].fillna(0, inplace=True)
-# Assume missing entris imply no promotion
-df_train.loc[:, "onpromotion"].fillna("False", inplace=True)
+# Any results you write to the current directory are saved as output.
+plt.style.use('ggplot')
 
-# Calculate means 
-df_train = df_train.groupby(
-    ['item_nbr', 'store_nbr', 'onpromotion']
-)['unit_sales'].mean().to_frame('unit_sales')
-# Inverse transform
-df_train["unit_sales"] = df_train["unit_sales"].apply(np.expm1)
+train=pd.read_csv('../input/train.csv')
 
-# Create submission
-pd.read_csv(
-    "../input/test.csv", usecols=[0, 2, 3, 4], dtype={'onpromotion': str}
-).set_index(
-    ['item_nbr', 'store_nbr', 'onpromotion']
-).join(
-    df_train, how='left'
-).fillna(0).to_csv(
-    'mean.csv.gz', float_format='%.2f', index=None, compression="gzip"
-)
+#Sort places by popularity
+sorted_visits=train.groupby('place_id')['time'].count().sort_values(ascending=False)
+
+n=10 #number of most popular places to plot
+decay=20 #If not False older check ins will disappear from the plot
+
+
+timemin=99999999999
+timemax=0
+
+plots=[] #Animated objects to update
+c=[cm.jet(x) for x in np.linspace(0.0, 1.0, n)] #let's borrow colors from everyone's dear Jet
+
+data=[] #Temporary data storage
+
+fig = plt.figure()
+ax=fig.add_subplot(111)
+
+for i  in range(n):
+    place=train[train.place_id==sorted_visits.index[i]]
+    data.append(place)
+    
+    timemin=min(timemin,place.time.min())
+    timemax=max(timemax,place.time.max())
+
+    ax.set_xlim([-2.0,12.0])
+    ax.set_ylim([-2.0,12.0])
+    
+    plots.append(plt.scatter(x=[],y=[],c=c[i], alpha=0.1))
+plots.append(ax.text(0.1,0.9,'',transform=ax.transAxes))
+timeinc=(timemax-timemin)/600.0# 30fps 20 seconds
+
+
+def init():    
+    return tuple(plots)
+
+def redraw(frame):
+    current_time=timemin+timeinc*frame
+    for i in range(n):
+        if decay:
+            place=data[i][(data[i].time<=current_time)&(data[i].time>=current_time-decay*timeinc)]
+        else:
+            place=data[i][data[i].time<=current_time]
+        #print len(place)
+        
+        plots[i].set_offsets(np.hstack((place.x.values[:,np.newaxis],place.y.values[:,np.newaxis])))
+        plots[i]._sizes = place.accuracy.values
+    txt='Day:{} Weekday:{} Hour:{}'.format(int(current_time/1440), int(current_time/1440)%7, int(current_time/60)%24)
+    plots[-1].set_text(txt)
+    return tuple(plots)
+
+        
+
+anim = animation.FuncAnimation(fig, redraw, init_func=init, blit=True,
+                               frames=600, interval=1, repeat=True)
+anim.save('PopularCheckins.gif', writer='imagemagick', fps=30)
+plt.show()

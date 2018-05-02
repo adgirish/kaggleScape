@@ -1,392 +1,321 @@
 
 # coding: utf-8
 
-# Data Import
-# ------------------
+# # Modeling for Dummies
+# This notebook will contain very simple methodologies for transforming the data inputs so that decent results can be generated from the popular machine learning models.
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-pd.options.mode.chained_assignment = None
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import plotly.plotly as py
-import plotly.graph_objs as go
-from plotly import tools
-from plotly.offline import iplot, init_notebook_mode
-init_notebook_mode()
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-terror_data = pd.read_csv('../input/globalterrorismdb_0616dist.csv', encoding='ISO-8859-1',
-                          usecols=[0, 1, 2, 3, 8, 11, 13, 14, 35, 84, 100, 103])
-terror_data = terror_data.rename(
-    columns={'eventid':'id', 'iyear':'year', 'imonth':'month', 'iday':'day',
-             'country_txt':'country', 'provstate':'state', 'targtype1_txt':'target',
-             'weaptype1_txt':'weapon', 'nkill':'fatalities', 'nwound':'injuries'})
-terror_data['fatalities'] = terror_data['fatalities'].fillna(0).astype(int)
-terror_data['injuries'] = terror_data['injuries'].fillna(0).astype(int)
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# terrorist attacks in United States only (2,198 rows)
-terror_usa = terror_data[(terror_data.country == 'United States') &
-                         (terror_data.state != 'Puerto Rico') &
-                         (terror_data.longitude < 0)]
-terror_usa['day'][terror_usa.day == 0] = 1
-terror_usa['date'] = pd.to_datetime(terror_usa[['day', 'month', 'year']])
-terror_usa = terror_usa[['id', 'date', 'year', 'state', 'latitude', 'longitude',
-                         'target', 'weapon', 'fatalities', 'injuries']]
-terror_usa = terror_usa.sort_values(['fatalities', 'injuries'], ascending = False)
-terror_usa = terror_usa.drop_duplicates(['date', 'latitude', 'longitude', 'fatalities'])
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# Terrorist Attacks by Latitude/Longitude
-# ---------------------------------------
+# ### Read in the Data
+# Make sure we put the Id column in the index of the pandas data frame. It is of no value for model building
 
 # In[ ]:
 
 
-terror_usa['text'] = terror_usa['date'].dt.strftime('%B %-d, %Y') + '<br>' +                     terror_usa['fatalities'].astype(str) + ' Killed, ' +                     terror_usa['injuries'].astype(str) + ' Injured'
-
-fatality = dict(
-           type = 'scattergeo',
-           locationmode = 'USA-states',
-           lon = terror_usa[terror_usa.fatalities > 0]['longitude'],
-           lat = terror_usa[terror_usa.fatalities > 0]['latitude'],
-           text = terror_usa[terror_usa.fatalities > 0]['text'],
-           mode = 'markers',
-           name = 'Fatalities',
-           hoverinfo = 'text+name',
-           marker = dict(
-               size = terror_usa[terror_usa.fatalities > 0]['fatalities'] ** 0.255 * 8,
-               opacity = 0.95,
-               color = 'rgb(240, 140, 45)')
-           )
-        
-injury = dict(
-         type = 'scattergeo',
-         locationmode = 'USA-states',
-         lon = terror_usa[terror_usa.fatalities == 0]['longitude'],
-         lat = terror_usa[terror_usa.fatalities == 0]['latitude'],
-         text = terror_usa[terror_usa.fatalities == 0]['text'],
-         mode = 'markers',
-         name = 'Injuries',
-         hoverinfo = 'text+name',
-         marker = dict(
-             size = (terror_usa[terror_usa.fatalities == 0]['injuries'] + 1) ** 0.245 * 8,
-             opacity = 0.85,
-             color = 'rgb(20, 150, 187)')
-         )
-
-layout = dict(
-         title = 'Terrorist Attacks by Latitude/Longitude in United States (1970-2015)',
-         showlegend = True,
-         legend = dict(
-             x = 0.85, y = 0.4
-         ),
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             showland = True,
-             landcolor = 'rgb(250, 250, 250)',
-             subunitwidth = 1,
-             subunitcolor = 'rgb(217, 217, 217)',
-             countrywidth = 1,
-             countrycolor = 'rgb(217, 217, 217)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-         )
-
-data = [fatality, injury]
-figure = dict(data = data, layout = layout)
-iplot(figure)
+train_df = pd.read_csv('../input/train.csv', index_col=0)
+test_df = pd.read_csv('../input/test.csv', index_col=0)
 
 
-# Terrorist Attacks by Year
-# -------------------------
+# ### Inspect the Data
 
 # In[ ]:
 
 
-# terrorist attacks by year
-terror_peryear = np.asarray(terror_usa.groupby('year').year.count())
-
-terror_years = np.arange(1970, 2016)
-# terrorist attacks in 1993 missing from database
-terror_years = np.delete(terror_years, [23])
-
-trace = [go.Scatter(
-         x = terror_years,
-         y = terror_peryear,
-         mode = 'lines',
-         line = dict(
-             color = 'rgb(240, 140, 45)',
-             width = 3)
-         )]
-
-layout = go.Layout(
-         title = 'Terrorist Attacks by Year in United States (1970-2015)',
-         xaxis = dict(
-             rangeslider = dict(thickness = 0.05),
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             range = [0.1, 425],
-             showline = True,
-             showgrid = False)
-         )
-
-figure = dict(data = trace, layout = layout)
-iplot(figure)
+train_df.head()
 
 
-# Terrorist Attacks per Capita
-# ----------------------------
+# # Combine Test and Train into a Single DataFrame
+# Next, we will combine train and test into a single pandas DataFrame. This is so that we can apply all our transformations to both the train and test set in one step and that both the train and the test set will have identical column names. We must first store the SalePrice variable as our y and drop it from train_df. Since model, evaluation will be done on the log of SalePrice, we go ahead and transform the final home price. We need to remember to transform it back in order to submit.
 
 # In[ ]:
 
 
-us_states = np.asarray(['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA',
-                        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA',
-                        'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
-                        'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX',
-                        'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'])
+y_train = np.log(train_df.pop('SalePrice'))
+all_df = pd.concat((train_df, test_df), axis=0)
 
-# state population estimates for July 2015 from US Census Bureau
-state_population = np.asarray([4858979, 738432, 6828065, 2978204, 39144818, 5456574,
-                               3590886, 945934, 646449, 20271272, 10214860, 1431603,
-                               1654930, 12859995, 6619680, 3123899, 2911641, 4425092,
-                               4670724, 1329328, 6006401, 6794422, 9922576, 5489594,
-                               2992333, 6083672, 1032949, 1896190, 2890845, 1330608,
-                               8958013, 2085109, 19795791, 10042802, 756927, 11613423,
-                               3911338, 4028977, 12802503, 1056298, 4896146, 858469,
-                               6600299, 27469114, 2995919, 626042, 8382993, 7170351,
-                               1844128, 5771337, 586107])
-
-# terrorist attacks per 100,000 people in state
-terror_perstate = np.asarray(terror_usa.groupby('state').state.count())
-terror_percapita = np.round(terror_perstate / state_population * 100000, 2)
-# District of Columbia outlier (1 terrorist attack per 10,000 people) adjusted
-terror_percapita[8] = round(terror_percapita[8] / 6, 2)
-
-terror_scale = [[0, 'rgb(252, 232, 213)'], [1, 'rgb(240, 140, 45)']]
-
-data = [dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = terror_scale,
-        showscale = False,
-        locations = us_states,
-        locationmode = 'USA-states',
-        z = terror_percapita,
-        marker = dict(
-            line = dict(
-                color = 'rgb(255, 255, 255)',
-                width = 2)
-            )
-        )]
-
-layout = dict(
-         title = 'Terrorist Attacks per 100,000 People in United States (1970-2015)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             countrycolor = 'rgb(255, 255, 255)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-         )
-
-figure = dict(data = data, layout = layout)
-iplot(figure)
-
-
-# Terrorist Attacks by Target
-# ---------------------------
 
 # In[ ]:
 
 
-# terrorist attack targets grouped in categories
-target_codes = []
+all_df.shape
 
-for attack in terror_usa['target'].values:
-    if attack in ['Business', 'Journalists & Media', 'NGO']:
-        target_codes.append(1)
-    elif attack in ['Government (General)', 'Government (Diplomatic)']:
-        target_codes.append(2)
-    elif attack == 'Abortion Related':
-        target_codes.append(4)
-    elif attack == 'Educational Institution':
-        target_codes.append(5)
-    elif attack == 'Police':
-        target_codes.append(6)
-    elif attack == 'Military':
-        target_codes.append(7)
-    elif attack == 'Religious Figures/Institutions':
-        target_codes.append(8)
-    elif attack in ['Airports & Aircraft', 'Maritime', 'Transportation']:
-        target_codes.append(9)
-    elif attack in ['Food or Water Supply', 'Telecommunication', 'Utilities']:
-        target_codes.append(10)
-    else:
-        target_codes.append(3)
-
-terror_usa['target'] = target_codes
-target_categories = ['Business', 'Government', 'Individuals', 'Healthcare', 'Education',
-                     'Police', 'Military', 'Religion', 'Transportation', 'Infrastructure']
-
-# terrorist attacks by target
-target_count = np.asarray(terror_usa.groupby('target').target.count())
-target_percent = np.round(target_count / sum(target_count) * 100, 2)
-
-# terrorist attack fatalities by target
-target_fatality = np.asarray(terror_usa.groupby('target')['fatalities'].sum())
-target_yaxis = np.asarray([1.33, 2.36, 2.98, 0.81, 1.25, 1.71, 1.31, 1.53, 1.34, 0])
-
-# terrorist attack injuries by target
-target_injury = np.asarray(terror_usa.groupby('target')['injuries'].sum())
-target_xaxis = np.log10(target_injury)
-
-target_text = []
-for i in range(0, 10):
-    target_text.append(target_categories[i] + ' (' + target_percent[i].astype(str) 
-                       + '%)<br>' + target_fatality[i].astype(str) + ' Killed, '
-                       + target_injury[i].astype(str) + ' Injured')
-
-data = [go.Scatter(
-        x = target_injury,
-        y = target_fatality,
-        text = target_text,
-        mode = 'markers',
-        hoverinfo = 'text',
-        marker = dict(
-            size = target_count / 6.5,
-            opacity = 0.9,
-            color = 'rgb(240, 140, 45)')
-        )]
-
-layout = go.Layout(
-         title = 'Terrorist Attacks by Target in United States (1970-2015)',
-         xaxis = dict(
-             title = 'Injuries',
-             type = 'log',
-             range = [1.36, 3.25],
-             tickmode = 'auto',
-             nticks = 2,
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             title = 'Fatalities',
-             type = 'log',
-             range = [0.59, 3.45],
-             tickmode = 'auto',
-             nticks = 4,
-             showline = True,
-             showgrid = False)
-         )
-
-annotations = []
-for i in range(0, 10):
-    annotations.append(dict(x=target_xaxis[i], y=target_yaxis[i],
-                            xanchor='middle', yanchor='top',
-                            text=target_categories[i], showarrow=False))
-layout['annotations'] = annotations
-
-figure = dict(data = data, layout = layout)
-iplot(figure)
-
-
-# Terrorist Attacks by Weapon
-# ---------------------------
 
 # In[ ]:
 
 
-# terrorist attack weapons grouped in categories
-weapon_codes = []
+y_train.head()
 
-for attack in terror_usa['weapon'].values:
-    if attack in ['Explosives/Bombs/Dynamite', 'Sabotage Equipment']:
-        weapon_codes.append(1)
-    elif attack == 'Incendiary':
-        weapon_codes.append(2)
-    elif attack in ['Firearms', 'Fake Weapons']:
-        weapon_codes.append(3)
-    elif attack == 'Melee':
-        weapon_codes.append(5)
-    elif attack == 'Biological':
-        weapon_codes.append(6)
-    elif attack in ['Chemical', 'Radiological']:
-        weapon_codes.append(7)
-    elif 'Vehicle' in attack:
-        weapon_codes.append(8)
-    else:
-        weapon_codes.append(4)
 
-terror_usa['weapon'] = weapon_codes
-weapon_categories = ['Explosives', 'Flammables', 'Firearms', 'Miscellaneous',
-                     'Knives', 'Bacteria/Viruses', 'Chemicals', 'Vehicles']
+# # Variable transformations
+# For this example, only minimal variable transformations will occur. To obtain a better fit for your data, a more detailed introspection of each variable would be necessary. Reading the data description file would be helpful here.
+# 
+# One thing that we notice is that the first variable MSSubClass is actually a categorical variable that is recorded as numeric. Lets change this variable to a string.
 
-# terrorist attacks by weapon
-weapon_count = np.asarray(terror_usa.groupby('weapon').weapon.count())
-weapon_percent = np.round(weapon_count / sum(weapon_count) * 100, 2)
+# In[ ]:
 
-# terrorist attack fatalities by weapon
-weapon_fatality = np.asarray(terror_usa.groupby('weapon')['fatalities'].sum())
-weapon_yaxis = np.asarray([1.93, 1.02, 2.28, 0.875, 0.945, 0.83, 0.835, 3.2])
 
-# terrorist attack injuries by weapon
-weapon_injury = np.asarray(terror_usa.groupby('weapon')['injuries'].sum())
-weapon_xaxis = np.log10(weapon_injury)
+all_df['MSSubClass'].dtypes
 
-weapon_text = []
-for i in range(0, 8):
-    weapon_text.append(weapon_categories[i] + ' (' + weapon_percent[i].astype(str) 
-                       + '%)<br>' + weapon_fatality[i].astype(str) + ' Killed, '
-                       + weapon_injury[i].astype(str) + ' Injured')
 
-weapon_fatality[6] = 7
-    
-data = [go.Scatter(
-        x = weapon_injury,
-        y = weapon_fatality,
-        text = weapon_text,
-        mode = 'markers',
-        hoverinfo = 'text',
-        marker = dict(
-            size = (weapon_count + 50) / 10,
-            opacity = 0.9,
-            color = 'rgb(240, 140, 45)')
-        )]
+# In[ ]:
 
-layout = go.Layout(
-         title = 'Terrorist Attacks by Weapon in United States (1970-2015)',
-         xaxis = dict(
-             title = 'Injuries',
-             type = 'log',
-             range = [0.45, 3.51],
-             tickmode = 'auto',
-             nticks = 4,
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             title = 'Fatalities',
-             type = 'log',
-             range = [0.65, 3.33],
-             tickmode = 'auto',
-             nticks = 3,
-             showline = True,
-             showgrid = False)
-         )
 
-annotations = []
-for i in range(0, 8):
-    annotations.append(dict(x=weapon_xaxis[i], y=weapon_yaxis[i],
-                            xanchor='middle', yanchor='top',
-                            text=weapon_categories[i], showarrow=False))
-layout['annotations'] = annotations
+all_df['MSSubClass'] = all_df['MSSubClass'].astype(str)
 
-figure = dict(data = data, layout = layout)
-iplot(figure)
+
+# In[ ]:
+
+
+all_df['MSSubClass'].value_counts()
+
+
+# ### Indicator (dummy) Variables
+# Since sklearn doesn't natively handle categorical predictor variables we must 0/1 encode them as a different column for each unique category for each variable. As you can see above, MSSubClass has about a dozen unique values. Each of these values will turn into a column.
+# 
+# ### Using pd.get_dummies
+# Pandas has a handy function that will do all the encoding for you. Let's see an example of this using just one variable.
+
+# In[ ]:
+
+
+pd.get_dummies(all_df['MSSubClass'], prefix='MSSubClass').head()
+
+
+# ### Using pd.get_dummies on an entire DataFrame.
+# get_dummies can also work on an entire dataframe. This is very nice and works by ignoring all numeric features and making 0/1 columns for all categorical features (those that have 'object') as its data type.
+
+# In[ ]:
+
+
+all_dummy_df = pd.get_dummies(all_df)
+all_dummy_df.head()
+
+
+# ### All numeric variable
+# Only numeric data is acceptable for all the machine learning algorithms in sklearn. And get_dummies has nearly done this for us. 'Nearly' because there are still missing values. get_dummies actually takes care of missing values in the categorical variables for us by simply not labeling them (they get labeled 0 for each new column created).
+
+# ### Missing Values
+# Let's check the missing values first to see how many we have to deal with.
+
+# In[ ]:
+
+
+all_dummy_df.isnull().sum().sort_values(ascending=False).head(10)
+
+
+# ### Replacing missing values
+# There are many valid ways to replace missing values. Many times, a missing value might mean a very specific thing. Here we will bypass further introspection and simply replace each missing value with the mean. This could potentially be a very stupid thing to do, but to proceed to model building we will just go ahead with the mean.
+
+# In[ ]:
+
+
+mean_cols = all_dummy_df.mean()
+mean_cols.head(10)
+
+
+# In[ ]:
+
+
+all_dummy_df = all_dummy_df.fillna(mean_cols)
+
+
+# ### Check that missing values are no more
+
+# In[ ]:
+
+
+all_dummy_df.isnull().sum().sum()
+
+
+# ### Stage 1 Data Prep Complete
+# Our data is finished (for now). This is a very crude and fast approach that gives availability of all variables for input into sklearn's models.
+
+# ### More Data Prep
+# Since we will be using penalized (ridge) regression - Ridge its best practice to standardize our inputs by subtracting the mean and dividing by the standard deviation so that they are all scaled similarly. We only want to do this to our non 0/1 variables. In pandas these were our original numeric variables. We will apply this standardization to both train and test data at the same time, which is technically data snooping but will proceed again for simplicity.
+# 
+#  Lets find the names of these first. 
+
+# In[ ]:
+
+
+numeric_cols = all_df.columns[all_df.dtypes != 'object']
+numeric_cols
+
+
+# In[ ]:
+
+
+numeric_col_means = all_dummy_df.loc[:, numeric_cols].mean()
+numeric_col_std = all_dummy_df.loc[:, numeric_cols].std()
+all_dummy_df.loc[:, numeric_cols] = (all_dummy_df.loc[:, numeric_cols] - numeric_col_means) / numeric_col_std
+
+
+# ### Check a histogram of a variable to see that the scaling worked
+# Checking the variable **GrLivArea** we see that the scaling has centered it to 0. We also see some outliers here > 3 standard deviations. We could apply a log transformation (something you can think about) or investigate those large values.
+
+# In[ ]:
+
+
+all_dummy_df['GrLivArea'].hist();
+
+
+# # Model Building
+# Next we will explore a few popular models and use cross validation to get an estimate for what we are likely to see as our score for a submission.
+
+# ### Splitting Data back to Train/test
+# At the beginning of the notebook we combined all the train and test data. We will no separate it back out.
+
+# In[ ]:
+
+
+dummy_train_df = all_dummy_df.loc[train_df.index]
+dummy_test_df = all_dummy_df.loc[test_df.index]
+
+
+# In[ ]:
+
+
+dummy_train_df.shape, dummy_test_df.shape
+
+
+# ### Ridge Regression with Cross Validation
+# We perform ridge regression for our first model, which allows us to use all the variables without too much worry about multicollinearity because of the penalty imposed.
+
+# In[ ]:
+
+
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import cross_val_score
+
+
+# In[ ]:
+
+
+# Not completely necessary, just converts dataframe to numpy array
+X_train = dummy_train_df.values
+X_test = dummy_test_df.values
+
+
+# ### Using cross_val_score 
+# Sklearn has a nice function that computes the cross validation score for any chosen model. The code below loops through an array of alphas (the penalty term for ridge regression) and outputs the results of 10-fold cross validation. Sklearn uses the negative mean squared error as its scoring method so we must take the negative and the square root to get the same metric that kaggle is using.
+
+# In[ ]:
+
+
+alphas = np.logspace(-3, 2, 50)
+test_scores = []
+for alpha in alphas:
+    clf = Ridge(alpha)
+    test_score = np.sqrt(-cross_val_score(clf, X_train, y_train, cv=10, scoring='neg_mean_squared_error'))
+    test_scores.append(np.mean(test_score))
+
+
+# In[ ]:
+
+
+import matplotlib.pyplot as plt
+
+
+# ### Plotting the cross validation score
+# Below, we plot alpha vs the cross validation score. It looks like a value of alpha between 10 and 20 give about the same score. We can also expect to get  a score around .135 (or likely a bit higher) if we submit.
+
+# In[ ]:
+
+
+plt.plot(alphas, test_scores)
+plt.title("Alpha vs CV Error");
+
+
+# ### Using random forest
+# Lets do the same procedure for fitting a random forest to the data. The training is done on 200 trees for 5-fold cv. This will take quite some time.
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+
+
+# In[ ]:
+
+
+max_features = [.1, .3, .5, .7, .9, .99]
+test_scores = []
+for max_feat in max_features:
+    clf = RandomForestRegressor(n_estimators=200, max_features=max_feat)
+    test_score = np.sqrt(-cross_val_score(clf, X_train, y_train, cv=5, scoring='neg_mean_squared_error'))
+    test_scores.append(np.mean(test_score))
+
+
+# In[ ]:
+
+
+plt.plot(max_features, test_scores)
+plt.title("Max Features vs CV Error");
+
+
+# # Make final prediction as combination of Ridge and Random Forest.
+# We will now train two models using the best parameters from cross validation on all the data for both Ridge Regression and Random Forest and then take the average of those two predictions.
+
+# In[ ]:
+
+
+ridge = Ridge(alpha=15)
+rf = RandomForestRegressor(n_estimators=500, max_features=.3)
+
+
+# In[ ]:
+
+
+ridge.fit(X_train, y_train)
+rf.fit(X_train, y_train)
+
+
+# In[ ]:
+
+
+y_ridge = np.exp(ridge.predict(X_test))
+y_rf = np.exp(rf.predict(X_test))
+
+
+# In[ ]:
+
+
+y_final = (y_ridge + y_rf) / 2
+
+
+# In[ ]:
+
+
+submission_df = pd.DataFrame(data= {'Id' : test_df.index, 'SalePrice': y_final})
+
+
+# In[ ]:
+
+
+submission_df.head(10)
+
+
+# # Make Submisison
+
+# In[ ]:
+
+
+submission_df.to_csv('submisison_rf_ridge.csv', index=False)
 

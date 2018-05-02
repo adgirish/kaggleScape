@@ -1,358 +1,437 @@
 
 # coding: utf-8
 
-# Goes over several of the tables available. Removes some missing hero_id from test_player.csv. 
+# # Intro
 # 
-# Last updated december 2nd 2016
-
-# In[ ]:
-
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import gc
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# ###match.csv
-
-# In[ ]:
-
-
-matches = pd.read_csv('../input/match.csv', index_col=0)
-matches.head()
-
-
-# `match_id`  has been reencoded from steams  `match_id` to save a little but of space.  tower_status and barracks_status are binarymasks indicating whether various structures have been destroyed. See the very bottom of https://wiki.teamfortress.com/wiki/WebAPI/GetMatchDetails#Tower_Status%22tower_status_dire%22:%202047, for details.  **radiant_win** would be good choice for a target of a binary classification task. 
-
-# In[ ]:
-
-
-# Each file needs to be removed after use.
-del matches
-gc.collect()
-
-
-# ###players.csv
+# I'm trying to learn the very basics with this exercise. My goal is to train a linear regression model with a subset of columns from this interesting dataset in order to predict the value of a used car.
 # 
-# Contains statistics abouts players performance in individual matches. 
-
-# In[ ]:
-
-
-players = pd.read_csv('../input/players.csv')
-players.iloc[:5,:15]
-
-
-# `account_id` is useful if you want to look at multiple matches for the same player but be aware that many players choose to hide their account_id so it won't be available.
-
-# In[ ]:
-
-
-players['account_id'].value_counts()
-
-
-# About 180000 thousand of the records out of a possible 500k are not available. The data was sampled using a time based split so this distribution should be representative of the rest of the available data. 
-
-# In[ ]:
-
-
-players.iloc[:5,20:30]
-
-
-# xp_hero, means the amount of experience gained from killing other players.  The three main types of counts included are experience, gold, and user action
-
-# In[ ]:
-
-
-players.iloc[:5,40:55]
-
-
-# I am pretty sure these are counts of user issued commands. The only reason they look like floats is because of how pandas handles nan. It is a float so if there is even one in a column all other numbers are converted. There may be a way of approximating actions per minute(not quite clicks per minute) from this. 
-
-# In[ ]:
-
-
-#cleanup
-del players
-gc.collect()
-
-
-# ###player_time.csv
-# contains xp, gold, and last hit totals for each player at one minute intervals
-
-# In[ ]:
-
-
-player_time = pd.read_csv('../input/player_time.csv')
-player_time.head()
-
-
-# In[ ]:
-
-
-a_match = player_time.query('match_id == 1')
-
-
-# In[ ]:
-
-
-a_match.T
-
-
-# Since each match lasts for a different amount of time storing them with time on the horizontal axis would
-# take a lot of space.  The suffix for each variable indicates the value of the player_slot variable allowing this data to be combined with players.csv if desired.  
-
-# In[ ]:
-
-
-del player_time
-gc.collect()
-
-
-# ###teamfights.csv
-
-# In[ ]:
-
-
-teamfights = pd.read_csv('../input/teamfights.csv')
-teamfights.head()
-
-
-# `start`, `end` and `last_death` contain the time for those events. Each row contains very basic info about each team fight.  Time is in seconds. I was considering adding a specific column for the count of teamfights in a match. It would make getting the first teamfight for each match easier.
-
-# In[ ]:
-
-
-del teamfights
-gc.collect()
-
-
-# ###teamfights_players.csv
-# More detailed information about each teamfight
-
-# In[ ]:
-
-
-teamfights_players = pd.read_csv('../input/teamfights_players.csv')
-teamfights_players.head()
-
-
-# Each row in the `teamfights.csv` corrosponds to ten rows in this file. I have marked this file and teamfights to be updated with specific variable indicating which teamfight in the match it belongs to this should make joining and working with these tables easier.
-
-# In[ ]:
-
-
-del teamfights_players
-gc.collect()
-
-
-# ###chat.csv
-# contains chat logs for 50k matches
-
-# In[ ]:
-
-
-chat = pd.read_csv('../input/chat.csv')
-chat.head()
-
-
-# [Here is a Kernel][1] by mammykins showing how to make a wordcloud from the chat logs
+# Any help or advice is welcome!!!
 # 
+# ### Changelist
 # 
-#   [1]: https://www.kaggle.com/mammykins/d/devinanzelmo/dota-2-matches/dota-2-allchat-wordcloud
-
-# ### test_players.csv and hero_names.csv
-# removes heros with invalid hero_ids from the test_players.csv file
-
-# In[ ]:
-
-
-# problem with the hero_ids in test_player brought to my attention by @Dexter, thanks!
-# hero_id is 0 in 15 cases. 
-
-test_players = pd.read_csv('../input/test_player.csv')
-hero_names = pd.read_csv('../input/hero_names.csv')
-
+# * left only random forest with gridsearchcv
+# * rewritten all the notebook
+# * added name length feature
+# * better study on the data
+# * used seaborn to plot
+# * added random forest and xgboost algorithms
 
 # In[ ]:
 
 
-# As can been seen the number of zeros appearing here are much less then the least popular hero. These are very likely
-# caused by processing problems, either in my data generation code, or in the data pulled from steam. 
-test_players['hero_id'].value_counts().tail()
+import pandas as pd
+
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn import datasets, linear_model, preprocessing, svm
+from sklearn.preprocessing import StandardScaler, Normalizer
+import math
+import matplotlib
+import seaborn as sns
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[ ]:
-
-
-test_players.query('hero_id == 0')
-
-
-# No pattern immediately jumps out in relationship to the missing hero IDs. Except maybe they are more common for Dire. The safest way to deal with this is probably to remove the the matches in which any hero_id is 0
-
-# In[ ]:
-
-
-# remove matches with any invalid hero_ids
-# imputing hero_id, is likely possible but the data is not available online in this dataset
-
-matches_with_zero_ids = test_players.query('hero_id == 0')['match_id'].values.tolist()
-test_players = test_players.query('match_id != @matches_with_zero_ids')
-
+# ### Useful functions
 
 # In[ ]:
 
 
-# check that the invalid ids are removed
-# This is now on my list of bugs to fix for next release. 
-test_players['hero_id'].value_counts().tail()
+def category_values(dataframe, categories):
+    for c in categories:
+        print('\n', dataframe.groupby(by=c)[c].count().sort_values(ascending=False))
+        print('Nulls: ', dataframe[c].isnull().sum())
+
+def plot_correlation_map( df ):
+    corr = df.corr()
+    _ , ax = plt.subplots( figsize =( 12 , 10 ) )
+    cmap = sns.diverging_palette( 220 , 10 , as_cmap = True )
+    _ = sns.heatmap(
+        corr, 
+        cmap = cmap,
+        square=True, 
+        cbar_kws={ 'shrink' : .9 }, 
+        ax=ax, 
+        annot = True, 
+        annot_kws = { 'fontsize' : 12 }
+    )
 
 
-# ###player_ratings.csv
-# A possible way to measure skill rating when we don't have MMR data
-# See this kernel for details on how this was calculated https://www.kaggle.com/devinanzelmo/d/devinanzelmo/dota-2-matches/dota-2-skill-rating-with-trueskill
 
-# In[ ]:
-
-
-# player_ratings.csv contains trueskill ratings for players in the match, and test data.
-# True Skill is a rating method somewhat like MMR, and can be used to sort players by skill. 
-
-player_ratings = pd.read_csv('../input/player_ratings.csv')
-
-
-# In[ ]:
-
-
-player_ratings.head()
-
-
-# In addition to trueskill rating total_wins and total_matches have been included to allow for the calculation of winrate. See this kernel for details on how trueskill values were calculated
-
-# In[ ]:
-
-
-# Now create a list of player rankings by using the formula mu - 3*sigma
-# This ranking formula penalizes players with fewer matches because there is more uncertainty
-
-player_ratings['conservative_skill_estimate'] = player_ratings['trueskill_mu'] - 3*player_ratings['trueskill_sigma']
-
-
-# In[ ]:
-
-
-player_ratings.head()
-
-
-# In[ ]:
-
-
-player_ratings = player_ratings.sort_values(by='conservative_skill_estimate', ascending=False)
-
-
-# In[ ]:
-
-
-# negative account ids are players not appearing in other data available in this dataset.
-
-player_ratings.head(10)
-
-
-# In[ ]:
-
-
-del player_ratings
-gc.collect()
-
-
-# ###match_outcomes.csv
-# Useful for creating custom skill calculations. Contains results with account_ids for 900k matches occuring prior to the other available data. Data is mostly from patch 6.85 and some from 6.84
-
-# In[ ]:
-
-
-match_outcomes = pd.read_csv('../input/match_outcomes.csv')
-
-
-# In[ ]:
-
-
-# each match has data on two rows. the 'rad' tells whether the team is Radiant or not(1 is Radiant 0 is Dire)
-# negative account ids are not in the other available data. account_id 0 is for anonymous players.
-match_outcomes.head()
-
-
-# In[ ]:
-
-
-del match_outcomes
-gc.collect()
-
-
-# ### ability_upgrades.csv and ability_names.csv
+# # Preparing data
 # 
-# ability_upgrades.csv contains the upgrade performed at each level for each player.
-# ability_ids.csv links the ability ids to the english names of abilities.  
-
-# In[ ]:
-
-
-ability_upgrades = pd.read_csv('../input/ability_upgrades.csv')
-ability_ids = pd.read_csv('../input/ability_ids.csv')
-
-
-# In[ ]:
-
-
-ability_ids.head()
-
-
-# In[ ]:
-
-
-ability_upgrades.head()
-
-
-# In[ ]:
-
-
-del ability_upgrades, ability_ids
-gc.collect()
-
-
-# ###purchase_log.csv and item_ids.csv
+# ## Reading from file
 # 
-# purchase_log.csv contains the time for each purchase.
-# item_ids.csv contains numeric id's for items and the english names 
+# Just reading the file and printing some lines.
 
 # In[ ]:
 
 
-purchase_log = pd.read_csv('../input/purchase_log.csv')
-item_ids = pd.read_csv('../input/item_ids.csv')
+df = pd.read_csv('../input/autos.csv', sep=',', header=0, encoding='cp1252')
+#df = pd.read_csv('autos.csv.gz', sep=',', header=0, compression='gzip',encoding='cp1252')
+df.sample(10)
+
+
+# Let's see some info from numeric fields
+
+# In[ ]:
+
+
+df.describe()
+
+
+# ## Dropping some useless columns
+# 
+# Some column can already be dropped.
+
+# In[ ]:
+
+
+print(df.seller.unique())
+print(df.offerType.unique())
+print(df.abtest.unique())
+print(df.nrOfPictures.unique())
+
+
+# Seller has only one value, while offerType and abtest has no relevance for the analysis. So far, I still don't know how to use the `dateCrawled` column.
+# 
+# Therefore I modify the dataframe dropping all those features.
+# 
+# I remove `lastSeen`, `dateCreated` and `postalCode` as well as I don't think they will be useful for a price prediction.
+
+# In[ ]:
+
+
+df.drop(['seller', 'offerType', 'abtest', 'dateCrawled', 'nrOfPictures', 'lastSeen', 'postalCode', 'dateCreated'], axis='columns', inplace=True)
+
+
+# ## Cleaning data
+# 
+# Cleaning data from duplicates, NaNs and selecting reasonable ranges for columns
+# 
+
+# In[ ]:
+
+
+print("Too new: %d" % df.loc[df.yearOfRegistration >= 2017].count()['name'])
+print("Too old: %d" % df.loc[df.yearOfRegistration < 1950].count()['name'])
+print("Too cheap: %d" % df.loc[df.price < 100].count()['name'])
+print("Too expensive: " , df.loc[df.price > 150000].count()['name'])
+print("Too few km: " , df.loc[df.kilometer < 5000].count()['name'])
+print("Too many km: " , df.loc[df.kilometer > 200000].count()['name'])
+print("Too few PS: " , df.loc[df.powerPS < 10].count()['name'])
+print("Too many PS: " , df.loc[df.powerPS > 500].count()['name'])
+print("Fuel types: " , df['fuelType'].unique())
+#print("Offer types: " , df['offerType'].unique())
+#print("Sellers: " , df['seller'].unique())
+print("Damages: " , df['notRepairedDamage'].unique())
+#print("Pics: " , df['nrOfPictures'].unique()) # nrOfPictures : number of pictures in the ad (unfortunately this field contains everywhere a 0 and is thus useless (bug in crawler!) )
+#print("Postale codes: " , df['postalCode'].unique())
+print("Vehicle types: " , df['vehicleType'].unique())
+print("Brands: " , df['brand'].unique())
+
+# Cleaning data
+#valid_models = df.dropna()
+
+#### Removing the duplicates
+dedups = df.drop_duplicates(['name','price','vehicleType','yearOfRegistration'
+                         ,'gearbox','powerPS','model','kilometer','monthOfRegistration','fuelType'
+                         ,'notRepairedDamage'])
+
+#### Removing the outliers
+dedups = dedups[
+        (dedups.yearOfRegistration <= 2016) 
+      & (dedups.yearOfRegistration >= 1950) 
+      & (dedups.price >= 100) 
+      & (dedups.price <= 150000) 
+      & (dedups.powerPS >= 10) 
+      & (dedups.powerPS <= 500)]
+
+print("-----------------\nData kept for analisys: %d percent of the entire set\n-----------------" % (100 * dedups['name'].count() / df['name'].count()))
+
+
+# ## Working on the `null` values
+# 
+# Checking if theree are NaNs to fix or drop
+
+# In[ ]:
+
+
+dedups.isnull().sum()
+
+
+# Some decisions to take for the nulls in the following fields: vehicleType (37422 nulls), gearbox (19803 nulls), model (20288 nulls), fuelType (33081 nulls), notRepairedDamage (70770 nulls).
+# 
+# ### `model`-`brand`-`vehicleType`
+# If we have the `model` we could determine the `brand` and the `vehicleType` calculating the mode for the corresponding fields in the rest of the dataset. The opposite combinations are not true. So I think the actions should be:
+# 
+#     | vehicleType | brand | model | Action
+#     | ---           | ---     | ---     |
+#     | null        |  null | [value] | Set the other fields
+#     | null        | [value] | null  | Delete
+#     | [value]       |  null | null  | Delete
+# 
+# __So far, I'll drop all the NaNs in these 3 fields.__
+# 
+# ### `notRepairedDamage`
+# Those with null `notRepairedDamage` field could be set to "`not-declared`" value for example.
+# 
+# ### `fuelType`
+# Null `fuelType`s could be set to "`not-declared`" value again.
+# 
+# ### `gearbox`
+# Null `fuelType`s could be set to "`not-declared`" value again.
+# 
+
+# In[ ]:
+
+
+dedups['notRepairedDamage'].fillna(value='not-declared', inplace=True)
+dedups['fuelType'].fillna(value='not-declared', inplace=True)
+dedups['gearbox'].fillna(value='not-declared', inplace=True)
+dedups['vehicleType'].fillna(value='not-declared', inplace=True)
+dedups['model'].fillna(value='not-declared', inplace=True)
+
+
+# Checking if all the nulls have been filled or dropped.
+
+# In[ ]:
+
+
+dedups.isnull().sum()
+
+
+# OK, we're clear. Let's do some visualization now.
+
+# ## Visualizations
+# ### Categories distribution
+# Let's see some charts to understand how data is distributed across the categories
+
+# In[ ]:
+
+
+categories = ['gearbox', 'model', 'brand', 'vehicleType', 'fuelType', 'notRepairedDamage']
+
+for i, c in enumerate(categories):
+    v = dedups[c].unique()
+    
+    g = dedups.groupby(by=c)[c].count().sort_values(ascending=False)
+    r = range(min(len(v), 5))
+
+    print( g.head())
+    plt.figure(figsize=(5,3))
+    plt.bar(r, g.head()) 
+    #plt.xticks(r, v)
+    plt.xticks(r, g.index)
+    plt.show()
+
+
+# ### Feature engineering
+
+# Adding the name length to see how much does a long description influence the price
+
+# In[ ]:
+
+
+dedups['namelen'] = [min(70, len(n)) for n in dedups['name']]
+
+ax = sns.jointplot(x='namelen', 
+                   y='price',
+                   data=dedups[['namelen','price']], 
+#                   data=dedups[['namelen','price']][dedups['model']=='golf'], 
+                    alpha=0.1, 
+                    size=8)
+
+
+# It seems that a name length between 15 and 30 characters is better for the sale price. An explanation could be that a longer name includes more optionals and accessories and therefore the price is obviously higher.
+# Very short and very long names do not work well.
+
+# In[ ]:
+
+
+labels = ['name', 'gearbox', 'notRepairedDamage', 'model', 'brand', 'fuelType', 'vehicleType']
+les = {}
+
+for l in labels:
+    les[l] = preprocessing.LabelEncoder()
+    les[l].fit(dedups[l])
+    tr = les[l].transform(dedups[l]) 
+    dedups.loc[:, l + '_feat'] = pd.Series(tr, index=dedups.index)
+
+labeled = dedups[ ['price'
+                        ,'yearOfRegistration'
+                        ,'powerPS'
+                        ,'kilometer'
+                        ,'monthOfRegistration'
+                        , 'namelen'] 
+                    + [x+"_feat" for x in labels]]
 
 
 # In[ ]:
 
 
-item_ids.head()
+len(labeled['name_feat'].unique()) / len(labeled['name_feat'])
+
+
+# Labels for the name column account for 62% of the total. I think it's too much, so I remove the feature.
+
+# In[ ]:
+
+
+labeled.drop(['name_feat'], axis='columns', inplace=True)
+
+
+# ### Correlations
+# Let's see how features are correlated each other and, more important, with the price.
+
+# In[ ]:
+
+
+plot_correlation_map(labeled)
+labeled.corr()
+
+
+# This is the list of the most influencing features for the price
+
+# In[ ]:
+
+
+labeled.corr().loc[:,'price'].abs().sort_values(ascending=False)[1:]
+
+
+# I don't know why the model does not influence the car price more...
+
+# # Playing with different models
+
+# ## Prepare data for training
+# Here I split the dataset in train and validation data and tune the right-skewed sale price column.
+
+# In[ ]:
+
+
+
+Y = labeled['price']
+X = labeled.drop(['price'], axis='columns', inplace=False)
+
+
+matplotlib.rcParams['figure.figsize'] = (12.0, 6.0)
+prices = pd.DataFrame({"1. Before":Y, "2. After":np.log1p(Y)})
+prices.hist()
+
+Y = np.log1p(Y)
+
+
+# ### Basic imports and functions
+# 
+# Trying with some model from scikit learn: LinearRegression, LR with L2 regularization and others.
+
+# In[ ]:
+
+
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, Lasso, LassoCV, LassoLarsCV
+from sklearn.model_selection import cross_val_score, train_test_split
+
+def cv_rmse(model, x, y):
+    r = np.sqrt(-cross_val_score(model, x, y, scoring="neg_mean_squared_error", cv = 5))
+    return r
+
+# Percent of the X array to use as training set. This implies that the rest will be test set
+test_size = .33
+
+#Split into train and validation
+X_train, X_val, y_train, y_val = train_test_split(X, Y, test_size=test_size, random_state = 3)
+print(X_train.shape, X_val.shape, y_train.shape, y_val.shape)
+
+r = range(2003, 2017)
+km_year = 10000
+
+
+
+# ## Random forests
+# 
+# I use the GridSearch to set the optimal parameteres for the regressor, then train the final model.
+# 
+# I've removed the other parameters to quickly make this point pass online while I keep working on many parameters offline.
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+
+rf = RandomForestRegressor()
+
+param_grid = { "criterion" : ["mse"]
+              , "min_samples_leaf" : [3]
+              , "min_samples_split" : [3]
+              , "max_depth": [10]
+              , "n_estimators": [500]}
+
+gs = GridSearchCV(estimator=rf, param_grid=param_grid, cv=2, n_jobs=-1, verbose=1)
+gs = gs.fit(X_train, y_train)
+
+
+# #### Predicting samples
+
+# In[ ]:
+
+
+print(gs.best_score_)
+print(gs.best_params_)
+ 
 
 
 # In[ ]:
 
 
-purchase_log.head()
+bp = gs.best_params_
+forest = RandomForestRegressor(criterion=bp['criterion'],
+                              min_samples_leaf=bp['min_samples_leaf'],
+                              min_samples_split=bp['min_samples_split'],
+                              max_depth=bp['max_depth'],
+                              n_estimators=bp['n_estimators'])
+forest.fit(X_train, y_train)
+# Explained variance score: 1 is perfect prediction
+print('Score: %.2f' % forest.score(X_val, y_val))
 
+
+# #### Predicting samples
+
+# ### Features importance
 
 # In[ ]:
 
 
-del purchase_log, item_ids
-gc.collect()
+importances = forest.feature_importances_
+std = np.std([tree.feature_importances_ for tree in forest.estimators_],
+             axis=0)
+indices = np.argsort(importances)[::-1]
+# Print the feature ranking
+print("Feature ranking:")
 
+for f in range(X.shape[1]):
+    print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
+
+print(X_train.columns.values)
+# Plot the feature importances of the forest
+plt.figure()
+plt.title("Feature importances")
+plt.bar(range(X.shape[1]), importances[indices],
+       color="r", yerr=std[indices], align="center",tick_label = X_train.columns.values)
+plt.xticks(range(X.shape[1]), indices)
+plt.xlim([-1, X.shape[1]])
+plt.show()
+
+
+
+# # Conclusions
+# 
+# I've tried to play with as much stuff as I could with this dataset in order to understand the very basic topics about:
+# 
+# * data interpretation and selection
+# * feature selection and labeling
+# * data visualization
+# * very rough ML algorithms application
+# 
+# There's very much to improve both in how I managed all these steps and in the different outcomes of the predictions on the sale price. I'll experiment a bit more in the next few days, then I'll move on another dataset to learn more.
+# 

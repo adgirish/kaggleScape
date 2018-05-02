@@ -1,7 +1,28 @@
 
 # coding: utf-8
 
+# # INTRODUCTION
+# * In this kernel, we will learn how to use plotly library.
+#     * Plotly library: Plotly's Python graphing library makes interactive, publication-quality graphs online. Examples of how to make line plots, scatter plots, area charts, bar charts, error bars, box plots, histograms, heatmaps, subplots, multiple-axes, polar charts, and bubble charts.
+# 
+# <br>Content:
+# 1. [Loading Data and Explanation of Features](#1)
+# 1. [Line Charts](#2)
+# 1. [Scatter Charts](#3)
+# 1. [Bar Charts](#4)
+# 1. [Pie Charts](#5)
+# 1. [Bubble Charts](#6)
+# 1. [Histogram](#7)
+# 1. [Word Cloud](#8)
+# 1. [Box Plot](#9)
+# 1. [Scatter Plot Matrix](#10)
+# 1. Map Plots: https://www.kaggle.com/kanncaa1/time-series-prediction-with-eda-of-world-war-2
+# 
+# 
+# 
+
 # In[ ]:
+
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
@@ -10,350 +31,593 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import plotly.plotly as py
+from plotly.offline import init_notebook_mode, iplot
+init_notebook_mode(connected=True)
+from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-import seaborn as sns
-plt.style.use('ggplot')
-
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+import plotly.graph_objs as go
+import os
+print(os.listdir("../input"))
 
 # Any results you write to the current directory are saved as output.
 
 
-# In[ ]:
-
-
-df = pd.read_csv('../input/flavors_of_cacao.csv',na_values='\xa0')
-
-
-# let's check for some missing values first
-
-# In[ ]:
-
-
-b = pd.DataFrame(df.isnull().sum(), columns= ['Number of missing values'])
-b
-
-
-# In[ ]:
-
-
-df.head()
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(8,6))
-sns.distplot(df['Rating'],bins=5,color='brown')
-
-
-# The distribution of the ratings is somewhat skewed from normal. We see that there is a high number of  3 and 4 ratings. There are very few 1 and 5 ratings.
-
-# Extracted the Cocoa percentage and converted it into float for further analysis
+# <a id="1"></a> <br>
+# # Loading Data and Explanation of Features
+# <font color='red'>
+# * timesData includes 14 features that are:
+#     <font color='black'>
+#     * world_rank             
+#     * university_name       
+#     * country               
+#     * teaching                
+#     * international            
+#     * research                 
+#     * citations                
+#     * income                   
+#     * total_score              
+#     * num_students             
+#     * student_staff_ratio      
+#     * international_students   
+#     * female_male_ratio        
+#     * year 
 
 # In[ ]:
 
 
-df['Cocoa % as num'] = df['Cocoa\nPercent'].apply(lambda x: x.split('%')[0])
-df['Cocoa % as num'] = df['Cocoa % as num'].astype(float)
-
-
-# Cocoa is a key ingredient of any chocolate. Now, lets look at the distribution of cocoa percentage.
-# As expected, we see that the distribution of cocoa percentage in chocolates is normally distributed with a majority of the chocolates having 70% of cocoa.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-sns.distplot(df['Cocoa % as num'],bins=20,color='Brown')
-
-
-# Let's have a look at the ratings by Review year, we would like to see if the review date has an effect on the Rating. Also, we would like to see if the outliers in the Rating. A boxplot would be very helpful in this case.
-
-# In[ ]:
-
-
-df['Review\nDate'] = df['Review\nDate'].astype(str)
-
-plt.figure(figsize=(12,6))
-sns.boxplot(x='Review\nDate', y='Rating',data=df)
-
-
-# There is an interesting trend in the Rating. From the years 2006 to 2009, the median of the Ratings is consistent around 3. There is a jump in the median to a value of 3.3 from 2010 and it remained around 3.3 until 2016. 
-
-# In[ ]:
-
-
-fig, (ax1, ax2, ax3) = plt.subplots(nrows=3,figsize=(12,15))
-
-
-a = df.groupby(['Company\nLocation'])['Rating'].mean()
-a = a.sort_values(ascending=False)
-
-b = df.groupby(['Company\nLocation'])['Rating'].median()
-b = b.sort_values(ascending=False)
-
-a = pd.DataFrame(a)
-b = pd.DataFrame(b)
-
-Ratings_by_location = a.join(b, how='left',lsuffix='_mean', rsuffix='_median')
-Ratings_by_location['Mean-Median'] = Ratings_by_location['Rating_mean']-Ratings_by_location['Rating_median']
-Rating_difference = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Mean-Median'], ax = ax3)
-Rating_difference.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
-Rating_difference.set_ylabel("Mean-Median of ratings")
-
-
-#plt.figure(figsize=(12,6))
-ratings_mean = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Rating_mean'],ax=ax1)
-ratings_mean.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
-ratings_mean.set_ylabel("Mean of Ratings")
-
-
-#plt.figure(figsize=(12,6))
-ratings_median = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Rating_median'], ax = ax2)
-ratings_median.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
-ratings_median.set_ylabel("Median of ratings")
-
-plt.tight_layout()
-
-
-# From the above visualizations, we can see that there is no much difference between mean and median of the data except for the company that's located in Sao Tome.
-# 
-# A very important observation is that, Rating seems to be dependent on the country of company location.
-# We can spot several European and South American countries with a higher mean Rating, this could be due to the availability of Cocoa in these countries. The availability cocoa can influence the percentage of Cocoa used in the chocolates at these companies.
-
-# Lets looks at the Cocoa percentage used in Chocolates in different countries. 
-# From the below chart, the distribution of cocoa varied from 40% to around 80% in our dataset. 
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-
-c = df.groupby(['Company\nLocation'])['Cocoa % as num'].mean()
-c = c.sort_values(ascending=False)
-
-ratings = sns.barplot(x=c.index,y=c)
-ratings.set_xticklabels(labels = c.index, rotation =90)
-
-
-# The Ratings might be possibly influenced by the bean type and broad bean type used in the production.
-# Since we have these features in our dataset, we can plot the effect these features have on our ratings.
-# 
-# From the below visualizations, we can see that the distribution of ratings is different based on bean type and broad bean type.
-
-# In[ ]:
-
-
-
-fig, (ax1, ax2) = plt.subplots(ncols=2,figsize=(12,15))
-
-e = df.groupby(['Bean\nType'])['Rating'].mean()
-e = e.sort_values(ascending=False)
-Rating_beanType = sns.barplot(y=e.index,x=e,ax = ax1)
-
-
-f = df.groupby(['Broad Bean\nOrigin'])['Rating'].mean()
-f = f.sort_values(ascending=False)
-Rating_broadbean = sns.barplot(y=f.index,x=f,ax = ax2)
-
-plt.tight_layout()
-
-
-# Soon to be added: Will try to spot anomalies in this dataset using techniques like DBScan.
-# 
-# We have chosen Cocoa percentage, Review date, Rating, Broad bean origin, Company location to be included in the training data for our clustering model.
-# 
-# The clustering technique we will be using is DBScan
-# 
-# Density-based spatial clustering of applications with noise (DBSCAN) is a data clustering algorithm proposed by Martin Ester, Hans-Peter Kriegel, Jörg Sander and Xiaowei Xu in 1996. It is a density-based clustering algorithm: given a set of points in some space, it groups together points that are closely packed together (points with many nearby neighbors), marking as outliers points that lie alone in low-density regions (whose nearest neighbors are too far away). DBSCAN is one of the most common clustering algorithms and also most cited in scientific literature.
-# 
-# In 2014, the algorithm was awarded the test of time award (an award given to algorithms which have received substantial attention in theory and practice) at the leading data mining conference, KDD.
-# 
-# Source: Wikipedia
-# 
-# 
-# ![image.png](attachment:image.png)
-# 
-# 
-# The above figure is taken from https://stats.stackexchange.com/questions/194734/dbscan-what-is-a-core-point
-# 
-# Blue observations are noise
-# 
-# Red observations are core points
-# 
-# Yellow ones are non core point aka edges of the cluster
-# 
-# 
-
-# In[ ]:
-
-
-df1 = df[['Cocoa % as num','Rating','Review\nDate']]
+# Load data that we will use.
+timesData = pd.read_csv("../input/timesData.csv")
 
 
 # In[ ]:
 
 
-#non_numerical_columns = ['Review\nDate','Bean\nType', 'Broad Bean\nOrigin','Company\nLocation']
-
-non_numerical_columns = ['Review\nDate']
-
-for i in non_numerical_columns:
-    x1 = pd.get_dummies(df1[i])
-    df1 = df1.join(x1,lsuffix='_l',rsuffix='_r')
-    df1.drop(i,axis=1,inplace=True)
-
-
-# Standardizing the data is key for most of the clustering techniques to avoid a feature biasing the results of clustering
-
-# In[ ]:
-
-
-from sklearn.cluster import DBSCAN
-from sklearn import metrics
-from sklearn.preprocessing import StandardScaler
+# information about timesData
+timesData.info()
 
 
 # In[ ]:
 
 
-df_num = StandardScaler().fit_transform(df1)
+timesData.head(10)
 
 
-# In[ ]:
-
-
-A = []
-B = []
-C = []
-
-for i in np.linspace(0.1,5,50):
-    db = DBSCAN(eps=i, min_samples=10).fit(df_num)
-
-    core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
-    core_samples_mask[db.core_sample_indices_] = True
-    labels = db.labels_
-    n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-    
-    sum = 0
-    for t in labels:
-        if t == -1: 
-            sum = sum + 1
-    C.append(sum)
-            
-    
-    
-    A.append(i)
-    B.append(int(n_clusters_))
-
-
-# labels are the label of the clusters.
-# If the label is -1, then the observation is an outlier/noise within our dataset.
-# 
-# 
-# db.core_sample_indices_   are the indices of the core points in the cluster, the indices that are excluded here are of outliers and the edges of the clusters
+# <a id="2"></a> <br>
+# # Line Charts
+# <font color='red'>
+# Line Charts Example: Citation and Teaching vs World Rank of Top 100 Universities
+# <font color='black'>
+# * Import graph_objs as *go*
+# * Creating traces
+#     * x = x axis
+#     * y = y axis
+#     * mode = type of plot like marker, line or line + markers
+#     * name = name of the plots
+#     * marker = marker is used with dictionary. 
+#         * color = color of lines. It takes RGB (red, green, blue) and opacity (alpha)
+#     * text = The hover text (hover is curser)
+# * data = is a list that we add traces into it
+# * layout = it is dictionary.
+#     * title = title of layout
+#     * x axis = it is dictionary
+#         * title = label of x axis
+#         * ticklen = length of x axis ticks
+#         * zeroline = showing zero line or not
+# * fig = it includes data and layout
+# * iplot() = plots the figure(fig) that is created by data and layout
 
 # In[ ]:
 
 
-results = pd.DataFrame([A,B,C]).T
-results.columns = ['distance','Number of clusters','Number of outliers']
-results.plot(x='distance',y='Number of clusters',figsize=(10,6))
+# prepare data frame
+df = timesData.iloc[:100,:]
+# import graph objects as "go"
+import plotly.graph_objs as go
+# Creating trace1
+trace1 = go.Scatter(
+                    x = df.world_rank,
+                    y = df.citations,
+                    mode = "lines",
+                    name = "citations",
+                    marker = dict(color = 'rgba(16, 112, 2, 0.8)'),
+                    text= df.university_name)
+# Creating trace2
+trace2 = go.Scatter(
+                    x = df.world_rank,
+                    y = df.teaching,
+                    mode = "lines+markers",
+                    name = "teaching",
+                    marker = dict(color = 'rgba(80, 26, 80, 0.8)'),
+                    text= df.university_name)
+data = [trace1, trace2]
+layout = dict(title = 'Citation and Teaching vs World Rank of Top 100 Universities',
+              xaxis= dict(title= 'World Rank',ticklen= 5,zeroline= False)
+             )
+fig = dict(data = data, layout = layout)
+iplot(fig)
 
 
-# Based on the above plot, I decided to go forward with a distance (epsilon) value of 1
-
-# In[ ]:
-
-
-db = DBSCAN(eps=1, min_samples=10).fit(df_num)
-core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
-core_samples_mask[db.core_sample_indices_] = True
-labels = db.labels_
-n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-n_clusters_
-
-
-# The number of clusters in our dataset is 12. Remember that the number of clusters does not include outliers/noise in the dataset.
-
-# In[ ]:
-
-
-df = df.join(pd.DataFrame(labels))
-df = df.rename(columns={0:'Cluster'})
-
-df['Cluster'].value_counts()
-
-
-# -1 stands for outliers/Noise, we see that there are 93 outliers in our dataset. 
-# 
-# The number of observations in our clusters range from 20 to 283.
-# 
-# Let's look at some statistics within our clusters.
-
-# In[ ]:
-
-
-df_clusters = df.groupby('Cluster')['Rating','Cocoa % as num']
-df_clusters.describe()
-
-
-# In[ ]:
-
-
-fig, (ax1,ax2) = plt.subplots(nrows = 2,figsize=(12,12))
-
-plt.figure(figsize=(12,8))
-plot1 = sns.boxplot(x=df['Cluster'],y=df['Rating'],data=df, ax = ax1)
-
-
-plt.figure(figsize=(12,8))
-plot2 = sns.boxplot(x=df['Cluster'],y=df['Cocoa % as num'],data=df, ax= ax2)
-
-
-# We can infer from the above plots that the rating as well as the Cocoa percentage is much different for our outliers from the remaining clusters within the dataset.
-# 
-# A high Cocoa percentage in a chocolate doesn't necessarily prompt higher ratings, looks like it actually worsens the ratings from our dataset.
-
-# The following code is actually taken from scikit learn for visualization of our clusters.
-# 
-# http://scikit-learn.org/stable/auto_examples/cluster/plot_dbscan.html#sphx-glr-auto-examples-cluster-plot-dbscan-py
+# <a id="3"></a> <br>
+# # Scatter
+# <font color='red'>
+# Scatter Example: Citation vs world rank of top 100 universities with 2014, 2015 and 2016 years
+# <font color='black'>
+# * Import graph_objs as *go*
+# * Creating traces
+#     * x = x axis
+#     * y = y axis
+#     * mode = type of plot like marker, line or line + markers
+#     * name = name of the plots
+#     * marker = marker is used with dictionary. 
+#         * color = color of lines. It takes RGB (red, green, blue) and opacity (alpha)
+#     * text = The hover text (hover is curser)
+# * data = is a list that we add traces into it
+# * layout = it is dictionary.
+#     * title = title of layout
+#     * x axis = it is dictionary
+#         * title = label of x axis
+#         * ticklen = length of x axis ticks
+#         * zeroline = showing zero line or not
+#     * y axis = it is dictionary and same with x axis
+# * fig = it includes data and layout
+# * iplot() = plots the figure(fig) that is created by data and layout
 
 # In[ ]:
 
 
-plt.figure(figsize=(16,12))
-X = df_num
+# prepare data frames
+df2014 = timesData[timesData.year == 2014].iloc[:100,:]
+df2015 = timesData[timesData.year == 2015].iloc[:100,:]
+df2016 = timesData[timesData.year == 2016].iloc[:100,:]
+# import graph objects as "go"
+import plotly.graph_objs as go
+# creating trace1
+trace1 =go.Scatter(
+                    x = df2014.world_rank,
+                    y = df2014.citations,
+                    mode = "markers",
+                    name = "2014",
+                    marker = dict(color = 'rgba(255, 128, 255, 0.8)'),
+                    text= df2014.university_name)
+# creating trace2
+trace2 =go.Scatter(
+                    x = df2015.world_rank,
+                    y = df2015.citations,
+                    mode = "markers",
+                    name = "2015",
+                    marker = dict(color = 'rgba(255, 128, 2, 0.8)'),
+                    text= df2015.university_name)
+# creating trace3
+trace3 =go.Scatter(
+                    x = df2016.world_rank,
+                    y = df2016.citations,
+                    mode = "markers",
+                    name = "2016",
+                    marker = dict(color = 'rgba(0, 255, 200, 0.8)'),
+                    text= df2016.university_name)
+data = [trace1, trace2, trace3]
+layout = dict(title = 'Citation vs world rank of top 100 universities with 2014, 2015 and 2016 years',
+              xaxis= dict(title= 'World Rank',ticklen= 5,zeroline= False),
+              yaxis= dict(title= 'Citation',ticklen= 5,zeroline= False)
+             )
+fig = dict(data = data, layout = layout)
+iplot(fig)
 
-unique_labels = set(labels)
-colors = [plt.cm.Spectral(each)
-          for each in np.linspace(0, 1, len(unique_labels))]
-for k, col in zip(unique_labels, colors):
-    if k == -1:
-        # Black used for noise.
-        col = [0, 0, 0, 1]
 
-    class_member_mask = (labels == k)
+# <a id="4"></a> <br>
+# # Bar Charts
+# <font color='red'>
+# First Bar Charts Example: citations and teaching of top 3 universities in 2014 (style1)
+# <font color='black'>
+# * Import graph_objs as *go*
+# * Creating traces
+#     * x = x axis
+#     * y = y axis
+#     * mode = type of plot like marker, line or line + markers
+#     * name = name of the plots
+#     * marker = marker is used with dictionary. 
+#         * color = color of lines. It takes RGB (red, green, blue) and opacity (alpha)
+#         * line = It is dictionary. line between bars
+#             * color = line color around bars
+#     * text = The hover text (hover is curser)
+# * data = is a list that we add traces into it
+# * layout = it is dictionary.
+#     * barmode = bar mode of bars like grouped
+# * fig = it includes data and layout
+# * iplot() = plots the figure(fig) that is created by data and layout
 
-    xy = X[class_member_mask & core_samples_mask]
-    plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
-             markeredgecolor='k', markersize=14)
+# In[ ]:
 
-    xy = X[class_member_mask & ~core_samples_mask]
-    plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
-             markeredgecolor='k', markersize=6)
 
-plt.title('Estimated number of clusters: %d' % n_clusters_)
+# prepare data frames
+df2014 = timesData[timesData.year == 2014].iloc[:3,:]
+# import graph objects as "go"
+import plotly.graph_objs as go
+# create trace1 
+trace1 = go.Bar(
+                x = df2014.university_name,
+                y = df2014.citations,
+                name = "citations",
+                marker = dict(color = 'rgba(255, 174, 255, 0.5)',
+                             line=dict(color='rgb(0,0,0)',width=1.5)),
+                text = df2014.country)
+# create trace2 
+trace2 = go.Bar(
+                x = df2014.university_name,
+                y = df2014.teaching,
+                name = "teaching",
+                marker = dict(color = 'rgba(255, 255, 128, 0.5)',
+                              line=dict(color='rgb(0,0,0)',width=1.5)),
+                text = df2014.country)
+data = [trace1, trace2]
+layout = go.Layout(barmode = "group")
+fig = go.Figure(data = data, layout = layout)
+iplot(fig)
+
+
+# <font color='red'>
+# Second Bar Charts Example: citations and teaching of top 3 universities in 2014 (style2)
+# <br> Actually, if you change only the barmode from *group* to *relative* in previous example, you achieve what we did here. However, for diversity I use different syntaxes. 
+# <font color='black'>
+# * Import graph_objs as *go*
+# * Creating traces
+#     * x = x axis
+#     * y = y axis
+#     * name = name of the plots
+#     * type = type of plot like bar plot
+# * data = is a list that we add traces into it
+# * layout = it is dictionary.
+#     * xaxis = label of x axis
+#     * barmode = bar mode of bars like grouped( previous example) or relative
+#     * title = title of layout
+# * fig = it includes data and layout
+# * iplot() = plots the figure(fig) that is created by data and layout
+
+# In[ ]:
+
+
+# prepare data frames
+df2014 = timesData[timesData.year == 2014].iloc[:3,:]
+# import graph objects as "go"
+import plotly.graph_objs as go
+x = df2014.university_name
+
+trace1 = {
+  'x': x,
+  'y': df2014.citations,
+  'name': 'citation',
+  'type': 'bar'
+};
+trace2 = {
+  'x': x,
+  'y': df2014.teaching,
+  'name': 'teaching',
+  'type': 'bar'
+};
+data = [trace1, trace2];
+layout = {
+  'xaxis': {'title': 'Top 3 universities'},
+  'barmode': 'relative',
+  'title': 'citations and teaching of top 3 universities in 2014'
+};
+fig = go.Figure(data = data, layout = layout)
+iplot(fig)
+
+
+# <font color='red'>
+# Third Bar Charts Example: Horizontal bar charts.  (style3) Citation vs income for universities
+# <font color='black'>
+# * Import graph_objs as *go* and importing tools
+#     *  Tools: used for subplots
+# * Creating trace1 
+#     * bar: bar plot
+#         * x = x axis 
+#         * y = y axis
+#         * marker
+#             * color: color of bars
+#             * line: bar line color and width
+#         * name: name of bar
+#         * orientation: orientation like horizontal 
+#    * creating trace2
+#        * scatter: scatter plot
+#            * x = x axis 
+#             * y = y axis
+#             * mode: scatter type line line + markers or only markers
+#             * line: properties of line
+#                 * color: color of line
+#             * name: name of scatter plot
+#     * layout: axis, legend, margin, paper and plot properties
+#         * 
+
+# In[ ]:
+
+
+# import graph objects as "go" and import tools
+import plotly.graph_objs as go
+from plotly import tools
+
+# prepare data frames
+df2016 = timesData[timesData.year == 2016].iloc[:7,:]
+
+y_saving = [each for each in df2016.research]
+y_net_worth  = [float(each) for each in df2016.income]
+x_saving = [each for each in df2016.university_name]
+x_net_worth  = [each for each in df2016.university_name]
+trace0 = go.Bar(
+                x=y_saving,
+                y=x_saving,
+                marker=dict(color='rgba(171, 50, 96, 0.6)',line=dict(color='rgba(171, 50, 96, 1.0)',width=1)),
+                name='research',
+                orientation='h',
+)
+trace1 = go.Scatter(
+                x=y_net_worth,
+                y=x_net_worth,
+                mode='lines+markers',
+                line=dict(color='rgb(63, 72, 204)'),
+                name='income',
+)
+layout = dict(
+                title='Citations and income',
+                yaxis1=dict(showticklabels=True,domain=[0, 0.85]),
+                yaxis2=dict(showline=True,showticklabels=False,linecolor='rgba(102, 102, 102, 0.8)',linewidth=2,domain=[0, 0.85]),
+                xaxis1=dict(zeroline=False,showline=False,showticklabels=True,showgrid=True,domain=[0, 0.42]),
+                xaxis2=dict(zeroline=False,showline=False,showticklabels=True,showgrid=True,domain=[0.47, 1],side='top',dtick=25),
+                legend=dict(x=0.029,y=1.038,font=dict(size=10) ),
+                margin=dict(l=200, r=20,t=70,b=70),
+                paper_bgcolor='rgb(248, 248, 255)',
+                plot_bgcolor='rgb(248, 248, 255)',
+)
+annotations = []
+y_s = np.round(y_saving, decimals=2)
+y_nw = np.rint(y_net_worth)
+# Adding labels
+for ydn, yd, xd in zip(y_nw, y_s, x_saving):
+    # labeling the scatter savings
+    annotations.append(dict(xref='x2', yref='y2', y=xd, x=ydn - 4,text='{:,}'.format(ydn),font=dict(family='Arial', size=12,color='rgb(63, 72, 204)'),showarrow=False))
+    # labeling the bar net worth
+    annotations.append(dict(xref='x1', yref='y1', y=xd, x=yd + 3,text=str(yd),font=dict(family='Arial', size=12,color='rgb(171, 50, 96)'),showarrow=False))
+
+layout['annotations'] = annotations
+
+# Creating two subplots
+fig = tools.make_subplots(rows=1, cols=2, specs=[[{}, {}]], shared_xaxes=True,
+                          shared_yaxes=False, vertical_spacing=0.001)
+
+fig.append_trace(trace0, 1, 1)
+fig.append_trace(trace1, 1, 2)
+
+fig['layout'].update(layout)
+iplot(fig)
+
+
+# <a id="5"></a> <br>
+# # Pie Charts
+# <font color='red'>
+# Pie Charts Example: Horizontal bar charts.  (style3) Citation vs income for universities
+# <font color='black'>
+# * fig: create figures
+#     * data: plot type
+#         * values: values of plot
+#         * labels: labels of plot
+#         * name: name of plots
+#         * hoverinfo: information in hover
+#         * hole: hole width
+#         * type: plot type like pie
+#     * layout: layout of plot
+#         * title: title of layout
+#         * annotations: font, showarrow, text, x, y
+
+# In[ ]:
+
+
+# data preparation
+df2016 = timesData[timesData.year == 2016].iloc[:7,:]
+pie1 = df2016.num_students
+pie1_list = [float(each.replace(',', '.')) for each in df2016.num_students]
+labels = df2016.university_name
+# figure
+fig = {
+  "data": [
+    {
+      "values": pie1_list,
+      "labels": labels,
+      "domain": {"x": [0, .5]},
+      "name": "Number Of Students Rates",
+      "hoverinfo":"label+percent+name",
+      "hole": .3,
+      "type": "pie"
+    },],
+  "layout": {
+        "title":"Universities Number of Students rates",
+        "annotations": [
+            { "font": { "size": 20},
+              "showarrow": False,
+              "text": "Number of Students",
+                "x": 0.20,
+                "y": 1
+            },
+        ]
+    }
+}
+iplot(fig)
+
+
+# <a id="6"></a> <br>
+# # Bubble Charts
+# <font color='red'>
+# Bubble Charts Example: University world rank vs teaching score with number of students(size) and international score (color)
+# <font color='black'>
+# * x = x axis
+# * y = y axis
+# * mode = markers(scatter)
+# *  marker = marker properties
+#     * color = third dimension of plot. Internaltional score
+#     * size = fourth dimension of plot. Number of students
+# * text: university names
+
+# In[ ]:
+
+
+# data preparation
+df2016 = timesData[timesData.year == 2016].iloc[:20,:]
+num_students_size  = [float(each.replace(',', '.')) for each in df2016.num_students]
+international_color = df2016.international
+data = [
+    {
+        'y':  df2016.teaching,
+        'x': df2016.world_rank,
+        'mode': 'markers',
+        'marker': {
+            'color': international_color,
+            'size': num_students_size,
+            'showscale': True
+        },
+        "text" :  df2016.university_name    
+    }
+]
+iplot(data)
+
+
+# <a id="7"></a> <br>
+# # Histogram
+# <font color='red'>
+# Lets look at histogram of students-staff ratio in 2011 and 2012 years. 
+#     <font color='black'>
+# * trace1 = first histogram
+#     * x = x axis
+#     * y = y axis
+#     * opacity = opacity of histogram
+#     * name = name of legend
+#     * marker = color of histogram
+# * trace2 = second histogram
+# * layout = layout 
+#     * barmode = mode of histogram like overlay. Also you can change it with *stack*
+
+# In[ ]:
+
+
+# prepare data
+x2011 = timesData.student_staff_ratio[timesData.year == 2011]
+x2012 = timesData.student_staff_ratio[timesData.year == 2012]
+
+trace1 = go.Histogram(
+    x=x2011,
+    opacity=0.75,
+    name = "2011",
+    marker=dict(color='rgba(171, 50, 96, 0.6)'))
+trace2 = go.Histogram(
+    x=x2012,
+    opacity=0.75,
+    name = "2012",
+    marker=dict(color='rgba(12, 50, 196, 0.6)'))
+
+data = [trace1, trace2]
+layout = go.Layout(barmode='overlay',
+                   title=' students-staff ratio in 2011 and 2012',
+                   xaxis=dict(title='students-staff ratio'),
+                   yaxis=dict( title='Count'),
+)
+fig = go.Figure(data=data, layout=layout)
+
+iplot(fig)
+
+
+# <a id="8"></a> <br>
+# # Word Cloud
+# Not a pyplot but learning it is good for visualization. Lets look at which country is mentioned most in 2011.
+# * WordCloud = word cloud library that I import at the beginning of kernel
+#     * background_color = color of back ground
+#     * generate = generates the country name list(x2011) a word cloud
+
+# In[ ]:
+
+
+# data prepararion
+x2011 = timesData.country[timesData.year == 2011]
+plt.subplots(figsize=(8,8))
+wordcloud = WordCloud(
+                          background_color='white',
+                          width=512,
+                          height=384
+                         ).generate(" ".join(x2011))
+plt.imshow(wordcloud)
+plt.axis('off')
 plt.show()
 
 
-# The black markers in the above dataset is the noise/outliers in our dataset.
-# 
-# More analysis to follow soon. 
-# 
-# Thanks, upvote if you liked it :)
+# <a id="9"></a> <br>
+# # Box Plots
+# <font color='red'>
+# * Box Plots
+#     * Median (50th percentile) = middle value of the data set. Sort and take the data in the middle. It is also called 50% percentile that is 50% of data are less that median(50th quartile)(quartile)
+#         * 25th percentile = quartile 1 (Q1) that is lower quartile
+#         * 75th percentile = quartile 3 (Q3) that is higer quartile
+#         * height of box = IQR = interquartile range = Q3-Q1
+#         * Whiskers = 2 * IQR from the median
+#         * Outliers = being more than 2*IQR away from median commonly.
+#         
+#     <font color='black'>
+#     * trace = box
+#         * y = data we want to visualize with box plot 
+#         * marker = color
+
+# In[ ]:
+
+
+# data preparation
+x2015 = timesData[timesData.year == 2015]
+
+trace0 = go.Box(
+    y=x2015.total_score,
+    name = 'total score of universities in 2015',
+    marker = dict(
+        color = 'rgb(12, 12, 140)',
+    )
+)
+trace1 = go.Box(
+    y=x2015.research,
+    name = 'research of universities in 2015',
+    marker = dict(
+        color = 'rgb(12, 128, 128)',
+    )
+)
+data = [trace0, trace1]
+iplot(data)
+
+
+# <a id="10"></a> <br>
+# # Scatter Matrix Plots
+# <font color='red'>
+# Scatter Matrix = it helps us to see covariance and relation between more than 2 features
+# <font color='black'>
+# * import figure factory as ff
+# * create_scatterplotmatrix = creates scatter plot
+#     * data2015 = prepared data. It includes research, international and total scores with index from 1 to 401
+#     * colormap = color map of scatter plot
+#     * colormap_type = color type of scatter plot
+#     * height and weight
+
+# In[ ]:
+
+
+# import figure factory
+import plotly.figure_factory as ff
+# prepare data
+dataframe = timesData[timesData.year == 2015]
+data2015 = dataframe.loc[:,["research","international", "total_score"]]
+data2015["index"] = np.arange(1,len(data2015)+1)
+# scatter matrix
+fig = ff.create_scatterplotmatrix(data2015, diag='box', index='index',colormap='Portland',
+                                  colormap_type='cat',
+                                  height=700, width=700)
+iplot(fig)
+
+
+# # Conclusion
+# * If you like it, thank you for you upvotes.
+# * If you have any question, I will happy to hear it
+# ## To be continued

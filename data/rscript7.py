@@ -1,229 +1,188 @@
-"""
-Contributions from:
-DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
-https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
-JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
-https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
-hklee - weighted mean comparisons, LB 0.497, 1ST
-https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+# Based on Bojan's -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
+# Changes:
+# 1. Split category_name into sub-categories
+# 2. Parallelize LGBM to 4 cores
+# 3. Increase the number of rounds in 1st LGBM
+# 4. Another LGBM with different seed for model and training split, slightly different hyper-parametes.
+# 5. Weights on ensemble
+# 6. SGDRegressor doesn't improve the result, going with only 1 Ridge and 2 LGBM
 
-Also all comments for changes, encouragement, and forked scripts rock
-
-Keep the Surprise Going
-"""
-
-import glob, re
+import pyximport; pyximport.install()
+import gc
+import time
 import numpy as np
 import pandas as pd
-from sklearn import *
-from datetime import datetime
-#from xgboost import XGBRegressor
 
-#"START HKLEE FEATURE"
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
-for k, v in dfs.items(): locals()[k] = v
+from joblib import Parallel, delayed
 
-wkend_holidays = date_info.apply(lambda x: (x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1, axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+from scipy.sparse import csr_matrix, hstack
 
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
+from sklearn.linear_model import Ridge
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.linear_model import SGDRegressor
+import lightgbm as lgb
 
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) 
+NUM_BRANDS = 4000
+NUM_CATEGORIES = 1000
+NAME_MIN_DF = 10
+MAX_FEATURES_ITEM_DESCRIPTION = 50000
 
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), how='left')['visitors_y'].values
+def rmsle(y, y0):
+     assert len(y) == len(y0)
+     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
+    
+def split_cat(text):
+    try: return text.split("/")
+    except: return ("No Label", "No Label", "No Label")
+    
+def handle_missing_inplace(dataset):
+    dataset['general_cat'].fillna(value='missing', inplace=True)
+    dataset['subcat_1'].fillna(value='missing', inplace=True)
+    dataset['subcat_2'].fillna(value='missing', inplace=True)
+    dataset['brand_name'].fillna(value='missing', inplace=True)
+    dataset['item_description'].fillna(value='missing', inplace=True)
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), on='air_store_id', how='left')['visitors_y'].values
 
-test_visit_var = sample_submission.visitors.map(pd.np.expm1)
+def cutting(dataset):
+    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
+    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
+    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
+    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
 
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv')
+
+def to_categorical(dataset):
+    dataset['general_cat'] = dataset['general_cat'].astype('category')
+    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
+    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
+    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
+
+
+def main():
+    start_time = time.time()
+
+    train = pd.read_table('../input/train.tsv', engine='c')
+    test = pd.read_table('../input/test.tsv', engine='c')
+    print('[{}] Finished to load data'.format(time.time() - start_time))
+    print('Train shape: ', train.shape)
+    print('Test shape: ', test.shape)
+
+    nrow_train = train.shape[0]
+    y = np.log1p(train["price"])
+    merge: pd.DataFrame = pd.concat([train, test])
+    submission: pd.DataFrame = test[['test_id']]
+
+    del train
+    del test
+    gc.collect()
+    
+    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
+    zip(*merge['category_name'].apply(lambda x: split_cat(x)))
+    merge.drop('category_name', axis=1, inplace=True)
+    print('[{}] Split categories completed.'.format(time.time() - start_time))
+
+    handle_missing_inplace(merge)
+    print('[{}] Handle missing completed.'.format(time.time() - start_time))
+
+    cutting(merge)
+    print('[{}] Cut completed.'.format(time.time() - start_time))
+
+    to_categorical(merge)
+    print('[{}] Convert categorical completed'.format(time.time() - start_time))
+
+    cv = CountVectorizer(min_df=NAME_MIN_DF)
+    X_name = cv.fit_transform(merge['name'])
+    print('[{}] Count vectorize `name` completed.'.format(time.time() - start_time))
+
+    cv = CountVectorizer()
+    X_category1 = cv.fit_transform(merge['general_cat'])
+    X_category2 = cv.fit_transform(merge['subcat_1'])
+    X_category3 = cv.fit_transform(merge['subcat_2'])
+    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
+
+    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
+                         ngram_range=(1, 3),
+                         stop_words='english')
+    X_description = tv.fit_transform(merge['item_description'])
+    print('[{}] TFIDF vectorize `item_description` completed.'.format(time.time() - start_time))
+
+    lb = LabelBinarizer(sparse_output=True)
+    X_brand = lb.fit_transform(merge['brand_name'])
+    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
+
+    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
+                                          sparse=True).values)
+    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
+
+    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
+    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
+
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_train:]
+    
+    model = Ridge(alpha=.05, copy_X=True, fit_intercept=True, max_iter=100,
+      normalize=False, random_state=101, solver='auto', tol=0.001)
+    model.fit(X, y)
+    print('[{}] Train ridge completed'.format(time.time() - start_time))
+    predsR = model.predict(X=X_test)
+    print('[{}] Predict ridge completed'.format(time.time() - start_time))
+
+    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.15, random_state = 144) 
+    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
+    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
+    watchlist = [d_train, d_valid]
+    
+    params = {
+        'learning_rate': 0.5,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 60,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 1,
+        'bagging_fraction': 0.5,
+        'nthread': 4
     }
 
-data['tra'] = data['tra'].merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-data['tra'] = data['tra'].merge(visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
-
-missings = data['tra'].visitors_y.isnull()
-data['tra'].loc[missings, 'visitors_y'] = data['tra'][missings].merge(visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), how='left')['visitors_y'].values
-
-missings = data['tra'].visitors_y.isnull()
-data['tra'].loc[missings, 'visitors_y'] = data['tra'][missings].merge(visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), on='air_store_id', how='left')['visitors_y'].values
-
-train_visit_var = data['tra'].visitors_y.map(pd.np.expm1)
-#"END HKLEE FEATURE"
-
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    params2 = {
+        'learning_rate': 1,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 140,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 2,
+        'bagging_fraction': 1,
+        'nthread': 4
     }
 
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+    model = lgb.train(params, train_set=d_train, num_boost_round=8000, valid_sets=watchlist, \
+    early_stopping_rounds=250, verbose_eval=1000) 
+    predsL = model.predict(X_test)
+    
+    print('[{}] Predict lgb 1 completed.'.format(time.time() - start_time))
+    
+    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
+    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
+    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
+    watchlist2 = [d_train2, d_valid2]
 
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime']).dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime']).dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+    model = lgb.train(params2, train_set=d_train2, num_boost_round=8000, valid_sets=watchlist2, \
+    early_stopping_rounds=250, verbose_eval=1000) 
+    predsL2 = model.predict(X_test)
 
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+    print('[{}] Predict lgb 2 completed.'.format(time.time() - start_time))
 
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+    preds = predsR*0.35 + predsL*0.35 + predsL2*0.3
 
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-#OPTIMIZED BY JEROME VALLET
-tmp = data['tra'].groupby(['air_store_id','dow']).agg({'visitors' : [np.min,np.mean,np.median,np.max,np.size]}).reset_index()
-tmp.columns = ['air_store_id', 'dow', 'min_visitors', 'mean_visitors', 'median_visitors','max_visitors','count_observations']
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+    submission['price'] = np.expm1(preds)
+    submission.to_csv("submission_ridge_2xlgbm.csv", index=False)
 
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-# NEW FEATURES FROM Georgii Vyshnia
-stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
-stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
-lbl = preprocessing.LabelEncoder()
-for i in range(10):
-    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
-
-train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
-
-train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
-train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
-train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
-
-test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
-test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
-test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
-
-# NEW FEATURES FROM JMBULL
-train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-train['var_max_lat'] = train['latitude'].max() - train['latitude']
-train['var_max_long'] = train['longitude'].max() - train['longitude']
-test['var_max_lat'] = test['latitude'].max() - test['latitude']
-test['var_max_long'] = test['longitude'].max() - test['longitude']
-
-# NEW FEATURES FROM Georgii Vyshnia
-train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
-test['lon_plus_lat'] = test['longitude'] + test['latitude']
-
-lbl = preprocessing.LabelEncoder()
-train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
-test['air_store_id2'] = lbl.transform(test['air_store_id'])
-
-train['hklee_feature'] = train_visit_var 
-test['hklee_feature'] = test_visit_var
-
-col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
-
-def RMSLE(y, pred):
-    return metrics.mean_squared_error(y, pred)**0.5
-
-#Bojan Tunguz / Surprise Me 2!
-model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8, max_depth =10)
-model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
-#model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8, colsample_bytree=0.8, max_depth =10)
-
-model1.fit(train[col], np.log1p(train['visitors'].values))
-model2.fit(train[col], np.log1p(train['visitors'].values))
-#model3.fit(train[col], np.log1p(train['visitors'].values))
-print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), model1.predict(train[col])))
-print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), model2.predict(train[col])))
-#print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), model3.predict(train[col])))
-#test['visitors'] = (model1.predict(test[col]) + model2.predict(test[col]) + model3.predict(test[col])) / 3
-test['visitors'] = (model1.predict(test[col]) + model2.predict(test[col])) / 2
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
-del train; del data;
-
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
-
-for k, v in dfs.items(): locals()[k] = v
-
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
-
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
-
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
-
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
-
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
-    how='left')['visitors_y'].values
-
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
-    on='air_store_id', how='left')['visitors_y'].values
-
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
-
-sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y']* 1.1)/2
-sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
+if __name__ == '__main__':
+    main()

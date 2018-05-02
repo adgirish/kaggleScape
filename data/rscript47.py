@@ -1,45 +1,39 @@
-# -*- coding: utf-8 -*-
-"""
-@author: Giba1
-"""
-import numpy as np
-import pandas as pd
-import cv2
-import matplotlib.pyplot as plt
-import sys
-from skimage import io, transform
-import matplotlib.animation as animation
+# full leak can be extracted with 10 GB memory
+# but you can extract a subset of leak if you have less memory
+# pypy leak.py takes 30 mins
 
-train = pd.read_csv( '../input/driver_imgs_list.csv' )
-train['id'] = range( train.shape[0] )
-fig = plt.figure()
-subj = np.unique( train['subject'])[0]
+import csv
+import os
 
-for subj in np.unique( train['subject'])[:2]:
+memory = 10 # stands for 10GB, write your memory here
+limit = 114434838 / 10 * memory 
 
-    imagem = train[ train['subject']==subj ]
-    
-    imgs = []
-    t = imagem.values[0]
-    for t in imagem.values:
-        img = cv2.imread('../input/train/'+t[1]+'/'+t[2],3)
-        img = cv2.resize(img, (160, 120))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        imgs.append( img )
-        
-    ax = fig.add_subplot(111)
-    ax.set_axis_off()
-    fig.subplots_adjust(left=0, bottom=0, right=1, top=1,wspace=None, hspace=None)  # removes white border
-    fname = 'MOVIE_subject_'+subj+'.gif'
-    imgs = [ (ax.imshow(img), 
-              ax.set_title(t[0]), 
-              ax.annotate(n_img,(5,5))) for n_img, img in enumerate(imgs) ] 
-    img_anim = animation.ArtistAnimation(fig, imgs, interval=125, 
-                                repeat_delay=1000, blit=False)
-    print('Writing:', fname)
-    img_anim.save(fname, writer='imagemagick', dpi=20)
-    fig.clf()
-print ('Now relax and watch some movies!!!')
-
-
-# Any results you write to the current directory are saved as output.
+leak = {}
+for c,row in enumerate(csv.DictReader(open('../input/promoted_content.csv'))):
+    if row['document_id'] != '':
+        leak[row['document_id']] = 1 
+print(len(leak))
+count = 0
+filename = '../input/page_views.csv'
+filename = '../input/page_views_sample.csv' # comment this out locally
+for c,row in enumerate(csv.DictReader(open(filename))):
+    if count>limit:
+	    break
+    if c%1000000 == 0:
+        print (c,count)
+    if row['document_id'] not in leak:
+	    continue
+    if leak[row['document_id']]==1:
+	    leak[row['document_id']] = set()
+    lu = len(leak[row['document_id']])
+    leak[row['document_id']].add(row['uuid'])
+    if lu!=len(leak[row['document_id']]):
+	    count+=1
+fo = open('leak.csv','w')
+fo.write('document_id,uuid\n')
+for i in leak:
+    if leak[i]!=1:
+	    tmp = list(leak[i])
+	    fo.write('%s,%s\n'%(i,' '.join(tmp)))
+	    del tmp
+fo.close()	

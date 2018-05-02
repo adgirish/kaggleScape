@@ -1,115 +1,97 @@
 
 # coding: utf-8
 
-# Load the required libraries and data. 
+# **Introduction**
+# This kernel is a simple playing around with the quora datasets
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-from sklearn import model_selection, preprocessing
-import xgboost as xgb
-import datetime
-#now = datetime.datetime.now()
+# This Python 3 environment comes with many helpful analytics libraries installed
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-macro = pd.read_csv('../input/macro.csv')
-id_test = test.id
-train.sample(3)
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+import matplotlib.pyplot as plt
+
+import seaborn as sns
+
+color = sns.color_palette()
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+pd.options.mode.chained_assignment = None  # default='warn'
+
+# Input data files are available in the "../input/" directory.
+
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+
+#print(check_output(["ls", "../input"]).decode("utf8"))
+
+train_df = pd.read_csv("../input/train.csv")
+
+test_df = pd.read_csv("../input/test.csv")
+
+print(train_df.shape)
+
+print(test_df.shape)
+
 # Any results you write to the current directory are saved as output.
 
 
-# In[ ]:
-
-
-#It seems that this doen't improve anything. 
-
-#train["timestamp"] = pd.to_datetime(train["timestamp"])
-#train["year"], train["month"], train["day"] = train["timestamp"].dt.year,train["timestamp"].dt.month,train["timestamp"].dt.day
-
-#test["timestamp"] = pd.to_datetime(test["timestamp"])
-#test["year"], test["month"], test["day"] = test["timestamp"].dt.year,test["timestamp"].dt.month,test["timestamp"].dt.day
-
+# let's view the top 5 lines of train_df
 
 # In[ ]:
 
 
+train_df.head()
 
-y_train = train["price_doc"]
-x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
-x_test = test.drop(["id", "timestamp"], axis=1)
 
-#can't merge train with test because the kernel run for very long time
-
-for c in x_train.columns:
-    if x_train[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_train[c].values)) 
-        x_train[c] = lbl.transform(list(x_train[c].values))
-        #x_train.drop(c,axis=1,inplace=True)
-        
-for c in x_test.columns:
-    if x_test[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_test[c].values)) 
-        x_test[c] = lbl.transform(list(x_test[c].values))
-        #x_test.drop(c,axis=1,inplace=True)        
-
+# Now let's view the top few lines of test_df
 
 # In[ ]:
 
 
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 5,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
+test_df.head()
 
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
 
+# **Target Variable Exploration**
 
 # In[ ]:
 
 
-cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20,
-    verbose_eval=50, show_stdv=False)
-cv_output[['train-rmse-mean', 'test-rmse-mean']].plot()
+is_dup = train_df['is_duplicate'].value_counts()
+
+plt.figure(figsize=(8,4))
+
+sns.barplot(is_dup.index, is_dup.values, alpha=0.8, color=color[1])
+
+plt.ylabel('Number of Occurrences', fontsize=12)
+
+plt.xlabel('Is Duplicate', fontsize=12)
+
+plt.show()
 
 
-# In[ ]:
-
-
-num_boost_rounds = len(cv_output)
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round= num_boost_rounds)
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(1, 1, figsize=(8, 13))
-xgb.plot_importance(model, max_num_features=50, height=0.5, ax=ax)
-
+# Let's check the number of non duplicates vs the number of duplicates
 
 # In[ ]:
 
 
-y_predict = model.predict(dtest)
-output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
-output.head()
+is_dup
 
+
+# In percentage:
 
 # In[ ]:
 
 
-output.to_csv('xgbSub.csv', index=False)
+is_dup / is_dup.sum()
 

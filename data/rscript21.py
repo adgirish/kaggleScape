@@ -1,78 +1,67 @@
-import sqlite3
-import pandas as pd
-import matplotlib.pyplot as plt
+import os
+import logging
 
-# This script identifies which communication styles receive highest ranks
-# For illustration purposes I defined 3 styles such as Passive, Assertive and Aggressive
-# The list of key words must of course be extended
+import h5py
+import numpy as np
+from skimage.io import imread
 
-sql_conn = sqlite3.connect('../input/database.sqlite')
+logging.getLogger('tensorflow').setLevel(logging.WARNING)
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    datefmt='%H:%M:%S', )
+logger = logging.getLogger(__name__)
 
-df = pd.read_sql("SELECT score, body FROM May2015 WHERE LENGTH(body) > 5 AND LENGTH(body) < 100 LIMIT 10000", sql_conn)
-    
-keywords = pd.DataFrame({'Passive': pd.Series(['if you have the time','hmm','well','that was my fault','not sure']),
-                         'Assertive': pd.Series(['good idea','great idea','thanks for','good to know','really like', 'too','sorry for']),
-                         'Aggressive': pd.Series(['I shot','fuck','fucking','ass','idiot'])})
+MAIN_DIR = '/home/arseny/kaggle_data/'
 
-content_summary = pd.DataFrame()
-for col in keywords:
-    content = df[df.body.apply(lambda x: any(keyword in x.split() for keyword in keywords[col]))]
-    content_summary[col] = content.describe().score
+TRAIN_DIR = MAIN_DIR + 'train/'
+TEST_DIR = MAIN_DIR + 'test/'
+MASK_DIR = MAIN_DIR + 'train_masks/'
 
-keys = content_summary.keys()
 
-content_summary = content_summary.transpose()
+class Dataset:
+    def __init__(self, batch_size=64):
+        self.batch_size = batch_size
 
-# Setting the positions and width for the bars
-pos = list(range(len(content_summary['count'])))
-width = 0.25
+    @staticmethod
+    def read_img(fname):
+        return (imread(fname) / 255).astype(np.float16)
 
-# Plotting the bars
-fig, ax = plt.subplots(figsize=(10,5))
+    def cache_train(self):
+        logger.info('Creating cache file for train')
+        file = h5py.File('train.h5', 'w')
+        train_files = os.listdir(TRAIN_DIR)
+        x_data = file.create_dataset('x_data', shape=(len(train_files), 1280, 1918, 3), dtype=np.float16)
+        mask = imread(os.path.join(MASK_DIR, fn.replace('.jpg', '_mask.gif'))) / 255
+        y_data[i, :, :, :] = mask.reshape(1280, 1918, 1)
 
-clrs = []
-for v in content_summary['mean'].values:
-    if v < 2:
-        clrs.append('#FFC1C1')
-    elif v < 5:
-        clrs.append('#F08080')
-    elif v < 10:
-        clrs.append('#EE6363')
-    else:
-        clrs.append('r')
+        names = file.create_dataset('names', shape=(len(train_files),), dtype=h5py.special_dtype(vlen=str))
 
-plt.bar(pos,
-        content_summary['count'],
-        width,
-        alpha=0.5,
-        # with color
-        color=clrs,
-        label=keys)
+        logger.info(f'There are {len(train_files)} files in train')
+        for i, fn in enumerate(os.listdir(TRAIN_DIR)):
+            img = self.read_img(os.path.join(TRAIN_DIR, fn))
+            x_data[i, :, :, :] = img
+            y_data[i, :, :, :] = imread(os.path.join(MASK_DIR, fn.replace('.jpg', '_mask.gif'))).reshape(1280, 1918, 1)
+            names[i] = fn
+        file.close()
 
-# Set the y axis label
-ax.set_ylabel('Number of comments')
+    def cache_test(self):
+        logger.info('Creating cache file for test')
+        file = h5py.File('test.h5', 'w')
+        test_files = os.listdir(TEST_DIR)
+        x_data = file.create_dataset('x_data', shape=(len(test_files), 1280, 1918, 3), dtype=np.float16)
+        names = file.create_dataset('names', shape=(len(test_files),), dtype=h5py.special_dtype(vlen=str))
 
-# Set the chart's title
-ax.set_title('Which communication style receives highest ranks?')
+        logger.info(f'There are {len(test_files)} files in test')
+        for i, fn in enumerate(os.listdir(TRAIN_DIR)):
+            img = self.read_img(os.path.join(TRAIN_DIR, fn))
+            x_data[i, :, :, :] = img
+            names[i] = fn
+        file.close()
 
-# Set the position of the x ticks
-ax.set_xticks([p + 0.5 * width for p in pos])
+    def cache(self):
+        self.cache_train()
+        self.cache_test()
 
-# Set the labels for the x ticks
-ax.set_xticklabels(keys)
 
-# Setting the x-axis and y-axis limits
-plt.xlim(min(pos)-width, max(pos)+width*4)
-plt.ylim([0, max(content_summary['count'])+20])
-
-rects = ax.patches
-
-# Now make some labels
-for ii,rect in enumerate(rects):
-        height = rect.get_height()
-        plt.text(rect.get_x()+rect.get_width()/2., 1.02*height, '%s'% ("Score {0:.2f}".format(content_summary['mean'][ii])),
-                 ha='center', va='bottom')
-
-plt.grid()
-
-plt.savefig("CommunicationStyles.png")
+if __name__ == '__main__':
+    Dataset().cache()

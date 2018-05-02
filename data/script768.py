@@ -1,929 +1,467 @@
 
 # coding: utf-8
 
-# # Approaching (Almost) Any NLP Problem on Kaggle
+# # Mercari Price Suggestion Challenge
 # 
-# In this post I'll talk about approaching natural language processing problems on Kaggle. As an example, we will use the data from this competition. We will create a very basic first model first and then improve it using different other features. We will also see how deep neural networks can be used and end this post with some ideas about ensembling in general.
+# This is first of its kind and kernel only competition, and stage2 files will not be downloaded and will be available only in kernels. In this notebook, I am doing basic data exploration and reporting my findings. I will be making a simple model at the end to just as to make it complete. Val loss will be reported at the end of this notebook.
 # 
-# ### This covers:
-# - tfidf 
-# - count features
-# - logistic regression
-# - naive bayes
-# - svm
-# - xgboost
-# - grid search
-# - word vectors
-# - LSTM
-# - GRU
-# - Ensembling
+# **NOTE - If you find this kernel useful, please upvote, and if you have any suggestion or if anything is not clear please comment, I will try to explain my work**
 # 
-# *NOTE*: This notebook is not meant for achieving a very high score on the Leaderboard for this dataset. However, if you follow it properly, you can get a very high score with some tuning. ;)
+# In this notebook we will extract many features and make a simple model which runs faster than **Bojan** :P I will be extracting following features - 
+# - **Yes/No features ** - if description present, if brand name present
+# - ** Category and brand encoding** - category has three levels and we will be seperating each level and then provide encoding for all three levels.
+# - ** SVD comp on if-idf calculated over item description** - *self explanatory*
+# - **SVD comp on if-itf calculated over product name** - *self explanatory*
+# - **item_condition_id** - use it without processing
+# - **shipping** - use it without processing
 # 
-# So, without wasting any time, let's start with importing some important python modules that I'll be using.
+# *Only very few features in first round of feature extraction*
+# 
+# *** We will train a XGB model to check how the extracted features are performing***
+# 
+# **PS_1:  These features are working very well, please change n_comp in SVD and change the number of iterations in XGB from 80 to 1000, you will get very high accuracies.**
+# 
+# **PS_2: I am learning markov models for predicting probability of author given sentence ( with history of last 3 words), I have taken a part of code from internet and I have written a probability function, but that function is faulty and I am having difficulty fixing it. If you know markov models, please contact or have a look at [notebook](https://www.kaggle.com/maheshdadhich/creative-feature-engineering-lb-0-35) **
+# 
+# 
+# 
+# 
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
+import pandas as pd  #pandas for using dataframe and reading csv 
+import numpy as np   #numpy for vector operations and basic maths 
+import urllib        #for url stuff
+import re            #for processing regular expressions
+import datetime      #for datetime operations
+import calendar      #for calendar for datetime operations
+import time          #to get the system time
+import scipy         #for other dependancies
+from sklearn.cluster import KMeans # for doing K-means clustering
+from haversine import haversine # for calculating haversine distance
+import math          #for basic maths operations
+import seaborn as sns #for making plots
+import matplotlib.pyplot as plt # for plotting
+import os                # for os commands
+import nltk
+from nltk.corpus import stopwords
+import string
 import xgboost as xgb
-from tqdm import tqdm
-from sklearn.svm import SVC
-from keras.models import Sequential
-from keras.layers.recurrent import LSTM, GRU
-from keras.layers.core import Dense, Activation, Dropout
-from keras.layers.embeddings import Embedding
-from keras.layers.normalization import BatchNormalization
-from keras.utils import np_utils
-from sklearn import preprocessing, decomposition, model_selection, metrics, pipeline
-from sklearn.model_selection import GridSearchCV
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import TruncatedSVD
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import MultinomialNB
-from keras.layers import GlobalMaxPooling1D, Conv1D, MaxPooling1D, Flatten, Bidirectional, SpatialDropout1D
-from keras.preprocessing import sequence, text
-from keras.callbacks import EarlyStopping
-from nltk import word_tokenize
-from nltk.corpus import stopwords
-stop_words = stopwords.words('english')
+from sklearn import ensemble, metrics, model_selection, naive_bayes
 
 
-# Let's load the datasets
+# ## Reading in the files..
 
 # In[ ]:
 
 
-train = pd.read_csv('train.csv')
-test = pd.read_csv('test.csv')
-sample = pd.read_csv('sample_submission.csv')
-
-
-# A quick look at the data
-
-# In[ ]:
-
-
-train.head()
+train_df = pd.read_csv('../input/train.tsv', sep='\t')
+train_df.head(10)
 
 
 # In[ ]:
 
 
-test.head()
+# checking test file.. 
+test_df = pd.read_csv('../input/test.tsv', sep='\t')
+test_df.head()
+# its clear that we are supposed to predict the price, given other variables.
 
 
 # In[ ]:
 
 
-sample.head()
+# Lets check the basic price histogram and see if what is the range of prices 
+get_ipython().run_line_magic('matplotlib', 'inline')
+start = time.time()
+sns.set(style="white", palette="muted", color_codes=True)
+f, axes = plt.subplots(1, 1, figsize=(11, 7), sharex=True)
+sns.despine(left=True)
+sns.distplot(np.log(train_df['price'].values+1), axlabel = 'Log(price)', label = 'log(trip_duration)', bins = 50, color="y")
+plt.setp(axes, yticks=[])
+plt.tight_layout()
+end = time.time()
+print("Time taken by above cell is {}.".format((end-start)))
+plt.show()
 
 
-# The problem requires us to predict the author, i.e. EAP, HPL and MWS given the text. In simpler words, text classification with 3 different classes.
+# ** Findings ** - This is the plot of log(price), I expected that the prices variation will be there a lot, so I checked the log(price) histogram instead of normal histogram. Its clear from above plot that most of the products have price greater than 1 dollars , and highest number of products have prices between \$ 100  to \$ 1000. 
+
+# In[ ]:
+
+
+# Lets check if shipping has any impact on prices 
+start = time.time()
+fig, ax = plt.subplots(figsize=(11, 7), nrows=2, sharex=True, sharey=True)
+sns.distplot(np.log(train_df.loc[train_df['shipping']==1]['price'].values+1), ax=ax[0], color='blue', label='shipping')
+sns.distplot(np.log(train_df.loc[train_df['shipping']==0]['price'].values+1), ax=ax[1], color='green', label='No shipping')
+ax[0].legend(loc=0)
+ax[1].legend(loc=0)
+plt.show()
+end = time.time()
+print("Time taken by above cell is {}.".format((end-start)))
+
+
+# **findings** - Its clear that the No shipping has slightly narrow distribution of prices and starting from 100 dollors while shipping products are starting from 10 dollars 
+
+# In[ ]:
+
+
+# Lets check the basic price histogram and see if what is the range of prices 
+get_ipython().run_line_magic('matplotlib', 'inline')
+start = time.time()
+sns.set(style="white", palette="muted", color_codes=True)
+f, axes = plt.subplots(1, 1, figsize=(11, 7), sharex=True)
+sns.despine(left=True)
+sns.distplot(train_df['item_condition_id'], axlabel = 'item_condition_id', label = 'item_condition_id', bins = 12, color="g", kde = False)
+plt.setp(axes, yticks=[])
+plt.tight_layout()
+end = time.time()
+print("Time taken by above cell is {}.".format((end-start)))
+plt.show()
+
+
+# # Basic feature engineering 
+# Lets start with features that we have mentioned in introduction in FE round 1, we will add other features but first check how these features are performing in for prediction. For finding category label, we need to first devide item category into three categories, primary, secondary and tirtiary ( I have named them _1/_2/_3 here). After that we will make a dictionary and give labels to different category and make cat labels features.
 # 
-# For this particular problem, Kaggle has specified multi-class log-loss as evaluation metric. This is implemented in the follow way (taken from: https://github.com/dnouri/nolearn/blob/master/nolearn/lasagne/util.py)
+# - **1. Category label features - **
 
 # In[ ]:
 
 
-def multiclass_logloss(actual, predicted, eps=1e-15):
-    """Multi class version of Logarithmic Loss metric.
-    :param actual: Array containing the actual target classes
-    :param predicted: Matrix with class predictions, one probability per class
-    """
-    # Convert 'actual' to a binary array if it's not already:
-    if len(actual.shape) == 1:
-        actual2 = np.zeros((actual.shape[0], predicted.shape[1]))
-        for i, val in enumerate(actual):
-            actual2[i, val] = 1
-        actual = actual2
-
-    clip = np.clip(predicted, eps, 1 - eps)
-    rows = actual.shape[0]
-    vsota = np.sum(actual * np.log(clip))
-    return -1.0 / rows * vsota
+# 1. Extract 3 category related features 
+def cat_split(row):
+    try:
+        text = row
+        txt1, txt2, txt3 = text.split('/')
+        return txt1, txt2, txt3
+    except:
+        return np.nan, np.nan, np.nan
 
 
-# We use the LabelEncoder from scikit-learn to convert text labels to integers, 0, 1 2
-
-# In[ ]:
-
-
-lbl_enc = preprocessing.LabelEncoder()
-y = lbl_enc.fit_transform(train.author.values)
-
-
-# Before going further it is important that we split the data into training and validation sets. We can do it using `train_test_split` from the `model_selection` module of scikit-learn.
-
-# In[ ]:
-
-
-xtrain, xvalid, ytrain, yvalid = train_test_split(train.text.values, y, 
-                                                  stratify=y, 
-                                                  random_state=42, 
-                                                  test_size=0.1, shuffle=True)
+train_df["cat_1"], train_df["cat_2"], train_df["cat_3"] = zip(*train_df.category_name.apply(lambda val: cat_split(val)))
+test_df["cat_1"], test_df["cat_2"], test_df["cat_3"] = zip(*test_df.category_name.apply(lambda val: cat_split(val)))
+train_df.head()
 
 
 # In[ ]:
 
 
-print (xtrain.shape)
-print (xvalid.shape)
-
-
-# ## Building Basic Models
-# 
-# Let's start building our very first model. 
-# 
-# Our very first model is a simple TF-IDF (Term Frequency - Inverse Document Frequency) followed by a simple Logistic Regression.
-
-# In[ ]:
-
-
-# Always start with these features. They work (almost) everytime!
-tfv = TfidfVectorizer(min_df=3,  max_features=None, 
-            strip_accents='unicode', analyzer='word',token_pattern=r'\w{1,}',
-            ngram_range=(1, 3), use_idf=1,smooth_idf=1,sublinear_tf=1,
-            stop_words = 'english')
-
-# Fitting TF-IDF to both training and test sets (semi-supervised learning)
-tfv.fit(list(xtrain) + list(xvalid))
-xtrain_tfv =  tfv.transform(xtrain) 
-xvalid_tfv = tfv.transform(xvalid)
+test_df.head()
 
 
 # In[ ]:
 
 
-# Fitting a simple Logistic Regression on TFIDF
-clf = LogisticRegression(C=1.0)
-clf.fit(xtrain_tfv, ytrain)
-predictions = clf.predict_proba(xvalid_tfv)
+# making dictionaries for different categories 
+keys = train_df.cat_1.unique().tolist() + test_df.cat_1.unique().tolist()
+keys = list(set(keys))
+values = list(range(keys.__len__()))
+cat1_dict = dict(zip(keys, values))
 
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
+keys2 = train_df.cat_2.unique().tolist() + test_df.cat_2.unique().tolist()
+keys2 = list(set(keys2))
+values2 = list(range(keys2.__len__()))
+cat2_dict = dict(zip(keys2, values2))
 
-
-# And there we go. We have our first model with a multiclass logloss of 0.626.
-# 
-# But we are greedy and want a better score. Lets look at the same model with a different data.
-# 
-# Instead of using TF-IDF, we can also use word counts as features. This can be done easily using CountVectorizer from scikit-learn.
-
-# In[ ]:
-
-
-ctv = CountVectorizer(analyzer='word',token_pattern=r'\w{1,}',
-            ngram_range=(1, 3), stop_words = 'english')
-
-# Fitting Count Vectorizer to both training and test sets (semi-supervised learning)
-ctv.fit(list(xtrain) + list(xvalid))
-xtrain_ctv =  ctv.transform(xtrain) 
-xvalid_ctv = ctv.transform(xvalid)
+keys3 = train_df.cat_3.unique().tolist() + test_df.cat_3.unique().tolist()
+keys3 = list(set(keys3))
+values3 = list(range(keys3.__len__()))
+cat3_dict = dict(zip(keys3, values3))
 
 
 # In[ ]:
 
 
-# Fitting a simple Logistic Regression on Counts
-clf = LogisticRegression(C=1.0)
-clf.fit(xtrain_ctv, ytrain)
-predictions = clf.predict_proba(xvalid_ctv)
+# function to assign category label
+def cat_lab(row,cat1_dict = cat1_dict, cat2_dict = cat2_dict, cat3_dict = cat3_dict):
+    """function to give cat label for cat1/2/3"""
+    txt1 = row['cat_1']
+    txt2 = row['cat_2']
+    txt3 = row['cat_3']
+    return cat1_dict[txt1], cat2_dict[txt2], cat3_dict[txt3]
 
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# Aaaaanddddddd Wallah! We just improved our first model by 0.1!!!
-# 
-# Next, let's try a very simple model which was quite famous in ancient times - Naive Bayes.
-# 
-# Let's see what happens when we use naive bayes on these two datasets:
-
-# In[ ]:
+train_df["cat_1_label"], train_df["cat_2_label"], train_df["cat_3_lable"] = zip(*train_df.apply(lambda val: cat_lab(val), axis =1))
+test_df["cat_1_label"], test_df["cat_2_label"], test_df["cat_3_lable"] = zip(*test_df.apply(lambda val: cat_lab(val), axis =1))
+train_df.head(10)
 
 
-# Fitting a simple Naive Bayes on TFIDF
-clf = MultinomialNB()
-clf.fit(xtrain_tfv, ytrain)
-predictions = clf.predict_proba(xvalid_tfv)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# Good performance! But the logistic regression on counts is still better! What happens when we use this model on counts data instead?
+# ** 2. if category present -yes/no features -**
 
 # In[ ]:
 
 
-# Fitting a simple Naive Bayes on Counts
-clf = MultinomialNB()
-clf.fit(xtrain_ctv, ytrain)
-predictions = clf.predict_proba(xvalid_ctv)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# Whoa! Seems like old stuff still works good!!!! One more ancient algorithms in the list is SVMs. Some people "love" SVMs. So, we must try SVM on this dataset.
-# 
-# Since SVMs take a lot of time, we will reduce the number of features from the TF-IDF using Singular Value Decomposition before applying SVM. 
-# 
-# Also, note that before applying SVMs, we *must* standardize the data.
-
-# In[ ]:
-
-
-# Apply SVD, I chose 120 components. 120-200 components are good enough for SVM model.
-svd = decomposition.TruncatedSVD(n_components=120)
-svd.fit(xtrain_tfv)
-xtrain_svd = svd.transform(xtrain_tfv)
-xvalid_svd = svd.transform(xvalid_tfv)
-
-# Scale the data obtained from SVD. Renaming variable to reuse without scaling.
-scl = preprocessing.StandardScaler()
-scl.fit(xtrain_svd)
-xtrain_svd_scl = scl.transform(xtrain_svd)
-xvalid_svd_scl = scl.transform(xvalid_svd)
-
-
-# Now it's time to apply SVM. After running the following cell, feel free to go for a walk or talk to your girlfriend/boyfriend. :P
-
-# In[ ]:
-
-
-# Fitting a simple SVM
-clf = SVC(C=1.0, probability=True) # since we need probabilities
-clf.fit(xtrain_svd_scl, ytrain)
-predictions = clf.predict_proba(xvalid_svd_scl)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# Oops! time to get up! Looks like SVM doesn't perform well on this data...! 
-# 
-# Before moving further, lets apply the most popular algorithm on Kaggle: xgboost!
-
-# In[ ]:
-
-
-# Fitting a simple xgboost on tf-idf
-clf = xgb.XGBClassifier(max_depth=7, n_estimators=200, colsample_bytree=0.8, 
-                        subsample=0.8, nthread=10, learning_rate=0.1)
-clf.fit(xtrain_tfv.tocsc(), ytrain)
-predictions = clf.predict_proba(xvalid_tfv.tocsc())
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# In[ ]:
-
-
-# Fitting a simple xgboost on tf-idf
-clf = xgb.XGBClassifier(max_depth=7, n_estimators=200, colsample_bytree=0.8, 
-                        subsample=0.8, nthread=10, learning_rate=0.1)
-clf.fit(xtrain_ctv.tocsc(), ytrain)
-predictions = clf.predict_proba(xvalid_ctv.tocsc())
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# In[ ]:
-
-
-# Fitting a simple xgboost on tf-idf svd features
-clf = xgb.XGBClassifier(max_depth=7, n_estimators=200, colsample_bytree=0.8, 
-                        subsample=0.8, nthread=10, learning_rate=0.1)
-clf.fit(xtrain_svd, ytrain)
-predictions = clf.predict_proba(xvalid_svd)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# In[ ]:
-
-
-# Fitting a simple xgboost on tf-idf svd features
-clf = xgb.XGBClassifier(nthread=10)
-clf.fit(xtrain_svd, ytrain)
-predictions = clf.predict_proba(xvalid_svd)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# Seems like no luck with XGBoost! But that is not correct. I haven't done any hyperparameter optimizations yet. And since I'm lazy, I'll just tell you how to do it and you can do it on your own! ;). This will be discussed in the next section:
-# 
-# 
-# ## Grid Search
-# 
-# Its a technique for hyperparameter optimization. Not so effective but can give good results if you know the grid you want to use. I specify the parameters that should usually be used in this post: http://blog.kaggle.com/2016/07/21/approaching-almost-any-machine-learning-problem-abhishek-thakur/ Please keep in mind that these are the parameters I usually use. There are many other methods of hyperparameter optimization which may or may not be as effective.
-# 
-# In this section, I'll talk about grid search using logistic regression. 
-# 
-# Before starting with grid search we need to create a scoring function. This is accomplished using the `make_scorer` function of scikit-learn.
-# 
-
-# In[ ]:
-
-
-mll_scorer = metrics.make_scorer(multiclass_logloss, greater_is_better=False, needs_proba=True)
-
-
-# Next we need a pipeline. For demonstration here, i'll be using a pipeline consisting of SVD, scaling and then logistic regression. Its better to understand with more modules in pipeline than just one ;)
-
-# In[ ]:
-
-
-# Initialize SVD
-svd = TruncatedSVD()
+def if_catname(row):
+    """function to give if brand name is there or not"""
+    if row == row:
+        return 1
+    else:
+        return 0
     
-# Initialize the standard scaler 
-scl = preprocessing.StandardScaler()
-
-# We will use logistic regression here..
-lr_model = LogisticRegression()
-
-# Create the pipeline 
-clf = pipeline.Pipeline([('svd', svd),
-                         ('scl', scl),
-                         ('lr', lr_model)])
+train_df['if_cat'] = train_df.category_name.apply(lambda row : if_catname(row))
+test_df['if_cat'] = test_df.category_name.apply(lambda row : if_catname(row))
+train_df.head()
 
 
-# Next we need a grid of parameters:
+# **3. If brand name is present - yes/no features -**
 
 # In[ ]:
 
 
-param_grid = {'svd__n_components' : [120, 180],
-              'lr__C': [0.1, 1.0, 10], 
-              'lr__penalty': ['l1', 'l2']}
+# brand name related features 
+def if_brand(row):
+    """function to give if brand name is there or not"""
+    if row == row:
+        return 1
+    else:
+        return 0
+    
+train_df['if_brand'] = train_df.brand_name.apply(lambda row : if_brand(row))
+test_df['if_brand'] = test_df.brand_name.apply(lambda row : if_brand(row))
+train_df.head()
 
 
-# So, for SVD we evaluate 120 and 180 components and for logistic regression we evaluate three different values of C with l1 and l2 penalty. We can now start grid search on these parameters.
-
-# In[ ]:
-
-
-# Initialize Grid Search Model
-model = GridSearchCV(estimator=clf, param_grid=param_grid, scoring=mll_scorer,
-                                 verbose=10, n_jobs=-1, iid=True, refit=True, cv=2)
-
-# Fit Grid Search Model
-model.fit(xtrain_tfv, ytrain)  # we can use the full data here but im only using xtrain
-print("Best score: %0.3f" % model.best_score_)
-print("Best parameters set:")
-best_parameters = model.best_estimator_.get_params()
-for param_name in sorted(param_grid.keys()):
-    print("\t%s: %r" % (param_name, best_parameters[param_name]))
-
-
-# The score comes similar to what we had for SVM. This technique can be used to finetune xgboost or even multinomial naive bayes as below. We will use the tfidf data here:
+# ** 4. Brand name label features -** 
 
 # In[ ]:
 
 
-nb_model = MultinomialNB()
+# makinfg brand name dict features 
+keys = train_df.brand_name.dropna().unique()
+values = list(range(keys.__len__()))
+brand_dict = dict(zip(keys, values))
 
-# Create the pipeline 
-clf = pipeline.Pipeline([('nb', nb_model)])
+def brand_label(row):
+    """function to assign brand label"""
+    try:
+        return brand_dict[row]
+    except:
+        return np.nan
 
-# parameter grid
-param_grid = {'nb__alpha': [0.001, 0.01, 0.1, 1, 10, 100]}
-
-# Initialize Grid Search Model
-model = GridSearchCV(estimator=clf, param_grid=param_grid, scoring=mll_scorer,
-                                 verbose=10, n_jobs=-1, iid=True, refit=True, cv=2)
-
-# Fit Grid Search Model
-model.fit(xtrain_tfv, ytrain)  # we can use the full data here but im only using xtrain. 
-print("Best score: %0.3f" % model.best_score_)
-print("Best parameters set:")
-best_parameters = model.best_estimator_.get_params()
-for param_name in sorted(param_grid.keys()):
-    print("\t%s: %r" % (param_name, best_parameters[param_name]))
+train_df['brand_label'] = train_df.brand_name.apply(lambda row: brand_label(row))
+test_df['brand_label'] = test_df.brand_name.apply(lambda row: brand_label(row))
+train_df.head()
 
 
-# This is an improvement of 8% over the original naive bayes score!
+# ** 5. if item_description present - yes/no feature -**
+
+# In[ ]:
+
+
+# item description related features 
+print("Description of item is not present in {}".format(train_df.loc[train_df.item_description == 'No description yet'].shape[0]))
+print("while the shape of train_df is {}".format(train_df.shape[0]))
+
+def if_description(row):
+    """function to say if description is present or not"""
+    if row == 'No description yet':
+        a = 0
+    else:
+        a = 1
+    return a
+
+train_df['is_description'] = train_df.item_description.apply(lambda row : if_description(row))
+test_df['is_description'] = test_df.item_description.apply(lambda row : if_description(row))
+train_df.head()
+
+
+# In[ ]:
+
+
+# Nulls in item description in train or test as tf-idf is not defined on nan
+print(train_df.item_description.isnull().sum())
+print(test_df.item_description.isnull().sum())
+# lets drop these 4 items 
+print(train_df.shape[0])
+train_df = train_df.loc[train_df.item_description == train_df.item_description]
+test_df = test_df.loc[test_df.item_description == test_df.item_description]
+train_df = train_df.loc[train_df.name == train_df.name]
+test_df = test_df.loc[test_df.name == test_df.name]
+print(train_df.shape[0])
+print("Dropped records where item description was nan")
+
+
+# ** 6. SVD on tf-idf on unigrams for iten_description -**
+
+# In[ ]:
+
+
+# description related tf-idf features 
+# I guess "No dscription present won't affact these features ... So, I am not removing them.
+import time
+start = time.time()
+tfidf_vec = TfidfVectorizer(stop_words='english', ngram_range=(1,1))
+full_tfidf = tfidf_vec.fit_transform(train_df['item_description'].values.tolist() + test_df['item_description'].values.tolist())
+train_tfidf = tfidf_vec.transform(train_df['item_description'].values.tolist())
+test_tfidf = tfidf_vec.transform(test_df['item_description'].values.tolist())
+
+n_comp = 40
+svd_obj = TruncatedSVD(n_components=n_comp, algorithm='arpack')
+svd_obj.fit(full_tfidf)
+train_svd = pd.DataFrame(svd_obj.transform(train_tfidf))
+test_svd = pd.DataFrame(svd_obj.transform(test_tfidf))
+    
+train_svd.columns = ['svd_item_'+str(i) for i in range(n_comp)]
+test_svd.columns = ['svd_item_'+str(i) for i in range(n_comp)]
+train_df = pd.concat([train_df, train_svd], axis=1)
+test_df = pd.concat([test_df, test_svd], axis=1)
+end = time.time()
+print("time taken {}".format(end - start))
+
+
+# In[ ]:
+
+
+print(train_df.shape[0])
+train_df = train_df.loc[train_df.item_description == train_df.item_description]
+test_df = test_df.loc[test_df.item_description == test_df.item_description]
+train_df = train_df.loc[train_df.name == train_df.name]
+test_df = test_df.loc[test_df.name == test_df.name]
+print(train_df.shape[0])
+print("Dropped records where item description was nan")
+
+
+# **7. SVD on tf-idf of unigram of product name features -**
 # 
-# In NLP problems, it's customary to look at word vectors. Word vectors give a lot of insights about the data. Let's dive into that.
-# 
-# ## Word Vectors
-# 
-# Without going into too much details, I would explain how to create sentence vectors and how can we use them to create a machine learning model on top of it. I am a fan of GloVe vectors, word2vec and fasttext. In this post, I'll be using the GloVe vectors. You can download the GloVe vectors from here `http://www-nlp.stanford.edu/data/glove.840B.300d.zip`
 
 # In[ ]:
 
 
-# load the GloVe vectors in a dictionary:
-
-embeddings_index = {}
-f = open('glove.840B.300d.txt')
-for line in tqdm(f):
-    values = line.split()
-    word = values[0]
-    coefs = np.asarray(values[1:], dtype='float32')
-    embeddings_index[word] = coefs
-f.close()
-
-print('Found %s word vectors.' % len(embeddings_index))
+print(train_df.shape[0])
+train_df = train_df.loc[train_df.item_description == train_df.item_description]
+test_df = test_df.loc[test_df.item_description == test_df.item_description]
+train_df = train_df.loc[train_df.name == train_df.name]
+test_df = test_df.loc[test_df.name == test_df.name]
+print(train_df.shape[0])
+print("Dropped records where item description was nan")
 
 
 # In[ ]:
 
 
-# this function creates a normalized vector for the whole sentence
-def sent2vec(s):
-    words = str(s).lower().decode('utf-8')
-    words = word_tokenize(words)
-    words = [w for w in words if not w in stop_words]
-    words = [w for w in words if w.isalpha()]
-    M = []
-    for w in words:
-        try:
-            M.append(embeddings_index[w])
-        except:
-            continue
-    M = np.array(M)
-    v = M.sum(axis=0)
-    if type(v) != np.ndarray:
-        return np.zeros(300)
-    return v / np.sqrt((v ** 2).sum())
+# product name related features 
+
+tfidf_vec = TfidfVectorizer(stop_words='english', ngram_range=(1,1))
+full_tfidf = tfidf_vec.fit_transform(train_df['name'].values.tolist() + test_df['name'].values.tolist())
+train_tfidf = tfidf_vec.transform(train_df['name'].values.tolist())
+test_tfidf = tfidf_vec.transform(test_df['name'].values.tolist())
+
+n_comp = 40
+svd_obj = TruncatedSVD(n_components=n_comp, algorithm='arpack')
+svd_obj.fit(full_tfidf)
+train_svd = pd.DataFrame(svd_obj.transform(train_tfidf))
+test_svd = pd.DataFrame(svd_obj.transform(test_tfidf))
+    
+train_svd.columns = ['svd_name_'+str(i) for i in range(n_comp)]
+test_svd.columns = ['svd_name_'+str(i) for i in range(n_comp)]
+train_df = pd.concat([train_df, train_svd], axis=1)
+test_df = pd.concat([test_df, test_svd], axis=1)
 
 
 # In[ ]:
 
 
-# create sentence vectors using the above function for training and validation set
-xtrain_glove = [sent2vec(x) for x in tqdm(xtrain)]
-xvalid_glove = [sent2vec(x) for x in tqdm(xvalid)]
+# test check for dimensions before model 
+print("Train should have one columns more than test")
+print(train_df.shape[1])
+print(test_df.shape[1])
+print("perfect The data is fine")
+
+
+#  # XGboost regressor ...
+#  Now we have 49 features which could be used in price prediction and let's use them and see how they are performing 
+
+# In[ ]:
+
+
+# XGboost regressor ...
+# replace all nan with -1 
+print(train_df.isnull().sum())
+train_df.fillna(0, inplace=True)
+test_df.fillna(0, inplace=True)
+print(train_df.isnull().sum())
 
 
 # In[ ]:
 
 
-xtrain_glove = np.array(xtrain_glove)
-xvalid_glove = np.array(xvalid_glove)
-
-
-# Let's see the performance of xgboost on glove features:
-
-# In[ ]:
-
-
-# Fitting a simple xgboost on glove features
-clf = xgb.XGBClassifier(nthread=10, silent=False)
-clf.fit(xtrain_glove, ytrain)
-predictions = clf.predict_proba(xvalid_glove)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
+train = train_df.copy()
+test = test_df.copy()
+print("Difference of features in train and test are {}".format(np.setdiff1d(train.columns, test.columns)))
+print("")
+do_not_use_for_training = ['cat_1','test_id','cat_2','cat_3','train_id','name', 'category_name', 'brand_name', 'price', 'item_description']
+feature_names = [f for f in train.columns if f not in do_not_use_for_training]
+print("We will be using following features for training {}.".format(feature_names))
+print("")
+print("Total number of features are {}.".format(len(feature_names)))
 
 
 # In[ ]:
 
 
-# Fitting a simple xgboost on glove features
-clf = xgb.XGBClassifier(max_depth=7, n_estimators=200, colsample_bytree=0.8, 
-                        subsample=0.8, nthread=10, learning_rate=0.1, silent=False)
-clf.fit(xtrain_glove, ytrain)
-predictions = clf.predict_proba(xvalid_glove)
-
-print ("logloss: %0.3f " % multiclass_logloss(yvalid, predictions))
-
-
-# we see that a simple tuning of parameters can improve xgboost score on GloVe features! Believe me you can squeeze a lot more from it.
-# 
-# ## Deep Learning
-# 
-# But this is an era of deep learning! We cant live without training a few neural networks. Here, we will train LSTM and a simple dense network on the GloVe features. Let's start with the dense network first:
-
-# In[ ]:
-
-
-# scale the data before any neural net:
-scl = preprocessing.StandardScaler()
-xtrain_glove_scl = scl.fit_transform(xtrain_glove)
-xvalid_glove_scl = scl.transform(xvalid_glove)
+y = np.log(train['price'].values + 1)
 
 
 # In[ ]:
 
 
-# we need to binarize the labels for the neural net
-ytrain_enc = np_utils.to_categorical(ytrain)
-yvalid_enc = np_utils.to_categorical(yvalid)
+from sklearn.model_selection import train_test_split
+Xtr, Xv, ytr, yv = train_test_split(train[feature_names].values, y, test_size=0.2, random_state=1987)
+dtrain = xgb.DMatrix(Xtr, label=ytr)
+dvalid = xgb.DMatrix(Xv, label=yv)
+dtest = xgb.DMatrix(test[feature_names].values)
+watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
+
+start = time.time()
+xgb_par = {'min_child_weight': 20, 'eta': 0.05, 'colsample_bytree': 0.5, 'max_depth': 15,
+            'subsample': 0.9, 'lambda': 2.0, 'nthread': -1, 'booster' : 'gbtree', 'silent': 1,
+            'eval_metric': 'rmse', 'objective': 'reg:linear'}
+
+model_1 = xgb.train(xgb_par, dtrain, 80, watchlist, early_stopping_rounds=20, maximize=False, verbose_eval=20)
+print('Modeling RMSLE %.5f' % model_1.best_score)
+end = time.time()
+print("Time taken in training is {}.".format(end - start))
 
 
 # In[ ]:
 
 
-# create a simple 3 layer sequential neural net
-model = Sequential()
-
-model.add(Dense(300, input_dim=300, activation='relu'))
-model.add(Dropout(0.2))
-model.add(BatchNormalization())
-
-model.add(Dense(300, activation='relu'))
-model.add(Dropout(0.3))
-model.add(BatchNormalization())
-
-model.add(Dense(3))
-model.add(Activation('softmax'))
-
-# compile the model
-model.compile(loss='categorical_crossentropy', optimizer='adam')
+start = time.time()
+yvalid = model_1.predict(dvalid)
+ytest = model_1.predict(dtest)
+end = time.time()
+print("Time taken in prediction is {}.".format(end - start))
 
 
 # In[ ]:
 
 
-model.fit(xtrain_glove_scl, y=ytrain_enc, batch_size=64, 
-          epochs=5, verbose=1, 
-          validation_data=(xvalid_glove_scl, yvalid_enc))
-
-
-# You need to keep on tuning the parameters of the neural network, add more layers, increase dropout to get better results. Here, I'm just showing that its fast to implement and run and gets better result than xgboost without any optimization :)
-# 
-# To move further, i.e. with LSTMs we need to tokenize the text data
-
-# In[ ]:
-
-
-# using keras tokenizer here
-token = text.Tokenizer(num_words=None)
-max_len = 70
-
-token.fit_on_texts(list(xtrain) + list(xvalid))
-xtrain_seq = token.texts_to_sequences(xtrain)
-xvalid_seq = token.texts_to_sequences(xvalid)
-
-# zero pad the sequences
-xtrain_pad = sequence.pad_sequences(xtrain_seq, maxlen=max_len)
-xvalid_pad = sequence.pad_sequences(xvalid_seq, maxlen=max_len)
-
-word_index = token.word_index
+# Lets check how the distribution of test and vaidation set looks like ...
+start = time.time()
+fig, ax = plt.subplots(nrows=2, sharex=True, sharey=True)
+sns.distplot(yvalid, ax=ax[0], color='blue', label='Validation')
+sns.distplot(ytest, ax=ax[1], color='green', label='Test')
+ax[0].legend(loc=0)
+ax[1].legend(loc=0)
+plt.show()
+end = time.time()
+print("Time taken by above cell is {}.".format((end-start)))
 
 
 # In[ ]:
 
 
-# create an embedding matrix for the words we have in the dataset
-embedding_matrix = np.zeros((len(word_index) + 1, 300))
-for word, i in tqdm(word_index.items()):
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        embedding_matrix[i] = embedding_vector
-
-
-# In[ ]:
-
-
-# A simple LSTM with glove embeddings and two dense layers
-model = Sequential()
-model.add(Embedding(len(word_index) + 1,
-                     300,
-                     weights=[embedding_matrix],
-                     input_length=max_len,
-                     trainable=False))
-model.add(SpatialDropout1D(0.3))
-model.add(LSTM(100, dropout=0.3, recurrent_dropout=0.3))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(3))
-model.add(Activation('softmax'))
-model.compile(loss='categorical_crossentropy', optimizer='adam')
-
-
-# In[ ]:
-
-
-model.fit(xtrain_pad, y=ytrain_enc, batch_size=512, epochs=100, verbose=1, validation_data=(xvalid_pad, yvalid_enc))
-
-
-# We see that the score is now less than 0.5. I ran it for many epochs without stopping at the best but you can use early stopping to stop at the best iteration. How do I use early stopping?
-# 
-# well, pretty easy. let's compile the model again:
-
-# In[ ]:
-
-
-# A simple LSTM with glove embeddings and two dense layers
-model = Sequential()
-model.add(Embedding(len(word_index) + 1,
-                     300,
-                     weights=[embedding_matrix],
-                     input_length=max_len,
-                     trainable=False))
-model.add(SpatialDropout1D(0.3))
-model.add(LSTM(300, dropout=0.3, recurrent_dropout=0.3))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(3))
-model.add(Activation('softmax'))
-model.compile(loss='categorical_crossentropy', optimizer='adam')
-
-# Fit the model with early stopping callback
-earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3, verbose=0, mode='auto')
-model.fit(xtrain_pad, y=ytrain_enc, batch_size=512, epochs=100, 
-          verbose=1, validation_data=(xvalid_pad, yvalid_enc), callbacks=[earlystop])
-
-
-# One question could be: why do i use so much dropout? Well, fit the model with no or little dropout and you will that it starts to overfit :)
-# 
-# Let's see if Bi-directional LSTM can give us better results. Its a piece of cake to do it with Keras :)
-
-# In[ ]:
-
-
-# A simple bidirectional LSTM with glove embeddings and two dense layers
-model = Sequential()
-model.add(Embedding(len(word_index) + 1,
-                     300,
-                     weights=[embedding_matrix],
-                     input_length=max_len,
-                     trainable=False))
-model.add(SpatialDropout1D(0.3))
-model.add(Bidirectional(LSTM(300, dropout=0.3, recurrent_dropout=0.3)))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(3))
-model.add(Activation('softmax'))
-model.compile(loss='categorical_crossentropy', optimizer='adam')
-
-# Fit the model with early stopping callback
-earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3, verbose=0, mode='auto')
-model.fit(xtrain_pad, y=ytrain_enc, batch_size=512, epochs=100, 
-          verbose=1, validation_data=(xvalid_pad, yvalid_enc), callbacks=[earlystop])
-
-
-# Pretty close! Lets try two layers of GRU:
-
-# In[ ]:
-
-
-# GRU with glove embeddings and two dense layers
-model = Sequential()
-model.add(Embedding(len(word_index) + 1,
-                     300,
-                     weights=[embedding_matrix],
-                     input_length=max_len,
-                     trainable=False))
-model.add(SpatialDropout1D(0.3))
-model.add(GRU(300, dropout=0.3, recurrent_dropout=0.3, return_sequences=True))
-model.add(GRU(300, dropout=0.3, recurrent_dropout=0.3))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(1024, activation='relu'))
-model.add(Dropout(0.8))
-
-model.add(Dense(3))
-model.add(Activation('softmax'))
-model.compile(loss='categorical_crossentropy', optimizer='adam')
-
-# Fit the model with early stopping callback
-earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3, verbose=0, mode='auto')
-model.fit(xtrain_pad, y=ytrain_enc, batch_size=512, epochs=100, 
-          verbose=1, validation_data=(xvalid_pad, yvalid_enc), callbacks=[earlystop])
-
-
-# Nice! Much better than what we had previously! Keep optimizing and the performance will keep improving.
-# Worth trying: stemming and lemmatization. This is something I'm skipping for now.
-# 
-# In the Kaggle world, to get a top score you should have an ensemble of models. Let's check a little bit of ensembling!
-# 
-# 
-# ## Ensembling
-# 
-# Few months back I made a simple ensembler but I didn't have time to develop it fully. It can be found here: https://github.com/abhishekkrthakur/pysembler . I'm going to use some part of it here:
-
-# In[ ]:
-
-
-# this is the main ensembling class. how to use it is in the next cell!
-import numpy as np
-from sklearn.metrics import roc_auc_score
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import StratifiedKFold, KFold
-import pandas as pd
-import os
-import sys
-import logging
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="[%(asctime)s] %(levelname)s %(message)s",
-    datefmt="%H:%M:%S", stream=sys.stdout)
-logger = logging.getLogger(__name__)
-
-
-class Ensembler(object):
-    def __init__(self, model_dict, num_folds=3, task_type='classification', optimize=roc_auc_score,
-                 lower_is_better=False, save_path=None):
-        """
-        Ensembler init function
-        :param model_dict: model dictionary, see README for its format
-        :param num_folds: the number of folds for ensembling
-        :param task_type: classification or regression
-        :param optimize: the function to optimize for, e.g. AUC, logloss, etc. Must have two arguments y_test and y_pred
-        :param lower_is_better: is lower value of optimization function better or higher
-        :param save_path: path to which model pickles will be dumped to along with generated predictions, or None
-        """
-
-        self.model_dict = model_dict
-        self.levels = len(self.model_dict)
-        self.num_folds = num_folds
-        self.task_type = task_type
-        self.optimize = optimize
-        self.lower_is_better = lower_is_better
-        self.save_path = save_path
-
-        self.training_data = None
-        self.test_data = None
-        self.y = None
-        self.lbl_enc = None
-        self.y_enc = None
-        self.train_prediction_dict = None
-        self.test_prediction_dict = None
-        self.num_classes = None
-
-    def fit(self, training_data, y, lentrain):
-        """
-        :param training_data: training data in tabular format
-        :param y: binary, multi-class or regression
-        :return: chain of models to be used in prediction
-        """
-
-        self.training_data = training_data
-        self.y = y
-
-        if self.task_type == 'classification':
-            self.num_classes = len(np.unique(self.y))
-            logger.info("Found %d classes", self.num_classes)
-            self.lbl_enc = LabelEncoder()
-            self.y_enc = self.lbl_enc.fit_transform(self.y)
-            kf = StratifiedKFold(n_splits=self.num_folds)
-            train_prediction_shape = (lentrain, self.num_classes)
-        else:
-            self.num_classes = -1
-            self.y_enc = self.y
-            kf = KFold(n_splits=self.num_folds)
-            train_prediction_shape = (lentrain, 1)
-
-        self.train_prediction_dict = {}
-        for level in range(self.levels):
-            self.train_prediction_dict[level] = np.zeros((train_prediction_shape[0],
-                                                          train_prediction_shape[1] * len(self.model_dict[level])))
-
-        for level in range(self.levels):
-
-            if level == 0:
-                temp_train = self.training_data
-            else:
-                temp_train = self.train_prediction_dict[level - 1]
-
-            for model_num, model in enumerate(self.model_dict[level]):
-                validation_scores = []
-                foldnum = 1
-                for train_index, valid_index in kf.split(self.train_prediction_dict[0], self.y_enc):
-                    logger.info("Training Level %d Fold # %d. Model # %d", level, foldnum, model_num)
-
-                    if level != 0:
-                        l_training_data = temp_train[train_index]
-                        l_validation_data = temp_train[valid_index]
-                        model.fit(l_training_data, self.y_enc[train_index])
-                    else:
-                        l0_training_data = temp_train[0][model_num]
-                        if type(l0_training_data) == list:
-                            l_training_data = [x[train_index] for x in l0_training_data]
-                            l_validation_data = [x[valid_index] for x in l0_training_data]
-                        else:
-                            l_training_data = l0_training_data[train_index]
-                            l_validation_data = l0_training_data[valid_index]
-                        model.fit(l_training_data, self.y_enc[train_index])
-
-                    logger.info("Predicting Level %d. Fold # %d. Model # %d", level, foldnum, model_num)
-
-                    if self.task_type == 'classification':
-                        temp_train_predictions = model.predict_proba(l_validation_data)
-                        self.train_prediction_dict[level][valid_index,
-                        (model_num * self.num_classes):(model_num * self.num_classes) +
-                                                       self.num_classes] = temp_train_predictions
-
-                    else:
-                        temp_train_predictions = model.predict(l_validation_data)
-                        self.train_prediction_dict[level][valid_index, model_num] = temp_train_predictions
-                    validation_score = self.optimize(self.y_enc[valid_index], temp_train_predictions)
-                    validation_scores.append(validation_score)
-                    logger.info("Level %d. Fold # %d. Model # %d. Validation Score = %f", level, foldnum, model_num,
-                                validation_score)
-                    foldnum += 1
-                avg_score = np.mean(validation_scores)
-                std_score = np.std(validation_scores)
-                logger.info("Level %d. Model # %d. Mean Score = %f. Std Dev = %f", level, model_num,
-                            avg_score, std_score)
-
-            logger.info("Saving predictions for level # %d", level)
-            train_predictions_df = pd.DataFrame(self.train_prediction_dict[level])
-            train_predictions_df.to_csv(os.path.join(self.save_path, "train_predictions_level_" + str(level) + ".csv"),
-                                        index=False, header=None)
-
-        return self.train_prediction_dict
-
-    def predict(self, test_data, lentest):
-        self.test_data = test_data
-        if self.task_type == 'classification':
-            test_prediction_shape = (lentest, self.num_classes)
-        else:
-            test_prediction_shape = (lentest, 1)
-
-        self.test_prediction_dict = {}
-        for level in range(self.levels):
-            self.test_prediction_dict[level] = np.zeros((test_prediction_shape[0],
-                                                         test_prediction_shape[1] * len(self.model_dict[level])))
-        self.test_data = test_data
-        for level in range(self.levels):
-            if level == 0:
-                temp_train = self.training_data
-                temp_test = self.test_data
-            else:
-                temp_train = self.train_prediction_dict[level - 1]
-                temp_test = self.test_prediction_dict[level - 1]
-
-            for model_num, model in enumerate(self.model_dict[level]):
-
-                logger.info("Training Fulldata Level %d. Model # %d", level, model_num)
-                if level == 0:
-                    model.fit(temp_train[0][model_num], self.y_enc)
-                else:
-                    model.fit(temp_train, self.y_enc)
-
-                logger.info("Predicting Test Level %d. Model # %d", level, model_num)
-
-                if self.task_type == 'classification':
-                    if level == 0:
-                        temp_test_predictions = model.predict_proba(temp_test[0][model_num])
-                    else:
-                        temp_test_predictions = model.predict_proba(temp_test)
-                    self.test_prediction_dict[level][:, (model_num * self.num_classes): (model_num * self.num_classes) +
-                                                                                        self.num_classes] = temp_test_predictions
-
-                else:
-                    if level == 0:
-                        temp_test_predictions = model.predict(temp_test[0][model_num])
-                    else:
-                        temp_test_predictions = model.predict(temp_test)
-                    self.test_prediction_dict[level][:, model_num] = temp_test_predictions
-
-            test_predictions_df = pd.DataFrame(self.test_prediction_dict[level])
-            test_predictions_df.to_csv(os.path.join(self.save_path, "test_predictions_level_" + str(level) + ".csv"),
-                                       index=False, header=None)
-
-        return self.test_prediction_dict
-
-
-# In[ ]:
-
-
-# specify the data to be used for every level of ensembling:
-train_data_dict = {0: [xtrain_tfv, xtrain_ctv, xtrain_tfv, xtrain_ctv], 1: [xtrain_glove]}
-test_data_dict = {0: [xvalid_tfv, xvalid_ctv, xvalid_tfv, xvalid_ctv], 1: [xvalid_glove]}
-
-model_dict = {0: [LogisticRegression(), LogisticRegression(), MultinomialNB(alpha=0.1), MultinomialNB()],
-
-              1: [xgb.XGBClassifier(silent=True, n_estimators=120, max_depth=7)]}
-
-ens = Ensembler(model_dict=model_dict, num_folds=3, task_type='classification',
-                optimize=multiclass_logloss, lower_is_better=True, save_path='')
-
-ens.fit(train_data_dict, ytrain, lentrain=xtrain_glove.shape[0])
-preds = ens.predict(test_data_dict, lentest=xvalid_glove.shape[0])
-
-
-# In[ ]:
-
-
-# check error:
-multiclass_logloss(yvalid, preds[1])
-
-
-# Thus, we see that ensembling improves the score by a great extent! Since this is supposed to be a tutorial only I wont be providing any CSVs that you can submit to the leaderboard.
-# 
-# I hope you like it! 
-# 
-# P.S.: If the response is good, I'll add more stuff in this! :)
+start = time.time()
+if test.shape[0] == ytest.shape[0]:
+    print('Test shape OK.') 
+test['price'] = np.exp(ytest) - 1
+test[['test_id', 'price']].to_csv('mahesh_xgb_submission_mercari.csv', index=False)
+end = time.time()
+print("Time taken in training is {}.".format(end - start))
+
+
+# **Sleep time zzzzz......**
+# # Upvote if you find this analysis useful... Thanks (y)

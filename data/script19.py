@@ -1,142 +1,176 @@
 
 # coding: utf-8
 
-# Donated to Cancer Treatment
-# =============================
+# ## Enriching NCAATourneyDetailedResults.csv with Advanced Stats
+# 
+# #### If the opponents of a team score only 75.2 points on average, it could be more about the pace at which the team played instead of their skill on the defensive end. 
+# 
+# ### The given Box score numbers are an incomplete standard of a team's performance. 
+# 
+# **Advanced Metrics ** in basketball provide a deeper understanding of a team's performance.
+# 
+# **Possession** is used to normalize basketball statistics - offensive/defensive efficiency and other metrics are all based on how the possession is calculated. Team performance should be measured on a per-possession basis.  
+# 
+# > Possession =0.96*[(Field Goal Attempts)+(Turnovers)+0.44*(Free Throw Attempts)-(Off.Rebounds)]
+# 
+# 
+# ##### (Notice: Possession values are not calculated by using Play-By-Play data, as it seems like they do not necessarily add up to the final stats of the game and an estimation will do just fine)
+# 
+# For more information [click here](https://www.nbastuffer.com/analytics101/possession/)
+# 
+# ### Now let's add some new features that can acutally be used for predictive modelling and ranking a team.
+# 
 
 # In[ ]:
 
 
-from sklearn import *
-import sklearn
-import pandas as pd
-import numpy as np
-import xgboost as xgb
-
-train = pd.read_csv('../input/training_variants')
-test = pd.read_csv('../input/test_variants')
-trainx = pd.read_csv('../input/training_text', sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-testx = pd.read_csv('../input/test_text', sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-
-train = pd.merge(train, trainx, how='left', on='ID').fillna('')
-y = train['Class'].values
-train = train.drop(['Class'], axis=1)
-
-test = pd.merge(test, testx, how='left', on='ID').fillna('')
-pid = test['ID'].values
-
-df_all = pd.concat((train, test), axis=0, ignore_index=True)
-df_all['Gene_Share'] = df_all.apply(lambda r: sum([1 for w in r['Gene'].split(' ') if w in r['Text'].split(' ')]), axis=1)
-df_all['Variation_Share'] = df_all.apply(lambda r: sum([1 for w in r['Variation'].split(' ') if w in r['Text'].split(' ')]), axis=1)
-
-#commented for Kaggle Limits
-#for i in range(56):
-#    df_all['Gene_'+str(i)] = df_all['Gene'].map(lambda x: str(x[i]) if len(x)>i else '')
-#    df_all['Variation'+str(i)] = df_all['Variation'].map(lambda x: str(x[i]) if len(x)>i else '')
-
-
-gen_var_lst = sorted(list(train.Gene.unique()) + list(train.Variation.unique()))
-print(len(gen_var_lst))
-gen_var_lst = [x for x in gen_var_lst if len(x.split(' '))==1]
-print(len(gen_var_lst))
-i_ = 0
-#commented for Kaggle Limits
-#for gen_var_lst_itm in gen_var_lst:
-#    if i_ % 100 == 0: print(i_)
-#    df_all['GV_'+str(gen_var_lst_itm)] = df_all['Text'].map(lambda x: str(x).count(str(gen_var_lst_itm)))
-#    i_ += 1
-
-for c in df_all.columns:
-    if df_all[c].dtype == 'object':
-        if c in ['Gene','Variation']:
-            lbl = preprocessing.LabelEncoder()
-            df_all[c+'_lbl_enc'] = lbl.fit_transform(df_all[c].values)  
-            df_all[c+'_len'] = df_all[c].map(lambda x: len(str(x)))
-            df_all[c+'_words'] = df_all[c].map(lambda x: len(str(x).split(' ')))
-        elif c != 'Text':
-            lbl = preprocessing.LabelEncoder()
-            df_all[c] = lbl.fit_transform(df_all[c].values)
-        if c=='Text': 
-            df_all[c+'_len'] = df_all[c].map(lambda x: len(str(x)))
-            df_all[c+'_words'] = df_all[c].map(lambda x: len(str(x).split(' '))) 
-
-train = df_all.iloc[:len(train)]
-test = df_all.iloc[len(train):]
-
-class cust_regression_vals(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def fit(self, x, y=None):
-        return self
-    def transform(self, x):
-        x = x.drop(['Gene', 'Variation','ID','Text'],axis=1).values
-        return x
-
-class cust_txt_col(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
-    def __init__(self, key):
-        self.key = key
-    def fit(self, x, y=None):
-        return self
-    def transform(self, x):
-        return x[self.key].apply(str)
-
-print('Pipeline...')
-fp = pipeline.Pipeline([
-    ('union', pipeline.FeatureUnion(
-        n_jobs = -1,
-        transformer_list = [
-            ('standard', cust_regression_vals()),
-            ('pi1', pipeline.Pipeline([('Gene', cust_txt_col('Gene')), ('count_Gene', feature_extraction.text.CountVectorizer(analyzer=u'char', ngram_range=(1, 8))), ('tsvd1', decomposition.TruncatedSVD(n_components=20, n_iter=25, random_state=12))])),
-            ('pi2', pipeline.Pipeline([('Variation', cust_txt_col('Variation')), ('count_Variation', feature_extraction.text.CountVectorizer(analyzer=u'char', ngram_range=(1, 8))), ('tsvd2', decomposition.TruncatedSVD(n_components=20, n_iter=25, random_state=12))])),
-            #commented for Kaggle Limits
-            #('pi3', pipeline.Pipeline([('Text', cust_txt_col('Text')), ('tfidf_Text', feature_extraction.text.TfidfVectorizer(ngram_range=(1, 2))), ('tsvd3', decomposition.TruncatedSVD(n_components=50, n_iter=25, random_state=12))]))
-        ])
-    )])
-
-train = fp.fit_transform(train); print(train.shape)
-test = fp.transform(test); print(test.shape)
-
-y = y - 1 #fix for zero bound array
-
-denom = 0
-fold = 1 #Change to 5, 1 for Kaggle Limits
-for i in range(fold):
-    params = {
-        'eta': 0.03333,
-        'max_depth': 4,
-        'objective': 'multi:softprob',
-        'eval_metric': 'mlogloss',
-        'num_class': 9,
-        'seed': i,
-        'silent': True
-    }
-    x1, x2, y1, y2 = model_selection.train_test_split(train, y, test_size=0.18, random_state=i)
-    watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-    model = xgb.train(params, xgb.DMatrix(x1, y1), 1000,  watchlist, verbose_eval=50, early_stopping_rounds=100)
-    score1 = metrics.log_loss(y2, model.predict(xgb.DMatrix(x2), ntree_limit=model.best_ntree_limit), labels = list(range(9)))
-    print(score1)
-    #if score < 0.9:
-    if denom != 0:
-        pred = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit+80)
-        preds += pred
-    else:
-        pred = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit+80)
-        preds = pred.copy()
-    denom += 1
-    submission = pd.DataFrame(pred, columns=['class'+str(c+1) for c in range(9)])
-    submission['ID'] = pid
-    submission.to_csv('submission_xgb_fold_'  + str(i) + '.csv', index=False)
-preds /= denom
-submission = pd.DataFrame(preds, columns=['class'+str(c+1) for c in range(9)])
-submission['ID'] = pid
-submission.to_csv('submission_xgb.csv', index=False)
-
-
-# In[ ]:
-
-
+import numpy as np 
+import pandas as pd 
 import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+from math import pi
 
-plt.rcParams['figure.figsize'] = (7.0, 7.0)
-xgb.plot_importance(booster=model); plt.show()
+df = pd.read_csv('../input/NCAATourneyDetailedResults.csv')
+
+#Points Winning/Losing Team
+df['WPts'] = df.apply(lambda row: 2*row.WFGM + row.WFGM3 + row.WFTM, axis=1)
+df['LPts'] = df.apply(lambda row: 2*row.LFGM + row.LFGM3 + row.LFTM, axis=1)
+
+#Calculate Winning/losing Team Possesion Feature
+wPos = df.apply(lambda row: 0.96*(row.WFGA + row.WTO + 0.44*row.WFTA - row.WOR), axis=1)
+lPos = df.apply(lambda row: 0.96*(row.LFGA + row.LTO + 0.44*row.LFTA - row.LOR), axis=1)
+#two teams use almost the same number of possessions in a game
+#(plus/minus one or two - depending on how quarters end)
+#so let's just take the average
+df['Pos'] = (wPos+lPos)/2
+
+
+# ### Advanced Metrics
+
+# In[ ]:
+
+
+#Offensive efficiency (OffRtg) = 100 x (Points / Possessions)
+df['WOffRtg'] = df.apply(lambda row: 100 * (row.WPts / row.Pos), axis=1)
+df['LOffRtg'] = df.apply(lambda row: 100 * (row.LPts / row.Pos), axis=1)
+#Defensive efficiency (DefRtg) = 100 x (Opponent points / Opponent possessions)
+df['WDefRtg'] = df.LOffRtg
+df['LDefRtg'] = df.WOffRtg
+#Net Rating = Off.Rtg - Def.Rtg
+df['WNetRtg'] = df.apply(lambda row:(row.WOffRtg - row.WDefRtg), axis=1)
+df['LNetRtg'] = df.apply(lambda row:(row.LOffRtg - row.LDefRtg), axis=1)
+                         
+#Assist Ratio : Percentage of team possessions that end in assists
+df['WAstR'] = df.apply(lambda row: 100 * row.WAst / (row.WFGA + 0.44*row.WFTA + row.WAst + row.WTO), axis=1)
+df['LAstR'] = df.apply(lambda row: 100 * row.LAst / (row.LFGA + 0.44*row.LFTA + row.LAst + row.LTO), axis=1)
+#Turnover Ratio: Number of turnovers of a team per 100 possessions used.
+#(TO * 100) / (FGA + (FTA * 0.44) + AST + TO)
+df['WTOR'] = df.apply(lambda row: 100 * row.WTO / (row.WFGA + 0.44*row.WFTA + row.WAst + row.WTO), axis=1)
+df['LTOR'] = df.apply(lambda row: 100 * row.LTO / (row.LFGA + 0.44*row.LFTA + row.LAst + row.LTO), axis=1)
+                    
+#The Shooting Percentage : Measure of Shooting Efficiency (FGA/FGA3, FTA)
+df['WTSP'] = df.apply(lambda row: 100 * row.WPts / (2 * (row.WFGA + 0.44 * row.WFTA)), axis=1)
+df['LTSP'] = df.apply(lambda row: 100 * row.LPts / (2 * (row.LFGA + 0.44 * row.LFTA)), axis=1)
+#eFG% : Effective Field Goal Percentage adjusting for the fact that 3pt shots are more valuable 
+df['WeFGP'] = df.apply(lambda row:(row.WFGM + 0.5 * row.WFGM3) / row.WFGA, axis=1)      
+df['LeFGP'] = df.apply(lambda row:(row.LFGM + 0.5 * row.LFGM3) / row.LFGA, axis=1)   
+#FTA Rate : How good a team is at drawing fouls.
+df['WFTAR'] = df.apply(lambda row: row.WFTA / row.WFGA, axis=1)
+df['LFTAR'] = df.apply(lambda row: row.LFTA / row.LFGA, axis=1)
+                         
+#OREB% : Percentage of team offensive rebounds
+df['WORP'] = df.apply(lambda row: row.WOR / (row.WOR + row.LDR), axis=1)
+df['LORP'] = df.apply(lambda row: row.LOR / (row.LOR + row.WDR), axis=1)
+#DREB% : Percentage of team defensive rebounds
+df['WDRP'] = df.apply(lambda row: row.WDR / (row.WDR + row.LOR), axis=1)
+df['LDRP'] = df.apply(lambda row: row.LDR / (row.LDR + row.WOR), axis=1)                                      
+#REB% : Percentage of team total rebounds
+df['WRP'] = df.apply(lambda row: (row.WDR + row.WOR) / (row.WDR + row.WOR + row.LDR + row.LOR), axis=1)
+df['LRP'] = df.apply(lambda row: (row.LDR + row.LOR) / (row.WDR + row.WOR + row.LDR + row.LOR), axis=1) 
+
+
+# #### PIE : Measure of a team's performance
+# 
+# > *A high PIE % is highly correlated to winning. In fact, a team’s PIE rating and a team’s winning percentage correlate at an R square of .908 which indicates a "strong" correlation*
+# 
+# from the official site of the [NBA](https://stats.nba.com/help/glossary/)
+
+# In[ ]:
+
+
+wtmp = df.apply(lambda row: row.WPts + row.WFGM + row.WFTM - row.WFGA - row.WFTA + row.WDR + 0.5*row.WOR + row.WAst +row.WStl + 0.5*row.WBlk - row.WPF - row.WTO, axis=1)
+ltmp = df.apply(lambda row: row.LPts + row.LFGM + row.LFTM - row.LFGA - row.LFTA + row.LDR + 0.5*row.LOR + row.LAst +row.LStl + 0.5*row.LBlk - row.LPF - row.LTO, axis=1) 
+df['WPIE'] = wtmp/(wtmp + ltmp)
+df['LPIE'] = ltmp/(wtmp + ltmp)
+
+
+# In[ ]:
+
+
+#categories need to be normalized for a sensible plot
+categories= ['FTAR','ORP','DRP','PIE','eFGP']
+
+#get stats by TeamID
+#TODO: filter by season
+def get_stats(teamid, categories):
+    
+    wstats = []
+    wteam = df.loc[(df['WTeamID'] == teamid)]
+    for i in categories:
+        wstats.append(wteam['W'+i].sum())
+    
+    lstats = []
+    lteam = df.loc[(df['LTeamID'] == teamid)]
+    for i in categories:
+        lstats.append(lteam['L'+i].sum())
+
+    return [(i+j)/(len(wteam.index)+len(lteam.index))
+            for i,j in zip(wstats,lstats)]
+
+#plotting advanced stats for given team
+def plot_team(stats, categories):
+
+    stats += stats[:1]
+
+    angles = [n / float(len(categories)) * 2 * pi for n in range(len(categories))]
+    angles += angles[:1]
+
+    ax = plt.subplot(111, polar=True)
+
+    plt.xticks(angles[:-1], categories, color='grey', size=10)
+
+    ax.set_rlabel_position(0)
+    plt.yticks([i*0.1 for i in range(10)], [], color="black", size=8)
+    plt.ylim(0,1)
+    
+    ax.plot(angles, stats, linewidth=2, linestyle='solid')
+    ax.fill(angles, stats, 'b', alpha=0.2)
+
+
+# #### Evaluations of random NCAA teams (TODO: filtered by year)
+# ##### Note: to plot different metrics, values need to be normalized first.
+
+# In[ ]:
+
+
+plot_team(get_stats(1241,categories),categories)
+
+
+# In[ ]:
+
+
+plot_team(get_stats(1421,categories),categories)
+
+
+# In[ ]:
+
+
+#let's call it dimensionality reduction
+# --> build your predictive model on advanced stats only
+#df.drop(['WFGM', 'WFGA', 'WFGM3', 'WFGA3', 'WFTM', 'WFTA', 'WOR', 'WDR', 'WAst', 'WTO', 'WStl', 'WBlk', 'WPF'], axis=1, inplace=True)
+#df.drop(['LFGM', 'LFGA', 'LFGM3', 'LFGA3', 'LFTM', 'LFTA', 'LOR', 'LDR', 'LAst', 'LTO', 'LStl', 'LBlk', 'LPF'], axis=1, inplace=True)
+
+#TODO: Compute Avanced Stats for entire Season for each Team
+#df['WPIE'].groupby([df['Season'], df['WTeamID']]).describe()
+
+df.to_csv('NCAATourneyDetailedResultsEnriched', index=False)
 

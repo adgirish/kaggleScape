@@ -1,475 +1,393 @@
 
 # coding: utf-8
 
-# # Exoplanet Data Exploration
+# In this notebook I'll try the approach, which discovered in one tutorial about multivariate time series forecasting using LSTM.
 # 
-# Here are some of my initial attempts to look at the exoplanet datasets from Kepler. The dataset is highly unbalanced, so a fully automated analysis will be quite difficult. We also have to be careful since there are other effects such as rotating spots that might fake the kind of signal from an exoplanet.
-# 
-# First, we'll load some packages and read in the dataset.
 
-# In[ ]:
+# In[1]:
 
 
 import pandas as pd
-import sklearn as sk
-import scipy
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+np.random.seed(10)
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
 
-df = pd.read_csv('../input/exoTrain.csv',index_col=0)
-
-
-# Now we'll look at the top few lines
-
-# In[ ]:
+from keras.models import Sequential
+from keras.layers import Dense, LSTM
 
 
-df.head()
-
-
-# Evidently, the exoplanets are located at the beginning of the dataset. Otherwise, this is just a bunch of numbers. Let's drop the label for now so it'll be easier to transform the data.
-
-# In[ ]:
-
-
-labels = df.LABEL
-df = df.drop('LABEL',axis=1)
-
-
-# # Statistics
+# ## **Data Aggregation**
 # 
-# Let's look at some basic statistics.
-
-# In[ ]:
-
-
-def stats_plots(df):
-    means = df.mean(axis=1)
-    medians = df.median(axis=1)
-    std = df.std(axis=1)
-    maxval = df.max(axis=1)
-    minval = df.min(axis=1)
-    skew = df.skew(axis=1)
-    fig = plt.figure(figsize=(12,8))
-    ax = fig.add_subplot(231)
-    ax.hist(means,alpha=0.8,bins=50)
-    ax.set_xlabel('Mean Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(232)
-    ax.hist(medians,alpha=0.8,bins=50)
-    ax.set_xlabel('Median Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(233)
-    ax.hist(std,alpha=0.8,bins=50)
-    ax.set_xlabel('Intensity Standard Deviation')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(234)
-    ax.hist(maxval,alpha=0.8,bins=50)
-    ax.set_xlabel('Maximum Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(235)
-    ax.hist(minval,alpha=0.8,bins=50)
-    ax.set_xlabel('Minimum Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(236)
-    ax.hist(skew,alpha=0.8,bins=50)
-    ax.set_xlabel('Intensity Skewness')
-    ax.set_ylabel('Num. of Stars')
-
-stats_plots(df)
-plt.show()
-
-
-# There are some major outliers here that we should remove. I'll leave that alone for now though.
 # 
-# What happens if we pick more sensible axes and look at the exoplanet stars and the non-exoplanet stars?
+# Features from **the1owl**'s kernel https://www.kaggle.com/the1owl/surprise-me
 
-# In[ ]:
+# In[2]:
 
 
-def stats_plots_label(df):
-    means1 = df[labels==1].mean(axis=1)
-    medians1 = df[labels==1].median(axis=1)
-    std1 = df[labels==1].std(axis=1)
-    maxval1 = df[labels==1].max(axis=1)
-    minval1 = df[labels==1].min(axis=1)
-    skew1 = df[labels==1].skew(axis=1)
-    means2 = df[labels==2].mean(axis=1)
-    medians2 = df[labels==2].median(axis=1)
-    std2 = df[labels==2].std(axis=1)
-    maxval2 = df[labels==2].max(axis=1)
-    minval2 = df[labels==2].min(axis=1)
-    skew2 = df[labels==2].skew(axis=1)
-    fig = plt.figure(figsize=(12,8))
-    ax = fig.add_subplot(231)
-    ax.hist(means1,alpha=0.8,bins=50,color='b',normed=True,range=(-250,250))
-    ax.hist(means2,alpha=0.8,bins=50,color='r',normed=True,range=(-250,250))
-    ax.get_legend()
-    ax.set_xlabel('Mean Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(232)
-    ax.hist(medians1,alpha=0.8,bins=50,color='b',normed=True,range=(-0.1,0.1))
-    ax.hist(medians2,alpha=0.8,bins=50,color='r',normed=True,range=(-0.1,0.1))
-    ax.get_legend()
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
 
-    ax.set_xlabel('Median Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(233)    
-    ax.hist(std1,alpha=0.8,bins=50,normed=True,color='b',range=(0,4000))
-    ax.hist(std2,alpha=0.8,bins=50,normed=True,color='r',range=(0,4000))
-    ax.get_legend()
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-    ax.set_xlabel('Intensity Standard Deviation')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(234)
-    ax.hist(maxval1,alpha=0.8,bins=50,normed=True,color='b',range=(-10000,50000))
-    ax.hist(maxval2,alpha=0.8,bins=50,normed=True,color='r',range=(-10000,50000))
-    ax.get_legend()
 
-    ax.set_xlabel('Maximum Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(235)
-    ax.hist(minval1,alpha=0.8,bins=50,normed=True,color='b',range=(-50000,10000))
-    ax.hist(minval2,alpha=0.8,bins=50,normed=True,color='r',range=(-50000,10000))
-    ax.get_legend()
+# In[3]:
 
-    ax.set_xlabel('Minimum Intensity')
-    ax.set_ylabel('Num. of Stars')
-    ax = fig.add_subplot(236)
-    ax.hist(skew1,alpha=0.8,bins=50,normed=True,color='b',range=(-40,60))
-    ax.hist(skew2,alpha=0.8,bins=50,normed=True,color='r',range=(-40,60)) 
-    ax.get_legend()
 
-    ax.set_xlabel('Intensity Skewness')
-    ax.set_ylabel('Num. of Stars')
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date    
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    data[df] = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date'})
 
-stats_plots_label(df)
-plt.show()
 
+# In[4]:
 
-# The distributions look pretty similar except in the case of median intensity, where the data look like they're restricted to a limited number of values. The skewness is also a bit different, likely because exoplanets are associated with dips in the intensity. So what's going on with the median?
 
-# In[ ]:
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
 
-df[labels==1].median(axis=1).describe()
 
+# In[5]:
 
-# Clearly, there's something wrong there. It looks like the exoplanet data and non-exoplanet data were processed slightly differently. The median for non-exoplanet data seems to have been defined to be zero. This might make it difficult to build a useful classifier. right now.
 
-# # Visualizations of Intensity Time Series
-# 
-# Let's first look at the data from all 37 exoplanet stars and an identical number of non-exoplanet stars so we can get some sense of what features we might want to look for.
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(12,40))
-x = np.array(range(3197))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,df[labels==2].iloc[i,:])
-
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(12,40))
-x = np.array(range(3197))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,df[labels==1].iloc[i,:])
-
-
-# There's tons of features that we can see here. We see both longer-scale structure and wildly different amounts of seemingly random noise. If you zoom in, a lot of noise looks sinusoidal. We also see a lot of anomalous points, particularly at high intensity. The clearest exoplanet signatures are fairly regular downward spikes in the data. Let's look at one of these.
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(12,4))
-ax = fig.add_subplot(121)
-plt.scatter(x,df[labels==2].iloc[35,:])
-ax = fig.add_subplot(122)
-plt.scatter(np.array(range(500)),df[labels==2].iloc[35,:500])
-plt.show()
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
 
-# On the plot on the right (zoomed in) we can clearly see a sinusoidal structure. There are also upward pulses in the plot on the left, particularly toward the end. Maybe these could be spots? Instrument noise is also a possibility (I would guess more likely).
-# 
-# Less clear are some possible signals of an almost rectangular pulse visible on the more general structure. A couple that have this kind of feature are shown below. These don't necessarily repeat and will likely be much more difficult to find. One of these seems to even have both kinds of features.
-
-# In[ ]:
 
+# In[6]:
 
-fig = plt.figure(figsize=(12,4))
-ax = fig.add_subplot(121)
-plt.scatter(x,df[labels==2].iloc[18,:])
-ax = fig.add_subplot(122)
-plt.scatter(x,df[labels==2].iloc[30,:])
-plt.show()
 
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+lbl = LabelEncoder()
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
 
-# The plot on the left has a single larger dip and a bunch of fast dips. The one on the right seems to have two transits but also has a very unstable signal that will need to be accounted for. 
-# 
-# We also see that the amount of noise isn't necessarily stable even within one signal. The data below show a star with an exoplanet that has both a complicated general structure and a great deal of noise toward the end. The exoplanet signal is not clear at all here, at least not without further processing of data.
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
 
-# In[ ]:
 
+# In[7]:
 
-fig = plt.figure(figsize=(10,15))
-ax = fig.add_subplot(311)
-ax.scatter(x,df[labels==2].iloc[9,:])
-ax = fig.add_subplot(312)
-ax.scatter(np.array(range(2500,3000)),df[labels==2].iloc[9,2500:3000])
-ax = fig.add_subplot(313)
-ax.scatter(np.array(range(1200,1700)),df[labels==2].iloc[9,1200:1700])
-plt.show()
 
+train = pd.merge(data['tra'], stores, how='left', on=['air_store_id','dow']) 
+test = pd.merge(data['tes'], stores, how='left', on=['air_store_id','dow'])
 
-# The middle plot shows some samples toward the end. The noise has some strange structure. It's not sinusoidal, but it clearly repeates. Toward the middle, we can see a few dips that maybe could be from a planet. Noisier repeating structures are also visible here.
-# 
-# I've mentioned a few issues with the data, so now let's try to do some data cleaning.
-# 
-# # Data Processing
-# 
-# ## Outlier Removal
-# 
-# First, remember that we saw a lot of high-valued outliers. Let's try to get rid of those.
-# 
-# To do this, I'll take the top 1% of data points and replace them with the mean of the 4 points on either side, as long as that value is lower. We're looking for dips in the data, so removing a few % shouldn't affect things much.
-
-# In[ ]:
-
-
-def reduce_upper_outliers(df,reduce = 0.01, half_width=4):
-    length = len(df.iloc[0,:])
-    remove = int(length*reduce)
-    for i in df.index.values:
-        values = df.loc[i,:]
-        sorted_values = values.sort_values(ascending = False)
-       # print(sorted_values[:30])
-        for j in range(remove):
-            idx = sorted_values.index[j]
-            #print(idx)
-            new_val = 0
-            count = 0
-            idx_num = int(idx[5:])
-            #print(idx,idx_num)
-            for k in range(2*half_width+1):
-                idx2 = idx_num + k - half_width
-                if idx2 <1 or idx2 >= length or idx_num == idx2:
-                    continue
-                new_val += values['FLUX-'+str(idx2)]
-                
-                count += 1
-            new_val /= count # count will always be positive here
-            #print(new_val)
-            if new_val < values[idx]: # just in case there's a few persistently high adjacent values
-                df.set_value(i,idx,new_val)
-        
-            
-    return df
-
-
-# To make things a bit easier, I'll take two subsamples: The exoplanet set and 100 random samples from the non-exoplanet set.
-# 
-# I'll run the outlier remover twice, altering 2% of the data points.
-
-# In[ ]:
-
-
-df_exo = df[labels==2]
-df_non = df[labels==1]
-df_non = df_non.sample(n=100,random_state=999)
-for i in range(2):
-    df_exo = reduce_upper_outliers(df_exo)
-for i in range(2):
-    df_non = reduce_upper_outliers(df_non)
-
-
-# So what did that do? Well, we see below that we've removed the vast majority of the high-valued outliers. There are still some problem areas in a few of these, mostly due to having a series of nearby high points. There is also some clipping there, but as I've mentioned, this shouldn't give us too much trouble.
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(12,40))
-x = np.array(range(3197))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,df_exo.iloc[i,:])
-
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(12,40))
-x = np.array(range(3197))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,df_non.iloc[i,:])
-
-
-# ## Smoothing
-# 
-# Now let's try to smooth the data. I'll do this in two steps:
-# 
-# First, I'll run a pass with a fairly wide (41 samples) median filter. I also looked at a Gaussian FIR filter. I don't think the exact choice of this will matter much. The width sets the size of features that we want to select.
-# 
-# This first step is actually going to be used to remove features. I will run the filter and subtract it from the result. Here, any features that are wider than a few tens of samples will be removed, so this is a high-pass filter.
-# 
-# I'll use a 4th order Savitzky-Golay filter (half-width of 10) as the second step. This is an interesting filter since it's an FIR version of running a polynomial least-squares fit at every point. That means that it doesn't just give estimates for the de-noised signal but also for some of the derivatives. I won't use that functionality right now. Again, there are tons of filters that can be used and many of them won't differ too much. I'll just run the filter here, so it will smooth the signals.
-# 
-# Here, I'll plot these steps for several of the exoplanet stars. You'll see the original signal, the high-pass filtered signal, and finally the smoothed signal.
-
-# In[ ]:
-
-
-from scipy.signal import savgol_filter
-from scipy.signal import gaussian
-from scipy.signal import medfilt
-from scipy.signal import lfilter
-
-test = [0,7,11,12,31,34]
-nfigs = 2 * len(test)
-fig = plt.figure(figsize=[13,50])
-count = 1
-for i in test:
-    ax = fig.add_subplot(nfigs,3,count)
-    ax.scatter(np.array(range(len(df_exo.iloc[i,:]))),df_exo.iloc[i,:])
-    count += 1
-    y0 = medfilt(df_exo.iloc[i,:],41)
-    for idx in range(len(y0)):
-        y0[idx] = df_exo.iloc[i,idx] - y0[idx]
-    y1 = savgol_filter(y0,21,4,deriv=0)
-    ax = fig.add_subplot(nfigs,3,count)
-    count += 1
-    ax.scatter( np.array(range(len(y0))),y0)
-    ax.set_label('Sample')
-    ax.set_ylabel('Gaussian Smoothing')
-    ax.set_title('Exoplanet Star '+str(i))
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
     
-    ax = fig.add_subplot(nfigs,3,count)
-    count += 1
-    ax.scatter( np.array(range(len(y1)-40)),y1[20:-20])
-    ax.set_label('Sample')
-    ax.set_ylabel('Savitzky-Golay Estimate, 1st derivative')
-    ax.set_title('Exoplanet Star '+str(i))
-    
-plt.show()
+train = train.fillna(-1)
+test = test.fillna(-1)
 
 
-# You can see here that the first step removed a lot of the broader structure, while the second reduces the size of random noise. The signal is still not clear for the first and maybe last (the last is very noisy) stars. The 2nd, 3rd, and 4th are now extremely clear. The smoothing helped regularize the shape of the peaks, so while the shapes are now different, it will be very easy for a simple peak finder to find them.
+# In[8]:
+
+
+def RMSLE(y, pred):
+    return mean_squared_error(y, pred)**0.5
+
+
+# In[9]:
+
+
+train.head()
+
+
+# # **Part 1** 
+# ## **Visitors as a feature to fit LSTM**
 # 
-# The 5th star shows some interesting behavior. In the initial and high-pass-filtered data, we see what looks like a pretty regular structure of the exoplanet going by. However, in the smoothed signal we see that three of the transits are much clearerwhile the others maybe seem less clear. So, are there two kinds of transits here? Or are some of these dips not actually transits?
+# Functions from https://machinelearningmastery.com/time-series-prediction-lstm-recurrent-neural-networks-python-keras
+
+# ### *Normalize feature*
+
+# In[10]:
+
+
+train = train.sort_values('visit_date')
+values = np.log1p(train['visitors'].values).reshape(-1,1)
+values = values.astype('float32')
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled = scaler.fit_transform(values)
+
+
+# ### *Split into train and test sets*
+
+# In[11]:
+
+
+train_size = int(len(scaled) * 0.7)
+test_size = len(scaled) - train_size
+
+V_train, V_test = scaled[0:train_size,:], scaled[train_size:len(scaled),:]
+print(len(V_train), len(V_test))
+
+
+# ### *Convert an array of values into a dataset matrix*
+
+# In[12]:
+
+
+def create_dataset(dataset, look_back=1):
+    dataX, dataY = [], []
+    for i in range(len(dataset) - look_back):
+        a = dataset[i:(i + look_back), 0]
+        dataX.append(a)
+        dataY.append(dataset[i + look_back, 0])
+    print(len(dataY))
+    return np.array(dataX), np.array(dataY)
+
+
+# ### *Create dataset with look back*
+
+# In[13]:
+
+
+look_back = 1
+trainX, trainY = create_dataset(V_train, look_back)
+testX, testY = create_dataset(V_test, look_back)
+
+
+# ### *Reshape X for model training*
+
+# In[14]:
+
+
+trainX = np.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1]))
+testX = np.reshape(testX, (testX.shape[0], 1, testX.shape[1]))
+
+
+#  ### *Train LSTM with 3 epochs*
+
+# In[15]:
+
+
+model = Sequential()
+model.add(LSTM(4, input_shape=(trainX.shape[1], trainX.shape[2])))
+model.add(Dense(1))
+model.compile(loss='mse', optimizer='adam')
+history = model.fit(trainX, trainY, epochs=3, batch_size=100,
+                            validation_data=(testX, testY), verbose=1, shuffle=False) 
+
+
+# ### *Make prediction and apply invert scaling*
+
+# In[16]:
+
+
+yhat = model.predict(testX)
+
+yhat_inverse = scaler.inverse_transform(yhat.reshape(-1, 1))
+testY_inverse = scaler.inverse_transform(testY.reshape(-1, 1))
+
+
+# ### *RMSLE*
+
+# In[17]:
+
+
+rmsle = RMSLE(testY_inverse, yhat_inverse)
+print('Test RMSLE: %.3f' % rmsle)
+
+
+# # **Part 2**
+# ## **Multivariate Forecast**
 # 
-# Regardless, I'll now build a filter function and run it on my two small datasets.
+# Functions from https://machinelearningmastery.com/multivariate-time-series-forecasting-lstms-keras
 
-# In[ ]:
+# ### *Using all features for model training*
 
-
-def short_transit_filter(df):
-
-    length = df.shape[0]
-    output = []
-    for i in range(length):
-
-        y0 = medfilt(df.iloc[i,:],41)
-        for idx in range(len(y0)):
-            y0[idx] = df.iloc[i,idx] - y0[idx]
-        y1 = savgol_filter(y0,21,4,deriv=0) # remove edge effects
-        output.append(y1)
-    
-    return output
-    
+# In[18]:
 
 
-# In[ ]:
+train = train.sort_values('visit_date')
+target_train = np.log1p(train['visitors'].values)
+
+col = [c for c in train if c not in ['id', 'air_store_id', 'visitors']]
+
+train = train[col]
+train.set_index('visit_date', inplace=True)
+
+train.head()
 
 
-out_exo = short_transit_filter(df_exo)
-out_non = short_transit_filter(df_non)
+# ### *Function to convert series to supervised learning*
+
+# In[19]:
 
 
-# Now, we can look at what we did to our data.
+def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
+    """
+    Frame a time series as a supervised learning dataset.
+    Arguments:
+        data: Sequence of observations as a list or NumPy array.
+        n_in: Number of lag observations as input (X).
+        n_out: Number of observations as output (y).
+        dropnan: Boolean whether or not to drop rows with NaN values.
+    Returns:
+        Pandas DataFrame of series framed for supervised learning.
+    """
+    n_vars = 1 if type(data) is list else data.shape[1]
+    df = pd.DataFrame(data)
+    cols, names = list(), list()
+    # Input sequence (t-n, ... t-1)
+    for i in range(n_in, 0, -1):
+        cols.append(df.shift(i))
+        names += [('var%d(t-%d)' % (j+1, i)) for j in range(n_vars)]
+    # Forecast sequence (t, t+1, ... t+n)
+    for i in range(0, n_out):
+        cols.append(df.shift(-i))
+        if i == 0:
+            names += [('var%d(t)' % (j+1)) for j in range(n_vars)]
+        else:
+            names += [('var%d(t+%d)' % (j+1, i)) for j in range(n_vars)]
+    # Put it all together
+    agg = pd.concat(cols, axis=1)
+    agg.columns = names
+    # Drop rows with NaN values
+    if dropnan:
+        agg.dropna(inplace=True)
+    return agg
 
-# In[ ]:
+
+# ### *Normalize features*
+
+# In[20]:
 
 
-fig = plt.figure(figsize=(13,40))
-x = np.array(range(len(out_exo[0])-24))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,out_exo[i][12:-12])
+train['visitors'] = target_train
+values = train.values
+values = values.astype('float32')
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled = scaler.fit_transform(values)
 
 
-# Here, we can see obvious exoplanet transits in about half of our data. We also see that the smoothing is clearly affected by outliers (see some of the upward peaks that have appeared). We may want to develop smarter outlier removers that look for local outliers as well.
+# ### *Frame as supervised learning*
 
-# In[ ]:
-
-
-fig = plt.figure(figsize=(13,40))
-x = np.array(range(len(out_exo[0])-24))
-for i in range(37):
-    ax = fig.add_subplot(13,3,i+1)
-    ax.scatter(x,out_non[i][12:-12])
+# In[21]:
 
 
-# In the non-exoplanet data we see downward spikes as well, but mostly isolated or at irregular intervals. If you look closely at the original data, many of these seem to be from single isolated data points. Maybe we should develop an outlier remover for downward spikes, but that might prove to be quite difficult if we don't want to remove our exoplanet events.
-
-# In[ ]:
-
-
-## After filtering
-
-df_exo_filt = pd.DataFrame(out_exo)
-df_non_filt = pd.DataFrame(out_non)
+reframed = series_to_supervised(scaled, 1, 1)
+reframed.head()
 
 
-# ## Post-smoothing statistics
+# ### *Drop unncessary columns*
+
+# In[22]:
+
+
+reframed.drop(reframed.columns[[i for i in range(17,33)]], axis=1, inplace=True)
+reframed.head()
+
+
+# ### *Split into train and test sets*
+
+# In[23]:
+
+
+values = reframed.values
+n_train_days = int(len(values) * 0.7)
+train = values[:n_train_days, :]
+test = values[n_train_days:, :]
+# Split into input and outputs
+train_X, train_y = train[:, :-1], train[:, -1]
+test_X, test_y = test[:, :-1], test[:, -1]
+# Reshape input to be 3D [samples, timesteps, features]
+train_X = train_X.reshape((train_X.shape[0], 1, train_X.shape[1]))
+test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))
+print(train_X.shape, train_y.shape, test_X.shape, test_y.shape)
+
+
+#  ### *Train LSTM with 3 epochs*
+
+# In[24]:
+
+
+multi_model = Sequential()
+multi_model.add(LSTM(4, input_shape=(train_X.shape[1], train_X.shape[2])))
+multi_model.add(Dense(1))
+multi_model.compile(loss='mse', optimizer='adam')
+multi_history = multi_model.fit(train_X, train_y, epochs=3,
+                                batch_size=100, validation_data=(test_X, test_y),
+                                verbose=1, shuffle=False)
+
+
+# ### *Make prediction*
+
+# In[25]:
+
+
+yhat = multi_model.predict(test_X)
+
+
+# ### *Apply invert scaling*
+
+# In[26]:
+
+
+test_X = test_X.reshape((test_X.shape[0], test_X.shape[2]))
+# Invert scaling for forecast
+inv_yhat = np.concatenate((yhat, test_X[:, 1:]), axis=1)
+inv_yhat = scaler.inverse_transform(inv_yhat)
+inv_yhat = inv_yhat[:,0]
+# Invert scaling for actual
+test_y = test_y.reshape((len(test_y), 1))
+inv_y = np.concatenate((test_y, test_X[:, 1:]), axis=1)
+inv_y = scaler.inverse_transform(inv_y)
+inv_y = inv_y[:,0]
+
+
+# ### *RMSLE*
+
+# In[27]:
+
+
+rmsle = RMSLE(inv_y, inv_yhat)
+print('Test RMSLE: %.3f' % rmsle)
+
+
+# Slight improve, not enough, however, to beat benchmarks. I would add that the LSTM may not be suited for autoregression type problems (at least with such set of features, window and LSTM-configuration) and that maybe better off exploring an MLP with a large window. But i think it's good demo how to fit neural network to a multivariate time series forecasting problem. 
+# Specifically:
 # 
-# Now let's see what happened to some of the basic statistics we looked at before.
-
-# In[ ]:
-
-
-means2 = df_exo_filt.mean(axis=1)
-std2 = df_exo_filt.std(axis=1)
-medians2 = df_exo_filt.median(axis=1)
-means1 = df_non_filt.mean(axis=1)
-std1 = df_non_filt.std(axis=1)
-medians1 = df_non_filt.median(axis=1)
-
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(10,10))
-
-ax = fig.add_subplot(221)
-ax.hist(means1,color='b',range=(-300,100),bins=20)
-ax.hist(means2,color='r',range=(-300,100),bins=20)
-ax.set_xlabel('Mean Intensity')
-ax = fig.add_subplot(222)
-ax.hist(medians1,color='b',range=(-50,50),bins=20)
-ax.hist(medians2,color='r',range=(-50,50),bins=20)
-ax.set_xlabel('Median Intensity')
-ax = fig.add_subplot(223)
-ax.hist(std1,color='b',range=(0,500),bins=10)
-ax.hist(std2,color='r',range=(0,500),bins=10)
-ax.set_xlabel('Intensity Std. Dev.')
-
-plt.show()
-
-
-# As we might have expected, our smoothing has caused significant reductions in the mean and median data for most of our data. The standard deviation also looks like it has been reduced substantially.
-
-# # Additional Work to Do
-# 
-# This just shows some visualizations and some basic processing steps. We haven't tried to classify anything yet. There's still a lot of processing that can be done. It may be useful to run several smoothing steps looking at different feature sizes. Once that's done, it might be good to then start data reduction. Taking FFTs of many samples may give us some information about any kind of instrument noise. If there are some characteristic frequencies of noise, we could try to filter them out.
-# 
-# Autocorrelation or partial autocorrelation may be quite useful in helping find periodic features such as the short-duration, short-interval transits. 
-# 
-# With such a small exoplanet sample, it may be impossible to achieve a very high purity sample. However, even getting a substantial reduction in non-exoplanet data could be useful. I also wonder if maybe neural nets can be enlisted to look for exoplanet-like features.
+# * How to transform a raw dataset into something we can use for time series forecasting.
+# * How to prepare data and fit an LSTM for a multivariate time series forecasting problem.
+# * How to make a forecast and rescale the result back into the original units.

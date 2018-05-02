@@ -1,179 +1,285 @@
 
 # coding: utf-8
 
-# # Station combinations
+# UFO Reports in United States
+# ----------------------------
+#  &nbsp;...by [Latitude/Longitude][1]<br>
+#  &nbsp;...by [Year][2]<br>
+#  &nbsp;...by [State][3]<br>
+#  &nbsp;...per [Capita][4]<br>
+#  &nbsp;...by [Area][5]
 # 
-# We have seen [station 32 has high (4.7%) error rate][1].
-# 
-# Let's investigate that failure rate with station combinations.
-# 
-#   [1]: https://www.kaggle.com/jeffd23/bosch-production-line-performance/what-s-wrong-with-station-32
+# [1]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-Latitude/Longitude
+# [2]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-Year
+# [3]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-State
+# [4]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-per-Capita
+# [5]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-per-Area
+
+# Data Import
+# -----------------
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import gc
-sns.set_style('whitegrid')
+
+import plotly.plotly as py
+import plotly.graph_objs as go
+from plotly import tools
+from plotly.offline import iplot, init_notebook_mode
+init_notebook_mode()
+
+ufo_data = pd.read_csv('../input/scrubbed.csv', usecols=[0, 1, 2, 9, 10], low_memory=False)
+ufo_data['datetime'] = pd.to_datetime(ufo_data['datetime'], errors='coerce')
+ufo_data.insert(1, 'year', ufo_data['datetime'].dt.year)
+ufo_data['year'] = ufo_data['year'].fillna(0).astype(int)
+ufo_data['city'] = ufo_data['city'].str.title()
+ufo_data['state'] = ufo_data['state'].str.upper()
+ufo_data['latitude'] = pd.to_numeric(ufo_data['latitude'], errors='coerce')
+ufo_data = ufo_data.rename(columns={'longitude ':'longitude'})
+
+us_states = np.asarray(['AK', 'AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DC', 'DE', 'FL', 'GA',
+                        'HI', 'IA', 'ID', 'IL', 'IN', 'KS', 'KY', 'LA', 'MA', 'MD', 'ME',
+                        'MI', 'MN', 'MO', 'MS', 'MT', 'NC', 'ND', 'NE', 'NH', 'NJ', 'NM',
+                        'NV', 'NY', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX',
+                        'UT', 'VA', 'VT', 'WA', 'WI', 'WV', 'WY'])
+
+# UFO sightings in United States only (70,805 rows)
+ufo_data = ufo_data[ufo_data['state'].isin(us_states)].sort_values('year')
+ufo_data = ufo_data[(ufo_data.latitude > 15) & (ufo_data.longitude < -65)]
+ufo_data = ufo_data[(ufo_data.latitude > 50) & (ufo_data.longitude > -125) == False]
+ufo_data = ufo_data[ufo_data['city'].str.contains('\(Canada\)|\(Mexico\)') == False]
 
 
-# # Read station and response data
+# UFO Reports by Latitude/Longitude
+# ----------------------------
+
+# In[ ]:
+
+
+ufo_data['text'] = ufo_data[ufo_data.year > 0]['datetime'].dt.strftime('%B %-d, %Y')
+
+data = [dict(
+        type = 'scattergeo',
+        locationmode = 'USA-states',
+        lon = ufo_data[ufo_data.year > 0]['longitude'],
+        lat = ufo_data[ufo_data.year > 0]['latitude'],
+        text = ufo_data[ufo_data.year > 0]['text'],
+        mode = 'markers',
+        marker = dict(
+            size = 5.5,
+            opacity = 0.75,
+            color = 'rgb(0, 163, 81)',
+            line = dict(color = 'rgb(255, 255, 255)', width = 1))
+        )]
+
+layout = dict(
+         title = 'UFO Reports by Latitude/Longitude in United States (1910-2014)',
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             showland = True,
+             landcolor = 'rgb(250, 250, 250)',
+             subunitwidth = 1,
+             subunitcolor = 'rgb(217, 217, 217)',
+             countrywidth = 1,
+             countrycolor = 'rgb(217, 217, 217)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+        )
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
+
+
+# UFO Reports by Year
+# -------------------
+# Have reports of UFO sightings increased, decreased, or remained constant in the past century?
+
+# In[ ]:
+
+
+# UFO sightings per year
+ufo_peryear = np.asarray(ufo_data[ufo_data.year > 0].groupby('year').year.count())
+# UFO sightings in 2014 estimated, data published in June 2014
+ufo_peryear[-1] = ufo_peryear[-1] * 3
+
+ufo_years = np.asarray(ufo_data[ufo_data.year > 0].year.unique())
+
+trace = [go.Scatter(
+         x = ufo_years,
+         y = ufo_peryear,
+         mode = 'lines',
+         line = dict(
+             color = 'rgb(0, 163, 81)',
+             width = 3)
+         )]
+
+layout = go.Layout(
+         title = 'UFO Reports by Year in United States (1910-2014)',
+         xaxis = dict(
+             rangeslider = dict(thickness = 0.05),
+             showline = True,
+             showgrid = False
+         ),
+         yaxis = dict(
+             range = [0, 7000],
+             showline = True,
+             showgrid = False)
+         )
+
+figure = dict(data = trace, layout = layout)
+iplot(figure)
+
+
+# Reports of UFO sightings have skyrocketed in the past twenty years — rising from less than 1,000 in 1995 to more than 6,000 in 2012, 2013, and 2014 (estimated). Have more UFOs been sighted or have more UFO sightings been reported?
 # 
-# ['S32', 'S33', 'S34'] have the most interesting pattern. 
-# 
-# We read the full train set although only 5 columns.
+# The NUFORC has collected UFO data from a phone hotline since 1974 and an online form since 1998. Could the availability of an online form be related to the dramatic increase in reported UFO sightings?
+
+# UFO Reports by State
+# -----------------------
+# Which states have reported the most UFO sightings in the past century?
 
 # In[ ]:
 
 
-STATIONS = ['S32', 'S33', 'S34']
-train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
-date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
-date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
-date_cols = date_cols[date_cols['station'].isin(STATIONS)]
-date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
-print(date_cols)
-train_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
-print(train_date.columns)
-train_date.columns = ['Id'] + STATIONS
-for station in STATIONS:
-    train_date[station] = 1 * (train_date[station] >= 0)
-response = pd.read_csv('../input/train_numeric.csv', usecols=['Id', 'Response'])
-print(response.shape)
-train = response.merge(train_date, how='left', on='Id')
-# print(train.count())
-train.head(3)
+# UFO sightings per state
+ufo_perstate = np.asarray(ufo_data.groupby('state').state.count())
+
+ufo_scale = [[0, 'rgb(229, 249, 239)'], [1, 'rgb(0, 163, 81)']]
+
+data = [dict(
+        type = 'choropleth',
+        autocolorscale = False,
+        colorscale = ufo_scale,
+        showscale = False,
+        locations = us_states,
+        locationmode = 'USA-states',
+        z = ufo_perstate,
+        marker = dict(
+            line = dict(
+                color = 'rgb(255, 255, 255)',
+                width = 2)
+            )
+        )]
+
+layout = dict(
+         title = 'UFO Reports by State in United States (1910-2014)',
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             countrycolor = 'rgb(255, 255, 255)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+        )
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
 
 
-# #Aggregation
-# 
-# Remove cases with less than 1000 records to show significant results.
+# The states with the highest populations — California, Texas, and Florida — reported the most UFO sightings.
 
-# In[ ]:
-
-
-train['cnt'] = 1
-failure_rate = train.groupby(STATIONS).sum()[['Response', 'cnt']]
-failure_rate['failure_rate'] = failure_rate['Response'] / failure_rate['cnt']
-failure_rate = failure_rate[failure_rate['cnt'] > 1000]  # remove 
-failure_rate.head(20)
-
-
-# In[ ]:
-
-
-failure_rate_pretty = failure_rate.reset_index()
-failure_rate_pretty['group'] = ['-'.join([s if row[s] else '' for s in STATIONS])                          for _, row in failure_rate_pretty.iterrows()]
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='group', y="failure_rate", data=failure_rate_pretty, color='r', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in failure_rate_pretty.iterrows():
-    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-plt.title('Station combinations %s' % str(STATIONS))
-fig.savefig('failure_rate.png', dpi=300)
-plt.show()
-
-
-# #Magic/Leakage features
-# First we need to get the start times for both train and test.
+# UFO Reports per Capita
+# ----------------------
+# Which states have reported the most UFO sightings given their population?
 
 # In[ ]:
 
 
-train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
-date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
-date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
-date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
-# Train start dates
-train_start_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
-train_start_date['start_date'] = train_start_date[date_cols].min(axis=1)
-train_start_date = train_start_date.drop(date_cols, axis=1)
-print(train_start_date.shape)
-# Test start dates
-test_start_date = pd.read_csv('../input/test_date.csv', usecols=['Id'] + date_cols)
-test_start_date['start_date'] = test_start_date[date_cols].min(axis=1)
-test_start_date = test_start_date.drop(date_cols, axis=1)
-print(test_start_date.shape)
-start_date = pd.concat([train_start_date, test_start_date])
-print(start_date.shape)
-del train_start_date, test_start_date
-gc.collect()
-start_date.head()
+# state population estimates for July 2015 from US Census Bureau
+state_population = np.asarray([738432, 4858979, 2978204, 6828065, 39144818, 5456574,
+                               3590886, 672228, 945934, 20271272, 10214860, 1431603,
+                               3123899, 1654930, 12859995, 6619680, 2911641, 4425092,
+                               4670724, 6794422, 6006401, 1329328, 9922576, 5489594,
+                               6083672, 2992333, 1032949, 10042802, 756927, 1896190,
+                               1330608, 8958013, 2085109, 2890845, 19795791, 11613423,
+                               3911338, 4028977, 12802503, 1056298, 4896146, 858469,
+                               6600299, 27469114, 2995919, 8382993, 626042, 7170351,
+                               5771337, 1844128, 586107])
+
+# UFO sightings per 100,000 people in state
+ufo_percapita = np.round(ufo_perstate / state_population * 100000, 2)
+
+data = [dict(
+        type = 'choropleth',
+        autocolorscale = False,
+        colorscale = ufo_scale,
+        showscale = False,
+        locations = us_states,
+        locationmode = 'USA-states',
+        z = ufo_percapita,
+        marker = dict(
+            line = dict(
+                color = 'rgb(255, 255, 255)',
+                width = 2)
+            )
+        )]
+
+layout = dict(
+         title = 'UFO Reports per 100,000 People in United States (1910-2014)',
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             countrycolor = 'rgb(255, 255, 255)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+        )
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
 
 
-# Then we add Faron's features.
+# Why have states in the Northeast and West on the border with Canada reported the most UFO sightings per person?
 
-# In[ ]:
-
-
-train_id = pd.read_csv('../input/train_numeric.csv', usecols=['Id'])
-test_id = pd.read_csv('../input/test_numeric.csv', usecols=['Id'])
-train_id = train_id.merge(start_date, on='Id')
-test_id = test_id.merge(start_date, on='Id')
-train_test_id = pd.concat((train_id, test_id)).reset_index(drop=True).reset_index(drop=False)
-train_test_id = train_test_id.sort_values(by=['start_date', 'Id'], ascending=True)
-train_test_id['IdDiff1'] = train_test_id['Id'].diff().fillna(9999999).astype(int)
-train_test_id['IdDiff2'] = train_test_id['Id'].iloc[::-1].diff().fillna(9999999).astype(int)
-train_test_id['Magic'] = 1 + 2 * (train_test_id['IdDiff1'] > 1) + 1 * (train_test_id['IdDiff2'] < -1)
-
-train_with_magic = train.merge(train_test_id[['Id', 'Magic']], on='Id')
-train_with_magic.head()
-
-
-# In[ ]:
-
-
-magic_failure_rate = train_with_magic.groupby(['Magic']).sum()[['Response', 'cnt']]
-magic_failure_rate['failure_rate'] = magic_failure_rate['Response'] / magic_failure_rate['cnt']
-magic_failure_rate.head()
-
-
-# 5% failure rate for 100K rows. Not bad for a single feature.
-
-# In[ ]:
-
-
-magic_failure_rate_pretty = magic_failure_rate.reset_index()
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='Magic', y="failure_rate", data=magic_failure_rate_pretty, color='k', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in magic_failure_rate_pretty.iterrows():
-    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-fig.savefig('magic_failure_rate.png', dpi=300)
-plt.show()
-
-
-# # Combining the results
-# Let's check ifwe could get something even stronger by combining the previous results.
+# UFO Reports by Area
+# --------------------
+# Which states have reported the most UFO sightings given their size?
 
 # In[ ]:
 
 
-combined_failure_rate = train_with_magic.groupby(['Magic','S32', 'S33']).sum()[['Response', 'cnt']]
-combined_failure_rate['failure_rate'] = combined_failure_rate['Response'] / combined_failure_rate['cnt']
-combined_failure_rate.head(20)
+# state land areas in square kilometeres from US Census Bureau
+state_area = np.asarray([1477953, 131171, 134771, 294207, 403466, 268431, 12542, 158,
+                         5047, 138887, 148959, 16635, 144669, 214045, 143793, 92789, 
+                         211754, 102269, 111898, 20202, 25142, 79883, 146435, 206232,
+                         178040, 121531, 376962, 125920, 178711, 198974, 23187, 19047,
+                         314161, 284332, 122057, 105829, 177660, 248608, 115883, 2678,
+                         77857, 196350, 106798, 676587, 212818, 102279, 23871, 172119,
+                         140268, 62259, 251470])
+
+# UFO sightings per 1,000 square kilometers in state
+ufo_perarea = np.round(ufo_perstate / state_area * 1000, 2)
+# District of Columbia outlier (1 UFO sighting per square kilometer) adjusted
+ufo_perarea[7] = round(ufo_perarea[7] / 6, 2)
+
+data = [dict(
+        type = 'choropleth',
+        autocolorscale = False,
+        colorscale = ufo_scale,
+        showscale = False,
+        locations = us_states,
+        locationmode = 'USA-states',
+        z = ufo_perarea,
+        marker = dict(
+            line = dict(
+                color = 'rgb(255, 255, 255)',
+                width = 2)
+            )
+        )]
+
+layout = dict(
+         title = 'UFO Reports per 1,000 Square Kilometers in United States (1910-2014)',
+         geo = dict(
+             scope = 'usa',
+             projection = dict(type = 'albers usa'),
+             countrycolor = 'rgb(255, 255, 255)',
+             showlakes = True,
+             lakecolor = 'rgb(255, 255, 255)')
+        )
+
+figure = dict(data = data, layout = layout)
+iplot(figure)
 
 
-# In[ ]:
-
-
-full = combined_failure_rate.reset_index()
-full['group'] = 100 * full['Magic'] + 10 * full['S32'] + full['S33']
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='group', y="failure_rate", data=full, color='g', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in full.iterrows():
-    plt.text(i, row['failure_rate']+0.05, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-plt.title('Magic & S32 - S33')
-fig.savefig('magic_station_failure_rate.png', dpi=300)
-plt.show()
-
-
-# We are able to find **1000 products with almost 70% failure rate using only 3 features**.
+# The states with the highest population densities — New Jersey, Massachusetts, Connecticut, and Rhode Island — reported the most UFO sightings per square kilometer.

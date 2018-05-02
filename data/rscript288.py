@@ -1,127 +1,115 @@
-# coding: utf-8
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+"""
+LGBM Regression on TfIDF of text features and One-Hot-Encoded Categoricals
+Featues based on Alexandu Papiu's (https://www.kaggle.com/apapiu) script: https://www.kaggle.com/apapiu/ridge-script
+LGBM based on InfiniteWing's (https://www.kaggle.com/infinitewing) script: https://www.kaggle.com/infinitewing/lightgbm-example
+"""
 
 import pandas as pd
 import numpy as np
-import math
+import scipy
 
-INPUT_PATH = '../input/'
+from sklearn.linear_model import Ridge, LogisticRegression
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer
+import lightgbm as lgb
 
+import gc
 
-def lcm(a, b):
-    """Compute the lowest common multiple of a and b"""
-    # in case of large numbers, using floor division
-    return a * b // math.gcd(a, b)
+NUM_BRANDS = 2500
+NAME_MIN_DF = 10
+MAX_FEAT_DESCP = 50000
 
+print("Reading in Data")
 
-def avg_normalized_happiness(pred, gift, wish):
-    n_children = 1000000  # n children to give
-    n_gift_type = 1000  # n types of gifts available
-    n_gift_quantity = 1000  # each type of gifts are limited to this quantity
-    n_gift_pref = 100  # number of gifts a child ranks
-    n_child_pref = 1000  # number of children a gift ranks
-    twins = math.ceil(0.04 * n_children / 2.) * 2  # 4% of all population, rounded to the closest number
-    triplets = math.ceil(0.005 * n_children / 3.) * 3  # 0.5% of all population, rounded to the closest number
-    ratio_gift_happiness = 2
-    ratio_child_happiness = 2
+df_train = pd.read_csv('../input/train.tsv', sep='\t')
+df_test = pd.read_csv('../input/test.tsv', sep='\t')
 
-    # check if triplets have the same gift
-    for t1 in np.arange(0, triplets, 3):
-        triplet1 = pred[t1]
-        triplet2 = pred[t1 + 1]
-        triplet3 = pred[t1 + 2]
-        # print(t1, triplet1, triplet2, triplet3)
-        assert triplet1 == triplet2 and triplet2 == triplet3
+df = pd.concat([df_train, df_test], 0)
+nrow_train = df_train.shape[0]
+y_train = np.log1p(df_train["price"])
 
-    # check if twins have the same gift
-    for t1 in np.arange(triplets, triplets + twins, 2):
-        twin1 = pred[t1]
-        twin2 = pred[t1 + 1]
-        # print(t1)
-        assert twin1 == twin2
+del df_train
+gc.collect()
 
-    max_child_happiness = n_gift_pref * ratio_child_happiness
-    max_gift_happiness = n_child_pref * ratio_gift_happiness
-    total_child_happiness = 0
-    total_gift_happiness = np.zeros(n_gift_type)
+print(df.memory_usage(deep = True))
 
-    for i in range(len(pred)):
-        child_id = i
-        gift_id = pred[i]
+df["category_name"] = df["category_name"].fillna("Other").astype("category")
+df["brand_name"] = df["brand_name"].fillna("unknown")
 
-        # check if child_id and gift_id exist
-        assert child_id < n_children
-        assert gift_id < n_gift_type
-        assert child_id >= 0
-        assert gift_id >= 0
-        child_happiness = (n_gift_pref - np.where(wish[child_id] == gift_id)[0]) * ratio_child_happiness
-        if not child_happiness:
-            child_happiness = -1
+pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
+df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
 
-        gift_happiness = (n_child_pref - np.where(gift[gift_id] == child_id)[0]) * ratio_gift_happiness
-        if not gift_happiness:
-            gift_happiness = -1
+df["item_description"] = df["item_description"].fillna("None")
+df["item_condition_id"] = df["item_condition_id"].astype("category")
+df["brand_name"] = df["brand_name"].astype("category")
 
-        total_child_happiness += child_happiness
-        total_gift_happiness[gift_id] += gift_happiness
+print(df.memory_usage(deep = True))
 
-    denominator1 = n_children * max_child_happiness
-    denominator2 = n_gift_quantity * max_gift_happiness * n_gift_type
-    common_denom = lcm(denominator1, denominator2)
-    multiplier = common_denom / denominator1
+print("Encodings")
+count = CountVectorizer(min_df=NAME_MIN_DF)
+X_name = count.fit_transform(df["name"])
 
-    ret = float(math.pow(total_child_happiness * multiplier, 3) + \
-                math.pow(np.sum(total_gift_happiness), 3)) / float(math.pow(common_denom, 3))
-    return ret
-           
-           
-def solve():
-    wish = pd.read_csv(INPUT_PATH + 'child_wishlist_v2.csv', header=None).as_matrix()[:, 1:]
-    gift = pd.read_csv(INPUT_PATH + 'gift_goodkids_v2.csv', header=None).as_matrix()[:, 1:]
-    answ = np.zeros((len(wish)), dtype=np.int32)
-    answ[:] = -1
-    gift_count = np.zeros((len(gift)), dtype=np.int32)
+print("Category Encoders")
+unique_categories = pd.Series("/".join(df["category_name"].unique().astype("str")).split("/")).unique()
+count_category = CountVectorizer()
+X_category = count_category.fit_transform(df["category_name"])
 
-    for i in range(0, 5001, 3):
-        g = wish[i, 0]
-        answ[i] = g
-        answ[i+1] = g
-        answ[i+2] = g
-        gift_count[g] += 3
-    
-    for i in range(5001, 45001, 2):
-        g = wish[i, 0]
-        answ[i] = g
-        answ[i+1] = g
-        gift_count[g] += 2
+print("Descp encoders")
+count_descp = TfidfVectorizer(max_features = MAX_FEAT_DESCP, 
+                              ngram_range = (1,3),
+                              stop_words = "english")
+X_descp = count_descp.fit_transform(df["item_description"])
 
-    for i in range(45001, len(answ)):
-        for k in range(100):
-            g = wish[i, k]
-            if gift_count[g] < 1000:
-                answ[i] = g
-                gift_count[g] += 1
-                break
-        if answ[i] == -1:
-            g = np.argmin(gift_count)
-            answ[i] = g
-            gift_count[g] += 1
+print("Brand encoders")
+vect_brand = LabelBinarizer(sparse_output=True)
+X_brand = vect_brand.fit_transform(df["brand_name"])
 
-        if i % 100000 == 0:
-            print('Completed: {}'.format(i))
+print("Dummy Encoders")
+X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[[
+    "item_condition_id", "shipping"]], sparse = True).values)
 
-    if gift_count.max() > 1000:
-        print('Some error in kernel: {}'.format(gift_count.max()))
+X = scipy.sparse.hstack((X_dummies, 
+                         X_descp,
+                         X_brand,
+                         X_category,
+                         X_name)).tocsr()
 
-    score = avg_normalized_happiness(answ, gift, wish)
-    print('Predicted score: {:.8f}'.format(score))
+print([X_dummies.shape, X_category.shape, 
+       X_name.shape, X_descp.shape, X_brand.shape])
 
-    out = open('subm_{}.csv'.format(score), 'w')
-    out.write('ChildId,GiftId\n')
-    for i in range(len(answ)):
-        out.write(str(i) + ',' + str(answ[i]) + '\n')
-    out.close()
+X_train = X[:nrow_train]
+X_test = X[nrow_train:]
 
 
-if __name__ == '__main__':
-    solve()
+
+params = {
+    'learning_rate': 0.75,
+    'application': 'regression',
+    'max_depth': 3,
+    'num_leaves': 100,
+    'verbosity': -1,
+    'metric': 'RMSE',
+}
+
+
+train_X, valid_X, train_y, valid_y = train_test_split(X_train, y_train, test_size = 0.1, random_state = 144) 
+d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
+d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
+watchlist = [d_train, d_valid]
+
+model = lgb.train(params, train_set=d_train, num_boost_round=2200, valid_sets=watchlist, \
+early_stopping_rounds=50, verbose_eval=100) 
+preds = model.predict(X_test)
+
+model = Ridge(solver = "lsqr", fit_intercept=False)
+
+print("Fitting Model")
+model.fit(X_train, y_train)
+
+preds += model.predict(X_test)
+preds /= 2
+
+
+df_test["price"] = np.expm1(preds)
+df_test[["test_id", "price"]].to_csv("submission_LGBM_Ridge_3.csv", index = False)

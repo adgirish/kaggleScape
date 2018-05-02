@@ -1,375 +1,328 @@
 
 # coding: utf-8
 
-# This kernel is an extension of the EDA notebook: [Stop the S@#$ - Toxic Comments EDA](https://www.kaggle.com/jagangupta/stop-the-s-toxic-comments-eda)
-# 
-# 
-# # Topic Modeling: 
-# 
-# Topic modeling can be a useful tool to summarize the context of a huge corpus(text) by guessing what the "Topic" or the general theme of the sentence. 
-# 
-# This can also be used as inputs to our classifier if they can identify patterns or "Topics" that indicate toxicity.
-# 
-# Let's find out!
-# 
-# The steps followed in this kernel:
-# * Preprocessing (Tokenization using gensim's simple_preprocess)
-# * Cleaning
-#     * Stop word removal
-#     * Bigram collation
-#     * Lemmatization
-# *  Creation of dictionary (list of all words in the cleaned text)
-# * Topic modeling using LDA
-# * Visualization with pyLDAviz
-# * Convert topics to sparse vectors
-# * Feed sparse vectors to the model
-
 # In[ ]:
 
 
-#import required packages
-#basic
-import pandas as pd 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
 import numpy as np
-
-#misc
+import pandas as pd
+import lightgbm as lgb
+import datetime
+import math
 import gc
-import time
-import warnings
-#viz
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec 
-import seaborn as sns
-import pyLDAvis.gensim
-#nlp
-import string
-import re     #for regex
-from nltk.tokenize.toktok import ToktokTokenizer
-from nltk.stem.wordnet import WordNetLemmatizer 
-from nltk.corpus import stopwords
-from nltk.corpus import wordnet
-import gensim
-from gensim.models import CoherenceModel, LdaModel, LsiModel, HdpModel
-from gensim.models.wrappers import LdaMallet
-from gensim.corpora import Dictionary
 
 
-#Modeling
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.utils.validation import check_X_y, check_is_fitted
-from sklearn.linear_model import LogisticRegression
-from sklearn import metrics
-from sklearn.metrics import log_loss
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import train_test_split
-from scipy import sparse
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-#settings
-start_time=time.time()
-color = sns.color_palette()
-sns.set_style("dark")
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-#constants
-eng_stopwords = set(stopwords.words("english"))
-#settings
-warnings.filterwarnings("ignore")
-lem = WordNetLemmatizer()
-tokenizer=ToktokTokenizer()
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-start_time=time.time()
-#importing the dataset
-train=pd.read_csv("../input/train.csv")
-test=pd.read_csv("../input/test.csv")
-end_import=time.time()
-print("Time till import:",end_import-start_time,"s")
+print('Loading data...')
+data_path = '../input/'
+train = pd.read_csv(data_path + 'train.csv', dtype={'msno' : 'category',
+                                                'source_system_tab' : 'category',
+                                                  'source_screen_name' : 'category',
+                                                  'source_type' : 'category',
+                                                  'target' : np.uint8,
+                                                  'song_id' : 'category'})
+test = pd.read_csv(data_path + 'test.csv', dtype={'msno' : 'category',
+                                                'source_system_tab' : 'category',
+                                                'source_screen_name' : 'category',
+                                                'source_type' : 'category',
+                                                'song_id' : 'category'})
+songs = pd.read_csv(data_path + 'songs.csv',dtype={'genre_ids': 'category',
+                                                  'language' : 'category',
+                                                  'artist_name' : 'category',
+                                                  'composer' : 'category',
+                                                  'lyricist' : 'category',
+                                                  'song_id' : 'category'})
+members = pd.read_csv(data_path + 'members.csv',dtype={'city' : 'category',
+                                                      'bd' : np.uint8,
+                                                      'gender' : 'category',
+                                                      'registered_via' : 'category'},
+                     parse_dates=['registration_init_time','expiration_date'])
+songs_extra = pd.read_csv(data_path + 'song_extra_info.csv')
+print('Done loading...')
 
 
 # In[ ]:
 
 
-#to seperate sentenses into words
-def preprocess(comment):
-    """
-    Function to build tokenized texts from input comment
-    """
-    return gensim.utils.simple_preprocess(comment, deacc=True, min_len=3)
+print('Data merging...')
+
+
+train = train.merge(songs, on='song_id', how='left')
+test = test.merge(songs, on='song_id', how='left')
+
+members['membership_days'] = members['expiration_date'].subtract(members['registration_init_time']).dt.days.astype(int)
+
+members['registration_year'] = members['registration_init_time'].dt.year
+members['registration_month'] = members['registration_init_time'].dt.month
+members['registration_date'] = members['registration_init_time'].dt.day
+
+members['expiration_year'] = members['expiration_date'].dt.year
+members['expiration_month'] = members['expiration_date'].dt.month
+members['expiration_date'] = members['expiration_date'].dt.day
+members = members.drop(['registration_init_time'], axis=1)
+
+def isrc_to_year(isrc):
+    if type(isrc) == str:
+        if int(isrc[5:7]) > 17:
+            return 1900 + int(isrc[5:7])
+        else:
+            return 2000 + int(isrc[5:7])
+    else:
+        return np.nan
+        
+songs_extra['song_year'] = songs_extra['isrc'].apply(isrc_to_year)
+songs_extra.drop(['isrc', 'name'], axis = 1, inplace = True)
+
+train = train.merge(members, on='msno', how='left')
+test = test.merge(members, on='msno', how='left')
+
+train = train.merge(songs_extra, on = 'song_id', how = 'left')
+train.song_length.fillna(200000,inplace=True)
+train.song_length = train.song_length.astype(np.uint32)
+train.song_id = train.song_id.astype('category')
+
+
+test = test.merge(songs_extra, on = 'song_id', how = 'left')
+test.song_length.fillna(200000,inplace=True)
+test.song_length = test.song_length.astype(np.uint32)
+test.song_id = test.song_id.astype('category')
+
+# import gc
+# del members, songs; gc.collect();
+
+print('Done merging...')
 
 
 # In[ ]:
 
 
-#tokenize the comments
-train_text=train.comment_text.apply(lambda x: preprocess(x))
-test_text=test.comment_text.apply(lambda x: preprocess(x))
-all_text=train_text.append(test_text)
-end_preprocess=time.time()
-print("Time till pre-process:",end_preprocess-start_time,"s")
-
-
-# In[ ]:
-
-
-#checks
-print("Total number of comments:",len(all_text))
-print("Before preprocessing:",train.comment_text.iloc[30])
-print("After preprocessing:",all_text.iloc[30])
-
-
-# In[ ]:
-
-
-#Phrases help us group together bigrams :  new + york --> new_york
-bigram = gensim.models.Phrases(all_text)
-
-
-# In[ ]:
-
-
-#check bigram collation functionality 
-bigram[all_text.iloc[30]]
-
-
-# In[ ]:
-
-
-def clean(word_list):
-    """
-    Function to clean the pre-processed word lists 
-    
-    Following transformations will be done
-    1) Stop words removal from the nltk stopword list
-    2) Bigram collation (Finding common bigrams and grouping them together using gensim.models.phrases)
-    3) Lemmatization (Converting word to its root form : babies --> baby ; children --> child)
-    """
-    #remove stop words
-    clean_words = [w for w in word_list if not w in eng_stopwords]
-    #collect bigrams
-    clean_words = bigram[clean_words]
-    #Lemmatize
-    clean_words=[lem.lemmatize(word, "v") for word in clean_words]
-    return(clean_words)    
-
-
-# In[ ]:
-
-
-#check clean function
-print("Before clean:",all_text.iloc[1])
-print("After clean:",clean(all_text.iloc[1]))
-
-
-# In[ ]:
-
-
-#scale it to all text
-all_text=all_text.apply(lambda x:clean(x))
-end_clean=time.time()
-print("Time till cleaning corpus:",end_clean-start_time,"s")
-
-
-# In[ ]:
-
-
-#create the dictionary
-dictionary = Dictionary(all_text)
-print("There are",len(dictionary),"number of words in the final dictionary")
-
-
-# In[ ]:
-
-
-#convert into lookup tuples within the dictionary using doc2bow
-print(dictionary.doc2bow(all_text.iloc[1]))
-print("Wordlist from the sentence:",all_text.iloc[1])
-#to check
-print("Wordlist from the dictionary lookup:", 
-      dictionary[21],dictionary[22],dictionary[23],dictionary[24],dictionary[25],dictionary[26],dictionary[27])
-
-
-# In[ ]:
-
-
-#scale it to all text
-corpus = [dictionary.doc2bow(text) for text in all_text]
-end_corpus=time.time()
-print("Time till corpus creation:",end_clean-start_time,"s")
-
-
-# In[ ]:
-
-
-#create the LDA model
-ldamodel = LdaModel(corpus=corpus, num_topics=15, id2word=dictionary)
-end_lda=time.time()
-print("Time till LDA model creation:",end_lda-start_time,"s")
-
-
-# In[ ]:
-
-
-pyLDAvis.enable_notebook()
-
-
-# In[ ]:
-
-
-pyLDAvis.gensim.prepare(ldamodel, corpus, dictionary)
-
-
-# In[ ]:
-
-
-end_viz=time.time()
-print("Time till viz:",end_viz-start_time,"s")
-
-
-# **Chart Desc:** 
-# 
-# The above visuals are from the awesome pyLDAviz package which is the python version of R package LDAviz.
-# 
-# The Left side shows the multi-dimensional "word-space" superimposed on two "Principal components" and the relative positions of all the topics.
-# 
-# The size of the circle represents what % of the corpus it contains.
-# 
-# The right side shows the word frequencies within the topic and in the whole corpus.
-# 
-# Clearly, some of the topics show a pattern of toxicity (ie) have a high contribution from toxic words.
-# 
-# Now let's feed these topics into a model.
-
-# In[ ]:
-
-
-#creating the topic probability matrix 
-topic_probability_mat = ldamodel[corpus]
-
-
-# In[ ]:
-
-
-#split it to test and train
-train_matrix=topic_probability_mat[:train.shape[0]]
-test_matrix=topic_probability_mat[train.shape[0]:]
-
-
-# In[ ]:
-
-
-del(topic_probability_mat)
-del(corpus)
-del(all_text)
-gc.collect()
-
-
-# In[ ]:
-
-
-#convert to sparse format (Csr matrix)
-train_sparse=gensim.matutils.corpus2csc(train_matrix)
-test_sparse=gensim.matutils.corpus2csc(test_matrix)
-end_time=time.time()
-print("total time till Sparse mat creation",end_time-start_time,"s")
-
-
-# In[ ]:
-
-
-#custom NB model
-class NbSvmClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, C=1.0, dual=False, n_jobs=1):
-        self.C = C
-        self.dual = dual
-        self.n_jobs = n_jobs
-
-    def predict(self, x):
-        # Verify that model has been fit
-        check_is_fitted(self, ['_r', '_clf'])
-        return self._clf.predict(x.multiply(self._r))
-
-    def predict_proba(self, x):
-        # Verify that model has been fit
-        check_is_fitted(self, ['_r', '_clf'])
-        return self._clf.predict_proba(x.multiply(self._r))
-
-    def fit(self, x, y):
-        # Check that X and y have correct shape
-        y = y.values
-        x, y = check_X_y(x, y, accept_sparse=True)
-
-        def pr(x, y_i, y):
-            p = x[y==y_i].sum(0)
-            return (p+1) / ((y==y_i).sum()+1)
-
-        self._r = sparse.csr_matrix(np.log(pr(x,1,y) / pr(x,0,y)))
-        x_nb = x.multiply(self._r)
-        self._clf = LogisticRegression(C=self.C, dual=self.dual, n_jobs=self.n_jobs).fit(x_nb, y)
-        return self
+print ("Adding new features")
+
+def genre_id_count(x):
+    if x == 'no_genre_id':
+        return 0
+    else:
+        return x.count('|') + 1
+
+train['genre_ids'].fillna('no_genre_id',inplace=True)
+test['genre_ids'].fillna('no_genre_id',inplace=True)
+train['genre_ids_count'] = train['genre_ids'].apply(genre_id_count).astype(np.int8)
+test['genre_ids_count'] = test['genre_ids'].apply(genre_id_count).astype(np.int8)
+
+def lyricist_count(x):
+    if x == 'no_lyricist':
+        return 0
+    else:
+        return sum(map(x.count, ['|', '/', '\\', ';'])) + 1
+    return sum(map(x.count, ['|', '/', '\\', ';']))
+
+train['lyricist'].fillna('no_lyricist',inplace=True)
+test['lyricist'].fillna('no_lyricist',inplace=True)
+train['lyricists_count'] = train['lyricist'].apply(lyricist_count).astype(np.int8)
+test['lyricists_count'] = test['lyricist'].apply(lyricist_count).astype(np.int8)
+
+def composer_count(x):
+    if x == 'no_composer':
+        return 0
+    else:
+        return sum(map(x.count, ['|', '/', '\\', ';'])) + 1
+
+train['composer'].fillna('no_composer',inplace=True)
+test['composer'].fillna('no_composer',inplace=True)
+train['composer_count'] = train['composer'].apply(composer_count).astype(np.int8)
+test['composer_count'] = test['composer'].apply(composer_count).astype(np.int8)
+
+def is_featured(x):
+    if 'feat' in str(x) :
+        return 1
+    return 0
+
+train['artist_name'].fillna('no_artist',inplace=True)
+test['artist_name'].fillna('no_artist',inplace=True)
+train['is_featured'] = train['artist_name'].apply(is_featured).astype(np.int8)
+test['is_featured'] = test['artist_name'].apply(is_featured).astype(np.int8)
+
+def artist_count(x):
+    if x == 'no_artist':
+        return 0
+    else:
+        return x.count('and') + x.count(',') + x.count('feat') + x.count('&')
+
+train['artist_count'] = train['artist_name'].apply(artist_count).astype(np.int8)
+test['artist_count'] = test['artist_name'].apply(artist_count).astype(np.int8)
+
+# if artist is same as composer
+train['artist_composer'] = (train['artist_name'] == train['composer']).astype(np.int8)
+test['artist_composer'] = (test['artist_name'] == test['composer']).astype(np.int8)
+
+
+# if artist, lyricist and composer are all three same
+train['artist_composer_lyricist'] = ((train['artist_name'] == train['composer']) & (train['artist_name'] == train['lyricist']) & (train['composer'] == train['lyricist'])).astype(np.int8)
+test['artist_composer_lyricist'] = ((test['artist_name'] == test['composer']) & (test['artist_name'] == test['lyricist']) & (test['composer'] == test['lyricist'])).astype(np.int8)
+
+# is song language 17 or 45. 
+def song_lang_boolean(x):
+    if '17.0' in str(x) or '45.0' in str(x):
+        return 1
+    return 0
+
+train['song_lang_boolean'] = train['language'].apply(song_lang_boolean).astype(np.int8)
+test['song_lang_boolean'] = test['language'].apply(song_lang_boolean).astype(np.int8)
+
+
+_mean_song_length = np.mean(train['song_length'])
+def smaller_song(x):
+    if x < _mean_song_length:
+        return 1
+    return 0
+
+train['smaller_song'] = train['song_length'].apply(smaller_song).astype(np.int8)
+test['smaller_song'] = test['song_length'].apply(smaller_song).astype(np.int8)
+
+# number of times a song has been played before
+_dict_count_song_played_train = {k: v for k, v in train['song_id'].value_counts().iteritems()}
+_dict_count_song_played_test = {k: v for k, v in test['song_id'].value_counts().iteritems()}
+def count_song_played(x):
+    try:
+        return _dict_count_song_played_train[x]
+    except KeyError:
+        try:
+            return _dict_count_song_played_test[x]
+        except KeyError:
+            return 0
     
 
-model = NbSvmClassifier(C=2, dual=True, n_jobs=-1)
+train['count_song_played'] = train['song_id'].apply(count_song_played).astype(np.int64)
+test['count_song_played'] = test['song_id'].apply(count_song_played).astype(np.int64)
+
+# number of times the artist has been played
+_dict_count_artist_played_train = {k: v for k, v in train['artist_name'].value_counts().iteritems()}
+_dict_count_artist_played_test = {k: v for k, v in test['artist_name'].value_counts().iteritems()}
+def count_artist_played(x):
+    try:
+        return _dict_count_artist_played_train[x]
+    except KeyError:
+        try:
+            return _dict_count_artist_played_test[x]
+        except KeyError:
+            return 0
+
+train['count_artist_played'] = train['artist_name'].apply(count_artist_played).astype(np.int64)
+test['count_artist_played'] = test['artist_name'].apply(count_artist_played).astype(np.int64)
+
+
+print "Done adding features"
 
 
 # In[ ]:
 
 
-#set the target columns
-target_x=train_sparse.transpose()
-TARGET_COLS=['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-target_y=train[TARGET_COLS]
+print ("Train test and validation sets")
+for col in train.columns:
+    if train[col].dtype == object:
+        train[col] = train[col].astype('category')
+        test[col] = test[col].astype('category')
+
+
+X_train = train.drop(['target'], axis=1)
+y_train = train['target'].values
+
+
+X_test = test.drop(['id'], axis=1)
+ids = test['id'].values
+
+
+# del train, test; gc.collect();
+
+d_train_final = lgb.Dataset(X_train, y_train)
+watchlist_final = lgb.Dataset(X_train, y_train)
+print('Processed data...')
 
 
 # In[ ]:
 
 
-del(train_sparse)
-gc.collect()
+params = {
+        'objective': 'binary',
+        'metric': 'binary_logloss',
+        'boosting': 'gbdt',
+        'learning_rate': 0.3 ,
+        'verbose': 0,
+        'num_leaves': 108,
+        'bagging_fraction': 0.95,
+        'bagging_freq': 1,
+        'bagging_seed': 1,
+        'feature_fraction': 0.9,
+        'feature_fraction_seed': 1,
+        'max_bin': 256,
+        'max_depth': 10,
+        'num_rounds': 200,
+        'metric' : 'auc'
+    }
+
+get_ipython().run_line_magic('time', 'model_f1 = lgb.train(params, train_set=d_train_final,  valid_sets=watchlist_final, verbose_eval=5)')
 
 
 # In[ ]:
 
 
-model = NbSvmClassifier(C=4, dual=True, n_jobs=-1)
-X_train, X_valid, y_train, y_valid = train_test_split(target_x, target_y, test_size=0.33, random_state=2018)
-train_loss = []
-valid_loss = []
-preds_train = np.zeros((X_train.shape[0], y_train.shape[1]))
-preds_valid = np.zeros((X_valid.shape[0], y_train.shape[1]))
-for i, j in enumerate(TARGET_COLS):
-    print('Class:= '+j)
-    model.fit(X_train,y_train[j])
-    preds_valid[:,i] = model.predict_proba(X_valid)[:,1]
-    preds_train[:,i] = model.predict_proba(X_train)[:,1]
-    train_loss_class=log_loss(y_train[j],preds_train[:,i])
-    valid_loss_class=log_loss(y_valid[j],preds_valid[:,i])
-    print('Trainloss=log loss:', train_loss_class)
-    print('Validloss=log loss:', valid_loss_class)
-    train_loss.append(train_loss_class)
-    valid_loss.append(valid_loss_class)
-print('mean column-wise log loss:Train dataset', np.mean(train_loss))
-print('mean column-wise log loss:Validation dataset', np.mean(valid_loss))
+params = {
+        'objective': 'binary',
+        'metric': 'binary_logloss',
+        'boosting': 'dart',
+        'learning_rate': 0.3 ,
+        'verbose': 0,
+        'num_leaves': 108,
+        'bagging_fraction': 0.95,
+        'bagging_freq': 1,
+        'bagging_seed': 1,
+        'feature_fraction': 0.9,
+        'feature_fraction_seed': 1,
+        'max_bin': 256,
+        'max_depth': 10,
+        'num_rounds': 200,
+        'metric' : 'auc'
+    }
 
-
-end_time=time.time()
-print("total time till NB base model creation",end_time-start_time)
+get_ipython().run_line_magic('time', 'model_f2 = lgb.train(params, train_set=d_train_final,  valid_sets=watchlist_final, verbose_eval=5)')
 
 
 # In[ ]:
 
 
-#credits
-#pyLDAviz
-#https://nlp.stanford.edu/events/illvi2014/papers/sievert-illvi2014.pdf
+print('Making predictions')
+p_test_1 = model_f1.predict(X_test)
+p_test_2 = model_f2.predict(X_test)
+p_test_avg = np.mean([p_test_1, p_test_2], axis = 0)
 
-#to be continued 
-#to do next
-#paragraph vectors
-#https://arxiv.org/abs/1507.07998
-#https://github.com/RaRe-Technologies/gensim/blob/develop/docs/notebooks/doc2vec-IMDB.ipynb
+
+print('Done making predictions')
+
+
+# In[ ]:
+
+
+print ('Saving predictions Model model of gbdt')
+
+subm = pd.DataFrame()
+subm['id'] = ids
+subm['target'] = p_test_avg
+subm.to_csv(data_path + 'submission_lgbm_avg.csv.gz', compression = 'gzip', index=False, float_format = '%.5f')
+
+print('Done!')
 

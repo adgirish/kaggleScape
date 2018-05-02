@@ -1,149 +1,124 @@
-# coding: utf-8
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import datetime
-from heapq import nlargest
-from operator import itemgetter
-from collections import defaultdict
+import numpy as np
+import pandas as pd
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+english_phone_brands_mapping = {
+    "三星": "samsung",
+    "天语": "Ktouch",
+    "海信": "hisense",
+    "联想": "lenovo",
+    "欧比": "obi",
+    "爱派尔": "ipair",
+    "努比亚": "nubia",
+    "优米": "youmi",
+    "朵唯": "dowe",
+    "黑米": "heymi",
+    "锤子": "hammer",
+    "酷比魔方": "koobee",
+    "美图": "meitu",
+    "尼比鲁": "nibilu",
+    "一加": "oneplus",
+    "优购": "yougo",
+    "诺基亚": "nokia",
+    "糖葫芦": "candy",
+    "中国移动": "ccmc",
+    "语信": "yuxin",
+    "基伍": "kiwu",
+    "青橙": "greeno",
+    "华硕": "asus",
+    "夏新": "panosonic",
+    "维图": "weitu",
+    "艾优尼": "aiyouni",
+    "摩托罗拉": "moto",
+    "乡米": "xiangmi",
+    "米奇": "micky",
+    "大可乐": "bigcola",
+    "沃普丰": "wpf",
+    "神舟": "hasse",
+    "摩乐": "mole",
+    "飞秒": "fs",
+    "米歌": "mige",
+    "富可视": "fks",
+    "德赛": "desci",
+    "梦米": "mengmi",
+    "乐视": "lshi",
+    "小杨树": "smallt",
+    "纽曼": "newman",
+    "邦华": "banghua",
+    "E派": "epai",
+    "易派": "epai",
+    "普耐尔": "pner",
+    "欧新": "ouxin",
+    "西米": "ximi",
+    "海尔": "haier",
+    "波导": "bodao",
+    "糯米": "nuomi",
+    "唯米": "weimi",
+    "酷珀": "kupo",
+    "谷歌": "google",
+    "昂达": "ada",
+    "聆韵": "lingyun",
+    "小米": "Xiaomi",
+    "华为": "Huawei",
+    "魅族": "Meizu",
+    "中兴": "ZTE",
+    "酷派": "Coolpad",
+    "金立": "Gionee",
+    "SUGAR": "SUGAR",
+    "OPPO": "OPPO",
+    "vivo": "vivo",
+    "HTC": "HTC",
+    "LG": "LG",
+    "ZUK": "ZUK",
+    "TCL": "TCL",
+    "LOGO": "LOGO",
+    "SUGAR": "SUGAR",
+    "Lovme": "Lovme",
+    "PPTV": "PPTV",
+    "ZOYE": "ZOYE",
+    "MIL": "MIL",
+    "索尼" : "Sony",
+    "欧博信" : "Opssom",
+    "奇酷" : "Qiku",
+    "酷比" : "CUBE",
+    "康佳" : "Konka",
+    "亿通" : "Yitong",
+    "金星数码" : "JXD",
+    "至尊宝" : "Monkey King",
+    "百立丰" : "Hundred Li Feng",
+    "贝尔丰" : "Bifer",
+    "百加" : "Bacardi",
+    "诺亚信" : "Noain",
+    "广信" : "Kingsun",
+    "世纪天元" : "Ctyon",
+    "青葱" : "Cong",
+    "果米" : "Taobao",
+    "斐讯" : "Phicomm",
+    "长虹" : "Changhong",
+    "欧奇" : "Oukimobile",
+    "先锋" : "XFPLAY",
+    "台电" : "Teclast",
+    "大Q" : "Daq",
+    "蓝魔" : "Ramos",
+    "奥克斯" : "AUX"
+}
+
+phone_brand_device_model = pd.read_csv('../input/phone_brand_device_model.csv')
+print(phone_brand_device_model.head(n=50))
+phone_brand_device_model.phone_brand = phone_brand_device_model.phone_brand.map(pd.Series(english_phone_brands_mapping), na_action='ignore')
+print(phone_brand_device_model.head(n=50))
+
+print(phone_brand_device_model.isnull().sum())
 
 
-def run_solution():
-    print('Preparing arrays...')
-    f = open("../input/train.csv", "r")
-    f.readline()
-    best_hotels_od_ulc = defaultdict(lambda: defaultdict(int))
-    best_hotels_search_dest = defaultdict(lambda: defaultdict(int))
-    best_hotels_search_dest1 = defaultdict(lambda: defaultdict(int))
-    best_hotel_country = defaultdict(lambda: defaultdict(int))
-    popular_hotel_cluster = defaultdict(int)
-    total = 0
-
-    # Calc counts
-    while 1:
-        line = f.readline().strip()
-        total += 1
-
-        if total % 10000000 == 0:
-            print('Read {} lines...'.format(total))
-
-        if line == '':
-            break
-
-        arr = line.split(",")
-        book_year = int(arr[0][:4])
-        user_location_city = arr[5]
-        orig_destination_distance = arr[6]
-        srch_destination_id = arr[16]
-        is_booking = int(arr[18])
-        hotel_country = arr[21]
-        hotel_market = arr[22]
-        hotel_cluster = arr[23]
-
-        append_1 = 3 + 17*is_booking
-        append_2 = 1 + 5*is_booking
-
-        if user_location_city != '' and orig_destination_distance != '':
-            best_hotels_od_ulc[(user_location_city, orig_destination_distance)][hotel_cluster] += 1
-
-        if srch_destination_id != '' and hotel_country != '' and hotel_market != '' and book_year == 2014:
-            best_hotels_search_dest[(srch_destination_id, hotel_country, hotel_market)][hotel_cluster] += append_1
-        
-        if srch_destination_id != '':
-            best_hotels_search_dest1[srch_destination_id][hotel_cluster] += append_1
-        
-        if hotel_country != '':
-            best_hotel_country[hotel_country][hotel_cluster] += append_2
-        
-        popular_hotel_cluster[hotel_cluster] += 1
-    
-    f.close()
-
-    print('Generate submission...')
-    now = datetime.datetime.now()
-    path = 'submission_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    out = open(path, "w")
-    f = open("../input/test.csv", "r")
-    f.readline()
-    total = 0
-    out.write("id,hotel_cluster\n")
-    topclasters = nlargest(5, sorted(popular_hotel_cluster.items()), key=itemgetter(1))
-
-    while 1:
-        line = f.readline().strip()
-        total += 1
-
-        if total % 1000000 == 0:
-            print('Write {} lines...'.format(total))
-
-        if line == '':
-            break
-
-        arr = line.split(",")
-        id = arr[0]
-        user_location_city = arr[6]
-        orig_destination_distance = arr[7]
-        srch_destination_id = arr[17]
-        hotel_country = arr[20]
-        hotel_market = arr[21]
-
-        out.write(str(id) + ',')
-        filled = []
-
-        s1 = (user_location_city, orig_destination_distance)
-        if s1 in best_hotels_od_ulc:
-            d = best_hotels_od_ulc[s1]
-            topitems = nlargest(5, sorted(d.items()), key=itemgetter(1))
-            for i in range(len(topitems)):
-                if topitems[i][0] in filled:
-                    continue
-                if len(filled) == 5:
-                    break
-                out.write(' ' + topitems[i][0])
-                filled.append(topitems[i][0])
-
-        s2 = (srch_destination_id, hotel_country, hotel_market)
-        if s2 in best_hotels_search_dest:
-            d = best_hotels_search_dest[s2]
-            topitems = nlargest(5, d.items(), key=itemgetter(1))
-            for i in range(len(topitems)):
-                if topitems[i][0] in filled:
-                    continue
-                if len(filled) == 5:
-                    break
-                out.write(' ' + topitems[i][0])
-                filled.append(topitems[i][0])
-        elif srch_destination_id in best_hotels_search_dest1:
-            d = best_hotels_search_dest1[srch_destination_id]
-            topitems = nlargest(5, d.items(), key=itemgetter(1))
-            for i in range(len(topitems)):
-                if topitems[i][0] in filled:
-                    continue
-                if len(filled) == 5:
-                    break
-                out.write(' ' + topitems[i][0])
-                filled.append(topitems[i][0])
-
-        if hotel_country in best_hotel_country:
-            d = best_hotel_country[hotel_country]
-            topitems = nlargest(5, d.items(), key=itemgetter(1))
-            for i in range(len(topitems)):
-                if topitems[i][0] in filled:
-                    continue
-                if len(filled) == 5:
-                    break
-                out.write(' ' + topitems[i][0])
-                filled.append(topitems[i][0])
-
-        for i in range(len(topclasters)):
-            if topclasters[i][0] in filled:
-                continue
-            if len(filled) == 5:
-                break
-            out.write(' ' + topclasters[i][0])
-            filled.append(topclasters[i][0])
-
-        out.write("\n")
-    out.close()
-    print('Completed!')
-
-run_solution()

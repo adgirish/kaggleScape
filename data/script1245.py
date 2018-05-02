@@ -1,362 +1,179 @@
 
 # coding: utf-8
 
+# Note: it is recommended you download this notebook to your own PC if you want to train the model, as Kaggle's servers will be slow and have a timeout. 
 # 
-# Based on work done on this notebook, https://www.kaggle.com/sudosudoohio/stratified-kfold-xgboost-eda-tutorial-0-281.
-# Filled in missing values with Median and  the public score increased from 0.281 to 0.285 after training with new data. 
-# Also, custom weights are given to the labels to tackle imbalanced labels in the data. However, performance hasn't improved.
+# ### Load data and do preprocessing 
+# First we load our data into Pandas dataframes and convert them to NumPy arrays using *.values*. We further convert the datatype from *float64* to *float32* for speed. 
 # 
-# Hope you will find the notebook helpful! .
+# Since the training examples are 1D vectors, and we wish to do convolutions on the 2D images, we reshape the input data from (n_train x 784) to (n_train x 28 x 28). We also normalize the data to the interval [0,1], while this is not really necessary here as all the pixel values already lie in the same range [0, 255], it is a good procedure to follow in general. 
 # 
+# We used *to_categorical* to transform the target data (which lies in the set [0,1,2,3,4,5,6,7,8,9]) to one hot vectors. 
 
 # In[ ]:
 
 
-## Importing Requried Libraries
-import numpy as np
-import subprocess
 import pandas as pd
+import numpy as np
+from keras.utils.np_utils import to_categorical
+from keras import backend as K
 
-from IPython.display import Image
+K.set_image_dim_ordering('th') #input shape: (channels, height, width)
 
-from collections import Counter
-import seaborn as sns
-import matplotlib.pyplot as plt
+train_df = pd.read_csv("../input/train.csv")
+valid_df = pd.read_csv("../input/test.csv")
+
+x_train = train_df.drop(['label'], axis=1).values.astype('float32')
+Y_train = train_df['label'].values
+x_valid = valid_df.values.astype('float32')
+
+img_width, img_height = 28, 28
+
+n_train = x_train.shape[0]
+n_valid = x_valid.shape[0]
+
+n_classes = 10 
+
+x_train = x_train.reshape(n_train,1,img_width,img_height)
+x_valid = x_valid.reshape(n_valid,1,img_width,img_height)
+
+x_train = x_train/255 #normalize from [0,255] to [0,1]
+x_valid = x_valid/255 
+
+y_train = to_categorical(Y_train)
+
+
+# ### View an image to make sure everything is OK
+# (The images are not color, but *imshow()* applies a colormap by default, and I'm not sure how to disable it)
+
+# In[ ]:
+
+
 get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
 
-from sklearn.model_selection import StratifiedKFold
-import xgboost as xgb
+imgplot = plt.imshow(x_train[4,0,:,:,],cmap='gray')
 
-from sklearn.datasets import make_classification
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import log_loss, accuracy_score
 
-# classifiers
-from sklearn.ensemble import GradientBoostingClassifier
-
-# reproducibility
-seed = 123
-
-
-# In[ ]:
-
-
-#### LOADING DATA ####
-### TRAIN DATA
-train_data = pd.read_csv("../input/train.csv", na_values='-1')
-cor_data = train_data.copy()
-                        
-## Filling the missing data NAN with median of the column
-train_data_nato_median = pd.DataFrame()
-for column in train_data.columns:
-    train_data_nato_median[column] = train_data[column].fillna(train_data[column].median())
-
-train_data = train_data_nato_median.copy()
-
-### TEST DATA
-test_data = pd.read_csv("../input/test.csv", na_values='-1')
-## Filling the missing data NAN with mean of the column
-test_data_nato_median = pd.DataFrame()
-for column in test_data.columns:
-    test_data_nato_median[column] = test_data[column].fillna(test_data[column].median())
-    
-test_data = test_data_nato_median.copy()
-test_data_id = test_data.pop('id')
-
-
-# In[ ]:
-
-
-## Identifying Categorical data
-column_names = train_data.columns
-categorical_column = column_names[column_names.str[10] == 'c']
-
-## Changing categorical columns to category data type
-def int_to_categorical(data):
-    """ 
-    changing columns to catgorical data type
-    """
-    for column in categorical_column:
-        data[column] =  data[column].astype('category')
-
-
-# In[ ]:
-
-
-## Creating list of train and test data and converting columns of interest to categorical type
-datas = [train_data,test_data]
-
-for data in datas:
-    int_to_categorical(data)
-
-#print(test_data.dtypes)
-
-
-# In[ ]:
-
-
-## Decribing categorical variables
-# def decribe_Categorical(x):
-#     """ 
-#     Function to decribe Categorical data
-#     """
-#     from IPython.display import display, HTML
-#     display(HTML(x[x.columns[x.dtypes =="category"]].describe().to_html))
-
-# decribe_Categorical(train_data)
-
-
-# In[ ]:
-
-
-### FUNCTION TO CREATE DUMMIES COLUMNS FOR CATEGORICAL VARIABLES
-def creating_dummies(data):
-    """creating dummies columns categorical varibles
-    """
-    for column in categorical_column:
-        dummies = pd.get_dummies(data[column],prefix=column)
-        data = pd.concat([data,dummies],axis =1)
-        ## dropping the original columns ##
-        data.drop([column],axis=1,inplace= True)
-
-
-# In[ ]:
-
-
-### CREATING DUMMIES FOR CATEGORICAL VARIABLES  
-for column in categorical_column:
-        dummies = pd.get_dummies(train_data[column],prefix=column)
-        train_data = pd.concat([train_data,dummies],axis =1)
-        train_data.drop([column],axis=1,inplace= True)
-
-
-for column in categorical_column:
-        dummies = pd.get_dummies(test_data[column],prefix=column)
-        test_data = pd.concat([test_data,dummies],axis =1)
-        test_data.drop([column],axis=1,inplace= True)
-
-print(train_data.shape)
-print(test_data.shape)
-
-
-# In[ ]:
-
-
-#Define covariates in X and dependent variable in y
-features = train_data.iloc[:,2:] ## FEATURE DATA
-targets= train_data.target ### LABEL DATA
-
-### CHECKING DIMENSIONS
-print(features.shape)
-print(targets.shape)
-
-
-# In[ ]:
-
-
-ax = sns.countplot(x = targets ,palette="Set2")
-sns.set(font_scale=1.5)
-ax.set_xlabel(' ')
-ax.set_ylabel(' ')
-fig = plt.gcf()
-fig.set_size_inches(10,5)
-ax.set_ylim(top=700000)
-for p in ax.patches:
-    ax.annotate('{:.2f}%'.format(100*p.get_height()/len(targets)), (p.get_x()+ 0.3, p.get_height()+10000))
-
-plt.title('Distribution of 595212 Targets')
-plt.xlabel('Initiation of Auto Insurance Claim Next Year')
-plt.ylabel('Frequency [%]')
-plt.show()
-
-
-# In[ ]:
-
-
-sns.set(style="white")
-
-
-# Compute the correlation matrix
-corr = cor_data.corr()
-
-
-# Set up the matplotlib figure
-f, ax = plt.subplots(figsize=(11, 9))
-
-# Generate a custom diverging colormap
-cmap = sns.diverging_palette(220, 10, as_cmap=True)
-
-# Draw the heatmap with the mask and correct aspect ratio
-sns.heatmap(corr, cmap=cmap, vmax=.3, center=0,
-            square=True, linewidths=.5, cbar_kws={"shrink": .5})
-
-plt.show()
-
-
-# In[ ]:
-
-
-# Define the gini metric - from https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703#5897
-def gini(actual, pred, cmpcol = 0, sortcol = 1):
-    assert( len(actual) == len(pred) )
-    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
-    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
-    totalLosses = all[:,0].sum()
-    giniSum = all[:,0].cumsum().sum() / totalLosses
-    
-    giniSum -= (len(actual) + 1) / 2.
-    return giniSum / len(actual)
- 
-def gini_normalized(a, p):
-    return gini(a, p) / gini(a, a)
-
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = gini_normalized(labels, preds)
-    return 'gini', gini_score
-
-
-# In[ ]:
-
-
-unwanted = features.columns[features.columns.str.startswith('ps_calc_')]
-print(unwanted)
-
-
-# In[ ]:
-
-
-train = features.drop(unwanted, axis=1)  
-test = test_data.drop(unwanted, axis=1)  
-
-print(train.shape)
-print(test.shape)
-
-
-# In[ ]:
-
-
-## Spliting train data 
-kfold = 2 ## I used 5 Kfolds. In interest of computational time using 2
-skf = StratifiedKFold(n_splits=kfold, random_state=42)
-
-
-# In[ ]:
-
-
-## Specifiying parameters
-params = {
-    'min_child_weight': 10.0,
-    'objective': 'binary:logistic',
-    'max_depth': 7,
-    'max_delta_step': 1.8,
-    'colsample_bytree': 0.4,
-    'subsample': 0.8,
-    'eta': 0.025,
-    'gamma': 0.65,
-    'num_boost_round' : 700
-    }
-
-
-# In[ ]:
-
-
-# Converting pandas series to numpy array to be fed to XGBoost package
-X= train.values
-y = targets.values
-
-type(X),type(y)
-
-
-# In[ ]:
-
-
-# Submission data frame
-sub = pd.DataFrame()
-sub['id'] = test_data_id
-sub['target'] = np.zeros_like(test_data_id)
-sub.shape
-
-
-# We are providing custom weights to the labels in the data. Here I used two ways to do it,
-# 1. Manually assigning weights to the label as by numpy array 'weights' in the code
-# 2. using 'scale_pos_weights' parameter
-
-# In[ ]:
-
-
-## Model fitting
-# THis is where the magic happens
-
-for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-    print('[Fold %d/%d]' % (i + 1, kfold))
-    X_train, X_valid = X[train_index], X[test_index]
-    y_train, y_valid = y[train_index], y[test_index]
-    ### Custom weights: To deal with imbalanced label
-    #weights = np.zeros(len(y_train))
-    #weights[y_train == 0] = 1
-    #weights[y_train == 1] = 9            
-    #d_train = xgb.DMatrix(X_train, label = y_train, weight = weights)
-    
-    
-    d_train = xgb.DMatrix(X_train, label = y_train)
-    d_valid = xgb.DMatrix(X_valid, y_valid)
-    d_test = xgb.DMatrix(test.values)
-    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-    
-    ### USing Scale_pos_weights parameter
-    ## In this case we are splitting giving weights to the label according 
-    # to their relative ratio's in the data
-    
-   # train_labels = d_train.get_label()
-   # ratio = float(np.sum(train_labels == 0))/ np.sum(train_labels == 1)
-   # params['scale_pos_weight'] = ratio
-
-    # Train the model! We pass in a max of 1,600 rounds (with early stopping after 70)
-    # and the custom metric (maximize=True tells xgb that higher metric is better)
-    mdl = xgb.train(params, d_train, 1600, watchlist, early_stopping_rounds=70, 
-                    feval=gini_xgb, maximize=True, verbose_eval=100)
-
-    print('[Fold %d/%d Prediciton:]' % (i + 1, kfold))
-    # Predict on our test data
-    p_test = mdl.predict(d_test, ntree_limit=mdl.best_ntree_limit)
-    sub['target'] += p_test/kfold
-
-
-# *OUTPUT*
-# Adding each layer of topic of the other:
-# 1. Base XGBoost: 0.281
-# 2. XGBoost with missing values filled with Median(equal class weights): 0.285
-# 3. XGbosot with custom weight: 0.282
-# 4. XGboost with scale_pos_weights parameter: 0.280
-
-# In[ ]:
-
-
-#sub.to_csv("ModifiedXGBOOST.csv",index =  False)
-
-
-# **FUTURE WORK:**
-# 1. Planning on using Gridsearch 
-# 2. Dealing with Imbalanced data such as this,
-#     For class imbalance, we have many methods that could deal with the problem. There is no one method that could essentially solve the issue every single time. Here are few methods that we could use to deal with Class imbalance.
+# ### Build Model 
 # 
-# 1. Weighted loss functions: Giving higher weights to minority class(in this case, class 1). For example, Logistic regression model has inbuilt parameter 'class_weights' which can used to assign weights to the class labels as per choice.
-# 2. Random Undersampling: As the name suggests, randomly undersample examples from majority class
-# 3. NEARMISS-1 : Retain points from majority class whose mean distance to the K nearest points in S is lowest
-# 4. NEARMISS-2: Keep points from majority class whose mean distance to the K farthest points in minority class is lowest
-# 5. NEARMISS-3: Select K nearest neighbours In majority class for every point in minority class
-# 6. Condensed Nearest Neighbour(CNN)
-# 7. Edited Nearest Neighbour(ENN)
-# 8. Repeated Edited Nearest Neighbour
-# 9. TOMEK LINK REMOVAL
-# 10. Random Oversampling
-# 11. Synthetic Minority Oversampling Technique(SMOTE)
-# 12. SMOTE + Tomek Link Removal
-# 13. SMOTE + ENN
-# 14. EASYENSEMBLE
-# 15. BALANCECASCADE and many more
+# ** Handling edges/borders **  
+# One thing we have to decide is how to deal with the edges. To allow convolution of the data at the edges, one can first 'zero pad' the input array, by adding zeros to the left, right, top, and bottom. ie:
 # 
-# Reference: 
-# 1. https://www.youtube.com/watch?v=-Z1PaqYKC1w
-# 2. https://www.youtube.com/watch?v=32tXCJP0HYc&list=PLZnYQQzkMilqTC12LmnN4WpQexB9raKQG&index=13
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;00000<br>
+# 123&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;01230<br>
+# 456&nbsp;-->&nbsp;04560<br>
+# 789&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;07890<br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;00000<br> 
+# 
+# 
+# This can be done with the [ZeroPadding2D()](https://keras.io/layers/convolutional/#ZeroPadding2D) function in Keras. One must make sure to zero pad with enough zeros -- one needs *filter_size/2* zeros. 
+# 
+# Alternatively, a simpler solution is to set *border_mode='same'*, which returns a filter map of the same size and automatically appends zeros. 
+# 
+# The other option available in Keras is *border_mode='valid'* which only does convolutions where the filter fits inside the image (also called narrow convolution). With this option set, the filter map has smaller dimensions than the input image. 
+# 
+# **[2D Convolution](https://keras.io/layers/convolutional/#convolution2d)**  
+# The main operation in the CNN. 
+# 
+# 
+# **[Max Pooling](https://keras.io/layers/pooling/#maxpooling2d)**  
+# Max pooling reduces the size of the filter maps, by applying a *max filter* to non-overlapping subregions. A max pooling layer with pooling_size=2 (ie using 2x2 max filters) will reduce the number total number of parameters in the filter map by a factor of 4.
+# 
+# **[Dropout](https://keras.io/layers/core/#dropout)**  
+# This is a technique for preventing overfitting. The dropout layer in Keras randomly drops a certain fraction of the neurons (units) with a probability p in each training round. This forces the network to learn redundant representations, and effectively lowers the number of paramters while maintaining a wide degree of flexibility.
+# 
+# **[Flattening](https://keras.io/layers/core/#flaten)**  
+# Flattening converts the input activations, which are in an array of shape (n_filters, filter_size_x, filter_size_y) into a 1D array. 
+# 
+# **[Dense layer](https://keras.io/layers/core/#dense)**  
+# This is a fully connected layer of neurons which works on the 1D input and gives a 1D output. 
+# 
+# **[Softmax activation](https://en.wikipedia.org/wiki/Softmax_function#Artificial_neural_networks)**  
+# Softmax converts the input  
+# 
+# ### Hyperparameters for this model
+# 
+# * Number of filters (n_filters) 
+# 
+# * Size of convolution filters (filter_size1, filter_size2)  
+# 
+# * Size of pooling windows (pool_size1, pool_size2)
+# 
+# * Size of the dense layer (n_dense)
+# 
+# ### Compilation  
+# The 'compilation' step is where you specify your loss function in Keras. In this case, we use categorical crossentropy. 
+
+# In[ ]:
+
+
+from keras.models import Sequential
+from keras.layers.convolutional import *
+from keras.layers.core import Dropout, Dense, Flatten, Activation
+
+n_filters = 64
+filter_size1 = 3
+filter_size2 = 2
+pool_size1 = 3
+pool_size2 = 1
+n_dense = 128
+
+model = Sequential()
+
+model.add(Convolution2D(n_filters, filter_size1, filter_size1, batch_input_shape=(None, 1, img_width, img_height), activation='relu', border_mode='valid'))
+
+model.add(MaxPooling2D(pool_size=(pool_size1, pool_size1)))
+
+model.add(Convolution2D(n_filters, filter_size2, filter_size2, activation='relu', border_mode='valid'))
+
+model.add(MaxPooling2D(pool_size=(pool_size2, pool_size2)))
+
+model.add(Dropout(0.25))
+
+model.add(Flatten())
+
+model.add(Dense(n_dense))
+
+model.add(Activation('relu'))
+
+model.add(Dropout(0.5))
+
+model.add(Dense(n_classes))
+
+model.add(Activation('softmax'))
+
+model.compile(optimizer='adam',
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+
+# ### Fit the model
+# see *[fit()](https://keras.io/models/sequential/#fit)* documentation  
+
+# In[ ]:
+
+
+batch_size = 128
+n_epochs = 1
+
+model.fit(x_train,
+          y_train,
+          batch_size=batch_size,
+          nb_epoch=n_epochs,verbose=2,
+          validation_split=.2)
+
+
+# ### Run model on validation data and save output
+# see *[predict_classes()](https://keras.io/models/sequential/#predict_classes)* documentation. 
+# 
+# (By contrast, *[predict()](https://keras.io/models/sequential/#predict)*  would return an array with shape (n_examples, n_classes), where each number represents a probability for the class in question.)
+# 
+
+# In[ ]:
+
+
+yPred = model.predict_classes(x_valid,batch_size=32,verbose=1)
+
+np.savetxt('mnist_output.csv', np.c_[range(1,len(yPred)+1),yPred], delimiter=',', header = 'ImageId,Label', comments = '', fmt='%d')
+

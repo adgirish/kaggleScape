@@ -1,1230 +1,365 @@
 
 # coding: utf-8
 
-# <....Work in progress...>
+# "***Feature Engineering is an art***". Someone once said to spend more time on deriving more and **meaningful** features. Why did I bold meaningful? Because infomation fed to the model must make sense in whatever form it is given. Creating loads of features having no sense is of no use at all. To add more features, an added advantage would be understanding the real world situation at hand or holding sme (subject ,atter experience).
 # 
-# Thank you for opening this script!
+# On this second kernel of mine let's see how we can garner more features from the existing ones. This kernel did not run properly upon execution. So I have decided to incorporate memory reduction techniques adopted from my previous kernel mentioned below.
 # 
-# I have made all efforts to document each and every step involved in the prediction process so that this notebook acts as a good starting point for new Kagglers and new machine learning enthusiasts.
+# To see my first kernel on how to reduce memory effectively [SEE THIS KERNEL](https://www.kaggle.com/jeru666/memory-reduction-and-data-insights/notebook)
 # 
-# Please **upvote** this kernel so that it reaches the top of the chart and is easily locatable by new users. Your comments on how we can improve this kernel is welcome. Thanks.
-# ***
-# ## Layout of the document
-# The prediction process is divided into two notebooks.
-# 
-# Part 1 : Covers data statistics, data visualization, and feature selection : https://www.kaggle.com/sharmasanthosh/forest-cover-type-prediction/exploratory-study-on-feature-selection
-# 
-# This notebook : Covers prediction using various algorithms 
-# ***
-# ## Data statistics
-# * Shape
-# * Datatypes
-# * Description
-# * Skew
-# * Class distribution
-# 
-# ## Data Interaction
-# * Correlation
-# * Scatter plot
-# 
-# ## Data Visualization
-# * Box and density plots
-# * Grouping of one hot encoded attributes
-# 
-# ## Data Cleaning
-# * Remove unnecessary columns
-# 
-# ## Data Preparation
-# * Original
-# * Delete rows or impute values in case of missing
-# * StandardScaler
-# * MinMaxScaler
-# * Normalizer
-# 
-# ## Feature selection
-# * ExtraTreesClassifier
-# * GradientBoostingClassifier
-# * RandomForestClassifier
-# * XGBClassifier
-# * RFE
-# * SelectPercentile
-# * PCA
-# * PCA + SelectPercentile
-# * Feature Engineering
-# 
-# ## Evaluation, prediction, and analysis
-# * LDA (Linear algo)
-# * LR (Linear algo)
-# * KNN (Non-linear algo)
-# * CART (Non-linear algo)
-# * Naive Bayes (Non-linear algo)
-# * SVC (Non-linear algo)
-# * Bagged Decision Trees (Bagging)
-# * Random Forest (Bagging)
-# * Extra Trees (Bagging)
-# * AdaBoost (Boosting)
-# * Stochastic Gradient Boosting (Boosting)
-# * Voting Classifier (Voting)
-# * MLP (Deep Learning)
-# * XGBoost
-# 
-# ***
-
-# ## Load raw data:
-# 
-# Information about all the attributes can be found here:
-# 
-# https://www.kaggle.com/c/forest-cover-type-prediction/data
-# 
-# Learning: 
-# We need to predict the 'Cover_Type' based on the other attributes. Hence, this is a classification problem where the target could belong to any of the seven classes.
+# ## Loading libraries and data
 
 # In[ ]:
 
 
-# Supress unnecessary warnings so that presentation looks clean
-import warnings
-warnings.filterwarnings('ignore')
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import seaborn as sns
+from matplotlib import pyplot
 
-# Read raw data from the file
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-import pandas #provides data structures to quickly analyze data
-#Since this code runs on Kaggle server, train data can be accessed directly in the 'input' folder
-dataset = pandas.read_csv("../input/train.csv") 
+from subprocess import check_output
 
-#Drop the first column 'Id' since it just has serial numbers. Not useful in the prediction process.
-dataset = dataset.iloc[:,1:]
-
-
-# ## Data Cleaning
-# * Remove unnecessary columns
-
-# In[ ]:
+#df_members = pd.read_csv('../input/members_v3.csv')
+df_transactions = pd.read_csv('../input/transactions.csv')
 
 
-#Removal list initialize
-rem = []
-
-#Add constant columns as they don't help in prediction process
-for c in dataset.columns:
-    if dataset[c].std() == 0: #standard deviation is zero
-        rem.append(c)
-
-#drop the columns        
-dataset.drop(rem,axis=1,inplace=True)
-
-print(rem)
-
-#Following columns are dropped
-
-
-# ## Data Preparation
-# * Original
-# * Delete rows or impute values in case of missing
-# * StandardScaler
-# * MinMaxScaler
-# * Normalizer
+# Have a quick look at the head to see what features we can create!
 
 # In[ ]:
 
 
-#get the number of rows and columns
-r, c = dataset.shape
-
-#get the list of columns
-cols = dataset.columns
-#create an array which has indexes of columns
-i_cols = []
-for i in range(0,c-1):
-    i_cols.append(i)
-#array of importance rank of all features  
-ranks = []
-
-#Extract only the values
-array = dataset.values
-
-#Y is the target column, X has the rest
-X_orig = array[:,0:(c-1)]
-Y = array[:,(c-1)]
-
-#Validation chunk size
-val_size = 0.1
-
-#Use a common seed in all experiments so that same chunk is used for validation
-seed = 0
-
-#Split the data into chunks
-from sklearn import cross_validation
-X_train, X_val, Y_train, Y_val = cross_validation.train_test_split(X_orig, Y, test_size=val_size, random_state=seed)
-
-#Import libraries for data transformations
-from sklearn.preprocessing import Imputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.preprocessing import Normalizer
-
-#All features
-X_all = []
-#Additionally we will make a list of subsets
-X_all_add =[]
-
-#columns to be dropped
-rem_cols = []
-#indexes of columns to be dropped
-i_rem = []
-
-#Add this version of X to the list 
-X_all.append(['Orig','All', X_train,X_val,1.0,cols[:c-1],rem_cols,ranks,i_cols,i_rem])
-
-#point where categorical data begins
-size=10
-
-import numpy
-
-#Standardized
-#Apply transform only for non-categorical data
-X_temp = StandardScaler().fit_transform(X_train[:,0:size])
-X_val_temp = StandardScaler().fit_transform(X_val[:,0:size])
-#Concatenate non-categorical data and categorical
-X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
-X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
-#Add this version of X to the list 
-X_all.append(['StdSca','All', X_con,X_val_con,1.0,cols,rem_cols,ranks,i_cols,i_rem])
-
-#MinMax
-#Apply transform only for non-categorical data
-X_temp = MinMaxScaler().fit_transform(X_train[:,0:size])
-X_val_temp = MinMaxScaler().fit_transform(X_val[:,0:size])
-#Concatenate non-categorical data and categorical
-X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
-X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
-#Add this version of X to the list 
-X_all.append(['MinMax', 'All', X_con,X_val_con,1.0,cols,rem_cols,ranks,i_cols,i_rem])
-
-#Normalize
-#Apply transform only for non-categorical data
-X_temp = Normalizer().fit_transform(X_train[:,0:size])
-X_val_temp = Normalizer().fit_transform(X_val[:,0:size])
-#Concatenate non-categorical data and categorical
-X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
-X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
-#Add this version of X to the list 
-X_all.append(['Norm', 'All', X_con,X_val_con,1.0,cols,rem_cols,ranks,i_cols,i_rem])
-
-#Impute
-#Imputer is not used as no data is missing
-
-#List of transformations
-trans_list = []
-
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-    trans_list.append(trans)
+print(df_transactions.shape)
+df_transactions.head()
 
 
-# ## Feature Selection
-# Using the rankings produced in :
-# https://www.kaggle.com/sharmasanthosh/forest-cover-type-prediction/exploratory-study-on-feature-selection
+# ## Memory Reduction
+# As stated earlier, let us first reduce memory wherever  possible. But first how much memory does df_train dataframe consume?
 
 # In[ ]:
 
 
-#Select top 75%,50%,25%
-ratio_list = [0.75,0.50,0.25]
+mem = df_transactions.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
 
-#Median of rankings for each column
-unsorted_rank = [0,8,11,4,5,2,5,7.5,9.5,3,8,28.5,14.5,2,35,19.5,12,14,37,25.5,50,44,9,28,20.5,19.5,40,38,20,38,43,35,44,22,24,33,49,42,46,47,27.5,19,31.5,23,28,42,30.5,46,40,12,13,18]
 
-#List of feature selection models
-feat = []
-
-#Add Median to the list 
-n = 'Median'
-for val in ratio_list:
-    feat.append([n,val])   
-
-for trans,s, X, X_val, d, cols, rem_cols, ra, i_cols, i_rem in X_all:
-    #Create subsets of feature list based on ranking and ratio_list
-    for name, v in feat:
-        #Combine importance and index of the column in the array joined
-        joined = []
-        for i, pred in enumerate(unsorted_rank):
-            joined.append([i,cols[i],pred])
-        #Sort in descending order    
-        joined_sorted = sorted(joined, key=lambda x: x[2])
-        #Starting point of the columns to be dropped
-        rem_start = int((v*(c-1)))
-        #List of names of columns selected
-        cols_list = []
-        #Indexes of columns selected
-        i_cols_list = []
-        #Ranking of all the columns
-        rank_list =[]
-        #List of columns not selected
-        rem_list = []
-        #Indexes of columns not selected
-        i_rem_list = []
-        #Split the array. Store selected columns in cols_list and removed in rem_list
-        for j, (i, col, x) in enumerate(list(joined_sorted)):
-            #Store the rank
-            rank_list.append([i,j])
-            #Store selected columns in cols_list and indexes in i_cols_list
-            if(j < rem_start):
-                cols_list.append(col)
-                i_cols_list.append(i)
-            #Store not selected columns in rem_list and indexes in i_rem_list    
-            else:
-                rem_list.append(col)
-                i_rem_list.append(i)    
-        #Sort the rank_list and store only the ranks. Drop the index 
-        #Append model name, array, columns selected and columns to be removed to the additional list        
-        X_all_add.append([trans,name,X,X_val,v,cols_list,rem_list,[x[1] for x in sorted(rank_list,key=lambda x:x[0])],i_cols_list,i_rem_list])
-
+# The following functions check whether a column's datatype can be reduced based on the maximum and minimum value present in that column
 
 # In[ ]:
 
 
-#Import plotting library    
-import matplotlib.pyplot as plt    
+def change_datatype(df):
+    int_cols = list(df.select_dtypes(include=['int']).columns)
+    for col in int_cols:
+        if ((np.max(df[col]) <= 127) and(np.min(df[col] >= -128))):
+            df[col] = df[col].astype(np.int8)
+        elif ((np.max(df[col]) <= 32767) and(np.min(df[col] >= -32768))):
+            df[col] = df[col].astype(np.int16)
+        elif ((np.max(df[col]) <= 2147483647) and(np.min(df[col] >= -2147483648))):
+            df[col] = df[col].astype(np.int32)
+        else:
+            df[col] = df[col].astype(np.int64)
 
-#Dictionary to store the accuracies for all combinations 
-acc = {}
+change_datatype(df_transactions)
 
-#List of combinations
-comb = []
-
-#Append name of transformation to trans_list
-for trans in trans_list:
-    acc[trans]=[]
-
-
-# ## Evaluation, prediction, and analysis
-# * LDA (Linear algo)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of LinearDiscriminatAnalysis using all the views
-
-#Import the library
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-
-#Set the base model
-model = LinearDiscriminantAnalysis()
-algo = "LDA"
-
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-#Accuracy of the model using all features
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-    model.fit(X[:,i_cols_list],Y_train)
-    result = model.score(X_val[:,i_cols_list], Y_val)
-    acc[trans].append(result)
-    #print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #print(result)
-comb.append("%s+%s of %s" % (algo,"All",1.0))
+def change_datatype_float(df):
+    float_cols = list(df.select_dtypes(include=['float']).columns)
+    for col in float_cols:
+        df[col] = df[col].astype(np.float32)
         
-#Accuracy of the model using a subset of features    
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    model.fit(X[:,i_cols_list],Y_train)
-    result = model.score(X_val[:,i_cols_list], Y_val)
-    acc[trans].append(result)
-    #print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #print(result)
-for v in ratio_list:
-    comb.append("%s+%s of %s" % (algo,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
+change_datatype_float(df_transactions)
 
-#Best estimated performance is 65%. Occurs when all features are used and without any transformation!
-#Performance of MinMax and Normalizer is very poor
+mem = df_transactions.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
 
 
-# ## Evaluation, prediction, and analysis
-# * LR (Linear algo)
+# We have reduced memory of **transactions** dataframe from 1.4 GB to ~500 MB. Now performing the same for **members** dataframe.
 
 # In[ ]:
 
 
-#Evaluation of various combinations of LogisticRegression using all the views
+#--- Members dataframe
+mem = df_members.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
 
-#Import the library
-from sklearn.linear_model import LogisticRegression
+change_datatype(df_members)
+change_datatype_float(df_members)
 
-C_list = [100]
-
-for C in C_list:
-    #Set the base model
-    model = LogisticRegression(n_jobs=-1,random_state=seed,C=C)
-   
-    algo = "LR"
-
-    ##Set figure size
-    #plt.rc("figure", figsize=(25, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with C=%s+%s of %s" % (algo,C,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with C=%s+%s of %s" % (algo,C,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-      
-#Best estimated performance is close to 67% with LR when C=100 and all attributes are considered and with standardized data
-#Performance improves will increasing value of C
-#Performance of Normalizer and MinMax Scaler is poor in general
+#--- Recheck memory of Members dataframe
+mem = df_members.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
 
 
-# ## Evaluation, prediction, and analysis
-# * KNN (Non-linear algo)
+# We have reduced memory almost by 50%. Let us see the column types to notice the changes:
 
 # In[ ]:
 
 
-#Evaluation of various combinations of KNN Classifier using all the views
+print(df_transactions.dtypes, '\n')
+print(df_members.dtypes)
 
-#Import the library
-from sklearn.neighbors import KNeighborsClassifier
 
-n_list = [1]
+# ## Transactions dataframe
+# 
+# Now let us create new features!!
+# 
+# Before creating features let us keep a count of the number of columns we have at the moment:
 
-for n_neighbors in n_list:
-    #Set the base model
-    model = KNeighborsClassifier(n_jobs=-1,n_neighbors=n_neighbors)
-   
-    algo = "KNN"
+# In[ ]:
 
-    ##Set figure size
-    #plt.rc("figure", figsize=(25, 10))
 
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_neighbors,"All",1.0))
+len(df_transactions.columns)
 
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_neighbors,"Subset",v))
+
+# ## Feature 1 : ***discount***
+# We can create a **discount** column to see how much discount was offered to the customer.
+
+# In[ ]:
+
+
+df_transactions['discount'] = df_transactions['plan_list_price'] - df_transactions['actual_amount_paid']
+
+df_transactions['discount'].unique()
+
+
+# ## Feature 2 : ***is_discount***
+# Let us create another column **is_column** to check whether the customer has availed any discount or not. 
+# 
+# Why this feature? Oh come on you now why!
+
+# In[ ]:
+
+
+df_transactions['is_discount'] = df_transactions.discount.apply(lambda x: 1 if x > 0 else 0)
+print(df_transactions['is_discount'].head())
+print(df_transactions['is_discount'].unique())
+
+
+# ## Feature 3 : ***amount_per_day***
+# A new column featuring amount per-day can be added.
+
+# In[ ]:
+
+
+df_transactions['amt_per_day'] = df_transactions['actual_amount_paid'] / df_transactions['payment_plan_days']
+df_transactions['amt_per_day'].head()
+
+
+# Now we have two date columns :
+# * transaction_date	
+# * membership_expire_date
+# 
+# Let us see if we can extract some features from them!
+
+# In[ ]:
+
+
+date_cols = ['transaction_date', 'membership_expire_date']
+print(df_transactions[date_cols].dtypes)
+
+
+# Both the date columns are of **integer** type. We have to convert them to type **datetime**.
+# 
+
+# Converting date columns from integer to datetime:
+
+# In[ ]:
+
+
+for col in date_cols:
+    df_transactions[col] = pd.to_datetime(df_transactions[col], format='%Y%m%d')
     
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
+df_transactions.head()
+
+
+# ## Feature 4 : ***membership_duration***
+# 
+# The difference between **transaction_date** and	**membership_expire_date** would give us membership duration.
+# 
+# Here we  find the differnce between these two columns in terms of days and months and later preserve the result as type integer.
+
+# In[ ]:
+
+
+#--- difference in days ---
+df_transactions['membership_duration'] = df_transactions.membership_expire_date - df_transactions.transaction_date
+df_transactions['membership_duration'] = df_transactions['membership_duration'] / np.timedelta64(1, 'D')
+df_transactions['membership_duration'] = df_transactions['membership_duration'].astype(int)
+
  
-#Best estimated performance is close to 86% when n_neighbors=1 and normalizer is used
+#---difference in months ---
+#df_transactions['membership_duration_M'] = (df_transactions.membership_expire_date - df_transactions.transaction_date)/ np.timedelta64(1, 'M')
+#df_transactions['membership_duration_M'] = round(df_transactions['membership_duration_M']).astype(int)
+#df_transactions['membership_duration_M'].head()
 
 
-# ## Evaluation, prediction, and analysis
-# * Naive Bayes
-
-# In[ ]:
-
-
-#Evaluation of various combinations of Naive Bayes using all the views
-
-#Import the library
-from sklearn.naive_bayes import GaussianNB
-
-#Set the base model
-model = GaussianNB()
-algo = "NB"
-
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-#Accuracy of the model using all features
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-    model.fit(X[:,i_cols_list],Y_train)
-    result = model.score(X_val[:,i_cols_list], Y_val)
-    acc[trans].append(result)
-    #print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #print(result)
-comb.append("%s+%s of %s" % (algo,"All",1.0))
-        
-#Accuracy of the model using a subset of features    
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    model.fit(X[:,i_cols_list],Y_train)
-    result = model.score(X_val[:,i_cols_list], Y_val)
-    acc[trans].append(result)
-    #print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #print(result)
-for v in ratio_list:
-    comb.append("%s+%s of %s" % (algo,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 64%. Original with 50% subset outperfoms all transformations of NB
-
-
-# ## Evaluation, prediction, and analysis
-# * CART (Non-linear algo)
+# Let us check the number of columns now:
 
 # In[ ]:
 
 
-#Evaluation of various combinations of CART using all the views
-
-#Import the library
-from sklearn.tree import DecisionTreeClassifier
-
-d_list = [13]
-
-for max_depth in d_list:
-    #Set the base model
-    model = DecisionTreeClassifier(random_state=seed,max_depth=max_depth)
-   
-    algo = "CART"
-
-    #Set figure size
-    plt.rc("figure", figsize=(15, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with d=%s+%s of %s" % (algo,max_depth,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with d=%s+%s of %s" % (algo,max_depth,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-    
-#Best estimated performance is close to 79% when max_depth=13 and for Original
+len(df_transactions.columns)
 
 
-# ## Evaluation, prediction, and analysis
-# * SVM (Non-linear algo)
+# Now that we have created 5 more columns, we have increased the memory consumption as well. So we will run the previous functions again to keep the memory in check.
 
 # In[ ]:
 
 
-#Evaluation of various combinations of SVM using all the views
-
-#Import the library
-from sklearn.svm import SVC
-
-c_list = [10]
-
-for C in c_list:
-    #Set the base model
-    model = SVC(random_state=seed,C=C)
-
-    algo = "SVM"
-
-    #Set figure size
-    #plt.rc("figure", figsize=(15, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with C=%s+%s of %s" % (algo,C,"All",1.0))
-
-    ##Accuracy of the model using a subset of features    
-    #for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    #    model.fit(X[:,i_cols_list],Y_train)
-    #    result = model.score(X_val[:,i_cols_list], Y_val)
-    #    acc[trans].append(result)
-    #    print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #    print(result)
-    #for v in ratio_list:
-    #    comb.append("%s with C=%s+%s of %s" % (algo,C,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Training time is very high compared to other algos
-#Performance is very poor for original. Shows the importance of data transformation
-#Best estimated performance is close to 77% when C=10 and for StandardScaler with 0.25 subset
+change_datatype(df_transactions)
+change_datatype_float(df_transactions)
 
 
-# ## Evaluation, prediction, and analysis
-# * Bagged Decision Trees (Bagging)
+# ## Members dataframe
+# Now let us see the members.csv file
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Bagged Decision Trees using all the views
+df_members.head()
 
-#Import the library
-from sklearn.ensemble import BaggingClassifier
-from sklearn.tree import DecisionTreeClassifier
-
-#Base estimator
-base_estimator = DecisionTreeClassifier(random_state=seed,max_depth=13)
-
-n_list = [100]
-
-for n_estimators in n_list:
-    #Set the base model
-    model = BaggingClassifier(n_jobs=-1,base_estimator=base_estimator, n_estimators=n_estimators, random_state=seed)
-   
-    algo = "Bag"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 82% when n_estimators is 100 for Original
-
-
-# ## Evaluation, prediction, and analysis
-# * Random Forest (Bagging)
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Random Forest using all the views
-
-#Import the library
-from sklearn.ensemble import RandomForestClassifier
-
-n_list = [100]
-
-for n_estimators in n_list:
-    #Set the base model
-    model = RandomForestClassifier(n_jobs=-1,n_estimators=n_estimators, random_state=seed)
-   
-    algo = "RF"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 85% when n_estimators is 100
+#--- Number of columns 
+len(df_members.columns)
 
 
-# ## Evaluation, prediction, and analysis
-# * Extra Trees (Bagging)
+# We will have to convert the date columns as before:
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Extra Trees using all the views
+date_cols = ['registration_init_time', 'expiration_date']
 
-#Import the library
-from sklearn.ensemble import ExtraTreesClassifier
-
-n_list = [100]
-
-for n_estimators in n_list:
-    #Set the base model
-    model = ExtraTreesClassifier(n_jobs=-1,n_estimators=n_estimators, random_state=seed)
-   
-    algo = "ET"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 88% when n_estimators is 100 , StdScaler with 0.75
+for col in date_cols:
+    df_members[col] = pd.to_datetime(df_members[col], format='%Y%m%d')
 
 
-# ## Evaluation, prediction, and analysis
-# * AdaBoost (Boosting)
+# ## Feature 5 : ***registration_duration***
 
 # In[ ]:
 
 
-#Evaluation of various combinations of AdaBoost ensemble using all the views
+#--- difference in days ---
+df_members['registration_duration'] = df_members.expiration_date - df_members.registration_init_time
+df_members['registration_duration'] = df_members['registration_duration'] / np.timedelta64(1, 'D')
+df_members['registration_duration'] = df_members['registration_duration'].astype(int)
 
-#Import the library
-from sklearn.ensemble import AdaBoostClassifier
+#---difference in months ---
+#df_members['registration_duration_M'] = (df_members.expiration_date - df_members.registration_init_time)/ np.timedelta64(1, 'M')
+#df_members['registration_duration_M'] = round(df_members['registration_duration_M']).astype(int)
 
-n_list = [100]
-
-for n_estimators in n_list:
-    #Set the base model
-    model = AdaBoostClassifier(n_estimators=n_estimators, random_state=seed)
-   
-    algo = "Ada"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 38% when n_estimators is 100
-
-
-# ## Evaluation, prediction, and analysis
-# * Gradient Boosting (Boosting)
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Stochastic Gradient Boosting using all the views
+#--- Reducing and checking memory again ---
+change_datatype(df_members)
+change_datatype_float(df_members)
 
-#Import the library
-from sklearn.ensemble import GradientBoostingClassifier
-
-d_list = [9]
-
-for max_depth in d_list:
-    #Set the base model
-    model = GradientBoostingClassifier(max_depth=max_depth, random_state=seed)
-   
-    algo = "SGB"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with d=%s+%s of %s" % (algo,max_depth,"All",1.0))
-
-    ##Accuracy of the model using a subset of features    
-    #for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    #    model.fit(X[:,i_cols_list],Y_train)
-    #    result = model.score(X_val[:,i_cols_list], Y_val)
-    #    acc[trans].append(result)
-    #    #print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #    #print(result)
-    #for v in ratio_list:
-    #    comb.append("%s with d=%s+%s of %s" % (algo,max_depth,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#training time is too high
-#Best estimated performance is close to 86% when depth is 7
+#--- Recheck memory of Members dataframe
+mem = df_members.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
 
 
-# ## Evaluation, prediction, and analysis
-# * Voting Classifier (Voting)
+# ## Merging dataframes (*transactions* and *members*)
+# Now let us combine both both the dataframes(**transactions** and **members**) based on **msno** and see if we can create anything more.
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Voting Classifier using all the views
+#-- merging the two dataframes---
+df_comb = pd.merge(df_transactions, df_members, on='msno', how='inner')
 
-#Import the library
-from sklearn.ensemble import VotingClassifier
+#--- deleting the dataframes to save memory
+del df_transactions
+del df_members
 
-list_estimators =[]
+df_comb.head()
 
-estimators = []
-model1 = ExtraTreesClassifier(n_jobs=-1,n_estimators=100, random_state=seed)
-estimators.append(('et', model1))
-model2 = RandomForestClassifier(n_jobs=-1,n_estimators=100, random_state=seed)
-estimators.append(('rf', model2))
-from sklearn.ensemble import BaggingClassifier
-from sklearn.tree import DecisionTreeClassifier
-base_estimator = DecisionTreeClassifier(random_state=seed,max_depth=13)
-model3 = BaggingClassifier(n_jobs=-1,base_estimator=base_estimator, n_estimators=100, random_state=seed)
-estimators.append(('bag', model3))
-
-list_estimators.append(['Voting',estimators])
-
-for name, estimators in list_estimators:
-    #Set the base model
-    model = VotingClassifier(estimators=estimators, n_jobs=-1)
-   
-    algo = name
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s+%s of %s" % (algo,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s+%s of %s" % (algo,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 86%
-
-
-# ## Evaluation, prediction, and analysis
-# * XGBoost
 
 # In[ ]:
 
 
-#Evaluation of various combinations of XG Boost using all the views
-
-#Import the library
-from xgboost import XGBClassifier
-
-n_list = [300]
-
-for n_estimators in n_list:
-    #Set the base model
-    model = XGBClassifier(n_estimators=n_estimators, seed=seed,subsample=0.25)
-   
-    algo = "XGB"
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"All",1.0))
-
-    #Accuracy of the model using a subset of features    
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-        model.fit(X[:,i_cols_list],Y_train)
-        result = model.score(X_val[:,i_cols_list], Y_val)
-        acc[trans].append(result)
-        #print(trans+"+"+name+"+%d" % (v*(c-1)))
-        #print(result)
-    for v in ratio_list:
-        comb.append("%s with n=%s+%s of %s" % (algo,n_estimators,"Subset",v))
-    
-##Plot the accuracies of all combinations
-#fig, ax = plt.subplots()
-##Plot each transformation
-#for trans in trans_list:
-#        plt.plot(acc[trans])
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Display the plot
-#plt.legend(trans_list,loc='best')    
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is close to 80% when n_estimators is 300, sub_sample=0.25 , subset=0.75
+#df_comb = df_comb.drop('msno', 1)
+mem = df_comb.memory_usage(index=True).sum()
+print("Memory consumed by training set  :   {} MB" .format(mem/ 1024**2))
 
 
-# ## Evaluation, prediction, and analysis
-# * Multi-layer perceptrons (Deep learning)
+# ## Feature 6 : ***reg_mem_duration***
+# 
+# After merging both the dataframes, we observe that the  average **registration_duration** is much longer than that of **membership_duration**.
+# 
+# So it is highly likely that customers renew their membership on a monthly or quarterly basis.
+# 
+# We can create another column stating the difference between the registration and membership duration. I don't know if it makes sense, but let's create it.
 
 # In[ ]:
 
 
-#Evaluation of baseline model of MLP using all the views
-
-#Import libraries for deep learning
-from keras.wrappers.scikit_learn import KerasClassifier
-from keras.models import Sequential
-from keras.layers import Dense
-
-#Import libraries for encoding
-from keras.utils import np_utils
-from sklearn.preprocessing import LabelEncoder
-
-#no. of output classes
-y = 7
-
-#random state
-numpy.random.seed(seed)
-
-# one hot encode class values
-encoder = LabelEncoder()
-Y_train_en = encoder.fit_transform(Y_train)
-Y_train_hot = np_utils.to_categorical(Y_train_en,y) 
-Y_val_en = encoder.fit_transform(Y_val)
-Y_val_hot = np_utils.to_categorical(Y_val_en,y) 
+df_comb['reg_mem_duration'] = df_comb['registration_duration'] - df_comb['membership_duration']
+#df_comb['reg_mem_duration_M'] = df_comb['registration_duration_M'] - df_comb['membership_duration_M']
+df_comb.head()
 
 
-# define baseline model
-def baseline(v):
-     # create model
-     model = Sequential()
-     model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
-     model.add(Dense(y, init='normal', activation='sigmoid'))
-     # Compile model
-     model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-     return model
-
-# define smaller model
-def smaller(v):
- # create model
- model = Sequential()
- model.add(Dense(v*(c-1)/2, input_dim=v*(c-1), init='normal', activation='relu'))
- model.add(Dense(y, init='normal', activation='sigmoid'))
- # Compile model
- model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
- return model
-
-# define deeper model
-def deeper(v):
- # create model
- model = Sequential()
- model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
- model.add(Dense(v*(c-1)/2, init='normal', activation='relu'))
- model.add(Dense(y, init='normal', activation='sigmoid'))
- # Compile model
- model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
- return model
-
-# Optimize using dropout and decay
-from keras.optimizers import SGD
-from keras.layers import Dropout
-from keras.constraints import maxnorm
-
-def dropout(v):
-    #create model
-    model = Sequential()
-    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu',W_constraint=maxnorm(3)))
-    model.add(Dropout(0.2))
-    model.add(Dense(v*(c-1)/2, init='normal', activation='relu', W_constraint=maxnorm(3)))
-    model.add(Dropout(0.2))
-    model.add(Dense(y, init='normal', activation='sigmoid'))
-    # Compile model
-    sgd = SGD(lr=0.1,momentum=0.9,decay=0.0,nesterov=False)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
-    return model
-
-# define decay model
-def decay(v):
-    # create model
-    model = Sequential()
-    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
-    model.add(Dense(y, init='normal', activation='sigmoid'))
-    # Compile model
-    sgd = SGD(lr=0.1,momentum=0.8,decay=0.01,nesterov=False)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
-    return model
-    
-est_list = [('MLP',baseline),('smaller',smaller),('deeper',deeper),('dropout',dropout),('decay',decay)]
-
-for name, est in est_list:
- 
-    algo = name
-
-    #Set figure size
-    plt.rc("figure", figsize=(20, 10))
-
-    #Accuracy of the model using all features
-    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
-        model = KerasClassifier(build_fn=est, v=v, nb_epoch=10, verbose=0)
-        model.fit(X[:,i_cols_list],Y_train_hot)
-        result = model.score(X_val[:,i_cols_list], Y_val_hot)
-        acc[trans].append(result)
-    #    print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #    print(result)
-    comb.append("%s+%s of %s" % (algo,"All",1.0))
-
-    ##Accuracy of the model using a subset of features    
-    #for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    #    model = KerasClassifier(build_fn=est, v=v, nb_epoch=10, verbose=0)
-    #    model.fit(X[:,i_cols_list],Y_train_hot)
-    #    result = model.score(X_val[:,i_cols_list], Y_val_hot)
-    #    acc[trans].append(result)
-    #    print(trans+"+"+name+"+%d" % (v*(c-1)))
-    #    print(result)
-    #for v in ratio_list:
-    #    comb.append("%s+%s of %s" % (algo,"Subset",v))
-
-#Plot the accuracies of all combinations
-fig, ax = plt.subplots()
-#Plot each transformation
-for trans in trans_list:
-        plt.plot(acc[trans])
-#Set the tick names to names of combinations
-ax.set_xticks(range(len(comb)))
-ax.set_xticklabels(comb,rotation='vertical')
-#Display the plot
-plt.legend(trans_list,loc='best')    
-#Plot the accuracy for all combinations
-plt.show()    
-
-# Best estimated performance is 71% 
-# Performance is poor is general. Data transformations make a huge difference.
-
-
-# ##Make Predictions
+# ## Feature 7 : ***autorenew_&_not_cancel***
+# 
+# A binary feature to see whether mebers have** auto renewed** and **not cancelled** at the same time:
+# * **auto_renew** = 1 and
+# * **is_cancel** = 0
 
 # In[ ]:
 
 
-# Make predictions using Extra Tress Classifier + 0.5 subset as it gave the best estimated performance
+df_comb['autorenew_&_not_cancel'] = ((df_comb.is_auto_renew == 1) == (df_comb.is_cancel == 0)).astype(np.int8)
+df_comb['autorenew_&_not_cancel'].unique()
 
-n_estimators = 100
 
-#Obtain the list of indexes for the required model
-indexes = []
-for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
-    if v == 0.5:
-        if trans == 'Orig':
-            indexes = i_cols_list
-            break
+# ## Feature 8 : ***notAutorenew_&_cancel***
+# Binary feature to predict possible churning if 
+# * **auto_renew** = 0 and
+# * **is_cancel** = 1
 
-#Best model definition
-best_model = ExtraTreesClassifier(n_jobs=-1,n_estimators=n_estimators)
-best_model.fit(X_orig[:,indexes],Y)
+# In[ ]:
 
-#Read test dataset
-dataset_test = pandas.read_csv("../input/test.csv")
-#Drop unnecessary columns
-ID = dataset_test['Id']
-dataset_test.drop('Id',axis=1,inplace=True)
-dataset_test.drop(rem,axis=1,inplace=True)
-X_test = dataset_test.values
 
-#Make predictions using the best model
-predictions = best_model.predict(X_test[:,indexes])
-# Write submissions to output file in the correct format
-with open("submission.csv", "w") as subfile:
-    subfile.write("Id,Cover_Type\n")
-    for i, pred in enumerate(list(predictions)):
-        subfile.write("%s,%s\n"%(ID[i],pred))
+df_comb['notAutorenew_&_cancel'] = ((df_comb.is_auto_renew == 0) == (df_comb.is_cancel == 1)).astype(np.int8)
+df_comb['notAutorenew_&_cancel'].unique()
 
+
+# ## Feature 9 : *long_time_user*
+# 
+# A binary feature to check whether user has been registered for more than a year. This can prompt the company to offer the user some discount.
+
+# In[ ]:
+
+
+df_comb['long_time_user'] = (((df_comb['registration_duration'] / 365).astype(int)) > 1).astype(int)
+
+
+# ## Important Note:
+# I have noticed that columns of type **datetime64[ns]** consume a lot of memory. So after having extracted features from these columns they can be dropped to reduce memory!!
+
+# In[ ]:
+
+
+datetime_cols = list(df_comb.select_dtypes(include=['datetime64[ns]']).columns)
+
+
+# Dropping columns of type **datetime64[ns]**.
+
+# In[ ]:
+
+
+df_comb = df_comb.drop([datetime_cols], 1)
+
+
+# You can also include duration periods in terms of months and years to get insight analysis.
+# 
+# ## Share your ideas as well!!
+# 
+# ## Do upvote if you find it useful!!

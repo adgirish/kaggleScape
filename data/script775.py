@@ -1,114 +1,327 @@
 
 # coding: utf-8
 
-# # Introduction
-# Maps allow us to transform data in a `DataFrame` or `Series` one value at a time for an entire column. However, often we want to group our data, and then do something specific to the group the data is in. We do this with the `groupby` operation.
-# 
-# In these exercises we'll apply groupwise analysis to our dataset.
-# 
-# # Useful Resources
-# - [**Grouping Reference and Examples**](https://www.kaggle.com/residentmario/grouping-and-sorting-reference).  
-# - [Pandas cheat sheet](https://github.com/pandas-dev/pandas/blob/master/doc/cheatsheet/Pandas_Cheat_Sheet.pdf)
-
-# # Set Up
-# Run the code cell below to load the data before running the exercises.
-
-# In[2]:
-
-
-import pandas as pd
-from learntools.advanced_pandas.grouping_and_sorting import *
-
-reviews = pd.read_csv("../input/wine-reviews/winemag-data-130k-v2.csv", index_col=0)
-pd.set_option("display.max_rows", 5)
-
-
-# # Checking Your Answers
-# 
-# # Checking Answers
-# 
-# **Check your answers in each exercise using the  `check_qN` function** (replacing `N` with the number of the exercise). For example here's how you would check an incorrect answer to exercise 1:
+# Here I am going to apply Principal component analysis on the given dataset using Scikit-learn and find out the dimensions(also known as components) with maximum variance(where the data is spread out).Features with little variance in the data are then projected into new lower dimension. Then the models are  trained on transformed dataset to apply machine learning models.Then I have applied  Random forest Regressor on old and the transformed datasets and compared them.
+# If you want to know the basic concept behind Principal Component Analysis check this out.
+# (https://www.kaggle.com/nirajvermafcb/d/ludobenistant/hr-analytics/principal-component-analysis-explained)
 
 # In[ ]:
 
 
-check_q1(pd.DataFrame())
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# If you get stuck, **use the `answer_qN` function to see the code with the correct answer.**
-# 
-# For the first set of questions, running the `check_qN` on the correct answer returns `True`.
-# For the second set of questions, using this function to check a correct answer will present an informative graph!
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# # Exercises
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# **Exercise 1**: Who are the most common wine reviewers in the dataset? Create a `Series` whose index is the `taster_twitter_handle` category from the dataset, and whose values count how many reviews each person wrote.
+# Any results you write to the current directory are saved as output.
+
 
 # In[ ]:
 
 
-# Your code here
-# common_wine_reviewers = _______
-# check_q1(common_wine_reviewers)
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-
-# **Exercise 2**: What is the best wine I can buy for a given amount of money? Create a `Series` whose index is wine prices and whose values is the maximum number of points a wine costing that much was given in a review. Sort the valeus by price, ascending (so that `4.0` dollars is at the top and `3300.0` dollars is at the bottom).
 
 # In[ ]:
 
 
-# Your code here
-# best_wine = ______
-# check_q2(best_wine)
+df=pd.read_csv('../input/data.csv') #Replace it with your path where the data file is stored
+df.head()
 
-
-# **Exercise 3**: What are the minimum and maximum prices for each `variety` of wine? Create a `DataFrame` whose index is the `variety` category from the dataset and whose values are the `min` and `max` values thereof.
 
 # In[ ]:
 
 
-# Your code here
-# wine_price_extremes = _____
-# check_q3(wine_price_extremes)
+df.describe()
 
-
-# The rest of the exercises are visual.
-# 
-# **Exercise 4**: Are there significant differences in the average scores assigned by the various reviewers? Create a `Series` whose index is reviewers and whose values is the average review score given out by that reviewer. Hint: you will need the `taster_name` and `points` columns.
 
 # In[ ]:
 
 
-# Your code here
-# reviewer_mean_ratings = _____
-# check_q4(reviewer_mean_rating)
+df.corr()
 
 
-# **Exercise 5**: What are the rarest, most expensive wine varieties? Create a `DataFrame` whose index is wine varieties and whose values are columns with the `min` and the `max` price of wines of this variety. Sort in descending order based on `min` first, `max` second.
+# Let us find if there is any relationship between temperature and apparent_temperature
 
 # In[ ]:
 
 
-# Your code here
-# wine_price_range = ____
-# check_q5(wine_price_range)
+x=df['temperature']
+y=df['apparent_temperature']
+colors=('r','b')
+plt.xlabel('Temperature')
+plt.ylabel('Apparent_temperature')
+plt.scatter(x,y,c=colors)
 
 
-# **Exercise 6**: What combination of countries and varieties are most common? Create a `Series` whose index is a `MultiIndex`of `{country, variety}` pairs. For example, a pinot noir produced in the US should map to `{"US", "Pinot Noir"}`. Sort the values in the `Series` in descending order based on wine count.
-# 
-# Hint: first run `reviews['n'] = 0`. Then `groupby` the dataset and run something on the column `n`. You won't need `reset_index`.
+# The temperture given here is in fahrenheit.We will convert it into Celsius using the formula 
+# **Celsius=(Fahrenheit-32)* (5/9)**
 
 # In[ ]:
 
 
-# Your code here
-# country_variety_pairs = _____
-# check_q6(country_variety_pairs)
+Fahrenheit=df['temperature']
 
 
-# # Keep Going
-# 
-# Move on to [**Data types and missing data workbook**](https://www.kaggle.com/residentmario/data-types-and-missing-data-workbook).
-# 
-# ___
-# This is part of the [*Learn Pandas*](https://www.kaggle.com/learn/pandas) series.
+# Converting it into the list so we can apply lambda function
+
+# In[ ]:
+
+
+F=Fahrenheit.tolist()
+
+
+# Applying Lambda function
+
+# In[ ]:
+
+
+C= map(lambda x: (float(5)/9)*(x-32),F)
+Celsius=(list(C))
+
+
+# Converting list to series
+
+# In[ ]:
+
+
+temperature_celsius=pd.Series(Celsius)
+
+
+# Applying the series to temperature column
+
+# In[ ]:
+
+
+df['temperature']= temperature_celsius
+df['temperature']
+df.head()
+
+
+# Thus we have converted the temperature column from fahrenheit to degree celsius.Similarly we are now converting apparent_temperature to degree celsius.
+
+# In[ ]:
+
+
+at_fahrenheit=df['apparent_temperature']
+at_F=at_fahrenheit.tolist()
+at_C= map(lambda x: (float(5)/9)*(x-32),at_F)
+at_Celsius=(list(C))
+at_celsius=pd.Series(at_Celsius)
+at_celsius
+
+
+# In[ ]:
+
+
+apparent_temperature_celsius=pd.Series(at_Celsius)
+print(apparent_temperature_celsius)
+
+
+# In[ ]:
+
+
+df['apparent_temperature']= temperature_celsius
+df['apparent_temperature']
+df.head()
+
+
+# In[ ]:
+
+
+X = df.iloc[:,1:8]  # all rows, all the features and no labels
+y = df.iloc[:, 0]  # all rows, label only
+#X
+#y
+
+
+# In[ ]:
+
+
+df.corr()
+
+
+# In[ ]:
+
+
+correlation = df.corr()
+plt.figure(figsize=(10,10))
+sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='viridis')
+
+plt.title('Correlation between different fearures')
+
+
+# Standardising data
+
+# In[ ]:
+
+
+# Scale the data to be between -1 and 1
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+X=scaler.fit_transform(X)
+X
+
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA
+pca = PCA()
+pca.fit_transform(X)
+
+
+# In[ ]:
+
+
+pca.get_covariance()
+
+
+# In[ ]:
+
+
+explained_variance=pca.explained_variance_ratio_
+explained_variance
+
+
+# In[ ]:
+
+
+with plt.style.context('dark_background'):
+    plt.figure(figsize=(6, 4))
+
+    plt.bar(range(7), explained_variance, alpha=0.5, align='center',
+            label='individual explained variance')
+    plt.ylabel('Explained variance ratio')
+    plt.xlabel('Principal components')
+    plt.legend(loc='best')
+    plt.tight_layout()
+
+
+# **Thus we can see from the above plot that  first two components constitute almost 55% of the variance.Third,fourth and fifth components has 42% of the data sprad.The last component has less than 5% of the variance.Hence we can drop the fifth component  **
+
+# In[ ]:
+
+
+pca=PCA(n_components=5)
+X_new=pca.fit_transform(X)
+X_new
+
+
+# In[ ]:
+
+
+pca.get_covariance()
+
+
+# In[ ]:
+
+
+explained_variance=pca.explained_variance_ratio_
+explained_variance
+
+
+# In[ ]:
+
+
+with plt.style.context('dark_background'):
+    plt.figure(figsize=(6, 4))
+
+    plt.bar(range(5), explained_variance, alpha=0.5, align='center',
+            label='individual explained variance')
+    plt.ylabel('Explained variance ratio')
+    plt.xlabel('Principal components')
+    plt.legend(loc='best')
+    plt.tight_layout()
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
+X_train.shape
+
+
+# In[ ]:
+
+
+# Establish model
+from sklearn.ensemble import RandomForestRegressor
+model = RandomForestRegressor()
+
+
+# In[ ]:
+
+
+# Try different numbers of n_estimators - this will take a minute or so
+estimators = np.arange(10, 200, 10)
+scores = []
+for n in estimators:
+    model.set_params(n_estimators=n)
+    model.fit(X_train, y_train)
+    scores.append(model.score(X_test, y_test))
+print(scores)    
+
+
+# In[ ]:
+
+
+plt.title("Effect of n_estimators")
+plt.xlabel("n_estimator")
+plt.ylabel("score")
+plt.plot(estimators, scores)
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X_new, y, test_size=0.2, random_state=1)
+X_train.shape
+
+
+# In[ ]:
+
+
+# Establish model
+from sklearn.ensemble import RandomForestRegressor
+model = RandomForestRegressor()
+
+
+# In[ ]:
+
+
+# Try different numbers of n_estimators - this will take a minute or so
+estimators = np.arange(10, 200, 10)
+scores = []
+for n in estimators:
+    model.set_params(n_estimators=n)
+    model.fit(X_train, y_train)
+    scores.append(model.score(X_test, y_test))
+print(scores)    
+
+
+# In[ ]:
+
+
+plt.title("Effect of n_estimators")
+plt.xlabel("n_estimator")
+plt.ylabel("score")
+plt.plot(estimators, scores)
+
+
+# You can find my notebook on Github:
+# ("https://github.com/nirajvermafcb/Data-Science-with-python")

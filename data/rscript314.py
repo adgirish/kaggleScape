@@ -1,197 +1,243 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Jun 29 14:00:37 2015
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-@author: alexandrebarachant
+#from subprocess import check_output
+#print(check_output(["ls", "../input"]).decode("utf8"))
 
-During a hand movement, the mu (~10Hz) and beta (~20Hz) oscillations are suppressed 
-over the contralateral motor cortex, i.e. we can observe a reduction of the 
-signal power in the corresponding frequency band. This effect is know as 
-Event Related Desynchronization.
+# Any results you write to the current directory are saved as output.
 
-I used MNE python to epoch signal corresponding to the hand movement, by assuming that 
-the hand movement occur before the 'Replace' event.
+import gc
 
-Using Common spatial patterns algorithm, i extract spatial filters that maximize 
-the difference of variance during and after the movement, and then visualize the 
-corresponding spectrum. 
-
-For each subject, we should see a spot over the electrode C3 (Left motor cortex,
-corresponding to a right hand movement), and a decrease of the signal power in 
-10 and 20 Hz during the movement (by reference to after the movement).
-
-Each subject has a different cortex organization, and a different apha and beta 
-peak. The CSP algorithm is also sensitive to artefacts, so it could give eronous 
-maps (for example subject 5 seems to trig on eye movements)
-
-"""
-
-import numpy as np
 import pandas as pd
-from mne.io import RawArray
-from mne.channels import read_montage
-from mne.epochs import concatenate_epochs
-from mne import create_info, find_events, Epochs
-from mne.viz.topomap import _prepare_topo_plot, plot_topomap
-from mne.decoding import CSP
-
-from sklearn.pipeline import make_pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
-from sklearn.cross_validation import cross_val_score, LeaveOneLabelOut
-from glob import glob
-
+import numpy as np
+import lightgbm as lgb
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from scipy.signal import welch
-from mne import pick_types
+from time import time
+from random import choice
+from scipy.stats import randint as sp_randint
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
 
-def creat_mne_raw_object(fname):
-    """Create a mne raw instance from csv file"""
-    # Read EEG file
-    data = pd.read_csv(fname)
-    
-    # get chanel names
-    ch_names = list(data.columns[1:])
-    
-    # read EEG standard montage from mne
-    montage = read_montage('standard_1005',ch_names)
+np.random.seed(17)
 
-    # events file
-    ev_fname = fname.replace('_data','_events')
-    # read event file
-    events = pd.read_csv(ev_fname)
-    events_names = events.columns[1:]
-    events_data = np.array(events[events_names]).T
-    
-    # concatenate event file and data
-    data = np.concatenate((1e-6*np.array(data[ch_names]).T,events_data))        
-    
-    # define channel type, the first is EEG, the last 6 are stimulations
-    ch_type = ['eeg']*len(ch_names) + ['stim']*6
-    
-    # create and populate MNE info structure
-    ch_names.extend(events_names)
-    info = create_info(ch_names,sfreq=500.0, ch_types=ch_type, montage=montage)
-    info['filename'] = fname
-    
-    # create raw object 
-    raw = RawArray(data,info,verbose=False)
-    return raw
+df_tn = pd.read_csv('../input/train.csv')
+df_tt = pd.read_csv('../input/test.csv')
 
-subjects = range(1,13)
-auc = []
-for subject in subjects:
-    epochs_tot = []
-    
-    #eid = 'HandStart'
-    fnames =  glob('../input/train/subj%d_series*_data.csv' % (subject))
-    
-    session = []
-    y = []
-    for i,fname in enumerate(fnames):
-      
-        # read data 
-        raw = creat_mne_raw_object(fname)
-        
-        # pick eeg signal
-        picks = pick_types(raw.info,eeg=True)
-        
-        # Filter data for alpha frequency and beta band
-        # Note that MNE implement a zero phase (filtfilt) filtering not compatible
-        # with the rule of future data.
-        raw.filter(7,35, picks=picks, method='iir', n_jobs=-1, verbose=False)
-        
-        # get event posision corresponding to Replace
-        events = find_events(raw,stim_channel='Replace', verbose=False)
-        # epochs signal for 1.5 second before the movement
-        epochs = Epochs(raw, events, {'during' : 1}, -2, -0.5, proj=False,
-                        picks=picks, baseline=None, preload=True,
-                        add_eeg_ref=False, verbose=False)
-        
-        epochs_tot.append(epochs)
-        session.extend([i]*len(epochs))
-        y.extend([1]*len(epochs))
-        
-        # epochs signal for 1.5 second after the movement, this correspond to the 
-        # rest period.
-        epochs_rest = Epochs(raw, events, {'after' : 1}, 0.5, 2, proj=False,
-                        picks=picks, baseline=None, preload=True,
-                        add_eeg_ref=False, verbose=False)
-        
-        # Workaround to be able to concatenate epochs
-        epochs_rest.times = epochs.times
-        
-        epochs_tot.append(epochs_rest)
-        session.extend([i]*len(epochs_rest))
-        y.extend([-1]*len(epochs_rest))
-        
-    #concatenate all epochs
-    epochs = concatenate_epochs(epochs_tot)
-    
-    # get data 
-    X = epochs.get_data()
-    y = np.array(y)
-    
-    # run CSP
-    csp = CSP(reg='lws')
-    csp.fit(X,y)
-    
-    # compute spatial filtered spectrum
-    po = []
-    for x in X:
-        f,p = welch(np.dot(csp.filters_[0,:].T,x), 500, nperseg=512)
-        po.append(p)
-    po = np.array(po)
-    
-    # prepare topoplot
-    _,epos,_,_,_ = _prepare_topo_plot(epochs,'eeg',None)
-    
-    # plot first pattern
-    pattern = csp.patterns_[0,:]
-    pattern -= pattern.mean()
-    ix = np.argmax(abs(pattern))
-    # the parttern is sign invariant.
-    # invert it for display purpose
-    if pattern[ix]>0:
-        sign = 1.0
-    else:
-        sign = -1.0
-    
-    fig, ax_topo = plt.subplots(1, 1, figsize=(12, 4))
-    title = 'Spatial Pattern'
-    fig.suptitle(title, fontsize=14)
-    img, _ = plot_topomap(sign*pattern,epos,axis=ax_topo,show=False)
-    divider = make_axes_locatable(ax_topo)
-    # add axes for colorbar
-    ax_colorbar = divider.append_axes('right', size='5%', pad=0.05)
-    plt.colorbar(img, cax=ax_colorbar)
-    
-    # plot spectrum
-    fix = (f>7) & (f<35)
-    ax_spectrum = divider.append_axes('right', size='300%', pad=1.2)
-    ax_spectrum.plot(f[fix],np.log(po[y==1][:,fix].mean(axis=0).T),'-r',lw=2)
-    ax_spectrum.plot(f[fix],np.log(po[y==-1][:,fix].mean(axis=0).T),'-b',lw=2)
-    ax_spectrum.set_xlabel('Frequency (Hz)')
-    ax_spectrum.set_ylabel('Power (dB)')
-    plt.grid()
-    plt.legend(['during','after'])
-    plt.title('Subject %d' % subject)
-    plt.show()
-    plt.savefig('spatial_pattern_subject_%02d.png' % subject ,bbox_inches='tight')
-    
-    # run cross validation
-    clf = make_pipeline(CSP(),LogisticRegression())
-    cv = LeaveOneLabelOut(session)
-    auc.append(cross_val_score(clf,X,y,cv=cv,scoring='roc_auc').mean())
-    print("Subject %d : AUC cross val score : %.3f" % (subject,auc[-1]))
+# replace -1 for NaN
 
-auc = pd.DataFrame(data=auc,index=subjects,columns=['auc'])
-auc.to_csv('cross_val_auc.csv')
-plt.figure(figsize=(4,4))
-auc.plot(kind='bar',y='auc')
-plt.xlabel('Subject')
-plt.ylabel('AUC')
-plt.title('During Vs. After classification')
-plt.savefig('cross_val_auc.png' ,bbox_inches='tight')
+# train set
+df_tn_z = df_tn.copy()
+df_tn_z.replace(-1, np.NaN, inplace = True)
+
+# test set
+df_tt_z = df_tt.copy()
+df_tt_z.replace(-1, np.NaN, inplace = True)
+
+# -1 can be changed to 0 for features where there is no category "0",
+# and features that have numerical values. Scrip below identifies such 
+# features as well as those where -1 shouldn't be changed.
+
+# list with features
+zero_list = ['ps_ind_02_cat', 'ps_reg_03', 'ps_car_12', 'ps_car_12', 'ps_car_14',] # -1 can be changed for 0 in this features
+
+minus_one = ['ps_ind_04_cat', 'ps_ind_05_cat', 'ps_car_01_cat', 'ps_car_02_cat',
+             'ps_car_03_cat', 'ps_car_07_cat', 'ps_car_05_cat', 'ps_car_09_cat',
+             'ps_car_11'] # these features already have 0 as value, thus -1 shouldn't be changed
+
+
+# fill in missing values with 0 or -1
+
+# train set
+df_tn_z[minus_one] = df_tn_z[minus_one].fillna(-1)
+df_tn_z[zero_list] = df_tn_z[zero_list].fillna(0)
+
+# test set
+df_tt_z[minus_one] = df_tt_z[minus_one].fillna(-1)
+df_tt_z[zero_list] = df_tt_z[zero_list].fillna(0)
+
+
+# group features by nature
+cat_f = ['ps_ind_02_cat', 'ps_ind_05_cat', 'ps_car_01_cat', 'ps_car_02_cat', 
+         'ps_car_03_cat',  'ps_car_04_cat','ps_car_05_cat', 'ps_car_06_cat',
+         'ps_car_07_cat', 'ps_car_08_cat','ps_car_09_cat', 'ps_car_10_cat', 
+         'ps_car_11_cat']
+bin_f = ['ps_ind_04_cat', 'ps_ind_06_bin', 'ps_ind_07_bin', 'ps_ind_08_bin',
+         'ps_ind_09_bin', 'ps_ind_10_bin', 'ps_ind_11_bin', 'ps_ind_12_bin',
+         'ps_ind_13_bin', 'ps_ind_16_bin', 'ps_ind_17_bin', 'ps_ind_18_bin',
+         'ps_calc_15_bin', 'ps_calc_16_bin', 'ps_calc_17_bin', 'ps_calc_18_bin',
+         'ps_calc_19_bin', 'ps_calc_20_bin']
+ord_f = ['ps_ind_01', 'ps_ind_03', 'ps_ind_14', 'ps_ind_15', 'ps_car_11']
+
+cont_f = ['ps_reg_01', 'ps_reg_02', 'ps_reg_03', 'ps_car_12', 'ps_car_13', 
+          'ps_car_14', 'ps_car_15',  'ps_calc_01', 'ps_calc_02', 'ps_calc_03',
+          'ps_calc_04', 'ps_calc_05', 'ps_calc_06', 'ps_calc_07', 'ps_calc_08',
+          'ps_calc_09', 'ps_calc_10', 'ps_calc_11', 'ps_calc_12', 'ps_calc_13',
+          'ps_calc_14']
+
+# transform categorical values to dummies
+df_tn_proc = df_tn_z.copy().drop(['id', 'target'], axis = 1)
+df_tt_proc = df_tt_z.copy().drop(['id'], axis = 1)
+df_all_proc = pd.concat((df_tn_proc, df_tt_proc), axis=0, ignore_index=True)
+
+for i in cat_f:
+    d = pd.get_dummies(df_all_proc[i], prefix = i, prefix_sep='_')
+    df_all_proc.drop(i, axis = 1, inplace = True)
+    df_all_proc = df_all_proc.merge(d, right_index=True, left_index=True)
+
+# prepare X and Y
+X = df_all_proc[:df_tn.shape[0]].copy()
+X_tt = df_all_proc[df_tn.shape[0]:].copy()
+Y = df_tn['target'].copy()
+print ("X shape", X.shape)
+print ("X_tt shape", X_tt.shape)
+print ("Y shape", Y.shape)
+print ("")
+
+del df_all_proc, df_tn_proc, df_tt_proc
+
+# formula for Gini Coefficient (https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703)
+def gini(actual, pred, cmpcol = 0, sortcol = 1):
+    assert( len(actual) == len(pred) )
+    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
+    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
+    totalLosses = all[:,0].sum()
+    giniSum = all[:,0].cumsum().sum() / totalLosses
+ 
+    giniSum -= (len(actual) + 1) / 2.
+    return giniSum / len(actual)
+
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
+
+
+# Custom LightGBM random search --------------------------------------------------------------
+
+n_iterations = 7 # number of iterations for random search
+top_n = 5 # select top n parameter sets
+
+gini_mean = []
+gini_std = []
+roc_auc_mean = []
+roc_auc_std = []
+dict_list = []
+
+# prepare indexes for stratified cross validation
+skf = StratifiedKFold(n_splits=5)
+skf.get_n_splits(X, Y)
+
+
+# loop for random search
+
+print ("Random search start...")
+print ("")
+
+for i in range(0, n_iterations):
+    skf_split = skf.split(X, Y)
+    param_dist = {'num_leaves': choice([27, 31, 61, 81, 127, 197, 231, 275, 302]),
+              'bagging_fraction': choice([0.5, 0.7, 0.8, 0.9]),
+              'learning_rate': choice([0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5]),
+              'min_data': choice([300, 400, 450, 500, 550, 650]),
+              'is_unbalance': choice([True, False]),
+              'max_bin': choice([3, 5, 10, 12, 18, 20, 22]),
+              'boosting_type' : choice(['gbdt', 'dart']),
+              'bagging_freq': choice([3, 9, 11, 15, 17, 23, 31]),
+              'max_depth': choice([3, 4, 5, 6, 7, 9, 11]),       
+              'feature_fraction': choice([0.5, 0.7, 0.8, 0.9]),
+              'lambda_l1': choice([0, 10, 20, 30, 40]),
+              'objective': 'binary', 
+              'metric': 'auc'} 
+    
+    gini_norm = []
+    roc_l = []
+    
+    print ("Cycle {}...".format(i+1))
+    for train_index, test_index in skf_split:
+    
+        X_train = X.iloc[train_index]
+        y_train = Y.iloc[train_index]
+    
+        X_val = X.iloc[test_index]
+        y_val = Y.iloc[test_index]
+    
+        # training
+        lgb_train = lgb.Dataset(X_train, y_train, free_raw_data=True)
+        lgb_val = lgb.Dataset(X_val, y_val, reference=lgb_train, free_raw_data=True)
+    
+        gbm = lgb.train(param_dist,
+                        lgb_train,
+                        num_boost_round = 10,
+                        valid_sets = lgb_val,
+                        early_stopping_rounds=5,
+                        verbose_eval=5)
+        # predicting
+        y_pred = gbm.predict(X_val, num_iteration=gbm.best_iteration)
+        gn = gini_normalized(y_val, y_pred)
+        gini_norm.append(gn)
+    
+        roc = roc_auc_score(y_val, y_pred)
+        roc_l.append(roc)
+
+    gini_norm_array = np.asarray(gini_norm)
+    roc_array = np.asarray(roc_l)
+    
+    gini_mean.append(gini_norm_array.mean())
+    gini_std.append(gini_norm_array.std())
+    roc_auc_mean.append(roc_array.mean())
+    roc_auc_std.append(roc_array.std())
+    dict_list.append(param_dist)
+    gc.collect()
+
+results_pd = pd.DataFrame({"gini_mean": gini_mean,
+                           "gini_std": gini_std,
+                           "roc_auc_mean": roc_auc_mean,
+                           "roc_auc_std": roc_auc_std,
+                           "parameters": dict_list})    
+
+results_pd.sort_values("gini_mean", ascending = False, axis = 0, inplace = True)
+top_pd = results_pd.head(top_n)
+for i in range(0, top_n):
+    print ("Model with rank {}".format(i+1))
+    print ("Mean gini score %.5f (std: %.5f)" % (top_pd['gini_mean'].values[i], top_pd['gini_std'].values[i]))
+    print ("Mean roc_auc score %.5f (std: %.5f)" % (top_pd['roc_auc_mean'].values[i], top_pd['roc_auc_std'].values[i]))
+    print ("Parameters:", top_pd['parameters'].values[i])
+    print ("")
+
+
+# train final lgbm model using best parameters
+
+print ("Train 5 lgbm models...")
+print ("")
+
+prms_1 = top_pd['parameters'].values[0]
+prms_2 = top_pd['parameters'].values[1]
+prms_3 = top_pd['parameters'].values[2]
+prms_4 = top_pd['parameters'].values[3]
+prms_5 = top_pd['parameters'].values[4]
+
+prms_list = [prms_1, prms_2, prms_3, prms_4, prms_5]
+weights = [0.4, 0.4, 0.1, 0.05, 0.05]
+
+pred_df = pd.DataFrame({"id": df_tt['id'].values})
+target = np.zeros(df_tt.shape[0])
+
+lgb_s = lgb.Dataset(X, Y)
+for i in range(0, len(prms_list)):
+    print ("Set {}".format(i))
+    print ("training...")
+    model = lgb.train(prms_list[i], 
+                      lgb_s, 
+                      num_boost_round = 10)
+    print ("predicting...")
+    y_pred = model.predict(X_tt)
+    print ("arrays addition...")
+    target = np.add(target, y_pred*weights[i])
+    print ("done")
+    print ("")
+    gc.collect()
+    
+pred_df['target'] = target
+pred_df.to_csv("lgbm_5m.csv", index = False)

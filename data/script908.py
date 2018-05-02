@@ -1,135 +1,107 @@
 
 # coding: utf-8
 
+# This is an expansion of Robin's notebook ( https://www.kaggle.com/robinkraft/making-tifs-look-normal-using-spectral/ ) to show ways how to use the spectral module to read bands, calculate the NDVI, NDWI and save the image as a high-quality jpeg.
+
 # In[ ]:
 
 
-import pandas as pd
+get_ipython().system('ls ../input/train-tif-v2/ | head')
+
+
+# In[ ]:
+
+
+import os
+
 import numpy as np
-import nltk
-from collections import Counter
-from nltk.corpus import stopwords
-from sklearn.metrics import log_loss
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from scipy.optimize import minimize
-stops = set(stopwords.words("english"))
-import xgboost as xgb
-from sklearn.cross_validation import train_test_split
-import multiprocessing
-import difflib
-
-train = pd.read_csv('../input/train.csv')[:10000]
-test = pd.read_csv('../input/test.csv')[:10000]
-
-tfidf = TfidfVectorizer(stop_words='english', ngram_range=(1, 1))
-#cvect = CountVectorizer(stop_words='english', ngram_range=(1, 1))
-
-tfidf_txt = pd.Series(train['question1'].tolist() + train['question2'].tolist() + test['question1'].tolist() + test['question2'].tolist()).astype(str)
-tfidf.fit_transform(tfidf_txt)
-#cvect.fit_transform(tfidf_txt)
-
-def diff_ratios(st1, st2):
-    seq = difflib.SequenceMatcher()
-    seq.set_seqs(str(st1).lower(), str(st2).lower())
-    return seq.ratio()
-
-def word_match_share(row):
-    q1words = {}
-    q2words = {}
-    for word in str(row['question1']).lower().split():
-        if word not in stops:
-            q1words[word] = 1
-    for word in str(row['question2']).lower().split():
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        return 0
-    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
-    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
-    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
-    return R
-
-def get_features(df_features):
-    print('nouns...')
-    df_features['question1_nouns'] = df_features.question1.map(lambda x: [w for w, t in nltk.pos_tag(nltk.word_tokenize(str(x).lower())) if t[:1] in ['N']])
-    df_features['question2_nouns'] = df_features.question2.map(lambda x: [w for w, t in nltk.pos_tag(nltk.word_tokenize(str(x).lower())) if t[:1] in ['N']])
-    df_features['z_noun_match'] = df_features.apply(lambda r: sum([1 for w in r.question1_nouns if w in r.question2_nouns]), axis=1)  #takes long
-    print('lengths...')
-    df_features['z_len1'] = df_features.question1.map(lambda x: len(str(x)))
-    df_features['z_len2'] = df_features.question2.map(lambda x: len(str(x)))
-    df_features['z_word_len1'] = df_features.question1.map(lambda x: len(str(x).split()))
-    df_features['z_word_len2'] = df_features.question2.map(lambda x: len(str(x).split()))
-    print('difflib...')
-    df_features['z_match_ratio'] = df_features.apply(lambda r: diff_ratios(r.question1, r.question2), axis=1)  #takes long
-    print('word match...')
-    df_features['z_word_match'] = df_features.apply(word_match_share, axis=1, raw=True)
-    print('tfidf...')
-    df_features['z_tfidf_sum1'] = df_features.question1.map(lambda x: np.sum(tfidf.transform([str(x)]).data))
-    df_features['z_tfidf_sum2'] = df_features.question2.map(lambda x: np.sum(tfidf.transform([str(x)]).data))
-    df_features['z_tfidf_mean1'] = df_features.question1.map(lambda x: np.mean(tfidf.transform([str(x)]).data))
-    df_features['z_tfidf_mean2'] = df_features.question2.map(lambda x: np.mean(tfidf.transform([str(x)]).data))
-    df_features['z_tfidf_len1'] = df_features.question1.map(lambda x: len(tfidf.transform([str(x)]).data))
-    df_features['z_tfidf_len2'] = df_features.question2.map(lambda x: len(tfidf.transform([str(x)]).data))
-    return df_features.fillna(0.0)
-
-train = get_features(train)
-#train.to_csv('train.csv', index=False)
-
-col = [c for c in train.columns if c[:1]=='z']
-
-pos_train = train[train['is_duplicate'] == 1]
-neg_train = train[train['is_duplicate'] == 0]
-p = 0.165
-scale = ((len(pos_train) / (len(pos_train) + len(neg_train))) / p) - 1
-while scale > 1:
-    neg_train = pd.concat([neg_train, neg_train])
-    scale -=1
-neg_train = pd.concat([neg_train, neg_train[:int(scale * len(neg_train))]])
-train = pd.concat([pos_train, neg_train])
-
-x_train, x_valid, y_train, y_valid = train_test_split(train[col], train['is_duplicate'], test_size=0.2, random_state=0)
-
-params = {}
-params["objective"] = "binary:logistic"
-params['eval_metric'] = 'logloss'
-params["eta"] = 0.02
-params["subsample"] = 0.7
-params["min_child_weight"] = 1
-params["colsample_bytree"] = 0.7
-params["max_depth"] = 4
-params["silent"] = 1
-params["seed"] = 1632
-
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-bst = xgb.train(params, d_train, 500, watchlist, early_stopping_rounds=50, verbose_eval=100) #change to higher #s
-print(log_loss(train.is_duplicate, bst.predict(xgb.DMatrix(train[col]))))
-
-test = get_features(test)
-#test.to_csv('test.csv', index=False)
-
-sub = pd.DataFrame()
-sub['test_id'] = test['test_id']
-sub['is_duplicate'] = bst.predict(xgb.DMatrix(test[col]))
-
-sub.to_csv('z08_submission_xgb_01.csv', index=False)
-
-
-# In[ ]:
-
+from spectral import *
+from skimage import io
+from sklearn.preprocessing import MinMaxScaler
+from PIL import Image
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
-
-plt.rcParams['figure.figsize'] = (7.0, 7.0)
-xgb.plot_importance(bst); plt.show()
 
 
 # In[ ]:
 
 
-plt.rcParams['figure.figsize'] = (20.0, 20.0)
-xgb.plot_tree(bst, num_trees=0); plt.show()
+BASEPATH = os.path.abspath('../input/train-tif-v2/')
+
+
+# In[ ]:
+
+
+path = os.path.join(BASEPATH, 'train_10.tif')
+img = io.imread(path)
+img2 = get_rgb(img, [2, 1, 0]) # RGB
+img3 = get_rgb(img, [3, 2, 1]) # NIR-R-G
+img4 = get_rgb(img, [3, 2, 0]) # NIR-R-B
+
+# rescaling to 0-255 range - uint8 for display
+rescaleIMG = np.reshape(img2, (-1, 1))
+scaler = MinMaxScaler(feature_range=(0, 255))
+rescaleIMG = scaler.fit_transform(rescaleIMG) # .astype(np.float32)
+img2_scaled = (np.reshape(rescaleIMG, img2.shape)).astype(np.uint8)
+
+rescaleIMG = np.reshape(img3, (-1, 1))
+scaler = MinMaxScaler(feature_range=(0, 255))
+rescaleIMG = scaler.fit_transform(rescaleIMG) # .astype(np.float32)
+img3_scaled = (np.reshape(rescaleIMG, img3.shape)).astype(np.uint8)
+
+rescaleIMG = np.reshape(img4, (-1, 1))
+scaler = MinMaxScaler(feature_range=(0, 255))
+rescaleIMG = scaler.fit_transform(rescaleIMG) # .astype(np.float32)
+img4_scaled = (np.reshape(rescaleIMG, img4.shape)).astype(np.uint8)
+
+# spectral module ndvi function
+vi = ndvi(img, 2, 3)
+
+# calculate NDVI and NDWI with spectral module adjusted bands
+np.seterr(all='warn') # divide by zero, NaN values
+vi2 = (img3[:, :, 0] - img3[:, :, 1]) / (img3[:, :, 0] + img3[:, :, 1]) # (NIR - RED) / (NIR + RED)
+vi3 = (img3[:, :, 2] - img3[:, :, 0]) / (img3[:, :, 2] + img3[:, :, 0]) # (GREEN - NIR) / (GREEN + NIR)
+
+
+# In[ ]:
+
+
+plt.style.use('ggplot')
+fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(10, 10))
+ax = axes.ravel()
+ax[0] = plt.subplot(2, 3, 1, adjustable='box-forced')
+ax[1] = plt.subplot(2, 3, 2, sharex=ax[0], sharey=ax[0], adjustable='box-forced')
+ax[2] = plt.subplot(2, 3, 3, sharex=ax[0], sharey=ax[0], adjustable='box-forced')
+ax[3] = plt.subplot(2, 3, 4, adjustable='box-forced')
+ax[4] = plt.subplot(2, 3, 5, adjustable='box-forced')
+ax[5] = plt.subplot(2, 3, 6, adjustable='box-forced')
+ax[0].imshow(img2_scaled)  # , cmap=plt.cm.gray)
+ax[0].set_title('RGB')
+# ax[0].axis('off')
+ax[1].imshow(img3_scaled)  # , cmap=plt.cm.gray)
+ax[1].set_title('NIR-RED-GREEN')
+# ax[1].axis('off')
+ax[2].imshow(img4_scaled)  # , cmap=plt.cm.gray)
+ax[2].set_title('NIR-RED-BLUE')
+
+# alternative cmaps e.g. nipy_spectral, gist_earth, terrain
+ax[3].imshow(vi, cmap=plt.get_cmap('nipy_spectral')) 
+ax[3].set_title('NDVI-spectral func')
+# ax[2].axis('off')
+ax[4].imshow(vi2, cmap=plt.get_cmap('nipy_spectral'))  # , cmap=plt.cm.gray)
+ax[4].set_title('NDVI-calculated')
+# ax[3].axis('off')
+ax[5].imshow(vi3, cmap=plt.get_cmap('nipy_spectral'))  # , cmap=plt.cm.gray)
+ax[5].set_title('NDWI GREEN-NIR')
+plt.show()
+
+
+# In[ ]:
+
+
+# note: save spectral module adjusted array as jpeg
+path_jpg = path.replace('tif','jpg')
+im = Image.fromarray(img2_scaled)
+im.save('train_10.jpg', 'JPEG', quality=95)
 

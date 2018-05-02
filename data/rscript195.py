@@ -1,77 +1,99 @@
-""" Converts the directory of DICOM files to a directory of .npy files
-    Writes out a JSON file mapping subject ID to 3D voxel spacing
-"""
-import json
-from operator import itemgetter
-import os
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import dicom
-import numpy as np
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# Directory of original data
-DICOM_DIR = 'stage1'
-# Where to store npy arrays
-NPY_DIR = 'stage1_npy'
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-def thru_plane_position(dcm):
-    """Gets spatial coordinate of image origin whose axis
-    is perpendicular to image plane.
-    """
-    orientation = tuple((float(o) for o in dcm.ImageOrientationPatient))
-    position = tuple((float(p) for p in dcm.ImagePositionPatient))
-    rowvec, colvec = orientation[:3], orientation[3:]
-    normal_vector = np.cross(rowvec, colvec)
-    slice_pos = np.dot(position, normal_vector)
-    return slice_pos
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-def read_subject(subject_id):
-    """ Read in the directory of a single subject and return a numpy array """
-    directory = os.path.join(DICOM_DIR, subject_id)
-    files = [os.path.join(directory, fname)
-             for fname in os.listdir(directory) if fname.endswith('.dcm')]
+# Any results you write to the current directory are saved as output.
 
-    # Read slices as a list before sorting
-    dcm_slices = [dicom.read_file(fname) for fname in files]
 
-    # Extract position for each slice to sort and calculate slice spacing
-    dcm_slices = [(dcm, thru_plane_position(dcm)) for dcm in dcm_slices]
-    dcm_slices = sorted(dcm_slices, key=itemgetter(1))
-    spacings = np.diff([dcm_slice[1] for dcm_slice in dcm_slices])
-    slice_spacing = np.mean(spacings)
+class Data(object):
+    def __init__(self, data_folder, test_the_script = False):
+        self.DATA_FOLDER = data_folder
+        self.test_the_script = test_the_script
+        self.read_data()
+        # self.process_data()
 
-    # All slices will have the same in-plane shape
-    shape = (int(dcm_slices[0][0].Columns), int(dcm_slices[0][0].Rows))
-    nslices = len(dcm_slices)
+        print('Train shape: ', self.train.shape)
 
-    # Final 3D array will be N_Slices x Columns x Rows
-    shape = (nslices, *shape)
-    img = np.empty(shape, dtype='float32')
-    for idx, (dcm, _) in enumerate(dcm_slices):
-        # Rescale and shift in order to get accurate pixel values
-        slope = float(dcm.RescaleSlope)
-        intercept = float(dcm.RescaleIntercept)
-        img[idx, ...] = dcm.pixel_array.astype('float32')*slope + intercept
+    def read_data(self):
+        self.nrows = None
+        if self.test_the_script:
+            self.nrows = 1000
 
-    # Calculate size of a voxel in mm
-    pixel_spacing = tuple(float(spac) for spac in dcm_slices[0][0].PixelSpacing)
-    voxel_spacing = (slice_spacing, *pixel_spacing)
+        self.train = self.read_train_test_low_memory(train_flag = True)
+        self.test = self.read_train_test_low_memory(train_flag = False)
+        self.stores = self.read_stores_low_memory()
+        self.items = self.read_items_low_memory()
+        self.oil = self.read_oil_low_memory()
+        self.transactions = self.read_transactions_low_memory()
 
-    return img, voxel_spacing
+        # if not self.test_the_script:
+        #     self.train = self.train[self.train['date'] >= '2017-03-01']
+            
+    def read_train_test_low_memory(self, train_flag = True):
+        filename = 'train'
+        if not train_flag: filename = 'test'
 
-def convert_all_subjects():
-    """ Converts all subjects in DICOM_DIR to 3D numpy arrays """
-    subjects = os.listdir(DICOM_DIR)
-    voxel_spacings = {}
-    for subject in subjects:
-        print('Converting %s' % subject)
-        img, voxel_spacing = read_subject(subject)
-        outfile = os.path.join(NPY_DIR, '%s.npy' % subject)
-        np.save(outfile, img)
-        voxel_spacings[subject] = voxel_spacing
+        types = {'id': 'int64',
+                'item_nbr': 'int32',
+                'store_nbr': 'int8',
+                'unit_sales': 'float32',
+                'onpromotion': bool,
+            }
+        data = pd.read_csv(self.DATA_FOLDER + filename + '.csv', parse_dates = ['date'], dtype = types, 
+                        nrows = self.nrows, infer_datetime_format = True)
+        
+        data['onpromotion'].fillna(False, inplace = True)
+        data['onpromotion'] = data['onpromotion'].map({False : 0, True : 1})
+        data['onpromotion'] = data['onpromotion'].astype('int8')
+        
+        return data
 
-    with open(os.path.join(NPY_DIR, 'voxel_spacings.json'), 'w') as fp:
-        json.dump(voxel_spacings, fp)
+    def read_stores_low_memory(self):
+        types = {'cluster': 'int32',
+                'store_nbr': 'int8',
+                }
+        data = pd.read_csv(self.DATA_FOLDER + 'stores.csv', dtype = types)
+        return data
+
+    def read_items_low_memory(self):
+        types = {'item_nbr': 'int32',
+                'perishable': 'int8',
+                'class' : 'int16'
+                }
+        data = pd.read_csv(self.DATA_FOLDER + 'items.csv', dtype = types)
+        return data
+
+    def read_oil_low_memory(self):
+        types = {'dcoilwtico': 'float32',
+                }
+        data = pd.read_csv(self.DATA_FOLDER + 'oil.csv', parse_dates = ['date'], dtype = types, 
+                                infer_datetime_format = True)
+        return data
+    
+    def read_transactions_low_memory(self):
+        types = {'transactions': 'int16',
+                'store_nbr' : 'int8'
+                }
+        data = pd.read_csv(self.DATA_FOLDER + 'transactions.csv', parse_dates = ['date'], dtype = types, 
+                                infer_datetime_format = True)
+        return data
 
 if __name__ == '__main__':
-    convert_all_subjects()
-
+    
+    data = Data(data_folder = '../input/', test_the_script = True)
+    print(data.train.info())
+    print(data.test.info())
+    print(data.items.info())
+    print(data.stores.info())
+    print(data.transactions.info())
+    print(data.oil.info())
+        

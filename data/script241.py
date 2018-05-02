@@ -1,134 +1,266 @@
 
 # coding: utf-8
 
-# # OpenMP Performance Sensitivity to the Number of Threads Used
+# # Machine Learning from Start to Finish with Scikit-Learn
 # 
-# ## TL;DR  
+# This notebook covers the basic Machine Learning process in Python step-by-step. Go from raw data to at least 78% accuracy on the Titanic Survivors dataset. 
 # 
-# *When using Kaggle Kernels, be aware that Kaggle's backend environment reports more CPUs than are available to your Kernel's execution. Some commonly used libraries default values for performance tuning parameters are **significantly sub-optimal** in this environment.  In particular, when using `xgboost` or other `OpenMP` based libraries, we suggest you start your Python kernels with `import os ; os.environ['OMP_NUM_THREADS'] = '4'`, prior to any other import.  Similarly for R, use `library(OpenMPController)` followed by `omp_set_num_threads(4)`.*
+# ### Steps Covered
 # 
-# ## Full Version
 # 
-# As covered in our [blog](http://blog.kaggle.com/2017/09/21/product-launch-amped-up-kernels-resources-code-tips-hidden-cells/), an individual Kernel executing on Kaggle gets 4 logical CPUs worth of compute.
+# 1. Importing  a DataFrame
+# 2. Visualize the Data
+# 3. Cleanup and Transform the Data
+# 4. Encode the Data
+# 5. Split Training and Test Sets
+# 6. Fine Tune Algorithms
+# 7. Cross Validate with KFold
+# 8. Upload to Kaggle
+
+# ## CSV to DataFrame
 # 
-# However, currently (and subject to change), a Kaggle Kernel actually runs on a Google Compute Engine (GCE) VM which has 32 logical CPUs.  That is the CPU count you will see when you query the system, e.g. using the `multiprocessing` Python library:
+# CSV files can be loaded into a dataframe by calling `pd.read_csv` . After loading the training and test files, print a `sample` to see what you're working with.
 
 # In[ ]:
 
 
-import multiprocessing
-print(multiprocessing.cpu_count())
-
-
-# While the system has 32 CPUs and your Kernel may use all 32 of these within a given Kernel session, the Docker container the Kernel runs in is limited to use only 4 CPUs worth of time over an arbitrary (but short) period of time.
-# 
-# **In summary, while your Kernel only effectively can use 4 CPUs, the system reports the presence of 32 CPUs.**
-# 
-# ## Why does this matter?
-# 
-# Many computation libraries allow you to  benefit from parallelism by making use of multiple logical CPUs when these are available to you.  When a CPU-bound computation can be executed in parallel (from the type of algorithm involved and the capabilities of the implementation) and can benefit from it (the inputs are large enough that the implied fixed-cost overhead is largely amortized), you would typically get the best performance (smallest running time) by using as many computation threads as you have logical CPUs available.  Most of these libraries will enable parallelism when these conditions are met, use that most optimal thread count, by default.
-# 
-# Let's take the example of `xgboost`, a popular library that provides gradient boosted decision trees, and in particular in this notebook, its Python interface.
-# 
-# Our `xgboost` installation is built with [GNU OpenMP](https://gcc.gnu.org/onlinedocs/libgomp) (a.k.a. GOMP) support to handle the parallelism aspects.  Let's find out what GOMP's configuration looks like in Kaggle Kernels' runtime:
-
-# In[ ]:
-
-
-# We can use the OMP_DISPLAY_ENV environment variable to have GOMP output its
-# configuration to stderr. That is done from C++ (libgomp) by operating on the
-# process's stderr file descriptor. Jupyter doesn't properly intercept operations
-# on that file descriptor (it only intercepts the Python space `sys.stderr`).
-# So let's do that here first:
-import os
-import sys
-
-stderr_fileno = 2  # sys.stderr.fileno(), if Jupyter hadn't messed with it.
-rpipe, wpipe = os.pipe()
-os.dup2(wpipe, stderr_fileno)
-
-os.environ['OMP_DISPLAY_ENV'] = 'TRUE'
-import xgboost as xgb
-os.close(stderr_fileno)
-os.close(wpipe)
-print(os.read(rpipe, 2**10).decode())
-
-
-# You can find the meaning of each of these environment variables in [GOMPs documenation](https://gcc.gnu.org/onlinedocs/libgomp/Environment-Variables.html).
-# 
-# A relevant one to discuss though, is `OMP_NUM_THREADS`.  As the output shows, it defaulted to `32`, which is our system's CPU count.  Let's see how this setting fares in a simple training of the Mercari dataset:
-
-# In[ ]:
-
-
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
-import time
-import xgboost as xgb
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+data_train = pd.read_csv('../input/train.csv')
+data_test = pd.read_csv('../input/test.csv')
+
+data_train.sample(3)
 
 
-# In[ ]:
-
-
-train_dataset = pd.read_csv('../input/train.tsv', sep='\t')
-ignore_columns = (
-    'name', 'item_description', 'brand_name', 'category_name', 'train_id', 'test_id', 'price')
-train_columns = [c for c in train_dataset.columns if c not in ignore_columns]
-dtrain = xgb.DMatrix(train_dataset[train_columns], train_dataset['price'])
-params = {'silent': 1}
-num_rounds = 100
-
-def train(params, dtrain, num_rounds):
-    """Returns the duration to train a model with given parameters."""
-    start_time = time.time()
-    xgb.train(params, dtrain, num_rounds, [(dtrain, 'train')], verbose_eval=False)
-    return time.time() - start_time
-
-
-# In[ ]:
-
-
-print('duration: %.2fs' % train(params, dtrain, num_rounds))
-
-
-# Let's see how this looks when we use only 4 threads, which is how many CPUs we actually can use in the Kaggle Kernels environment.
+# ## Visualizing Data
 # 
-# `OMP_NUM_THREADS` can no longer be used to influence the number of threads used at this point, as it is only read once by `xgboost` and/or GOMP.   We can however set the `xgboost` `nthread` parameter to have it reconfigure this at run-time:
+# Visualizing data is crucial for recognizing underlying patterns to exploit in the model. 
 
 # In[ ]:
 
 
-params['nthread'] = 4
-print('duration: %.2fs' % train(params, dtrain, num_rounds))
-
-
-# The difference is very significant, and suprisingly [x] so:  While spawning more threads than there are CPUs available isn't helpful and causes multiple threads to be multiplexed on a single CPU, it is unclear why that overhead causes `xgboost` to perform slower by several multiples.
-# 
-# *[x] Not to you?  Please let me know in comments what you see the cause for this might be!*
-# 
-# Here is some more data:
-# 
-
-# In[ ]:
-
-
-results = pd.DataFrame()
-for nthread in (1, 2, 4, 8, 16, 32):
-    params['nthread'] = nthread
-    durs = []
-    for i in range(16):
-        durs.append(train(params, dtrain, num_rounds))
-    results[nthread] = durs
-    print('nthread = %d, durations = %s' % (nthread, ', '.join(['%.2fs' % d for d in durs])))
+sns.barplot(x="Embarked", y="Survived", hue="Sex", data=data_train);
 
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(12, 6))
-plt.errorbar(results.columns, results.mean(), yerr=results.std(), linestyle='-', fmt='o', ecolor='g', capthick=2)
-plt.xlabel('nthread', fontsize=18)
-plt.ylabel('duration (s)', fontsize=18)
-plt.figsize=(12, 6)
+sns.pointplot(x="Pclass", y="Survived", hue="Sex", data=data_train,
+              palette={"male": "blue", "female": "pink"},
+              markers=["*", "o"], linestyles=["-", "--"]);
+
+
+# ## Transforming Features
+# 
+# 1. Aside from 'Sex', the 'Age' feature is second in importance. To avoid overfitting, I'm grouping people into logical human age groups. 
+# 2. Each Cabin starts with a letter. I bet this letter is much more important than the number that follows, let's slice it off. 
+# 3. Fare is another continuous value that should be simplified. I ran `data_train.Fare.describe()` to get the distribution of the feature, then placed them into quartile bins accordingly. 
+# 4. Extract information from the 'Name' feature. Rather than use the full name, I extracted the last name and name prefix (Mr. Mrs. Etc.), then appended them as their own features. 
+# 5. Lastly, drop useless features. (Ticket and Name)
+
+# In[ ]:
+
+
+def simplify_ages(df):
+    df.Age = df.Age.fillna(-0.5)
+    bins = (-1, 0, 5, 12, 18, 25, 35, 60, 120)
+    group_names = ['Unknown', 'Baby', 'Child', 'Teenager', 'Student', 'Young Adult', 'Adult', 'Senior']
+    categories = pd.cut(df.Age, bins, labels=group_names)
+    df.Age = categories
+    return df
+
+def simplify_cabins(df):
+    df.Cabin = df.Cabin.fillna('N')
+    df.Cabin = df.Cabin.apply(lambda x: x[0])
+    return df
+
+def simplify_fares(df):
+    df.Fare = df.Fare.fillna(-0.5)
+    bins = (-1, 0, 8, 15, 31, 1000)
+    group_names = ['Unknown', '1_quartile', '2_quartile', '3_quartile', '4_quartile']
+    categories = pd.cut(df.Fare, bins, labels=group_names)
+    df.Fare = categories
+    return df
+
+def format_name(df):
+    df['Lname'] = df.Name.apply(lambda x: x.split(' ')[0])
+    df['NamePrefix'] = df.Name.apply(lambda x: x.split(' ')[1])
+    return df    
+    
+def drop_features(df):
+    return df.drop(['Ticket', 'Name', 'Embarked'], axis=1)
+
+def transform_features(df):
+    df = simplify_ages(df)
+    df = simplify_cabins(df)
+    df = simplify_fares(df)
+    df = format_name(df)
+    df = drop_features(df)
+    return df
+
+data_train = transform_features(data_train)
+data_test = transform_features(data_test)
+data_train.head()
+
+
+# In[ ]:
+
+
+sns.barplot(x="Age", y="Survived", hue="Sex", data=data_train);
+
+
+# In[ ]:
+
+
+sns.barplot(x="Cabin", y="Survived", hue="Sex", data=data_train);
+
+
+# In[ ]:
+
+
+sns.barplot(x="Fare", y="Survived", hue="Sex", data=data_train);
+
+
+# ## Some Final Encoding
+# 
+# The last part of the preprocessing phase is to normalize labels. The LabelEncoder in Scikit-learn will convert each unique string value into a number, making out data more flexible for various algorithms. 
+# 
+# The result is a table of numbers that looks scary to humans, but beautiful to machines. 
+
+# In[ ]:
+
+
+from sklearn import preprocessing
+def encode_features(df_train, df_test):
+    features = ['Fare', 'Cabin', 'Age', 'Sex', 'Lname', 'NamePrefix']
+    df_combined = pd.concat([df_train[features], df_test[features]])
+    
+    for feature in features:
+        le = preprocessing.LabelEncoder()
+        le = le.fit(df_combined[feature])
+        df_train[feature] = le.transform(df_train[feature])
+        df_test[feature] = le.transform(df_test[feature])
+    return df_train, df_test
+    
+data_train, data_test = encode_features(data_train, data_test)
+data_train.head()
+
+
+# ## Splitting up the Training Data
+# 
+# Now its time for some Machine Learning. 
+# 
+# First, separate the features(X) from the labels(y). 
+# 
+# **X_all:** All features minus the value we want to predict (Survived).
+# 
+# **y_all:** Only the value we want to predict. 
+# 
+# Second, use Scikit-learn to randomly shuffle this data into four variables. In this case, I'm training 80% of the data, then testing against the other 20%.  
+# 
+# Later, this data will be reorganized into a KFold pattern to validate the effectiveness of a trained algorithm. 
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+
+X_all = data_train.drop(['Survived', 'PassengerId'], axis=1)
+y_all = data_train['Survived']
+
+num_test = 0.20
+X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=num_test, random_state=23)
+
+
+# ## Fitting and Tuning an Algorithm
+# 
+# Now it's time to figure out which algorithm is going to deliver the best model. I'm going with the RandomForestClassifier, but you can drop any other classifier here, such as Support Vector Machines or Naive Bayes. 
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import make_scorer, accuracy_score
+from sklearn.model_selection import GridSearchCV
+
+# Choose the type of classifier. 
+clf = RandomForestClassifier()
+
+# Choose some parameter combinations to try
+parameters = {'n_estimators': [4, 6, 9], 
+              'max_features': ['log2', 'sqrt','auto'], 
+              'criterion': ['entropy', 'gini'],
+              'max_depth': [2, 3, 5, 10], 
+              'min_samples_split': [2, 3, 5],
+              'min_samples_leaf': [1,5,8]
+             }
+
+# Type of scoring used to compare parameter combinations
+acc_scorer = make_scorer(accuracy_score)
+
+# Run the grid search
+grid_obj = GridSearchCV(clf, parameters, scoring=acc_scorer)
+grid_obj = grid_obj.fit(X_train, y_train)
+
+# Set the clf to the best combination of parameters
+clf = grid_obj.best_estimator_
+
+# Fit the best algorithm to the data. 
+clf.fit(X_train, y_train)
+
+
+
+# In[ ]:
+
+
+predictions = clf.predict(X_test)
+print(accuracy_score(y_test, predictions))
+
+
+# ## Validate with KFold
+# 
+# Is this model actually any good? It helps to verify the effectiveness of the algorithm using KFold. This will split our data into 10 buckets, then run the algorithm using a different bucket as the test set for each iteration. 
+
+# In[ ]:
+
+
+from sklearn.cross_validation import KFold
+
+def run_kfold(clf):
+    kf = KFold(891, n_folds=10)
+    outcomes = []
+    fold = 0
+    for train_index, test_index in kf:
+        fold += 1
+        X_train, X_test = X_all.values[train_index], X_all.values[test_index]
+        y_train, y_test = y_all.values[train_index], y_all.values[test_index]
+        clf.fit(X_train, y_train)
+        predictions = clf.predict(X_test)
+        accuracy = accuracy_score(y_test, predictions)
+        outcomes.append(accuracy)
+        print("Fold {0} accuracy: {1}".format(fold, accuracy))     
+    mean_outcome = np.mean(outcomes)
+    print("Mean Accuracy: {0}".format(mean_outcome)) 
+
+run_kfold(clf)
+
+
+# ## Predict the Actual Test Data
+# 
+# And now for the moment of truth. Make the predictions, export the CSV file, and upload them to Kaggle.
+
+# In[ ]:
+
+
+ids = data_test['PassengerId']
+predictions = clf.predict(data_test.drop('PassengerId', axis=1))
+
+
+output = pd.DataFrame({ 'PassengerId' : ids, 'Survived': predictions })
+# output.to_csv('titanic-predictions.csv', index = False)
+output.head()
 

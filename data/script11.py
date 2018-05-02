@@ -1,170 +1,273 @@
 
 # coding: utf-8
 
-# In this tutorial we're going to get started with some basic natural language processing (NLP) tasks. We're going to:
-# 
-# * Read in some helpful NLP libraries & our dataset
-# * Find out how often each author uses each word
-# * Use that to guess which author wrote a sentence
-# 
-# Ready? Let's get started! :D
+# In[ ]:
 
-# ## General intuition 
-# 
-# For this tutorial, we're going to be guessing which author wrote a string of text based on the normalized unigram frequency. That's just a fancy way of saying that we're going to count how often each author uses every word in our training data and then divide by the number of total words they wrote. Then, if our test sentence has words that we've seen one author use a lot more than the others, we will guess that that person is probably the author.
-# 
-# Let's imagine that this is our training corpus:
-# 
-# * Author one: "A very spooky thing happened. The thing was so spooky I screamed."
-# * Author two: "I ate a tasty candy apple. It was delicious"
-# 
-# And that this is our test sentence that we want to figure out who wrote:
-# 
-# * Author ???: "What a spooky thing!"
-# 
-# Just looking at it, it seems more likely that author one wrote this sentence. Author ones says both "spooky" and "thing" a lot, while author two does not (at least, based on our training data). Since we see both "spooky" and "thing" in our test sentence, it seems more likely that it was written by author one than author two--even though the test sentence does have the word "a" in it, which we have seen author two use too.
-# 
-# In the rest of this tutorial we're going to figure out how to translate this intution into code.
 
-# ## Read in some helpful NLP libraries & our dataset
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
 # 
-# For this tutorial, I'm going to be using the Natural Language Toolkit, also called the "NLTK". It's an open-source Python library for analyzing language data. The really nice thing about the NLTK is that it has a really helpful book that goes step-by-step through a lot of the common NLP tasks. Even better: you can get the book for free [here](http://www.nltk.org/book/).
+# Gene analysis is something which is widely used in biological science.Many of the Data learners coming here will be haveing trouble with these weird transciption numbers. So why not just conver this into just two columns and then apply our analysis.
 
 # In[ ]:
 
 
-# read in some helpful libraries
-import nltk # the natural langauage toolkit, open-source NLP
-import pandas as pd # dataframes
-
-### Read in the data
-
-# read our data into a dataframe
-texts = pd.read_csv("../input/train.csv")
-
-# look at the first few rows
-texts.head()
+df= pd.read_csv('../input/data_set_ALL_AML_train.csv')
+df.head()
 
 
-# ## Find out how often each author uses each word
+# In[ ]:
+
+
+df1 = [col for col in df.columns if "call" not in col]
+df = df[df1]
+df.head()
+
+
+# In[ ]:
+
+
+df.T.head()
+
+
+# In[ ]:
+
+
+df = df.T
+df2 = df.drop(['Gene Description','Gene Accession Number'],axis=0)
+df2.index = pd.to_numeric(df2.index)
+df2.sort_index(inplace=True)
+df2.head()
+
+
+# Now see here we are having just 38 columns which are our respective people
+
+# In[ ]:
+
+
+df2['cat'] = list(pd.read_csv('../input/actual.csv')[:38]['cancer'])
+dic = {'ALL':0,'AML':1}
+df2.replace(dic,inplace=True)
+df2.head(3)
+
+
+# # PCA analysis
+# #### Principal Component Analysis (or PCA) uses linear algebra to transform the dataset into a compressed form.
 # 
-# A lot of NLP applications rely on counting how often certain words are used. (The fancy term for this is "word frequency".) Let's look at the word frequency for each of the authors in our dataset. The NLTK has lots of nice built-in functions and data structures for this that we can make use of.
+# #### Generally this is called a data reduction technique. A property of PCA is that you can choose the number of dimensions or principal component in the transformed result.
+# 
+# #### In this case we will use it to analyse the feature importanace
+# 
+# We will reduce the data into two features.
+
+# ![](https://media.giphy.com/media/QA44U3zAnH0ha/source.gif)
 
 # In[ ]:
 
 
-### Split data
+from sklearn.preprocessing import StandardScaler
+X_std = StandardScaler().fit_transform(df2.drop('cat',axis=1))
 
-# split the data by author
-byAuthor = texts.groupby("author")
+from sklearn.decomposition import PCA as sklearnPCA
+sklearn_pca = sklearnPCA(n_components=30)
+Y_sklearn = sklearn_pca.fit_transform(X_std)
 
-### Tokenize (split into individual words) our text
-
-# word frequency by author
-wordFreqByAuthor = nltk.probability.ConditionalFreqDist()
-
-# for each author...
-for name, group in byAuthor:
-    # get all of the sentences they wrote and collapse them into a
-    # single long string
-    sentences = group['text'].str.cat(sep = ' ')
-    
-    # convert everything to lower case (so "The" and "the" get counted as 
-    # the same word rather than two different words)
-    sentences = sentences.lower()
-    
-    # split the text into individual tokens    
-    tokens = nltk.tokenize.word_tokenize(sentences)
-    
-    # calculate the frequency of each token
-    frequency = nltk.FreqDist(tokens)
-
-    # add the frequencies for each author to our dictionary
-    wordFreqByAuthor[name] = (frequency)
-    
-# now we have an dictionary where each entry is the frequency distrobution
-# of words for a specific author.     
-
-
-# Now we can look at how often each writer uses specific words. Since this is a Halloween competition, how about "blood", "scream" and "fear"? 👻😨🧛‍♀️
 
 # In[ ]:
 
 
-# see how often each author says "blood"
-for i in wordFreqByAuthor.keys():
-    print("blood: " + i)
-    print(wordFreqByAuthor[i].freq('blood'))
+cum_sum = sklearn_pca.explained_variance_ratio_.cumsum()
 
-# print a blank line
+sklearn_pca.explained_variance_ratio_[:10].sum()
+
+cum_sum = cum_sum*100
+
+fig, ax = plt.subplots(figsize=(8,8))
+plt.bar(range(30), cum_sum, label='Cumulative _Sum_of_Explained _Varaince', color = 'b',alpha=0.5)
+plt.title("Around 95% of variance is explained by the Fisrt 30 colmns ");
+
+
+# In[ ]:
+
+
+X_reduced2 = Y_sklearn
+
+
+# In[ ]:
+
+
+df2.cat.values
+
+
+# In[ ]:
+
+
+train = pd.DataFrame(X_reduced2)
+train['cat'] =  df2['cat'].reset_index().cat
+train.head(3)
+
+
+# ## To just give the glimpse of what PCA does to data, I am reducing it to 3 components,But in final modeling we will use 30 var.**
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA as sklearnPCA
+sklearn_pca = sklearnPCA(n_components=3)
+X_reduced  = sklearn_pca.fit_transform(X_std)
+Y=train['cat']
+from mpl_toolkits.mplot3d import Axes3D
+plt.clf()
+fig = plt.figure(1, figsize=(10,6 ))
+ax = Axes3D(fig, elev=-150, azim=110,)
+ax.scatter(X_reduced[:, 0], X_reduced[:, 1], X_reduced[:, 2], c=Y,cmap=plt.cm.Paired,linewidths=10)
+ax.set_title("First three PCA directions")
+ax.set_xlabel("1st eigenvector")
+ax.w_xaxis.set_ticklabels([])
+ax.set_ylabel("2nd eigenvector")
+ax.w_yaxis.set_ticklabels([])
+ax.set_zlabel("3rd eigenvector")
+ax.w_zaxis.set_ticklabels([])
+
+
+# In[ ]:
+
+
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+fig = plt.figure(1, figsize=(10,6))
+plt.scatter(X_reduced[:, 0],  X_reduced[:, 1], c=df2['cat'],cmap=plt.cm.Paired,linewidths=10)
+plt.annotate('See The Brown Cluster',xy=(20,-20),xytext=(9,8),arrowprops=dict(facecolor='black', shrink=0.05))
+#plt.scatter(test_reduced[:, 0],  test_reduced[:, 1],c='r')
+plt.title("This The 2D Transformation of above graph ")
+
+
+# ### Wow , See how we got our clusters and we differentiated cancer disease from it. We can think of this as a cluster.
+# Here PCA play a very important role.
+# 
+
+# In[ ]:
+
+
+test = pd.read_csv('../input/data_set_ALL_AML_independent.csv')
+
+test.head(3)
+
+
+# In[ ]:
+
+
+test1 = [col for col in test.columns if "call" not in col]
+test = test[test1]
+test = test.T
+test2 = test.drop(['Gene Description','Gene Accession Number'],axis=0)
+test2.index = pd.to_numeric(test2.index)
+test2.sort_index(inplace=True)
+#test2['cat'] = list(pd.read_csv('actual.csv')[39:63]['cancer'])
+#dic = {'ALL':0,'AML':1}
+#test2.replace(dic,inplace=True)
+#test2
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+Y_std = StandardScaler().fit_transform(test2)
+
+from sklearn.decomposition import PCA as sklearnPCA
+sklearn_pca = sklearnPCA(n_components=30)
+test_reduced = sklearn_pca.fit_transform(Y_std)
+
+
+# In[ ]:
+
+
+test_set = pd.DataFrame(test_reduced)
+
+test_set.head(3)
+
+
+# ### As clear from graph it is useful to use KNN to find the required weather that it is ALL or AML.
+# Depending upon distance
+
+# In[ ]:
+
+
+train.drop('cat',axis=1).plot(kind='hist',figsize=(8,10))
+
+
+# In[ ]:
+
+
+from sklearn.neighbors import KNeighborsClassifier
+clf= KNeighborsClassifier(n_neighbors=10,)
+clf.fit(train.drop('cat',axis=1),train['cat'])
+
+
+# In[ ]:
+
+
+pred = clf.predict(test_set)
+
+pateint = pd.read_csv('../input/actual.csv')['cancer'][38:]
+
+true = pateint.replace(dic)
+
+import sklearn
+sklearn.metrics.confusion_matrix(true, pred)
+
+
+# In[ ]:
+
+
+from sklearn.tree import DecisionTreeClassifier
+clf = DecisionTreeClassifier(min_samples_split=2)
+clf.fit(train.drop('cat',axis=1),train['cat'])
+pred = clf.predict(test_set)
+true = pateint.replace(dic)
+print(sklearn.metrics.confusion_matrix(true, pred))
 print()
 
-# see how often each author says "scream"
-for i in wordFreqByAuthor.keys():
-    print("scream: " + i)
-    print(wordFreqByAuthor[i].freq('scream'))
-    
-# print a blank line
-print()
-
-# see how often each author says "fear"
-for i in wordFreqByAuthor.keys():
-    print("fear: " + i)
-    print(wordFreqByAuthor[i].freq('fear'))
-
-
-# ## Use word frequency to guess which author wrote a sentence
-# 
-# The general idea is is that different people tend to use different words more or less often. (I had a beloved college professor that was especially fond of "gestalt".) If you're not sure who said something but it has a lot of words one person uses a lot in it, then you might guess that they were the one who wrote it. 
-# 
-# Let's use this general principle to guess who might have been more likely to write the sentence "It was a dark and stormy night."
 
 # In[ ]:
 
 
-# One way to guess authorship is to use the joint probabilty that each 
-# author used each word in a given sentence.
+from sklearn import svm
 
-# first, let's start with a test sentence
-testSentence = "It was a dark and stormy night."
+clf=svm.SVC(kernel='linear')
+clf.fit(train.drop('cat',axis=1),train['cat'])
+pred = clf.predict(test_set)
 
-# and then lowercase & tokenize our test sentence
-preProcessedTestSentence = nltk.tokenize.word_tokenize(testSentence.lower())
+pateint = pd.read_csv('../input/actual.csv')['cancer'][38:]
 
-# create an empy dataframe to put our output in
-testProbailities = pd.DataFrame(columns = ['author','word','probability'])
+true = pateint.replace(dic)
 
-# For each author...
-for i in wordFreqByAuthor.keys():
-    # for each word in our test sentence...
-    for j  in preProcessedTestSentence:
-        # find out how frequently the author used that word
-        wordFreq = wordFreqByAuthor[i].freq(j)
-        # and add a very small amount to every prob. so none of them are 0
-        smoothedWordFreq = wordFreq + 0.000001
-        # add the author, word and smoothed freq. to our dataframe
-        output = pd.DataFrame([[i, j, smoothedWordFreq]], columns = ['author','word','probability'])
-        testProbailities = testProbailities.append(output, ignore_index = True)
-
-# empty dataframe for the probability that each author wrote the sentence
-testProbailitiesByAuthor = pd.DataFrame(columns = ['author','jointProbability'])
-
-# now let's group the dataframe with our frequency by author
-for i in wordFreqByAuthor.keys():
-    # get the joint probability that each author wrote each word
-    oneAuthor = testProbailities.query('author == "' + i + '"')
-    jointProbability = oneAuthor.product(numeric_only = True)[0]
-    
-    # and add that to our dataframe
-    output = pd.DataFrame([[i, jointProbability]], columns = ['author','jointProbability'])
-    testProbailitiesByAuthor = testProbailitiesByAuthor.append(output, ignore_index = True)
-
-# and our winner is...
-testProbailitiesByAuthor.loc[testProbailitiesByAuthor['jointProbability'].idxmax(),'author']
+print(sklearn.metrics.confusion_matrix(true, pred))
+print()
 
 
-# So based on what we've seen in our training data, it looks like of our three authors, H.P. Lovecraft was the most likely to write the sentence "It was a dark and stormy night".
+# # Here the Red Points(means test set) is plotted on the training set to just give the illusion that which one false in which category
 
-# ## Ready for more?
-# 
-# Now that you've got your feet wet, why not head over to [Sohier's intermediate tutorial](https://www.kaggle.com/sohier/intermediate-tutorial-python/), which includes lots of tips on optimizing your code and getting ready to submit to the competition. 
+# In[ ]:
+
+
+fig = plt.figure(1, figsize=(14,6))
+plt.scatter(X_reduced[:, 0],  X_reduced[:, 1], c=df2['cat'],cmap=plt.cm.Paired,alpha=0.7,linewidths=7)
+plt.scatter(test_reduced[:, 0],  test_reduced[:, 1],c='r',linewidths=10)
+
+
+# **Inference:**<br>
+# Above Analysis give the picture of how to differntiate the data.<br>
+# **Note-** Accuracy is less due to insufficient data for training. Still if any measures to improve this model, Please suggest!.
+# <br>
+# ## Upvote!
+# If you like my kernel than do upvote to boost my confidence :)

@@ -1,103 +1,64 @@
-import pandas as pd
-import numpy as np
-import re
-import lightgbm as lgb
-import warnings
-warnings.filterwarnings(action='ignore', category=DeprecationWarning, module='sklearn')
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.metrics import roc_auc_score
+from sklearn.linear_model import LogisticRegression
+from collections import defaultdict
 
-
-#######################
-# FEATURE ENGINEERING #
-#######################
-"""
-Main function
-Input: pandas Series and a feature engineering function
-Output: pandas Series
-"""
-def engineer_feature(series, func, normalize=True):
-    feature = series.apply(func)
+usecols = ['ncodpers', 'ind_ahor_fin_ult1', 'ind_aval_fin_ult1', 'ind_cco_fin_ult1',
+       'ind_cder_fin_ult1', 'ind_cno_fin_ult1', 'ind_ctju_fin_ult1',
+       'ind_ctma_fin_ult1', 'ind_ctop_fin_ult1', 'ind_ctpp_fin_ult1',
+       'ind_deco_fin_ult1', 'ind_deme_fin_ult1', 'ind_dela_fin_ult1',
+       'ind_ecue_fin_ult1', 'ind_fond_fin_ult1', 'ind_hip_fin_ult1',
+       'ind_plan_fin_ult1', 'ind_pres_fin_ult1', 'ind_reca_fin_ult1',
+       'ind_tjcr_fin_ult1', 'ind_valo_fin_ult1', 'ind_viv_fin_ult1',
+       'ind_nomina_ult1', 'ind_nom_pens_ult1', 'ind_recibo_ult1']
        
-    if normalize:
-        feature = pd.Series(z_normalize(feature.values.reshape(-1,1)).reshape(-1,))
-    feature.name = func.__name__ 
-    return feature
+df_train = pd.read_csv('../input/train.csv', usecols=usecols)
+sample = pd.read_csv('../input/sample_submission.csv')
 
-"""
-Engineer features
-Input: pandas Series and a list of feature engineering functions
-Output: pandas DataFrame
-"""
-def engineer_features(series, funclist, normalize=True):
-    features = pd.DataFrame()
-    for func in funclist:
-        feature = engineer_feature(series, func, normalize)
-        features[feature.name] = feature
-    return features
+df_train = df_train.drop_duplicates(['ncodpers'], keep='last')
 
-"""
-Normalizer
-Input: NumPy array
-Output: NumPy array
-"""
-scaler = StandardScaler()
-def z_normalize(data):
-    scaler.fit(data)
-    return scaler.transform(data)
-    
-"""
-Feature functions
-"""
-def asterix_freq(x):
-    return x.count('!')/len(x)
+df_train.fillna(0, inplace=True)
 
-def uppercase_freq(x):
-    return len(re.findall(r'[A-Z]',x))/len(x)
+models = {}
+model_preds = {}
+id_preds = defaultdict(list)
+ids = df_train['ncodpers'].values
+for c in df_train.columns:
+    if c != 'ncodpers':
+        print(c)
+        y_train = df_train[c]
+        x_train = df_train.drop([c, 'ncodpers'], 1)
+        
+        clf = LogisticRegression()
+        clf.fit(x_train, y_train)
+        p_train = clf.predict_proba(x_train)[:,1]
+        
+        models[c] = clf
+        model_preds[c] = p_train
+        for id, p in zip(ids, p_train):
+            id_preds[id].append(p)
+            
+        print(roc_auc_score(y_train, p_train))
+        
+already_active = {}
+for row in df_train.values:
+    row = list(row)
+    id = row.pop(0)
+    active = [c[0] for c in zip(df_train.columns[1:], row) if c[1] > 0]
+    already_active[id] = active
     
-"""
-Import submission and OOF files
-"""
-def get_subs(nums):
-    subs = np.hstack([np.array(pd.read_csv("../input/trained-models/sub" + str(num) + ".csv")[LABELS]) for num in subnums])
-    oofs = np.hstack([np.array(pd.read_csv("../input/trained-models/oof" + str(num) + ".csv")[LABELS]) for num in subnums])
-    return subs, oofs
+train_preds = {}
+for id, p in id_preds.items():
+    # Here be dragons
+    preds = [i[0] for i in sorted([i for i in zip(df_train.columns[1:], p) if i[0] not in already_active[id]], key=lambda i:i [1], reverse=True)[:7]]
+    train_preds[id] = preds
+    
+test_preds = []
+for row in sample.values:
+    id = row[0]
+    p = train_preds[id]
+    test_preds.append(' '.join(p))
 
-if __name__ == "__main__":
-    
-    train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv').fillna(' ')
-    test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv').fillna(' ')
-    sub = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-    INPUT_COLUMN = "comment_text"
-    LABELS = train.columns[2:]
-    
-    # Import submissions and OOF files
-    # 29: LightGBM trained on Fasttext (CV: 0.9765, LB: 0.9620)
-    # 51: Logistic regression with word and char n-grams (CV: 0.9858, LB: ?)
-    # 52: LSTM trained on Fasttext (CV: ?, LB: 0.9851)
-    subnums = [29,51,52]
-    subs, oofs = get_subs(subnums)
-    
-    # Engineer features
-    feature_functions = [len, asterix_freq, uppercase_freq]
-    features = [f.__name__ for f in feature_functions]
-    F_train = engineer_features(train[INPUT_COLUMN], feature_functions)
-    F_test = engineer_features(test[INPUT_COLUMN], feature_functions)
-    
-    X_train = np.hstack([F_train[features].as_matrix(), oofs])
-    X_test = np.hstack([F_test[features].as_matrix(), subs])    
-
-    stacker = lgb.LGBMClassifier(max_depth=3, metric="auc", n_estimators=125, num_leaves=10, boosting_type="gbdt", learning_rate=0.1, feature_fraction=0.45, colsample_bytree=0.45, bagging_fraction=0.8, bagging_freq=5, reg_lambda=0.2)
-    
-    # Fit and submit
-    scores = []
-    for label in LABELS:
-        print(label)
-        score = cross_val_score(stacker, X_train, train[label], cv=5, scoring='roc_auc')
-        print("AUC:", score)
-        scores.append(np.mean(score))
-        stacker.fit(X_train, train[label])
-        sub[label] = stacker.predict_proba(X_test)[:,1]
-    print("CV score:", np.mean(scores))
-    
-    sub.to_csv("submission.csv", index=False)
+sample['added_products'] = test_preds
+sample.to_csv('collab_sub.csv', index=False)

@@ -1,148 +1,169 @@
 
 # coding: utf-8
 
-# Here's some **data augmentation methods for audio**. Some of them are inspired from [TF speech recognition tutorial](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/examples/speech_commands)
-# 
-# I highly recommend everyone new to this competition should take a look at the official baseline method showed above because it can produce 77% acc in public LB, which is higher than 60%+ of the teams (include mine) for now...
+# # A simple personalized recommending script
+
+# ## Fire up packages
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import librosa
+import sklearn
 import matplotlib.pyplot as plt
-import os
-import cv2
-import IPython.display as ipd
+get_ipython().run_line_magic('matplotlib', 'inline')
+import pandas
+from sklearn.cross_validation import train_test_split
+import numpy
+from wordcloud import WordCloud,STOPWORDS
 
-EPS = 1e-8
+
+# ## Load data
+
+# In[ ]:
+
+
+df = pandas.read_csv('../input/techcrunch_posts.csv')
+print(df.shape)
 
 
 # In[ ]:
 
 
-def get_spectrogram(wav):
-    D = librosa.stft(wav, n_fft=480, hop_length=160,
-                     win_length=480, window='hamming')
-    spect, phase = librosa.magphase(D)
-    return spect
+df.head()
 
 
-# Let's take an example audio first
+# ## Pre-process data
 
 # In[ ]:
 
 
-file_path = '../input/train/audio/yes/0a7c2a8d_nohash_0.wav'
-wav, sr = librosa.load(file_path, sr=None)
-print(wav.shape, wav.max(), wav.min())
+df['authors']=df['authors'].apply(lambda x: str(x).split(','))
+df['tags']=df['tags'].apply(lambda x:['No tag'] if str(x)=='NaN' else str(x).split(','))
+df['topics']=df['topics'].apply(lambda x: str(x).split(','))
 
 
 # In[ ]:
 
 
-ipd.Audio(wav, rate=sr)
+df['content']=df['content'].fillna(0)
+df=df[df['content']!=0]
+df=df.reset_index(drop=True)
+
+
+# ## Build KNN model based on the content of articles
+
+# In[ ]:
+
+
+import re
+import nltk
+from nltk.corpus import stopwords
 
 
 # In[ ]:
 
 
-log_spect = np.log(get_spectrogram(wav))
-print('spectrogram shape:', log_spect.shape)
-plt.imshow(log_spect, aspect='auto', origin='lower',)
-plt.title('spectrogram of origin audio')
-plt.show()
+def to_words(content):
+    letters_only = re.sub("[^a-zA-Z]", " ", content) 
+    words = letters_only.lower().split()                             
+    stops = set(stopwords.words("english"))                  
+    meaningful_words = [w for w in words if not w in stops] 
+    return( " ".join( meaningful_words )) 
 
 
-# ## 1. Time shifting
+# **Convert the words to tfidf matrices.**
+
+# In[ ]:
+
+
+clean_content=[]
+for each in df['content']:
+    clean_content.append(to_words(each))
+
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+tfidf=TfidfVectorizer()
+features=tfidf.fit_transform(clean_content)
+
+
+# **Implement K-Nearest-Neighbors model**
+
+# In[ ]:
+
+
+from sklearn.neighbors import NearestNeighbors
+knn=NearestNeighbors(n_neighbors=30,algorithm='brute',metric='cosine')
+knn_fit=knn.fit(features)
+
+
+# ## Wrap everything up to a small, personalized recommending system
+
+# In[ ]:
+
+
+def recommend_to_user(author):
+    ## Find All Authors##
+    indexes=[]
+    for i in range(len(df)):
+        if author in df['authors'][i]:
+            indexes.append(i)
+    tmp_df=df.iloc[indexes,:]
+    author_content=[]
+    for each in tmp_df['content']:
+        author_content.append(to_words(each))
+    wordcloud = WordCloud(background_color='black',
+                      width=3000,
+                      height=2500
+                     ).generate(author_content[0])
+    ## Find Nearest Neighbors based on the latest aritcles the author published on the website
+    Neighbors = knn_fit.kneighbors(features[indexes[0]])[1].tolist()[0][2:]
+    ## Get rid of all articles that is authored/co-authored by the author and find the articles
+    All_article = df.iloc[Neighbors,:]
+    All_article = All_article.reset_index(drop=True)
+    kept_index = []
+    for j in range(len(All_article)):
+        if author in All_article['authors'][j]:
+            pass
+        else:
+            kept_index.append(j)
+    Final_frame = All_article.iloc[kept_index,:]
+    Final_frame=Final_frame.reset_index(drop=True)
+    Selected_articles = Final_frame.iloc[0:5,:]
+    
+    ## Print out result directly ##
+    print('==='*30)
+    print('The article(s) of '+author+' is always featured by the following words')
+    plt.figure(1,figsize=(8,8))
+    plt.imshow(wordcloud)
+    plt.axis('off')
+    plt.show()
+    print("==="*30)
+    print('The top five articles recommended to '+author+' are:')
+    for k in range(len(Selected_articles)):
+        print(Selected_articles['title'][k]+', authored by '+Selected_articles['authors'][k][0]+' ,article can be visted at \n '+Selected_articles['url'][k])
+
+
+# ## Run a test for the recommender
+
+# In[ ]:
+
+
+recommend_to_user('Bastiaan Janmaat')
+
+
+# In[ ]:
+
+
+recommend_to_user('Matthew Lynley')
+
+
+# ## Conclusion
+
+# **We can find that the recommendation system is somehow making sense, if you just quickly compare the word cloud and the titles of article recommended by KNN algorithm. However, the recommender is still restricted, in terms of the following aspects:**
 # 
-# slightly shift the starting point of the audio, then pad it to original length.
-
-# In[ ]:
-
-
-start_ = int(np.random.uniform(-4800,4800))
-print('time shift: ',start_)
-if start_ >= 0:
-    wav_time_shift = np.r_[wav[start_:], np.random.uniform(-0.001,0.001, start_)]
-else:
-    wav_time_shift = np.r_[np.random.uniform(-0.001,0.001, -start_), wav[:start_]]
-ipd.Audio(wav_time_shift, rate=sr)
-
-
-# In[ ]:
-
-
-log_spect = np.log(get_spectrogram(wav_time_shift)+EPS)
-print('spectrogram shape:', log_spect.shape)
-plt.imshow(log_spect, aspect='auto', origin='lower',)
-plt.title('spectrogram of time shifted audio')
-plt.show()
-
-
-# ## 2. Speed tuning
-# slightly change the speed of the audio, then pad or slice it.
-
-# In[ ]:
-
-
-speed_rate = np.random.uniform(0.7,1.3)
-wav_speed_tune = cv2.resize(wav, (1, int(len(wav) * speed_rate))).squeeze()
-print('speed rate: %.3f' % speed_rate, '(lower is faster)')
-if len(wav_speed_tune) < 16000:
-    pad_len = 16000 - len(wav_speed_tune)
-    wav_speed_tune = np.r_[np.random.uniform(-0.001,0.001,int(pad_len/2)),
-                           wav_speed_tune,
-                           np.random.uniform(-0.001,0.001,int(np.ceil(pad_len/2)))]
-else: 
-    cut_len = len(wav_speed_tune) - 16000
-    wav_speed_tune = wav_speed_tune[int(cut_len/2):int(cut_len/2)+16000]
-print('wav length: ', wav_speed_tune.shape[0])
-ipd.Audio(wav_speed_tune, rate=sr)
-
-
-# In[ ]:
-
-
-log_spect = np.log(get_spectrogram(wav_speed_tune)+EPS)
-print('spectrogram shape:', log_spect.shape)
-plt.imshow(log_spect, aspect='auto', origin='lower',)
-plt.title('spectrogram of speed tuned audio')
-plt.show()
-
-
-# ## 3 & 4. Mix background noise & volume tuning
-# randomly choose a slice of background noise then mix it with the speech audio, along with randomly volume tuning
-
-# In[ ]:
-
-
-bg_files = os.listdir('../input/train/audio/_background_noise_/')
-bg_files.remove('README.md')
-chosen_bg_file = bg_files[np.random.randint(6)]
-bg, sr = librosa.load('../input/train/audio/_background_noise_/'+chosen_bg_file, sr=None)
-print(chosen_bg_file,'|', bg.shape[0], bg.max(), bg.min())
-ipd.Audio(bg, rate=sr) # !! be prepared when playing the noise, bacause it's so ANNOYING !!
-
-
-# In[ ]:
-
-
-start_ = np.random.randint(bg.shape[0]-16000)
-bg_slice = bg[start_ : start_+16000]
-wav_with_bg = wav * np.random.uniform(0.8, 1.2) +               bg_slice * np.random.uniform(0, 0.1)
-ipd.Audio(wav_with_bg, rate=sr) 
-
-
-# In[ ]:
-
-
-log_spect = np.log(get_spectrogram(wav_with_bg)+EPS)
-print('spectrogram shape:', log_spect.shape)
-plt.imshow(log_spect, aspect='auto', origin='lower',)
-plt.title('spectrogram of audio with background noise')
-plt.show()
-
-
-# If you find this helpful, please upvote me, thank you!
+# **1. For the user who has not published many articles on the website, the recommendation system may result in a disappointing outcome.**
+# 
+# **2. For the cases of cold-start (new users), it is more wise to use classification technique to make recommendation. Considering we do not have many user-wide data, we have to skip that.**

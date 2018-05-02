@@ -1,92 +1,99 @@
-import pandas as pd
+# coding: utf-8
+# Kaggle dosn't have ortools installed. So you need to run kernel at local machine
+# update from https://www.kaggle.com/zfturbo/max-flow-with-min-cost-in-10-minutes-0-9408
+
 import numpy as np
-from sklearn import *
-import glob
+import pandas as pd
+from ortools.graph import pywrapgraph
 
-datafiles = sorted(glob.glob('../input/**.csv'))
-datafiles = {file.split('/')[-1].split('.')[0]: pd.read_csv(file, encoding='latin-1') for file in datafiles}
-print([k for k in datafiles])
-datafiles['WNCAATourneyCompactResults_PrelimData2018']['SecondaryTourney'] = 'NCAA'
-datafiles['WRegularSeasonCompactResults_PrelimData2018']['SecondaryTourney'] = 'Regular'
+INPUT_PATH = '../input/'
 
-#Presets
-WLoc = {'A': 1, 'H': 2, 'N': 3}
-SecondaryTourney = {'NIT': 1, 'CBI': 2, 'CIT': 3, 'V16': 4, 'Regular': 5 ,'NCAA': 6}
+num_child = 1000000
+num_prize = 1001
+child_pref = 10
+prize_pref = 1000
+padding = num_child
+source = num_child + num_prize
+sink = source+1
 
-games = pd.concat((datafiles['WNCAATourneyCompactResults_PrelimData2018'],datafiles['WRegularSeasonCompactResults_PrelimData2018']), axis=0, ignore_index=True)
-games.reset_index(drop=True, inplace=True)
-games['WLoc'] = games['WLoc'].map(WLoc)
-games['SecondaryTourney'] = games['SecondaryTourney'].map(SecondaryTourney)
-games.head()
+wish = pd.read_csv(INPUT_PATH + 'child_wishlist.csv', header=None).as_matrix()[:, 1:]
+gift_init = pd.read_csv(INPUT_PATH + 'gift_goodkids.csv', header=None).as_matrix()[:, 1:]
+gift = gift_init.copy()
+answ = np.zeros(len(wish), dtype=np.int32)
+answ[:] = -1
+gift_count = np.zeros(num_prize, dtype=np.int32)
 
-#Add Ids
-games['ID'] = games.apply(lambda r: '_'.join(map(str, [r['Season']]+sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
-games['IDTeams'] = games.apply(lambda r: '_'.join(map(str, sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
-games['Team1'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[0], axis=1)
-games['Team2'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[1], axis=1)
-games['IDTeam1'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
-games['IDTeam2'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
+edgeMap = dict()
+for i in range(wish.shape[0]):
+    for j in range(wish.shape[1]):
+        edgeMap[(i, wish[i][j])] = 1000*(1 + (wish.shape[1] - j)*2)
 
-#Add Seeds
-seeds = {'_'.join(map(str,[int(k1),k2])):int(v[1:3]) for k1, v, k2 in datafiles['WNCAATourneySeeds_SampleTourney2018'].values}
-#Add 2018
-if 2018 not in datafiles['WNCAATourneySeeds']['Season'].unique():
-    seeds = {**seeds, **{k.replace('2017_','2018_'):seeds[k] for k in seeds if '2017_' in k}}
+for i in range(gift.shape[0]):
+    for j in range(gift.shape[1]):
+        if (gift[i][j], i) in edgeMap:
+            edgeMap[(gift[i][j], i)] += 10*(1 + (gift.shape[1] - j)*2)
+        else:
+            edgeMap[(gift[i][j], i)] = 10*(1 + (gift.shape[1] - j)*2)
 
-games['Team1Seed'] = games['IDTeam1'].map(seeds).fillna(0)
-games['Team2Seed'] = games['IDTeam2'].map(seeds).fillna(0)
+start_nodes = []
+end_nodes = []
+capacities = []
+unit_costs = []
+supplies = []
 
-#Additional Features & Clean Up
-games['ScoreDiff'] = games['WScore'] - games['LScore'] 
-games['Pred'] = games.apply(lambda r: 1. if sorted([r['WTeamID'],r['LTeamID']])[0]==r['WTeamID'] else 0., axis=1)
-games['ScoreDiffNorm'] = games.apply(lambda r: r['ScoreDiff'] * -1 if r['Pred'] == 0. else r['ScoreDiff'], axis=1)
-games['SeedDiff'] = games['Team1Seed'] - games['Team2Seed'] 
-games = games.fillna(-1)
+for h in edgeMap:
+    c, g = h
+    # print(c, g, edgeMap[h])
+    start_nodes.append(int(padding + g))
+    end_nodes.append(int(c))
+    capacities.append(1)
+    unit_costs.append(41010-edgeMap[h])
 
-#Test Set
-sub = datafiles['WSampleSubmissionStage1']
-#sub = datafiles['WSampleSubmissionStage2_SampleTourney2018']
-sub['WLoc'] = 3 #N
-sub['SecondaryTourney'] = 6 #NCAA
-sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
-sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
-sub['Team1'] = sub['ID'].map(lambda x: x.split('_')[1])
-sub['Team2'] = sub['ID'].map(lambda x: x.split('_')[2])
-sub['IDTeams'] = sub.apply(lambda r: '_'.join(map(str, [r['Team1'], r['Team2']])), axis=1)
-sub['IDTeam1'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
-sub['IDTeam2'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
-sub['Team1Seed'] = sub['IDTeam1'].map(seeds).fillna(0)
-sub['Team2Seed'] = sub['IDTeam2'].map(seeds).fillna(0)
-sub['SeedDiff'] = sub['Team1Seed'] - sub['Team2Seed'] 
+# Instantiate a SimpleMinCostFlow solver.
+min_cost_flow = pywrapgraph.SimpleMinCostFlow()
 
-#Leaky (No Validation)
-sdn = games.groupby(['IDTeams'], as_index=False)[['ScoreDiffNorm']].mean()
-sub = pd.merge(sub, sdn, how='left', on=['IDTeams'])
-sub['ScoreDiffNorm'] = sub['ScoreDiffNorm'].fillna(0.)
+# Add each arc.
+for i in range(0, len(start_nodes)):
+    min_cost_flow.AddArcWithCapacityAndUnitCost(start_nodes[i], end_nodes[i], capacities[i], unit_costs[i])
+for i in range(min(num_prize,1000)):
+    min_cost_flow.AddArcWithCapacityAndUnitCost(source, i+padding, 1000, 0)
+for i in range(num_child):
+    min_cost_flow.AddArcWithCapacityAndUnitCost(1000+padding, i, 1, 41010)
+min_cost_flow.AddArcWithCapacityAndUnitCost(source, 1000+padding, num_child, 0)
 
-#Interactions
-inter = games[['IDTeam2','IDTeam1','Season','Pred']].rename(columns={'IDTeam2':'Target','IDTeam1':'Common'})
-inter['Pred'] = inter['Pred'] * -1
-inter = pd.concat((inter,games[['IDTeam1','IDTeam2','Season','Pred']].rename(columns={'IDTeam1':'Target','IDTeam2':'Common'})), axis=0, ignore_index=True).reset_index(drop=True)
-inter = inter[inter['Season']>2013] #Limit
-inter = pd.merge(inter, inter, how='inner', on=['Common','Season'])
-inter = inter[inter['Target_x'] != inter['Target_y']]
-inter['IDTeams'] = inter.apply(lambda r: '_'.join(map(str, [r['Target_x'].split('_')[1],r['Target_y'].split('_')[1]])), axis=1)
-inter = inter[['IDTeams','Pred_x']]
-inter = inter.groupby(['IDTeams'], as_index=False)[['Pred_x']].sum()
-inter = {k:int(v) for k, v in inter.values}
+# Add node supplies.
+min_cost_flow.SetNodeSupply(source, num_child)
+for i in range(num_child):
+    min_cost_flow.SetNodeSupply(i, -1)
 
-games['Inter'] = games['IDTeams'].map(inter).fillna(0)
-sub['Inter'] = sub['IDTeams'].map(inter).fillna(0)
-col = [c for c in games.columns if c not in ['ID', 'Team1','Team2', 'IDTeams','IDTeam1','IDTeam2','Pred','DayNum', 'WTeamID', 'WScore', 'LTeamID', 'LScore', 'NumOT', 'ScoreDiff']]
+# Find the minimum cost flow
+print('Start solve....')
+min_cost_flow.SolveMaxFlowWithMinCost()
+res1 = min_cost_flow.MaximumFlow()
+print('Maximum flow:', res1)
+res2 = min_cost_flow.OptimalCost()
+print('Optimal cost:', -res2 / 2e10)
+print('Num arcs:', min_cost_flow.NumArcs())
 
-reg = linear_model.HuberRegressor()
-reg.fit(games[col], games['Pred'])
-sub['Pred'] = reg.predict(sub[col]).clip(0.05, 0.95)
-sub[['ID','Pred']].to_csv('rh3p_submission.csv', index=False)
+total = 0
+for i in range(min_cost_flow.NumArcs()):
+    if min_cost_flow.Flow(i) == 1 and min_cost_flow.Head(i) >= 0 and min_cost_flow.Head(i) < num_child:
+        answ[min_cost_flow.Head(i)] = min_cost_flow.Tail(i) - padding
+        gift_count[min_cost_flow.Tail(i) - padding] += 1
+print('Assigned: {}'.format(total))
 
-reg = ensemble.ExtraTreesClassifier(n_jobs=-1, random_state=18, n_estimators=100)
-reg.fit(games[col], games['Pred'])
-sub['Pred'] = reg.predict_proba(sub[col])[:,1]
-sub['Pred'] = sub['Pred'].clip(0.05, 0.95)
-sub[['ID','Pred']].to_csv('rh3p_etr_submission.csv', index=False)
+for i in range(num_prize):
+    if(gift_count[i] != 1000):
+        print("prize=", gift_count[i],": ", i)
+        
+for i in range(num_child):
+    if answ[i] == 1000:
+        for j in range(min(num_prize,1000)):
+            if gift_count[j] < 1000:
+                answ[i] = j
+                gift_count[j] += 1
+                break
+
+df = pd.read_csv(INPUT_PATH+"sample_submission_random.csv")
+df['GiftId'] = answ
+df.sort_values(['GiftId'], ascending=[1]).to_csv('sub.csv', index=False)

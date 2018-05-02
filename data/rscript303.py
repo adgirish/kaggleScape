@@ -1,225 +1,235 @@
-'''
-Doesn't run through kaggle scripts because of the 20 min limit. 
-Download the code, expand the network, add more iterations
-'''
-
-import os
-import cv2
-import glob
-import math
-import time
-import random
 import numpy as np
 import pandas as pd
+import os
 
-from sklearn.utils import shuffle
-from sklearn.preprocessing import LabelEncoder
-from sklearn.cross_validation import train_test_split
+import lightgbm as lgb
+from sklearn.naive_bayes import MultinomialNB
 
-import lasagne
-from lasagne.layers import helper
-from lasagne.updates import adam
-from lasagne.nonlinearities import rectify, softmax
-from lasagne.layers import InputLayer, MaxPool2DLayer, DenseLayer, DropoutLayer, helper
-from lasagne.layers import Conv2DLayer as ConvLayer
+from tqdm import tqdm
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, log_loss
+from sklearn.model_selection import KFold
 
-import theano
-from theano import tensor as T
+tqdm.pandas()
 
-'''
-Loading data functions
-'''
-PIXELS = 24
-imageSize = PIXELS * PIXELS
-num_features = imageSize 
+data_path = '../input/'
+classes = {
+    'EAP': 0,
+    'HPL': 1,
+    'MWS': 2
+}
+alphabet = 'abcdefghijklmnopqrstuvwxyz'
 
-def load_train_cv(encoder):
-    X_train = []
-    y_train = []
-    print('Read train images')
-    for j in range(10):
-        print('Load folder c{}'.format(j))
-        path = os.path.join('..', 'input', 'train', 'c' + str(j), '*.jpg')
-        files = glob.glob(path)
-        for fl in files:
-            img = cv2.imread(fl,0)
-            img = cv2.resize(img, (PIXELS, PIXELS))
-            #img = img.transpose(2, 0, 1)
-            img = np.reshape(img, (1, num_features))
-            X_train.append(img)
-            y_train.append(j)
+train = pd.read_csv(os.path.join(data_path, 'train.csv'))
+train['author'] = train['author'].apply(lambda x: classes[x])
 
-    X_train = np.array(X_train)
-    y_train = np.array(y_train)
+test = pd.read_csv(os.path.join(data_path, 'test.csv'))
+id_test = test['id'].values
 
-    y_train = encoder.fit_transform(y_train).astype('int32')
+# Clean text
+punctuation = ['.', '..', '...', ',', ':', ';', '-', '*', '"', '!', '?']
+def clean_text(x):
+    x.lower()
+    for p in punctuation:
+        x.replace(p, '')
+    return x
 
-    X_train, y_train = shuffle(X_train, y_train)
+train['text_cleaned'] = train['text'].apply(lambda x: clean_text(x))
+test['text_cleaned'] = test['text'].apply(lambda x: clean_text(x))
 
-    X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, test_size=0.1)
+# Count Vectorizer
+cvect = CountVectorizer(ngram_range=(1, 3), stop_words='english')
+cvect.fit(pd.concat((train['text_cleaned'], test['text_cleaned']), axis=0))
+cvect_train = cvect.transform(train['text_cleaned'])
+cvect_test = cvect.transform(test['text_cleaned'])
 
-    X_train = X_train.reshape(X_train.shape[0], 1, PIXELS, PIXELS).astype('float32') / 255.
-    X_test = X_test.reshape(X_test.shape[0], 1, PIXELS, PIXELS).astype('float32') / 255.
+# TFIDF
+tfidf = TfidfVectorizer(ngram_range=(1, 1), stop_words='english')
+tfidf.fit(pd.concat((train['text_cleaned'], test['text_cleaned']), axis=0))
+tfidf_train = tfidf.transform(train['text_cleaned'])
+tfidf_test = tfidf.transform(test['text_cleaned'])
 
-    return X_train, y_train, X_test, y_test, encoder
+def extract_features(df):
+    df['len'] = df['text'].apply(lambda x: len(x))
+    df['n_words'] = df['text'].apply(lambda x: len(x.split(' ')))
+    df['n_.'] = df['text'].str.count('\.')
+    df['n_...'] = df['text'].str.count('\...')
+    df['n_,'] = df['text'].str.count('\,')
+    df['n_:'] = df['text'].str.count('\:')
+    df['n_;'] = df['text'].str.count('\;')
+    df['n_-'] = df['text'].str.count('\-')
+    df['n_?'] = df['text'].str.count('\?')
+    df['n_!'] = df['text'].str.count('\!')
+    df['n_\''] = df['text'].str.count('\'')
+    df['n_"'] = df['text'].str.count('\"')
 
-def load_test():
-    print('Read test images')
-    path = os.path.join('..', 'input', 'test', '*.jpg')
-    files = glob.glob(path)
-    X_test = []
-    X_test_id = []
-    total = 0
-    thr = math.floor(len(files)/10)
-    for fl in files:
-        flbase = os.path.basename(fl)
-        img = cv2.imread(fl,0)
-        img = cv2.resize(img, (PIXELS, PIXELS))
-        #img = img.transpose(2, 0, 1)
-        img = np.reshape(img, (1, num_features))
-        X_test.append(img)
-        X_test_id.append(flbase)
-        total += 1
-        if total%thr == 0:
-            print('Read {} images from {}'.format(total, len(files)))
+    # First words in a sentence
+    df['n_The '] = df['text'].str.count('The ')
+    df['n_I '] = df['text'].str.count('I ')
+    df['n_It '] = df['text'].str.count('It ')
+    df['n_He '] = df['text'].str.count('He ')
+    df['n_Me '] = df['text'].str.count('Me ')
+    df['n_She '] = df['text'].str.count('She ')
+    df['n_We '] = df['text'].str.count('We ')
+    df['n_They '] = df['text'].str.count('They ')
+    df['n_You '] = df['text'].str.count('You ')
 
-    X_test = np.array(X_test)
-    X_test_id = np.array(X_test_id)
+    # Find numbers of different combinations
+    for c in tqdm(alphabet.upper()):
+        df['n_' + c] = df['text'].str.count(c)
+        df['n_' + c + '.'] = df['text'].str.count(c + '\.')
+        df['n_' + c + ','] = df['text'].str.count(c + '\,')
 
-    X_test = X_test.reshape(X_test.shape[0], 1, PIXELS, PIXELS).astype('float32') / 255.
+        for c2 in alphabet:
+            df['n_' + c + c2] = df['text'].str.count(c + c2)
+            df['n_' + c + c2 + '.'] = df['text'].str.count(c + c2 + '\.')
+            df['n_' + c + c2 + ','] = df['text'].str.count(c + c2 + '\,')
 
-    return X_test, X_test_id
+    for c in tqdm(alphabet):
+        df['n_' + c + '.'] = df['text'].str.count(c + '\.')
+        df['n_' + c + ','] = df['text'].str.count(c + '\,')
+        df['n_' + c + '?'] = df['text'].str.count(c + '\?')
+        df['n_' + c + ';'] = df['text'].str.count(c + '\;')
+        df['n_' + c + ':'] = df['text'].str.count(c + '\:')
+
+        for c2 in alphabet:
+            df['n_' + c + c2 + '.'] = df['text'].str.count(c + c2 + '\.')
+            df['n_' + c + c2 + ','] = df['text'].str.count(c + c2 + '\,')
+            df['n_' + c + c2 + '?'] = df['text'].str.count(c + c2 + '\?')
+            df['n_' + c + c2 + ';'] = df['text'].str.count(c + c2 + '\;')
+            df['n_' + c + c2 + ':'] = df['text'].str.count(c + c2 + '\:')
+            df['n_' + c + ', ' + c2] = df['text'].str.count(c + '\, ' + c2)
+
+    # And now starting processing of cleaned text
+    for c in tqdm(alphabet):
+        df['n_' + c] = df['text_cleaned'].str.count(c)
+        df['n_' + c + ' '] = df['text_cleaned'].str.count(c + ' ')
+        df['n_' + ' ' + c] = df['text_cleaned'].str.count(' ' + c)
+
+        for c2 in alphabet:
+            df['n_' + c + c2] = df['text_cleaned'].str.count(c + c2)
+            df['n_' + c + c2 + ' '] = df['text_cleaned'].str.count(c + c2 + ' ')
+            df['n_' + ' ' + c + c2] = df['text_cleaned'].str.count(' ' + c + c2)
+            df['n_' + c + ' ' + c2] = df['text_cleaned'].str.count(c + ' ' + c2)
+
+            for c3 in alphabet:
+                df['n_' + c + c2 + c3] = df['text_cleaned'].str.count(c + c2 + c3)
+                # df['n_' + c + ' ' + c2 + c3] = df['text_cleaned'].str.count(c + ' ' + c2 + c3)
+                # df['n_' + c + c2 + ' ' + c3] = df['text_cleaned'].str.count(c + c2 + ' ' + c3)
+
+    df['n_the'] = df['text_cleaned'].str.count('the ')
+    df['n_ a '] = df['text_cleaned'].str.count(' a ')
+    df['n_appear'] = df['text_cleaned'].str.count('appear')
+    df['n_little'] = df['text_cleaned'].str.count('little')
+    df['n_was '] = df['text_cleaned'].str.count('was ')
+    df['n_one '] = df['text_cleaned'].str.count('one ')
+    df['n_two '] = df['text_cleaned'].str.count('two ')
+    df['n_three '] = df['text_cleaned'].str.count('three ')
+    df['n_ten '] = df['text_cleaned'].str.count('ten ')
+    df['n_is '] = df['text_cleaned'].str.count('is ')
+    df['n_are '] = df['text_cleaned'].str.count('are ')
+    df['n_ed'] = df['text_cleaned'].str.count('ed ')
+    df['n_however'] = df['text_cleaned'].str.count('however')
+    df['n_ to '] = df['text_cleaned'].str.count(' to ')
+    df['n_into'] = df['text_cleaned'].str.count('into')
+    df['n_about '] = df['text_cleaned'].str.count('about ')
+    df['n_th'] = df['text_cleaned'].str.count('th')
+    df['n_er'] = df['text_cleaned'].str.count('er')
+    df['n_ex'] = df['text_cleaned'].str.count('ex')
+    df['n_an '] = df['text_cleaned'].str.count('an ')
+    df['n_ground'] = df['text_cleaned'].str.count('ground')
+    df['n_any'] = df['text_cleaned'].str.count('any')
+    df['n_silence'] = df['text_cleaned'].str.count('silence')
+    df['n_wall'] = df['text_cleaned'].str.count('wall')
+
+    df.drop(['id', 'text', 'text_cleaned'], axis=1, inplace=True)
+
+print('Processing train...')
+extract_features(train)
+print('Processing test...')
+extract_features(test)
+
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+# Drop non-relevant columns
+print('Searching for columns with non-changing values...')
+counts = train.sum(axis=0)
+cols_to_drop = counts[counts == 0].index.values
+train.drop(cols_to_drop, axis=1, inplace=True)
+test.drop(cols_to_drop, axis=1, inplace=True)
+print('Dropped ' + str(len(cols_to_drop)) + ' columns.')
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+print('Searching for columns with low STD...')
+counts = train.std(axis=0)
+cols_to_drop = counts[counts < 0.01].index.values
+train.drop(cols_to_drop, axis=1, inplace=True)
+test.drop(cols_to_drop, axis=1, inplace=True)
+print('Dropped ' + str(len(cols_to_drop)) + ' columns.')
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+# Split train dataset on train and CV
+X = np.concatenate((train.drop('author', axis=1), tfidf_train.toarray()), axis=1)
+y = train['author'].values
+X_test = np.concatenate((test, tfidf_test.toarray()), axis=1)
+
+p_valid = []
+p_test = []
 
 
-'''
-Lasagne Model ZFTurboNet and Batch Iterator
-'''
-def ZFTurboNet(input_var=None):
-    l_in = InputLayer(shape=(None, 1, PIXELS, PIXELS), input_var=input_var)
+kf = KFold(n_splits=5, shuffle=False, random_state=0)
+for train_index, valid_index in kf.split(X):
+    X_train, X_valid = X[train_index], X[valid_index]
+    y_train, y_valid = y[train_index], y[valid_index]
 
-    l_conv = ConvLayer(l_in, num_filters=8, filter_size=3, pad=1, nonlinearity=rectify)
-    l_convb = ConvLayer(l_conv, num_filters=8, filter_size=3, pad=1, nonlinearity=rectify)
-    l_pool = MaxPool2DLayer(l_convb, pool_size=2) # feature maps 12x12
+    # LightGBM
+    d_train = lgb.Dataset(X_train, label=y_train)
+    d_valid = lgb.Dataset(X_valid, label=y_valid)
 
-    #l_dropout1 = DropoutLayer(l_pool, p=0.25)
-    l_hidden = DenseLayer(l_pool, num_units=128, nonlinearity=rectify)
-    #l_dropout2 = DropoutLayer(l_hidden, p=0.5)
+    params = {
+        'max_depth': 27, 
+        'learning_rate': 0.1,
+        'verbose': 0, 
+        'early_stopping_round': 120,
+        'metric': 'multi_logloss',
+        'objective': 'multiclass',
+        'num_classes': 3,
+        'nthread': 1
+    }
+    n_estimators = 5000
+    model = lgb.train(params, d_train, n_estimators, [d_train, d_valid], verbose_eval=200)
 
-    l_out = DenseLayer(l_hidden, num_units=10, nonlinearity=softmax)
+    p_valid.append(model.predict(X_valid, num_iteration=model.best_iteration))
+    acc = accuracy_score(y_valid, np.argmax(p_valid[-1], axis=1))
+    logloss = log_loss(y_valid, p_valid[-1])
+    print('LGB:\tAccuracy = ' + str(round(acc, 6)) + ',\tLogLoss = ' + str(round(logloss, 6)))
+    p_test.append(model.predict(X_test, num_iteration=model.best_iteration))
 
-    return l_out
+    # MultinomialNB Count Vectorizer
+    X_train, X_valid = cvect_train[train_index], cvect_train[valid_index]
+    y_train, y_valid = y[train_index], y[valid_index]
+    print('X_train.shape = ' + str(X_train.shape) + ', y_train.shape = ' + str(y_train.shape))
+    print('X_valid.shape = ' + str(X_valid.shape) + ', y_valid.shape = ' + str(y_valid.shape))
 
-def iterate_minibatches(inputs, targets, batchsize):
-    assert len(inputs) == len(targets)
-    indices = np.arange(len(inputs))
-    np.random.shuffle(indices)
-    for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
-        excerpt = indices[start_idx:start_idx + batchsize]
-        yield inputs[excerpt], targets[excerpt]
+    model = MultinomialNB()
+    model.fit(X_train, y_train)
+    p_valid.append(model.predict_proba(X_valid))
+    acc = accuracy_score(y_valid, np.argmax(p_valid[-1], axis=1))
+    logloss = log_loss(y_valid, p_valid[-1])
+    print('MNBc:\tAccuracy = ' + str(round(acc, 6)) + ',\tLogLoss = ' + str(round(logloss, 6)))
+    p_test.append(model.predict_proba(cvect_test))
+    # break
 
-"""
-Set up all theano functions
-"""
-BATCHSIZE = 32
-LR = 0.001
-ITERS = 2
+# Ensemble
+print('Ensemble contains ' + str(len(p_valid)) + ' models.')
+p_test_ens = np.mean(p_test, axis=0)
 
-X = T.tensor4('X')
-Y = T.ivector('y')
-
-# set up theano functions to generate output by feeding data through network, any test outputs should be deterministic
-output_layer = ZFTurboNet(X)
-output_train = lasagne.layers.get_output(output_layer)
-output_test = lasagne.layers.get_output(output_layer, deterministic=True)
-
-# set up the loss that we aim to minimize, when using cat cross entropy our Y should be ints not one-hot
-loss = lasagne.objectives.categorical_crossentropy(output_train, Y)
-loss = loss.mean()
-
-# set up loss functions for validation dataset
-valid_loss = lasagne.objectives.categorical_crossentropy(output_test, Y)
-valid_loss = valid_loss.mean()
-
-valid_acc = T.mean(T.eq(T.argmax(output_test, axis=1), Y), dtype=theano.config.floatX)
-
-# get parameters from network and set up sgd with nesterov momentum to update parameters
-params = lasagne.layers.get_all_params(output_layer, trainable=True)
-updates = adam(loss, params, learning_rate=LR)
-
-# set up training and prediction functions
-train_fn = theano.function(inputs=[X,Y], outputs=loss, updates=updates)
-valid_fn = theano.function(inputs=[X,Y], outputs=[valid_loss, valid_acc])
-
-# set up prediction function
-predict_proba = theano.function(inputs=[X], outputs=output_test)
-
-'''
-load training data and start training
-'''
-encoder = LabelEncoder()
-
-# load the training and validation data sets
-train_X, train_y, valid_X, valid_y, encoder = load_train_cv(encoder)
-print('Train shape:', train_X.shape, 'Test shape:', valid_X.shape)
-
-# load data
-X_test, X_test_id = load_test()
-
-# loop over training functions for however many iterations, print information while training
-try:
-    for epoch in range(ITERS):
-        # do the training
-        start = time.time()
-        # training batches
-        train_loss = []
-        for batch in iterate_minibatches(train_X, train_y, BATCHSIZE):
-            inputs, targets = batch
-            train_loss.append(train_fn(inputs, targets))
-        train_loss = np.mean(train_loss)
-        # validation batches
-        valid_loss = []
-        valid_acc = []
-        for batch in iterate_minibatches(valid_X, valid_y, BATCHSIZE):
-            inputs, targets = batch
-            valid_eval = valid_fn(inputs, targets)
-            valid_loss.append(valid_eval[0])
-            valid_acc.append(valid_eval[1])
-        valid_loss = np.mean(valid_loss)
-        valid_acc = np.mean(valid_acc)
-        # get ratio of TL to VL
-        ratio = train_loss / valid_loss
-        end = time.time() - start
-        # print training details
-        print('iter:', epoch, '| TL:', np.round(train_loss,decimals=3), '| VL:', np.round(valid_loss, decimals=3), '| Vacc:', np.round(valid_acc, decimals=3), '| Ratio:', np.round(ratio, decimals=2), '| Time:', np.round(end, decimals=1))
-
-except KeyboardInterrupt:
-    pass
-
-'''
-Make Submission
-'''
-
-#make predictions
-print('Making predictions')
-PRED_BATCH = 2
-def iterate_pred_minibatches(inputs, batchsize):
-    for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
-        excerpt = slice(start_idx, start_idx + batchsize)
-        yield inputs[excerpt]
-
-predictions = []
-for pred_batch in iterate_pred_minibatches(X_test, PRED_BATCH):
-    predictions.extend(predict_proba(pred_batch))
-
-predictions = np.array(predictions)
-
-print('pred shape')
-print(predictions.shape)
-
-print('Creating Submission')
-def create_submission(predictions, test_id):
-    result1 = pd.DataFrame(predictions, columns=['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9'])
-    result1.loc[:, 'img'] = pd.Series(test_id, index=result1.index)
-    result1.to_csv('submission_ZFTurboNet.csv', index=False)
-
-create_submission(predictions, X_test_id)
+# Prepare submission
+subm = pd.DataFrame()
+subm['id'] = id_test
+subm['EAP'] = p_test_ens[:, 0]
+subm['HPL'] = p_test_ens[:, 1]
+subm['MWS'] = p_test_ens[:, 2]
+subm.to_csv('subm.csv', index=False)
+print('Done')

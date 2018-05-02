@@ -1,102 +1,223 @@
 
 # coding: utf-8
 
-# This notebook is a reworked version of William Cukierski's kernel [here](https://www.kaggle.com/wcukierski/example-metric-implementation). It gives the same results.
-# 
-# I wanted to use matrix multiplication for intersection and matrix maximum for union as this is easier to get my head around that the histogram approach. It will also help if I later code in C++ with binary maps. I also managed to simplify some of the formulae.
-# 
-# In the process, I noted that the evaluation method stipulates that the IOU score is based on the prediction masks, which is relevant where there is a mismatch between prediction and ground truth. Specifically if two true nuclei are fused together as one in the prediction or vice versa. So I think this code should work ok in the general case.
-# 
-# Hopefully this will help some of you. All comments welcome
+# In[ ]:
 
-# This is an example notebook to demonstrate how the IoU metric works for a single image. Please note: this is not the official scoring implementation, but should work in the same manner.
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+from sklearn import ensemble
+from sklearn import cross_validation
+from sklearn.metrics import roc_auc_score as auc
+import time
+
+plt.rcParams['figure.figsize'] = (12, 6)
+
+#%% load data and remove constant and duplicate columns  (taken from a kaggle script)
+
+trainDataFrame = pd.read_csv('../input/train.csv')
+
+# remove constant columns
+colsToRemove = []
+for col in trainDataFrame.columns:
+    if trainDataFrame[col].std() == 0:
+        colsToRemove.append(col)
+
+trainDataFrame.drop(colsToRemove, axis=1, inplace=True)
+
+# remove duplicate columns
+colsToRemove = []
+columns = trainDataFrame.columns
+for i in range(len(columns)-1):
+    v = trainDataFrame[columns[i]].values
+    for j in range(i+1,len(columns)):
+        if np.array_equal(v,trainDataFrame[columns[j]].values):
+            colsToRemove.append(columns[j])
+
+trainDataFrame.drop(colsToRemove, axis=1, inplace=True)
+
+trainLabels = trainDataFrame['TARGET']
+trainFeatures = trainDataFrame.drop(['ID','TARGET'], axis=1)
+
+
+# ### Build an estimator trying to predict the target for each feature individually
+# 
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import numpy as np
-import skimage.io
-import matplotlib.pyplot as plt
-import skimage.segmentation
+#%% look at single feature performance
 
-# Load a single image and its associated masks
-id = '0a7d30b252359a10fd298b638b90cb9ada3acced4e0c0e5a3692013f432ee4e9'
-file = "../input/stage1_train/{}/images/{}.png".format(id,id)
-mfile = "../input/stage1_train/{}/masks/*.png".format(id)
-image = skimage.io.imread(file)
-masks = skimage.io.imread_collection(mfile).concatenate()
-height, width, _ = image.shape
-num_masks = masks.shape[0]
+verySimpleLearner = ensemble.GradientBoostingClassifier(n_estimators=10, max_features=1, max_depth=3,
+                                                        min_samples_leaf=100,learning_rate=0.3, subsample=0.65,
+                                                        loss='deviance', random_state=1)
 
-# Make a ground truth array and summary label image
-y_true = np.zeros((num_masks, height, width), np.uint16)
-y_true[:,:,:] = masks[:,:,:] // 255  # Change ground truth mask to zeros and ones
-
-labels = np.zeros((height, width), np.uint16)
-labels[:,:] = np.sum(y_true, axis=0)  # Add up to plot all masks
+X_train, X_valid, y_train, y_valid = cross_validation.train_test_split(trainFeatures, trainLabels, test_size=0.5, random_state=1)
+        
+startTime = time.time()
+singleFeatureAUC_list = []
+singleFeatureAUC_dict = {}
+for feature in X_train.columns:
+    trainInputFeature = X_train[feature].values.reshape(-1,1)
+    validInputFeature = X_valid[feature].values.reshape(-1,1)
+    verySimpleLearner.fit(trainInputFeature, y_train)
     
-# Show label images
-fig = plt.figure()
-plt.imshow(image)
-plt.title("Original image")
-fig = plt.figure()
-plt.imshow(y_true[3])
-plt.title("One example ground truth mask")
-fig = plt.figure()
-plt.imshow(labels)
-plt.title("All ground truth masks")
+    trainAUC = auc(y_train, verySimpleLearner.predict_proba(trainInputFeature)[:,1])
+    validAUC = auc(y_valid, verySimpleLearner.predict_proba(validInputFeature)[:,1])
+        
+    singleFeatureAUC_list.append(validAUC)
+    singleFeatureAUC_dict[feature] = validAUC
+        
+validAUC = np.array(singleFeatureAUC_list)
+timeToTrain = (time.time()-startTime)/60
+print("(min,mean,max) AUC = (%.3f,%.3f,%.3f). took %.2f minutes" %(validAUC.min(),validAUC.mean(),validAUC.max(), timeToTrain))
 
-# Simulate an imperfect submission
-offset = 2 # offset pixels
-y_pr1 = y_true[:19, offset:, offset:]  # To remove 'item 20' as per other kernel
-y_pr2 = y_true[20:, offset:, offset:]
-y_pred = np.concatenate((y_pr1, y_pr2), axis=0)
-y_pred = np.pad(y_pred, ((0,0), (0, offset), (0, offset)), mode="constant")
-#y_pred[y_pred == 20] = 0 # Remove one object
-#y_pred, _, _ = skimage.segmentation.relabel_sequential(y_pred) # Relabel objects
-yptot = np.sum(y_pred, axis=0)  # Sum individual predictions for plotting
-
-# Show simulated predictions
-fig = plt.figure()
-plt.imshow(y_pred[3])
-plt.title("An example simulated imperfect submission")
-fig = plt.figure()
-plt.imshow(yptot)
-plt.title("All simulated imperfect submissions")
-plt.show()
-
-# Compute number of objects
-num_true = len(y_true)
-num_pred = len(y_pred)
-print("Number of true objects:", num_true)
-print("Number of predicted objects:", num_pred)
-
-# Compute iou score for each prediction
-iou = []
-for pr in range(num_pred):
-    bol = 0  # best overlap
-    bun = 1e-9  # corresponding best union
-    for tr in range(num_true):
-        olap = y_pred[pr] * y_true[tr]  # Intersection points
-        osz = np.sum(olap)  # Add the intersection points to see size of overlap
-        if osz > bol:  # Choose the match with the biggest overlap
-            bol = osz
-            bun = np.sum(np.maximum(y_pred[pr], y_true[tr]))  # Union formed with sum of maxima
-    iou.append(bol / bun)
-
-# Loop over IoU thresholds
-p = 0
-print("Thresh\tTP\tFP\tFN\tPrec.")
-for t in np.arange(0.5, 1.0, 0.05):
-    matches = iou > t
-    tp = np.count_nonzero(matches)  # True positives
-    fp = num_pred - tp  # False positives
-    fn = num_true - tp  # False negatives
-    p += tp / (tp + fp + fn)
-    print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, tp / (tp + fp + fn)))
-
-print("AP\t-\t-\t-\t{:1.3f}".format(p / 10))
+# show the scatter plot of the individual feature performance 
+plt.figure(); plt.hist(validAUC, 50, normed=1, facecolor='blue', alpha=0.75)
+plt.xlabel('AUC'); plt.ylabel('frequency'); plt.title('single feature AUC histogram'); plt.show()
 
 
-# This matches the table in Willam Cukierski's kernel.
+# ### Show single feature AUC performace
+
+# In[ ]:
+
+
+# create a table with features sorted according to AUC
+singleFeatureTable = pd.DataFrame(index=range(len(singleFeatureAUC_dict.keys())), columns=['feature','AUC'])
+for k,key in enumerate(singleFeatureAUC_dict):
+    singleFeatureTable.ix[k,'feature'] = key
+    singleFeatureTable.ix[k,'AUC'] = singleFeatureAUC_dict[key]
+singleFeatureTable = singleFeatureTable.sort_values(by='AUC', axis=0, ascending=False).reset_index(drop=True)
+
+singleFeatureTable.ix[:15,:]
+
+
+# ### Show scatter pltos of (feature, target) for the top performing single features
+
+# In[ ]:
+
+
+numSubPlotRows = 1
+numSubPlotCols = 2
+for plotInd in range(8):
+    plt.figure()
+    for k in range(numSubPlotRows*numSubPlotCols):
+        tableRow = numSubPlotRows*numSubPlotCols*plotInd+k
+        x = X_train[singleFeatureTable.ix[tableRow,'feature']].values.reshape(-1,1)[:,0]
+        
+        # use a huristic to find out if the variable is categorical, and if so add some random noise to it
+        if len(np.unique(x)) < 20:
+            diffVec = abs(x[1:]-x[:-1])
+            minDistBetweenCategories = min(diffVec[diffVec > 0])
+            x = x + 0.12*minDistBetweenCategories*np.random.randn(np.shape(x)[0])
+            
+        y = y_train + 0.12*np.random.randn(np.shape(y_train)[0])
+        # take only 3000 samples to be presented due to plotting issues
+        randPermutation = np.random.choice(len(x), 3000, replace=False)
+        plt.subplot(numSubPlotRows,numSubPlotCols,k+1)
+        plt.scatter(x[randPermutation], y[randPermutation], c=y_train[randPermutation], cmap='jet', alpha=0.25)
+        plt.xlabel(singleFeatureTable.ix[tableRow,'feature']); plt.ylabel('y GT')
+        plt.title('AUC = %.4f' %(singleFeatureTable.ix[tableRow,'AUC']))            
+        plt.ylim(-0.5,1.5); plt.tight_layout()
+
+
+# ### Build an estimator trying to predict the target with pairs of features
+
+# In[ ]:
+
+
+#%% look at performance of pairs of features
+
+# limit run time (on all feature combinations should take a few hours)
+numFeaturesToUse = 20
+featuresToUse = singleFeatureTable.ix[0:numFeaturesToUse-1,'feature']
+
+X_train, X_valid, y_train, y_valid = cross_validation.train_test_split(trainFeatures, trainLabels, test_size=0.5, random_state=1)
+    
+startTime = time.time()
+featurePairAUC_list = []
+featurePairAUC_dict = {}
+
+for feature1Ind in range(len(featuresToUse)-1):
+    featureName1 = featuresToUse[feature1Ind]
+    trainInputFeature1 = X_train[featureName1].values.reshape(-1,1)
+    validInputFeature1 = X_valid[featureName1].values.reshape(-1,1)
+
+    for feature2Ind in range(feature1Ind+1,len(featuresToUse)-1):
+        featureName2 = featuresToUse[feature2Ind]
+        trainInputFeature2 = X_train[featureName2].values.reshape(-1,1)
+        validInputFeature2 = X_valid[featureName2].values.reshape(-1,1)
+
+        trainInputFeatures = np.hstack((trainInputFeature1,trainInputFeature2))
+        validInputFeatures = np.hstack((validInputFeature1,validInputFeature2))
+        
+        verySimpleLearner.fit(trainInputFeatures, y_train)
+        
+        trainAUC = auc(y_train, verySimpleLearner.predict_proba(trainInputFeatures)[:,1])
+        validAUC = auc(y_valid, verySimpleLearner.predict_proba(validInputFeatures)[:,1])
+            
+        featurePairAUC_list.append(validAUC)
+        featurePairAUC_dict[(featureName1,featureName2)] = validAUC
+        
+validAUC = np.array(featurePairAUC_list)
+timeToTrain = (time.time()-startTime)/60
+print("(min,mean,max) AUC = (%.3f,%.3f,%.3f). took %.1f minutes" % (validAUC.min(),validAUC.mean(),validAUC.max(), timeToTrain))
+
+# show the histogram of the feature combinations performance 
+plt.figure(); plt.hist(validAUC, 50, normed=1, facecolor='blue', alpha=0.75)
+plt.xlabel('AUC'); plt.ylabel('frequency'); plt.title('feature pair AUC histogram'); plt.show()
+
+
+# ### Show AUC performace of best pairs of features
+
+# In[ ]:
+
+
+# create a table with features sorted according to AUC
+featureCombinationsTable = pd.DataFrame(index=range(len(featurePairAUC_list)), columns=['feature1','feature2','AUC'])
+for k,key in enumerate(featurePairAUC_dict):
+    featureCombinationsTable.ix[k,'feature1'] = key[0]
+    featureCombinationsTable.ix[k,'feature2'] = key[1]
+    featureCombinationsTable.ix[k,'AUC'] = featurePairAUC_dict[key]
+featureCombinationsTable = featureCombinationsTable.sort_values(by='AUC', axis=0, ascending=False).reset_index(drop=True)
+
+featureCombinationsTable.ix[:20,:]
+
+
+# ### Show the top performing feature pairs
+# scatter pltos of (feature1, feature2) with colored labels 
+# 
+
+# In[ ]:
+
+
+# show the scatter plot of best feature pair combinations
+numPlotRows = 1
+numPlotCols = 2
+for plotInd in range(8):
+    plt.figure()
+    for k in range(numPlotRows*numPlotCols):
+        tableRow = numPlotRows*numPlotCols*plotInd+k
+        x = X_train[featureCombinationsTable.ix[tableRow,'feature1']].values.reshape(-1,1)[:,0]
+        y = X_train[featureCombinationsTable.ix[tableRow,'feature2']].values.reshape(-1,1)[:,0]
+
+        # use a huristic to find out if the variables are categorical, and if so add some random noise to them
+        if len(np.unique(x)) < 20:
+            diffVec = abs(x[1:]-x[:-1])
+            minDistBetweenCategories = min(diffVec[diffVec > 0])
+            x = x + 0.12*minDistBetweenCategories*np.random.randn(np.shape(x)[0])
+
+        if len(np.unique(y)) < 20:
+            diffVec = abs(y[1:]-y[:-1])
+            minDistBetweenCategories = min(diffVec[diffVec > 0])
+            y = y + 0.12*minDistBetweenCategories*np.random.randn(np.shape(y)[0])
+
+        colors = y_train
+        # take only 3000 samples to be presented due to plotting issues
+        randPermutation = np.random.choice(len(x), 3000, replace=False)
+        plt.subplot(numPlotRows,numPlotCols,k+1)
+        plt.scatter(x[randPermutation], y[randPermutation], s=(3+1.6*colors[randPermutation])**2, c=-colors[randPermutation], cmap='spring', alpha=0.75)
+        plt.xlabel(featureCombinationsTable.ix[tableRow,'feature1']); plt.ylabel(featureCombinationsTable.ix[tableRow,'feature2'])
+        plt.title('AUC = %.4f' %(featureCombinationsTable.ix[tableRow,'AUC'])); plt.tight_layout()
+

@@ -1,161 +1,130 @@
 
 # coding: utf-8
 
-# **Introduction**
-# 
-# I previously built a XGboost to label data without context. Thought the results are good, but it's not satisfying.
-# 
-# And later I built a shallow RNN(due to the limitations of hardwares), and I found the RNN to be so disappoint.
-# 
-# Therefore, I built a new XGboost model to use the context to label data.
-# 
-# And most importantly, unlike the previous notebook, **this one is trained with all data, including PLAIN VERBATIM LETTERS etc.**
-# 
-# The major difference in the XGboost without context and with context is their dataset preparation.
-# 
-# XGboost with context(we will use XGBwithC for short) need the previous words(regardless of whether it comes from the same sentence or not). So we define a padding and 2 special symbols to let XGBoost understand, what's is the boundary of words and what are spaces that can be safely ignored.
-# 
-# **Results**
-# 
-# Both trained on 960,000 samples(words, not sentences) from en_train.csv and both have exactly the same parameters for training.
-# 
-# After 60 epochs, here are the total different results:
-# 
-# *XGBoost without context:
-# 
-# valid-merror:**0.005521**	train-merror:**0.004168***
-# 
-# *XGBoost with context:
-# 
-# valid-merror:**0.003729**	train-merror:**0.000811***
-# 
-# **Analysis**
-# 
-# I noticed astonishingly, XGBoost with context performs so well that it outperforms XGboost without context by a great margin. And what's more, **XGboost with context nearly perfectly fits to the training dataset it has seen.** I believe, if built larger and fed more data, it might be able to challenge deep RNN.
-# 
-# **Notebook explaintion**
-# 
-# Due to the time limit on notebook, I choose 320,000 samples instead of 960,000 to save time.
-# 
-# You can view outputs in this notebook.
-# 
-# **Final Words**
-# 
-# I have really limited time and I lack powerful computers(I only have my faithful alienware 15 r2 by my side)
-# 
-# Therefore I won't be participating in this competition any more.
-# 
-# And **I hope this script can help you in your research**.
+# ### Get dot coordinates using blob_log from skimage library
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import os
-import pickle
-import gc
-import xgboost as xgb
-import numpy as np
-import re
-import pandas as pd
-from sklearn.model_selection import train_test_split
-
-max_num_features = 10
-pad_size = 1
-boundary_letter = -1
-space_letter = 0
-max_data_size = 320000
-
-out_path = r'.'
-df = pd.read_csv(r'../input/en_train.csv')
-
-x_data = []
-y_data =  pd.factorize(df['class'])
-labels = y_data[1]
-y_data = y_data[0]
-gc.collect()
-for x in df['before'].values:
-    x_row = np.ones(max_num_features, dtype=int) * space_letter
-    for xi, i in zip(list(str(x)), np.arange(max_num_features)):
-        x_row[i] = ord(xi)
-    x_data.append(x_row)
-
-def context_window_transform(data, pad_size):
-    pre = np.zeros(max_num_features)
-    pre = [pre for x in np.arange(pad_size)]
-    data = pre + data + pre
-    neo_data = []
-    for i in np.arange(len(data) - pad_size * 2):
-        row = []
-        for x in data[i : i + pad_size * 2 + 1]:
-            row.append([boundary_letter])
-            row.append(x)
-        row.append([boundary_letter])
-        neo_data.append([int(x) for y in row for x in y])
-    return neo_data
-
-x_data = x_data[:max_data_size]
-y_data = y_data[:max_data_size]
-x_data = np.array(context_window_transform(x_data, pad_size))
-gc.collect()
-x_data = np.array(x_data)
-y_data = np.array(y_data)
-
-print('Total number of samples:', len(x_data))
-print('Use: ', max_data_size)
-#x_data = np.array(x_data)
-#y_data = np.array(y_data)
-
-print('x_data sample:')
-print(x_data[0])
-print('y_data sample:')
-print(y_data[0])
-print('labels:')
-print(labels)
+import cv2
+import matplotlib.pyplot as plt
+import skimage.feature
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-x_train = x_data
-y_train = y_data
-gc.collect()
+classes = ["adult_males", "subadult_males", "adult_females", "juveniles", "pups", "error"]
 
-x_train, x_valid, y_train, y_valid= train_test_split(x_train, y_train,
-                                                      test_size=0.1, random_state=2017)
-gc.collect()
-num_class = len(labels)
-dtrain = xgb.DMatrix(x_train, label=y_train)
-dvalid = xgb.DMatrix(x_valid, label=y_valid)
-watchlist = [(dvalid, 'valid'), (dtrain, 'train')]
+file_names = os.listdir("../input/Train/")
+file_names = sorted(file_names, key=lambda 
+                    item: (int(item.partition('.')[0]) if item[0].isdigit() else float('inf'), item)) 
 
-param = {'objective':'multi:softmax',
-         'eta':'0.3', 'max_depth':10,
-         'silent':1, 'nthread':-1,
-         'num_class':num_class,
-         'eval_metric':'merror'}
-model = xgb.train(param, dtrain, 50, watchlist, early_stopping_rounds=20,
-                  verbose_eval=10)
-gc.collect()
+# select a subset of files to run on
+file_names = file_names[0:2]
 
-pred = model.predict(dvalid)
-pred = [labels[int(x)] for x in pred]
-y_valid = [labels[x] for x in y_valid]
-x_valid = [ [ chr(x) for x in y[2 + max_num_features: 2 + max_num_features * 2]] for y in x_valid]
-x_valid = [''.join(x) for x in x_valid]
-x_valid = [re.sub('a+$', '', x) for x in x_valid]
+# dataframe to store results in
+count_df = pd.DataFrame(index=file_names, columns=classes).fillna(0)
 
-gc.collect()
 
-df_pred = pd.DataFrame(columns=['data', 'predict', 'target'])
-df_pred['data'] = x_valid
-df_pred['predict'] = pred
-df_pred['target'] = y_valid
-df_pred.to_csv(os.path.join(out_path, 'pred.csv'))
+# In[ ]:
 
-df_erros = df_pred.loc[df_pred['predict'] != df_pred['target']]
-df_erros.to_csv(os.path.join(out_path, 'errors.csv'), index=False)
 
-model.save_model(os.path.join(out_path, 'xgb_model'))
+for filename in file_names:
+    
+    # read the Train and Train Dotted images
+    image_1 = cv2.imread("../input/TrainDotted/" + filename)
+    image_2 = cv2.imread("../input/Train/" + filename)
+    
+    # absolute difference between Train and Train Dotted
+    image_3 = cv2.absdiff(image_1,image_2)
+    
+    # mask out blackened regions from Train Dotted
+    mask_1 = cv2.cvtColor(image_1, cv2.COLOR_BGR2GRAY)
+    mask_1[mask_1 < 20] = 0
+    mask_1[mask_1 > 0] = 255
+    
+    mask_2 = cv2.cvtColor(image_2, cv2.COLOR_BGR2GRAY)
+    mask_2[mask_2 < 20] = 0
+    mask_2[mask_2 > 0] = 255
+    
+    image_4 = cv2.bitwise_or(image_3, image_3, mask=mask_1)
+    image_5 = cv2.bitwise_or(image_4, image_4, mask=mask_2) 
+    
+    # convert to grayscale to be accepted by skimage.feature.blob_log
+    image_6 = cv2.cvtColor(image_5, cv2.COLOR_BGR2GRAY)
+    
+    # detect blobs
+    blobs = skimage.feature.blob_log(image_6, min_sigma=3, max_sigma=4, num_sigma=1, threshold=0.02)
+    
+    # prepare the image to plot the results on
+    image_7 = cv2.cvtColor(image_6, cv2.COLOR_GRAY2BGR)
+    
+    for blob in blobs:
+        # get the coordinates for each blob
+        y, x, s = blob
+        # get the color of the pixel from Train Dotted in the center of the blob
+        b,g,r = image_1[int(y)][int(x)][:]
+        
+        # decision tree to pick the class of the blob by looking at the color in Train Dotted
+        if r > 200 and b < 50 and g < 50: # RED
+            count_df["adult_males"][filename] += 1
+            cv2.circle(image_7, (int(x),int(y)), 8, (0,0,255), 2)            
+        elif r > 200 and b > 200 and g < 50: # MAGENTA
+            count_df["subadult_males"][filename] += 1
+            cv2.circle(image_7, (int(x),int(y)), 8, (250,10,250), 2)            
+        elif r < 100 and b < 100 and 150 < g < 200: # GREEN
+            count_df["pups"][filename] += 1
+            cv2.circle(image_7, (int(x),int(y)), 8, (20,180,35), 2) 
+        elif r < 100 and  100 < b and g < 100: # BLUE
+            count_df["juveniles"][filename] += 1 
+            cv2.circle(image_7, (int(x),int(y)), 8, (180,60,30), 2)
+        elif r < 150 and b < 50 and g < 100:  # BROWN
+            count_df["adult_females"][filename] += 1
+            cv2.circle(image_7, (int(x),int(y)), 8, (0,42,84), 2)            
+        else:
+            count_df["error"][filename] += 1
+            cv2.circle(image_7, (int(x),int(y)), 8, (255,255,155), 2)
+    
+    # output the results
+          
+    f, ax = plt.subplots(3,2,figsize=(10,16))
+    (ax1, ax2, ax3, ax4, ax5, ax6) = ax.flatten()
+    plt.title('%s'%filename)
+    
+    ax1.imshow(cv2.cvtColor(image_2[700:1200,2130:2639,:], cv2.COLOR_BGR2RGB))
+    ax1.set_title('Train')
+    ax2.imshow(cv2.cvtColor(image_1[700:1200,2130:2639,:], cv2.COLOR_BGR2RGB))
+    ax2.set_title('Train Dotted')
+    ax3.imshow(cv2.cvtColor(image_3[700:1200,2130:2639,:], cv2.COLOR_BGR2RGB))
+    ax3.set_title('Train Dotted - Train')
+    ax4.imshow(cv2.cvtColor(image_5[700:1200,2130:2639,:], cv2.COLOR_BGR2RGB))
+    ax4.set_title('Mask blackened areas of Train Dotted')
+    ax5.imshow(image_6[700:1200,2130:2639], cmap='gray')
+    ax5.set_title('Grayscale for input to blob_log')
+    ax6.imshow(cv2.cvtColor(image_7[700:1200,2130:2639,:], cv2.COLOR_BGR2RGB))
+    ax6.set_title('Result')
+
+    plt.show()
+
+
+# ### Check count results
+
+# In[ ]:
+
+
+count_df
+
+
+# ### Reference counts
+
+# In[ ]:
+
+
+reference = pd.read_csv('../input/Train/train.csv')
+reference.ix[0:1]
 

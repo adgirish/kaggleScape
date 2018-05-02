@@ -1,81 +1,49 @@
-"""Metrics to compute the model performance."""
+import itertools
 
+import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.metrics import make_scorer
 
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5], dtype={'onpromotion': str},
+    converters={'unit_sales': lambda u: float(u) if float(u) > 0 else 0},
+    skiprows=range(1, 124035460)
+)
 
-def dcg_score(y_true, y_score, k=5):
-    """Discounted cumulative gain (DCG) at rank K.
+# log transform
+df_train["unit_sales"] = df_train["unit_sales"].apply(np.log1p)
 
-    Parameters
-    ----------
-    y_true : array, shape = [n_samples]
-        Ground truth (true relevance labels).
-    y_score : array, shape = [n_samples, n_classes]
-        Predicted scores.
-    k : int
-        Rank.
+# Fill gaps in dates
+# Improved with the suggestion from Paulo Pinto
+u_dates = df_train.date.unique()
+u_stores = df_train.store_nbr.unique()
+u_items = df_train.item_nbr.unique()
+df_train.set_index(["date", "store_nbr", "item_nbr"], inplace=True)
+df_train = df_train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=["date", "store_nbr", "item_nbr"]
+    )
+)
 
-    Returns
-    -------
-    score : float
-    """
-    order = np.argsort(y_score)[::-1]
-    y_true = np.take(y_true, order[:k])
+# Fill NAs
+df_train.loc[:, "unit_sales"].fillna(0, inplace=True)
+# Assume missing entris imply no promotion
+df_train.loc[:, "onpromotion"].fillna("False", inplace=True)
 
-    gain = 2 ** y_true - 1
+# Calculate means 
+df_train = df_train.groupby(
+    ['item_nbr', 'store_nbr', 'onpromotion']
+)['unit_sales'].mean().to_frame('unit_sales')
+# Inverse transform
+df_train["unit_sales"] = df_train["unit_sales"].apply(np.expm1)
 
-    discounts = np.log2(np.arange(len(y_true)) + 2)
-    return np.sum(gain / discounts)
-
-
-def ndcg_score(ground_truth, predictions, k=5):
-    """Normalized discounted cumulative gain (NDCG) at rank K.
-
-    Normalized Discounted Cumulative Gain (NDCG) measures the performance of a
-    recommendation system based on the graded relevance of the recommended
-    entities. It varies from 0.0 to 1.0, with 1.0 representing the ideal
-    ranking of the entities.
-
-    Parameters
-    ----------
-    ground_truth : array, shape = [n_samples]
-        Ground truth (true labels represended as integers).
-    predictions : array, shape = [n_samples, n_classes]
-        Predicted probabilities.
-    k : int
-        Rank.
-
-    Returns
-    -------
-    score : float
-
-    Example
-    -------
-    >>> ground_truth = [1, 0, 2]
-    >>> predictions = [[0.15, 0.55, 0.2], [0.7, 0.2, 0.1], [0.06, 0.04, 0.9]]
-    >>> score = ndcg_score(ground_truth, predictions, k=2)
-    1.0
-    >>> predictions = [[0.9, 0.5, 0.8], [0.7, 0.2, 0.1], [0.06, 0.04, 0.9]]
-    >>> score = ndcg_score(ground_truth, predictions, k=2)
-    0.6666666666
-    """
-    lb = LabelBinarizer()
-    lb.fit(range(len(predictions) + 1))
-    T = lb.transform(ground_truth)
-
-    scores = []
-
-    # Iterate over each y_true and compute the DCG score
-    for y_true, y_score in zip(T, predictions):
-        actual = dcg_score(y_true, y_score, k)
-        best = dcg_score(y_true, y_true, k)
-        score = float(actual) / float(best)
-        scores.append(score)
-
-    return np.mean(scores)
-
-
-# NDCG Scorer function
-ndcg_scorer = make_scorer(ndcg_score, needs_proba=True, k=5)
+# Create submission
+pd.read_csv(
+    "../input/test.csv", usecols=[0, 2, 3, 4], dtype={'onpromotion': str}
+).set_index(
+    ['item_nbr', 'store_nbr', 'onpromotion']
+).join(
+    df_train, how='left'
+).fillna(0).to_csv(
+    'mean.csv.gz', float_format='%.2f', index=None, compression="gzip"
+)

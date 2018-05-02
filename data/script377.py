@@ -1,186 +1,367 @@
 
 # coding: utf-8
 
-# # Try Different ML Methods in Python
+# Goal of this notebook to test several classifiers on the data set with different features 
 
-# ## Load Data
+# And beforehand i want to thank Jose Portilla for his magnificent "Python for Data Science and Machine Learning" course on Udemy , which helped me to dive into ML =)
 
-# In[ ]:
+# ### Let's begin
 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-train = pd.read_csv('../input/train.csv')
-test  = pd.read_csv('../input/test.csv')
-train.head()
-
+# First of all neccesary imports
 
 # In[ ]:
 
 
-train.shape
+import numpy as np
+import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import seaborn as sns
+import string
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from nltk.stem import SnowballStemmer
+from nltk.corpus import stopwords
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# High dimension data always results in a good training score, yet the test score is not necessarily good as the overfiting  problem may occur. Therefore, before learning, we use the feature selection techniques built in sklearn package to select the useful features. The tutorial of feature selection can be found at the link below.
-# 
-# http://scikit-learn.org/stable/modules/feature_selection.html
-
-# ## Feature Selection
-
-# ### Tree_based feature selection
-
-# In[ ]:
-
-
-import sklearn
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.feature_selection import SelectFromModel
-features = train.iloc[:,0:562]
-label = train['Activity']
-clf = ExtraTreesClassifier()
-clf = clf.fit(features, label)
-model = SelectFromModel(clf, prefit=True)
-New_features = model.transform(features)
-print(New_features.shape)
-
-
-# ### L1-based feature selection
+# Let's read the data from csv file
 
 # In[ ]:
 
 
-from sklearn.svm import LinearSVC
-lsvc = LinearSVC(C=0.01, penalty="l1", dual=False).fit(features, label)
-model_2 = SelectFromModel(lsvc, prefit=True)
-New_features_2 = model_2.transform(features)
-print(New_features_2.shape)
+sms = pd.read_csv('../input/spam.csv', encoding='latin-1')
+sms.head()
 
 
-# The L1-based feature selection will keep more features within the training set.  
-
-# ## Fitting Classifiers
-
-# **Load Models**
+# Now drop "unnamed" columns and rename v1 and v2 to "label" and "message"
 
 # In[ ]:
 
 
+sms = sms.drop(['Unnamed: 2','Unnamed: 3','Unnamed: 4'],axis=1)
+sms = sms.rename(columns = {'v1':'label','v2':'message'})
+
+
+# Let's look into our data
+
+# In[ ]:
+
+
+sms.groupby('label').describe()
+
+
+# Intresting that "Sorry, I'll call later" appears only 30 times here =)
+
+# Now let's create new feature "message length" and plot it to see if it's of any interest
+
+# In[ ]:
+
+
+sms['length'] = sms['message'].apply(len)
+sms.head()
+
+
+# In[ ]:
+
+
+mpl.rcParams['patch.force_edgecolor'] = True
+plt.style.use('seaborn-bright')
+sms.hist(column='length', by='label', bins=50,figsize=(11,5))
+
+
+# Looks like the lengthy is the message, more likely it is a spam. Let's not forget this
+
+# ### Text processing and vectorizing our meddages
+
+# Let's create new data frame. We'll need a copy later on
+
+# In[ ]:
+
+
+text_feat = sms['message'].copy()
+
+
+# Now define our tex precessing function. It will remove any punctuation and stopwords aswell.
+
+# In[ ]:
+
+
+def text_process(text):
+    
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = [word for word in text.split() if word.lower() not in stopwords.words('english')]
+    
+    return " ".join(text)
+
+
+# In[ ]:
+
+
+text_feat = text_feat.apply(text_process)
+
+
+# In[ ]:
+
+
+vectorizer = TfidfVectorizer("english")
+
+
+# In[ ]:
+
+
+features = vectorizer.fit_transform(text_feat)
+
+
+# ###  Classifiers and predictions
+
+# First of all let's split our features to test and train set
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(features, sms['label'], test_size=0.3, random_state=111)
+
+
+# Now let's import bunch of classifiers, initialize them and make a dictionary to itereate through
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.naive_bayes import MultinomialNB
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier,GradientBoostingClassifier
-Classifiers = [DecisionTreeClassifier(),RandomForestClassifier(n_estimators=200),GradientBoostingClassifier(n_estimators=200)]
-
-
-# ### Without feature selection
-
-# In[ ]:
-
-
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import BaggingClassifier
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.metrics import accuracy_score
-import timeit
-test_features= test.iloc[:,0:562]
-Time_1=[]
-Model_1=[]
-Out_Accuracy_1=[]
-for clf in Classifiers:
-    start_time = timeit.default_timer()
-    fit=clf.fit(features,label)
-    pred=fit.predict(test_features)
-    elapsed = timeit.default_timer() - start_time
-    Time_1.append(elapsed)
-    Model_1.append(clf.__class__.__name__)
-    Out_Accuracy_1.append(accuracy_score(test['Activity'],pred))
 
-
-# ### Tree-based feature selection
 
 # In[ ]:
 
 
-test_features= model.transform(test.iloc[:,0:562])
-Time_2=[]
-Model_2=[]
-Out_Accuracy_2=[]
-for clf in Classifiers:
-    start_time = timeit.default_timer()
-    fit=clf.fit(New_features,label)
-    pred=fit.predict(test_features)
-    elapsed = timeit.default_timer() - start_time
-    Time_2.append(elapsed)
-    Model_2.append(clf.__class__.__name__)
-    Out_Accuracy_2.append(accuracy_score(test['Activity'],pred))
+svc = SVC(kernel='sigmoid', gamma=1.0)
+knc = KNeighborsClassifier(n_neighbors=49)
+mnb = MultinomialNB(alpha=0.2)
+dtc = DecisionTreeClassifier(min_samples_split=7, random_state=111)
+lrc = LogisticRegression(solver='liblinear', penalty='l1')
+rfc = RandomForestClassifier(n_estimators=31, random_state=111)
+abc = AdaBoostClassifier(n_estimators=62, random_state=111)
+bc = BaggingClassifier(n_estimators=9, random_state=111)
+etc = ExtraTreesClassifier(n_estimators=9, random_state=111)
 
 
-# ### L1-Based feature selection
-
-# In[ ]:
-
-
-test_features= model_2.transform(test.iloc[:,0:562])
-Time_3=[]
-Model_3=[]
-Out_Accuracy_3=[]
-for clf in Classifiers:
-    start_time = timeit.default_timer()
-    fit=clf.fit(New_features_2,label)
-    pred=fit.predict(test_features)
-    elapsed = timeit.default_timer() - start_time
-    Time_3.append(elapsed)
-    Model_3.append(clf.__class__.__name__)
-    Out_Accuracy_3.append(accuracy_score(test['Activity'],pred))
-
-
-# ## Evaluation
-
-# In the final chapter, we will evaluate the feature selections based on **running time and accuracy.** The running time is somehow determinant to the scala-bility of the model while the accuracy is gonna to tell us whether shrinking the dimension of the data may hugely jeopardize the performance of the model.
-
-# ### Accuracy
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-import numpy as np
-get_ipython().run_line_magic('matplotlib', 'inline')
-ind =  np.arange(3)   # the x locations for the groups
-width = 0.1       # the width of the bars
-fig, ax = plt.subplots()
-rects1 = ax.bar(ind, Out_Accuracy_1, width, color='r')
-rects2 = ax.bar(ind + width, Out_Accuracy_2, width, color='y')
-rects3 = ax.bar(ind + width + width ,Out_Accuracy_3, width, color='b')
-ax.set_ylabel('Accuracy')
-ax.set_title('Accuracy by Models and Selection Process')
-ax.set_xticks(ind + width)
-ax.set_xticklabels(Model_3,rotation=45)
-plt.show()
-
-
-# **The legend may cover the main part of bar so I remove them in this plot. For the meanings of colors, you can refer to the next plot.**
-
-# ### Running Time
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-import numpy as np
-get_ipython().run_line_magic('matplotlib', 'inline')
-ind =  np.arange(3)   # the x locations for the groups
-width = 0.1       # the width of the bars
-fig, ax = plt.subplots()
-rects1 = ax.bar(ind, Time_1, width, color='r')
-rects2 = ax.bar(ind + width, Time_2, width, color='y')
-rects3 = ax.bar(ind + width + width ,Time_3, width, color='b')
-ax.set_ylabel('Running Time')
-ax.set_title('Time by Models and Selection Process')
-ax.set_xticks(ind + width)
-ax.set_xticklabels(Model_3,rotation=45)
-ax.legend((rects1[0], rects2[0],rects3[0]), ('No Selection', 'Tree_Based','L1_Based'))
-
-plt.show()
-
-
-# ## Conclusion
-
-# 1. The feature selection can hugely decrease the running time of complicated model, without obviously jeopardizing the performance of model.
+# Parametres are based on notebook:
+# [Spam detection Classifiers hyperparameter tuning][1]
 # 
-# 2. The overall accuracy of the model will not be necessarily compromised by shrinking the size of the data set. The main reason is that good feature selection may prevent over-fitting to some extents.  
+# 
+#   [1]: https://www.kaggle.com/muzzzdy/d/uciml/sms-spam-collection-dataset/spam-detection-classifiers-hyperparameter-tuning/
+
+# In[ ]:
+
+
+clfs = {'SVC' : svc,'KN' : knc, 'NB': mnb, 'DT': dtc, 'LR': lrc, 'RF': rfc, 'AdaBoost': abc, 'BgC': bc, 'ETC': etc}
+
+
+# Let's make functions to fit our classifiers and make predictions
+
+# In[ ]:
+
+
+def train_classifier(clf, feature_train, labels_train):    
+    clf.fit(feature_train, labels_train)
+
+
+# In[ ]:
+
+
+def predict_labels(clf, features):
+    return (clf.predict(features))
+
+
+# Now iterate through classifiers and save the results
+
+# In[ ]:
+
+
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
+
+
+# In[ ]:
+
+
+df = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score'])
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.9,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# Looks like ensemble classifiers are not doing as good as expected.
+
+# ### Stemmer
+
+# It is said that stemming short messages does no goot or even harm predictions. Let's try this out.
+
+# Define our stemmer function
+
+# In[ ]:
+
+
+def stemmer (text):
+    text = text.split()
+    words = ""
+    for i in text:
+            stemmer = SnowballStemmer("english")
+            words += (stemmer.stem(i))+" "
+    return words
+
+
+# Stem, split, fit - repeat... Predict!
+
+# In[ ]:
+
+
+text_feat = text_feat.apply(stemmer)
+
+
+# In[ ]:
+
+
+features = vectorizer.fit_transform(text_feat)
+
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(features, sms['label'], test_size=0.3, random_state=111)
+
+
+# In[ ]:
+
+
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
+
+
+# In[ ]:
+
+
+df2 = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score2'])
+df = pd.concat([df,df2],axis=1)
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.85,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# Looks like mostly the same . Ensemble classifiers doing a little bit better, NB still got the lead.
+
+# ### What have we forgotten? Message length!
+
+# Let's append our message length feature to the matrix we fit into our classifiers
+
+# In[ ]:
+
+
+lf = sms['length'].as_matrix()
+newfeat = np.hstack((features.todense(),lf[:, None]))
+
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(newfeat, sms['label'], test_size=0.3, random_state=111)
+
+
+# In[ ]:
+
+
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
+
+
+# In[ ]:
+
+
+df3 = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score3'])
+df = pd.concat([df,df3],axis=1)
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.85,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# This time everyone are doing a little bit worse, except for LinearRegression and RandomForest. But the winner is still MultinominalNaiveBayes.
+
+# ### Voting classifier
+
+# We are using ensemble algorithms here, but what about ensemble of ensembles? Will it beat NB?
+
+# In[ ]:
+
+
+from sklearn.ensemble import VotingClassifier
+
+
+# In[ ]:
+
+
+eclf = VotingClassifier(estimators=[('BgC', bc), ('ETC', etc), ('RF', rfc), ('Ada', abc)], voting='soft')
+
+
+# In[ ]:
+
+
+eclf.fit(features_train,labels_train)
+
+
+# In[ ]:
+
+
+pred = eclf.predict(features_test)
+
+
+# In[ ]:
+
+
+print(accuracy_score(labels_test,pred))
+
+
+# Better but nope.
+
+# ### Final verdict - well tuned NaiveBayes is your friend in spam detection.

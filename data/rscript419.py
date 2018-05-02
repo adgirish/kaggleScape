@@ -8,6 +8,7 @@
 # category name embedding
 # some small changes like lr, decay, batch_size~
 
+# In[ ]:
 import os
 import gc
 import time
@@ -16,6 +17,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+
 import scipy
 from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -24,10 +27,11 @@ from sklearn.preprocessing import LabelBinarizer
 from scipy.sparse import csr_matrix, hstack
 from sklearn.linear_model import SGDRegressor
 
-NUM_BRANDS = 4000
+
+NUM_BRANDS = 4500
 NUM_CATEGORIES = 1000
 NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 40000
+MAX_FEATURES_ITEM_DESCRIPTION = 60000
 
 def handle_missing_inplace(dataset):
     dataset['category_name'].fillna(value='missing', inplace=True)
@@ -46,12 +50,13 @@ def to_categorical(dataset):
     dataset['category_name'] = dataset['category_name'].astype('category')
     dataset['brand_name'] = dataset['brand_name'].astype('category')
     dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
+    
 
-
-df_train = train = pd.read_csv('../input/train.tsv', sep='\t')
+df_train =train = pd.read_csv('../input/train.tsv', sep='\t')
 df_test = test = pd.read_csv('../input/test.tsv', sep='\t')
 
 train['target'] = np.log1p(train['price'])
+# In[ ]:
 
 
 print(train.shape)
@@ -69,6 +74,9 @@ test = simulate_test(test)
 print('new shape ', test.shape)
 print('[{}] Finished scaling test set...'.format(time.time() - start_time))
 
+
+# In[ ]:
+
 #HANDLE MISSING VALUES
 print("Handling missing values...")
 def handle_missing(dataset):
@@ -84,6 +92,8 @@ print(test.shape)
 
 print('[{}] Finished handling missing data...'.format(time.time() - start_time))
 
+
+# In[ ]:
 
 
 #PROCESS CATEGORICAL DATA
@@ -102,6 +112,9 @@ del le, train['brand_name'], test['brand_name']
 
 print('[{}] Finished PROCESSING CATEGORICAL DATA...'.format(time.time() - start_time))
 train.head(3)
+
+
+# In[ ]:
 
 
 #PROCESS TEXT: RAW
@@ -126,17 +139,22 @@ train.head(3)
 print('[{}] Finished PROCESSING TEXT DATA...'.format(time.time() - start_time))
 
 
+# In[ ]:
+
+
 #EXTRACT DEVELOPTMENT TEST
 from sklearn.model_selection import train_test_split
-dtrain, dvalid = train_test_split(train, random_state=666, train_size=0.99)
+dtrain, dvalid = train_test_split(train, random_state=233, train_size=0.99)
 print(dtrain.shape)
 print(dvalid.shape)
+
+# In[ ]:
 
 
 #EMBEDDINGS MAX VALUE
 #Base on the histograms, we select the next lengths
 MAX_NAME_SEQ = 20 #17
-MAX_ITEM_DESC_SEQ = 60 #269
+MAX_ITEM_DESC_SEQ = 60 #60 #269
 MAX_CATEGORY_NAME_SEQ = 20 #8
 MAX_TEXT = np.max([np.max(train.seq_name.max())
                    , np.max(test.seq_name.max())
@@ -150,6 +168,9 @@ MAX_CONDITION = np.max([train.item_condition_id.max(),
                         test.item_condition_id.max()])+1
 
 print('[{}] Finished EMBEDDINGS MAX VALUE...'.format(time.time() - start_time))
+
+
+# In[ ]:
 
 
 #KERAS DATA DEFINITION
@@ -175,6 +196,8 @@ X_test = get_keras_data(test)
 
 print('[{}] Finished DATA PREPARARTION...'.format(time.time() - start_time))
 
+
+# In[ ]:
 
 
 #KERAS MODEL DEFINITION
@@ -219,9 +242,9 @@ def get_model():
     emb_category = Embedding(MAX_CATEGORY, 10)(category)
     emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
     
-    rnn_layer1 = GRU(16) (emb_item_desc)
-    rnn_layer2 = GRU(8) (emb_category_name)
-    rnn_layer3 = GRU(8) (emb_name)
+    rnn_layer1 = GRU(25) (emb_item_desc)
+    rnn_layer2 = GRU(12) (emb_category_name)
+    rnn_layer3 = GRU(12) (emb_name)
     
     #main layer
     main_l = concatenate([
@@ -233,8 +256,8 @@ def get_model():
         , rnn_layer3
         , num_vars
     ])
-    main_l = Dropout(0.3)(Dense(512,activation='relu') (main_l))
-    main_l = Dropout(0.2)(Dense(88,activation='relu') (main_l))
+    main_l = Dropout(0.1)(Dense(512,activation='relu') (main_l))
+    main_l = Dropout(0.1)(Dense(64,activation='relu') (main_l))
     
     #output
     output = Dense(1,activation="linear") (main_l)
@@ -264,12 +287,14 @@ exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
 print('[{}] Finished DEFINEING MODEL...'.format(time.time() - start_time))
 
 
+# In[ ]:
+
 gc.collect()
 #FITTING THE MODEL
 epochs = 2
 BATCH_SIZE = 512 * 3
 steps = int(len(X_train['name'])/BATCH_SIZE) * epochs
-lr_init, lr_fin = 0.009, 0.006
+lr_init, lr_fin = 0.013, 0.009
 lr_decay = exp_decay(lr_init, lr_fin, steps)
 log_subdir = '_'.join(['ep', str(epochs),
                     'bs', str(BATCH_SIZE),
@@ -293,14 +318,18 @@ print('[{}] Finished FITTING MODEL...'.format(time.time() - start_time))
 v_rmsle = eval_model(model)
 print('[{}] Finished predicting valid set...'.format(time.time() - start_time))
 
+# In[ ]:
+
 
 #CREATE PREDICTIONS
 preds = model.predict(X_test, batch_size=BATCH_SIZE)
 preds = np.expm1(preds)
+# preds = np.round(preds)
 print('[{}] Finished predicting test set...'.format(time.time() - start_time))
 submission = test[["test_id"]][:test_len]
-submission["price"] = preds[:test_len]*0.8
-print('[{}] Finished predicting test set...'.format(time.time() - start_time))
+submission["price"] = preds[:test_len]*0.76
+submission.to_csv("./myNN"+log_subdir+"_{:.6}.csv".format(v_rmsle), index=False)
+print('[{}] Finished submission...'.format(time.time() - start_time))
 
 del train
 del test
@@ -358,17 +387,16 @@ print('[{}] Finished to train ridge'.format(time.time() - start_time))
 predsR = model.predict(X=X_test)
 print('[{}] Finished to predict ridge'.format(time.time() - start_time))
 predsR = np.expm1(predsR)
-predsR = predsR*0.14
+predsR = predsR*0.16
 submission["price"] += predsR
 
+model = SGDRegressor(penalty='elasticnet', l1_ratio=0.25)
+model.fit(X, y).sparsify()
+print('[{}] Train sgd completed'.format(time.time() - start_time))
+predsR2 = model.predict(X=X_test)
+predsR2 = np.expm1(predsR2)
+predsR2 = predsR2*0.08
+submission["price"] += predsR2
+print('[{}] Predict sgd completed.'.format(time.time() - start_time))
 
-model = Ridge(solver="sag", fit_intercept=False, alpha = 1.5, random_state=666)
-model.fit(X, y)
-print('[{}] Finished to train ridge'.format(time.time() - start_time))
-predsRR = model.predict(X=X_test)
-print('[{}] Finished to predict ridge'.format(time.time() - start_time))
-predsRR = np.expm1(predsRR)
-predsRR = predsRR*0.06
-submission["price"] += predsRR
-
-submission.to_csv("submission_rnn_ridge.csv", index = False)
+submission.to_csv("submission_rnn_ridge_sgdr.csv", index = False)

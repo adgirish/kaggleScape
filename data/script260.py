@@ -1,313 +1,187 @@
 
 # coding: utf-8
 
+# The goal of this script is to improve classification by extending the dataset. My inspiration came from Pavel Ostyakov's [A simple technique for extending dataset](https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/48038).
+# 
+# My method involves creating synthetic training data using a Markov chain generator. People far smarter than me figured out how to adapt Markov chains for this purpose and create a package called [Markovify](https://github.com/jsvine/markovify) for easy use.
+# 
+# The technique here does not improve the AUC score over a baseline script, at least not the way I'm doing it. Even so, I found the computer-generated comments to be fascinating!
+# 
+#    - UPDATE Jan 29: Changed the eval to use a single, stratified validation set for 'threat'. Added logloss metric.
+#    - UPDATE Feb 03: Changed base algorithm. Changed metric to AUC. Changed some content.
+# 
+# ### 1. Create Some Data
+# 
+# Import packages and data as usual...
+
+# In[ ]:
+
+
+# %autosave 600
+import numpy as np
+import pandas as pd
+import markovify as mk
+
+train = pd.read_csv('../input/train.csv')
+train.head()
+
+
+# Jagan shows us the breakdown of classes in his [Stop the S@# EDA](https://www.kagg**le.com/jagangupta/stop-the-s-toxic-comments-eda). 'threat' is very imbalanced, which may make it a good candidate for upsampling.
+# 
+# <img src="https://www.kaggle.io/svf/2240904/531400eed7c5659dbfa7af1ebaf64e45/__results___files/__results___10_0.png" />
+# 
+# 
+# We're looking at one category at a time so I don't think we care about the class of the other categories at this time. I could be wrong. 
+# 
+
+# In[ ]:
+
+
+tox = train.loc[train['threat'] == 1, ['comment_text']].reset_index(drop=True)
+tox.head(10)
+
+
+# Nasty stuff! These people need to relax.
+# 
+# From here I take a simple approach and load the raw texts into one document. No text processing or anything. 
+# Also I'll get the median length of the comments to provide a more consistent output.
+
+# In[ ]:
+
+
+doc = tox['comment_text'].tolist()
+
+nchar = int(tox.comment_text.str.len().median())
+nchar
+
+
+# Now comes the magic which is so easy with Markovify. Create a text_model object and produce some comments...
+
+# In[ ]:
+
+
+text_model = mk.Text(doc)
+for i in range(10):
+    print(text_model.make_short_sentence(nchar))
+
+
+# Only two lines of code and you too can sound like an angry 5th grader!
+
+# ### 2. Check for Improvement
+# 
+# This is fun and all, but we want to see if it helps classify the comments. I'll plagiarize [Logistic regression with words and char n-grams](https://www.kaggle.com/thousandvoices/logistic-regression-with-words-and-char-n-grams) by thousandvoices.
+# 
+
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import markovify as mk
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-with pd.HDFStore("../input/train.h5", "r") as train:
-    df = train.get('train')
-
-
-# # 缺失值统计 missing value statistics
-
-# In[ ]:
-
-
-m, n = df.shape
-miss_count = []
-for col in df.columns:
-    x = df[col].isnull().sum()
-    miss_count.append(x)
-miss_count_rate = np.array(miss_count) / m
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from scipy.sparse import hstack
+from scipy.special import logit, expit
 
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(8, 25))
-ind = np.arange(n)
-ax.barh(ind, miss_count_rate, color='y')
-plt.yticks(ind+0.4, df.columns)
-ax.set_xlabel('miss_count_rate in each col')
-ax.set_title('miss_count_rate in each col')
+runrows = 40000  # None
+
+
+train = pd.read_csv('../input/train.csv', nrows=runrows).fillna(' ')
+test = pd.read_csv('../input/test.csv', nrows=runrows).fillna(' ')
+
+class_names = list(train)[-6:]
+train_base_text = train['comment_text']
+test_text = test['comment_text']
+
+maxfeats = 200  # 20000
+
+
+# This part takes a little over an hour to run, which is why I used the limits above. I had to run the script on my machine to finish.
+
+# In[ ]:
+
+
+word_vectorizer = TfidfVectorizer(
+    sublinear_tf=True,
+    strip_accents='unicode',
+    analyzer='word',
+    token_pattern=r'\w{1,}',
+    ngram_range=(1, 1),
+    max_features=maxfeats)
+
+char_vectorizer = TfidfVectorizer(
+    sublinear_tf=True,
+    strip_accents='unicode',
+    analyzer='char',
+    ngram_range=(1, 4),
+    max_features=maxfeats)
+
+predictions = {'id': test['id']}
+losses = []
+
+for cl in class_names:
+    
+    #preprocess
+    print('starting {}'.format(cl))
+    class_df = train.loc[train[cl] == 1, ['comment_text']].reset_index(drop=True)
+    class_list = class_df['comment_text'].tolist() 
+    
+    nchar = int(class_df.comment_text.str.len().median())
+    
+    # only augment the smallest classes
+    ll = class_df.shape[0]
+    if ll < 7500:
+        count = int(ll/2)
+    else:
+        count = 0
+        
+    # generate markovified text
+    mkv_text = []
+    text_model = mk.Text(class_list)
+    for i in range(count):
+        new = text_model.make_short_sentence(nchar)
+        mkv_text.append(new)
+       
+    train_ls = train_base_text.tolist() + mkv_text
+    train_text = pd.Series(train_ls)    
+    all_text = train_text.append(test_text)
+    
+    # create tfidf features
+    word_vectorizer.fit(all_text)
+    train_word_features = word_vectorizer.transform(train_text)
+    test_word_features = word_vectorizer.transform(test_text)
+    
+    char_vectorizer.fit(all_text)
+    train_char_features = char_vectorizer.transform(train_text)
+    test_char_features = char_vectorizer.transform(test_text)
+    
+    train_features = hstack([train_char_features, train_word_features])
+    test_features = hstack([test_char_features, test_word_features])
+    
+    train_base_tgt = train[cl]
+    train_class = np.ones(count)
+    train_target = np.append(train_base_tgt, train_class)
+    
+    # train and predict
+    classifier = LogisticRegression(solver='sag', n_jobs=-1)
+    classifier.fit(train_features, train_target)
+    predictions[cl] = expit(logit(classifier.predict_proba(test_features)[:, 1]) - 0.5)
 
 
 # In[ ]:
 
 
-df = df.drop(df.columns[miss_count_rate > 0.3], axis=1)
+submission = pd.DataFrame.from_dict(predictions)
+submission.to_csv('submission_mk.csv', index=False)
 
 
-# # 异常值处理 Exception value processing
-
-# In[ ]:
-
-
-# 通过箱线图去除异常值之后，查看分布 observe hist of data within boxplot range
-m, n = df.shape
-col = df.columns
-plt.figure(figsize=(8, 50))
-k = 0
-for i in range(2, n):
-    k += 1
-    col_ = df[col[i]][df[col[i]].notnull()]
-    q_high = col_.quantile(0.75)
-    q_low = col_.quantile(0.25)
-    iqr = (q_high - q_low) * 1.5
-    high = q_high + iqr
-    low = q_low -iqr
-    col_ = col_[(col_ < high) & (col_ > low)]
-    plt.subplot(25, 4, k)
-    plt.hist(col_, bins=100)
-    plt.xticks()
-    plt.title(str(i) + ' ' + col[i])
-    plt.tight_layout(pad=0)
-
-
-# ## 以下特征形态较好 The following is features with fine hist
-# ### continuoues value[ 2, 6, 8, 13, 19, 20, 26, 27, 28, 30, 32, 34, 38, 41, 45, 49, 51, 52, 56, 59, 61, 62, 74, 76, 78, 79, 80, 81, 84, 86, 88, 89, 94, 97] 
-# ### category0 has two class[60, 63, 66, 67, 70, 72,  82,  96] 
-# ### category1 has three class [77, 87]
-
-# In[ ]:
-
-
-df = df.ix[:, [0, 1, 2, 6, 8, 13, 19, 20, 26, 27, 28, 30, 32, 34, 38, 41, 45, 49, 51,
-       52, 56, 59, 61, 62, 74, 76, 78, 79, 80, 81, 84, 86, 88, 89, 94, 97, 60, 
-               63, 66, 67, 70, 72, 82, 96, 77, 87, 98]]
-
-
-# ## 处理cate0特征下的异常值 processing exception value in cate0
-
-# In[ ]:
-
-
-cate0 = range(36, 44)
-col = df.columns
-for i in cate0:
-    df.ix[:, i] = np.where(df.ix[:, i] < -1, -2, df.ix[:, i])
-    df.ix[:, i] = np.where(df.ix[:, i] >= -1, 0, df.ix[:, i])
-
-
-# ## 去除y的异常值 drop samples which have exception value in y
-
-# In[ ]:
-
-
-q_high = df.y.quantile(0.75)
-q_low = df.y.quantile(0.25)
-iqr = (q_high - q_low) * 1.5
-high = q_high + iqr
-low = q_low -iqr
-df = df.drop(df[df.y > high].index)
-df = df.drop(df[df.y < low].index)
-
-
-# In[ ]:
-
-
-hist_ = plt.hist(df.ix[df['timestamp'] == 0, 'y'], bins=100)
-
-
-# In[ ]:
-
-
-hist_ = plt.hist(df.ix[df['id'] == 438, 'y'], bins=100)
-
-
-# In[ ]:
-
-
-## 同一timestamp或用一id对应的y分布都是对称的。
-
-
-# # missing value fill 填充
-
-# In[ ]:
-
-
-df = df.sort_values(by='y')
-
-
-# In[ ]:
-
-
-df = df.fillna(method='ffill')
-df = df.fillna(method='bfill') # 防止第一个值为nan
-
-
-# # 模型 model
-
-# ## 划分测试集和训练集 Divide the test set and the training set
-
-# In[ ]:
-
-
-test = {'x': [], 'y': [], 'timestamp': []}
-time = range(1812, 1802, -1)
-for i in range(10):
-    df_ = df.ix[df['timestamp']==time[i], :]
-    test['x'].append(df_.drop(['y', 'id', 'timestamp'], axis=1))
-    test['y'].append(df_['y'])
-    test['timestamp'].append(time[i])
-df_ = df[df['timestamp'] < 1803]
-X = df_.drop(['y', 'id', 'timestamp'], axis=1)
-y = df_['y']
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestRegressor
-rf0 = RandomForestRegressor(n_jobs=-1, verbose=1)
-rf0.fit(test['x'][0], test['y'][0])
-
-
-# In[ ]:
-
-
-col_ = X.columns
-plt.figure(figsize=(8, 16))
-ind = np.arange(len(col_))
-plt.barh(ind, rf0.feature_importances_)
-plt.yticks(ind+0.4, col_)
-
-
-# ## 类别变量的feature_importances_比较小，是否说明这几个特征没有用？
-# ## Feature_importances of features in cate0 and cate1 is small. Does it mean they are less important?
-
-# In[ ]:
-
-
-rf0.score(test['x'][0], test['y'][0])
-
-
-# In[ ]:
-
-
-rf0.score(test['x'][1], test['y'][1])
-
-
-# ## 严重过拟合？试一下减少特征和增大训练集
-# ## Over-fitting?Try to use less features or use more samples to fit modle.
-
-# In[ ]:
-
-
-# 只采用连续变量进行fit
-# Train model with continuous value.
-rf1 = RandomForestRegressor(n_jobs=-1, verbose=1)
-rf1.fit(test['x'][0].ix[:, range(34)], test['y'][0])
-rf1.score(test['x'][0].ix[:, range(34)], test['y'][0])
-
-
-# In[ ]:
-
-
-rf1.score(test['x'][1].ix[:, range(34)], test['y'][1])
-
-
-# In[ ]:
-
-
-# 采用前10个特征fit. Fit with 10 features.
-rf2 = RandomForestRegressor(n_jobs=-1, verbose=1)
-rf2.fit(test['x'][0].ix[:, range(10)], test['y'][0])
-rf2.score(test['x'][0].ix[:, range(10)], test['y'][0])
-
-
-# In[ ]:
-
-
-rf2.score(test['x'][1].ix[:, range(10)], test['y'][1])
-
-
-# In[ ]:
-
-
-# 采用第一个特征fit. Fit with one feature
-rf3 = RandomForestRegressor(n_jobs=-1, verbose=1)
-rf3.fit(test['x'][0].ix[:, range(1)], test['y'][0])
-rf3.score(test['x'][0].ix[:, range(1)], test['y'][0])
-
-
-# In[ ]:
-
-
-rf3.score(test['x'][1].ix[:, range(1)], test['y'][1])
-
-
-# In[ ]:
-
-
-plt.hist(test['y'][0])
-
-
-# In[ ]:
-
-
-plt.hist(test['y'][1])
-
-
-# ### 两个timestamp对于的y分布近似
-# ### y hist with defferent timestamps are similar.
-
-# In[ ]:
-
-
-df_ = df[df['timestamp'] < 100]
-X2 = df_.drop(['y', 'id', 'timestamp'], axis=1)
-y2 = df_['y']
-rf4 = RandomForestRegressor() 
-rf4.fit(X2, y2)
-rf4.score(X2, y2)
-
-
-# In[ ]:
-
-
-score_ = []
-for i in range(10):
-    score_.append(rf4.score(test['x'][i], test['y'][i]))
-plt.plot(range(10), score_)
-
-
-# ## 还是过拟合 Still over fitting!
-
-# plt.hist(test['x'][0].ix[test['x'][0].ix[:, 0]>-9, 0],bins=100)
-
-# df_id = df.groupby('id')['y'].mean()
-
-# sns.boxplot(df_id)
-
-# df_ = df.ix[:, ['id', 'technical_35', 'derived_0']]
-# y_ = df['y']
-# rf_ = RandomForestRegressor()
-# rf_.fit(df_, y_)
-# rf_.score(df_, y_)
-
-# ind = np.arange(3)
-# plt.bar(ind, rf_.feature_importances_)
-# plt.xticks(ind+0.4, ['id', 'technical_35', 'derived_0'])
-
-# df_ = df.ix[:, ['technical_35', 'derived_0']]
-# y_ = df['y']
-# rf_ = RandomForestRegressor(n_jobs=-1)
-# rf_.fit(df_, y_)
-# rf_.score(df_, y_)
-
-# ## id列对y的影响很不确定。
-
-# ## 以上，主要工作是做了特征选取，异常值处理，missing value填充
-# ## 选择随机森林模型进行拟合，过拟合现象比较严重。
-# ## 欢迎指教。
-# ## In this notebook, the main work is to do the feature selection, exception handling, missing value padding.
-# ## Using RandomForest to fit data, i find a serious over-fitting phenomenon.
-# ## Please give me some suggestions for the whole process. Happy kaggle！
+# As mentioned at the beginning, the final result is not as good as the baseline. This script scores 0.977 vs 0.978 on the test set. ryches says below in the comments:
+# > Very interesting to generate data like this but I think that the bag of words is holding it back because the markov is just picking things likely to go together in different orders so on a certain level it is just shuffling words around and then your bag of words model is ignoring the order anyway.
+# 
+# There may be other features that survive the model, but not these ones. Thanks for reading!

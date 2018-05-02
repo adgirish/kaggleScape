@@ -1,208 +1,240 @@
 
 # coding: utf-8
 
-# # Bayesian hyperparameter tuning of xgBoost
-# I took the features generated in my [previous notebook](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) and tried to tune a xgBoost model to those features using bayesian optimization. I ran the code locally for a few days, after which it had found some good parameters which gave a score of 0.9769 (using all the features of the previous notebook) - this worked out well for me, since I do not have a lot of time to actively work on trying out different models etc, but letting a script like this run for a few days to find good parameters is easy :)
-
-# ## Example 1: xgBoost Parameter Tuning with Scikit-Optimize
-# The following code is exactly what I used to tune the parameters - only difference is that I ran with the last 20 million samples in training set, and used the features from [previous notebook](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) instead of the raw features as done here. First I'll load the needed libraries and data.
+# Upvote ! if you find it useful 
+# 
+# 
+# **TUTORIAL for BEGINNERS ON HOW TO SOLVE ALMOST ANY  TEXT CLASSIFICATION PROBLEM USING NAIVE BAYES**
+# **So This is a very basic TUTORIAL, For newcomers. I will be using simple naive bayes along with Count Vectorization to solve this problem**
+# 
+# So Lets Start.
+# 
+# Lets Understand the hot terms first:
+# 
+# **Naive Bayes Classifier**
+# 
+# **It is a simple classifier based on bayes theorem with full independence between different features.**  I know it passed right from above the head.
+# 
+# Lets find a simple explanation:
+# * So we have a dataset with [text, label] e.g.["This process, however, afforded me no means of..."	,EAP] where EAP represents the author so we have a text and we have to find out which author out of three wrote that text.
+# * Now First of all computer does not understand alphabets or words, so we convert the words into numbers so make computer understand it
+# * For that we simply assign a number for each unique word, e.g.  "to be or not to be" will be assigned numbers like to:1, be:2, or:3, not:4.
+# * Now we can send input to the computer like [1,2,3,4,1,2] 
+# * But naive bayes does not want this it just wants the count of each words.
+# * Naive bayes like the count of "to" or "1" in document1 or row1 and so on
+# * So we give naive bayes input like this [0,1]:2   [0,2]:2   [0,3]:1 and so on. We are giving it the count of each word and each document so zero represents first document.
+# * So we are going to have a big two dimensional matrix with lots of columns and rows equal to the number of documents given
+# 
+# Now lets look at naive bayes again, Naive bayes considers each words as independant and does not value the position of each word: (the postion of word have no role in classifying or training in naive bayes)
+# 
+# Secondly it is based on probability and bayes theorem, I am not going to explain it here as it will take more than necessary space so Chapter 13 of **An Introduction to information retreival by Christopher D manning , Prabhakar Raghavan
+# Hinrich Schütze ** Section 13.2 will explain us the naive bayes in detail
+# 
+# https://nlp.stanford.edu/IR-book/pdf/13bayes.pdf
+# 
+# 
+# Now lets come back to the dataset
+# 
+# 
+# So lets see what we got, we got a training data set with author labels and testing datasets without labels. In this we just take the training data set, Split it by using 70% for training the Naive Bayes classifier and other 30% for testing it.
+# Here is the basic code and easiest one.
+# 
+# 
+# So first of all we import libraries then we load the csv file into a pandas dataframe, or in layman terms, into a python variable so that we can process it.
+# 
+# Then we see a sample of the data using training_data.head().
+# 
 
 # In[1]:
 
 
-import pandas as pd
-import numpy as np
-import xgboost as xgb
-import lightgbm as lgb
-from skopt import BayesSearchCV
-from sklearn.model_selection import StratifiedKFold
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# SETTINGS - CHANGE THESE TO GET SOMETHING MEANINGFUL
-ITERATIONS = 10 # 1000
-TRAINING_SIZE = 100000 # 20000000
-TEST_SIZE = 25000
-
-# Load data
-X = pd.read_csv(
-    '../input/train.csv', 
-    skiprows=range(1,184903891-TRAINING_SIZE), 
-    nrows=TRAINING_SIZE,
-    parse_dates=['click_time']
-)
-
-# Split into X and y
-y = X['is_attributed']
-X = X.drop(['click_time','is_attributed', 'attributed_time'], axis=1)
+#READING INPUT
+training_data = pd.read_csv("../input/train.csv")
+testing_data=pd.read_csv("../input/test.csv")
+training_data.head()
 
 
-# To do the bayesian parameter tuning, I use the [BayesSearchCV](https://scikit-optimize.github.io/#skopt.BayesSearchCV) class of scikit-optimize. It works basically as a drop-in replacement for GridSearchCV and RandomSearchCV, but generally I get better results with it. In the following I define the BayesSearchCV object, and write a short convenience function that will be used during optimization to output current status of the tuning. Locally I have access to more cores and run with n_jobs=4 for the classifier, and n_jobs=6 for the BayesSearchCV object.
-
-# In[2]:
-
-
-# Classifier
-bayes_cv_tuner = BayesSearchCV(
-    estimator = xgb.XGBClassifier(
-        n_jobs = 1,
-        objective = 'binary:logistic',
-        eval_metric = 'auc',
-        silent=1,
-        tree_method='approx'
-    ),
-    search_spaces = {
-        'learning_rate': (0.01, 1.0, 'log-uniform'),
-        'min_child_weight': (0, 10),
-        'max_depth': (0, 50),
-        'max_delta_step': (0, 20),
-        'subsample': (0.01, 1.0, 'uniform'),
-        'colsample_bytree': (0.01, 1.0, 'uniform'),
-        'colsample_bylevel': (0.01, 1.0, 'uniform'),
-        'reg_lambda': (1e-9, 1000, 'log-uniform'),
-        'reg_alpha': (1e-9, 1.0, 'log-uniform'),
-        'gamma': (1e-9, 0.5, 'log-uniform'),
-        'min_child_weight': (0, 5),
-        'n_estimators': (50, 100),
-        'scale_pos_weight': (1e-6, 500, 'log-uniform')
-    },    
-    scoring = 'roc_auc',
-    cv = StratifiedKFold(
-        n_splits=3,
-        shuffle=True,
-        random_state=42
-    ),
-    n_jobs = 3,
-    n_iter = ITERATIONS,   
-    verbose = 0,
-    refit = True,
-    random_state = 42
-)
-
-def status_print(optim_result):
-    """Status callback durring bayesian hyperparameter search"""
-    
-    # Get all the models tested so far in DataFrame format
-    all_models = pd.DataFrame(bayes_cv_tuner.cv_results_)    
-    
-    # Get current parameters and the best parameters    
-    best_params = pd.Series(bayes_cv_tuner.best_params_)
-    print('Model #{}\nBest ROC-AUC: {}\nBest params: {}\n'.format(
-        len(all_models),
-        np.round(bayes_cv_tuner.best_score_, 4),
-        bayes_cv_tuner.best_params_
-    ))
-    
-    # Save all model results
-    clf_name = bayes_cv_tuner.estimator.__class__.__name__
-    all_models.to_csv(clf_name+"_cv_results.csv")
-
-
-# Finally, let the parameter tuning run and wait for good results :)
-
-# In[3]:
-
-
-# Fit the model
-result = bayes_cv_tuner.fit(X.values, y.values, callback=status_print)
-
-
-# ## Example 2: lightGBM Parameter Tuning with Scikit-Optimize
-# I have not myself submitted any models run with lightGBM as of yet, but here is an example of how to run the parameter search with lightGBM instead of xgBoost
-
-# In[4]:
-
-
-# Classifier
-bayes_cv_tuner = BayesSearchCV(
-    estimator = lgb.LGBMRegressor(
-        objective='binary',
-        metric='auc',
-        n_jobs=1,
-        verbose=0
-    ),
-    search_spaces = {
-        'learning_rate': (0.01, 1.0, 'log-uniform'),
-        'num_leaves': (1, 100),      
-        'max_depth': (0, 50),
-        'min_child_samples': (0, 50),
-        'max_bin': (100, 1000),
-        'subsample': (0.01, 1.0, 'uniform'),
-        'subsample_freq': (0, 10),
-        'colsample_bytree': (0.01, 1.0, 'uniform'),
-        'min_child_weight': (0, 10),
-        'subsample_for_bin': (100000, 500000),
-        'reg_lambda': (1e-9, 1000, 'log-uniform'),
-        'reg_alpha': (1e-9, 1.0, 'log-uniform'),
-        'scale_pos_weight': (1e-6, 500, 'log-uniform'),
-        'n_estimators': (50, 100),
-    },    
-    scoring = 'roc_auc',
-    cv = StratifiedKFold(
-        n_splits=3,
-        shuffle=True,
-        random_state=42
-    ),
-    n_jobs = 3,
-    n_iter = ITERATIONS,   
-    verbose = 0,
-    refit = True,
-    random_state = 42
-)
-
-# Fit the model
-result = bayes_cv_tuner.fit(X.values, y.values, callback=status_print)
-
-
-# ## Example 3: Different cross-validators
-# Some people have asked about CV strategy, and as seen I've just used the basic Stratified K-fold strategy; that was however mostly due to time constraints, and thus me not thinking that much about it. There are a lot of potentially better options, especially considering the temporal nature of this problem. Adding these are really easy using scikit-learn cross-validators; you just plug-n-play a new cross-validator into the `cv = ` options of BayesSearchCV. Examples could be a single train-test split, where we e.g. use one day for training, and one for testing (adjust accordingly):
-
-# In[6]:
-
-
-from sklearn.model_selection import PredefinedSplit
-
-# Training [index == -1], testing [index == 0])
-test_fold = np.zeros(len(X))
-test_fold[:(TRAINING_SIZE-TEST_SIZE)] = -1
-cv = PredefinedSplit(test_fold)
-
-# Check that we only have a single train-test split, and the size
-train_idx, test_idx = next(cv.split())
-print(f"Splits: {cv.get_n_splits()}, Train size: {len(train_idx)}, Test size: {len(test_idx)}")
-
-
-# Alternatively, we could want to use the [TimeSeriesSplit](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html#sklearn.model_selection.TimeSeriesSplit) cross-validator, which allows us to do several "into the future folds" for predictions
-
-# In[14]:
-
-
-from sklearn.model_selection import TimeSeriesSplit
-
-# Here we just do 3-fold timeseries CV
-cv = TimeSeriesSplit(max_train_size=None, n_splits=3)
-
-# Let us check the sizes of the folds. Note that you can keep train size constant with max_train_size if needed
-for i, (train_index, test_index) in enumerate(cv.split(X)):
-    print(f"Split {i+1} / {cv.get_n_splits()}:, Train size: {len(train_index)}, Test size: {len(test_index)}")
-
-
-# ## Optimal xgBoost parameters
-# ![](http://)After a few days of running for xgBoost, it found the following optimal parameters. Again, note that these gave me a 0.9769 score on [these features](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) and not the raw features, by training on the entire training set.
+# Now by just looking at the top 4 entries, it must be clear that does id have any role in determining who the author is?
+# No. Id is just used as a identifier for text NOT for author. So one thing is clear over here, that id is useless and would not help in any way to our model to learn.
+# 
+# So now we simple omit the id.
+# Similarly to avoid clutterness we map "EAP" to 0 "HPL" to 1 and "MWS" to 2 as it will be more convenient for our classifier. 
+# In other words we are just telling our computer that if classifier predicts 0 for the text then it means that it is preicting "EAP", if 1 then it means that it is predicting "HPL", if 2 then it means that it is predicting 2.
+# 
+# Next we take all the rows under the column named "text" and put it in X ( a variable in python)
+# 
+# Similarly we take all rows under the column named "author_num" and put it in y (a variable in python)
 
 # In[ ]:
 
 
-{
-    'colsample_bylevel': 0.1,
-    'colsample_bytree': 1.0,
-    'gamma': 5.103973694670875e-08,
-    'learning_rate': 0.140626707498132,
-    'max_delta_step': 20,
-    'max_depth': 6,
-    'min_child_weight': 4,
-    'n_estimators': 100,
-    'reg_alpha': 1e-09,
-    'reg_lambda': 1000.0,
-    'scale_pos_weight': 499.99999999999994,
-    'subsample': 1.0
-}
+training_data['author_num'] = training_data.author.map({'EAP':0, 'HPL':1, 'MWS':2})
+X = training_data['text']
+y = training_data['author_num']
+print (X.head())
+print (y.head())
 
+
+
+# Now we got the data, we got the text and the corresponing label, Now we need to split the data into training set and testing set.
+# Testing set is the one which we will never show to the computer, we will take it and keep it in a safe and only use it to test the model.
+# 
+# So we are going to split it into 70% for training and 30% for testing.
+
+# In[ ]:
+
+
+per=int(float(0.7)* len(X))
+X_train=X[:per]
+X_test=X[per:]
+y_train=y[:per]
+y_test=y[per:]
+
+
+# Here are some libraries we are going to need
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+
+
+# **Now comes the most important part.
+# Vectorization**
+# 
+# We see that computers get crazy with text, It only understands numbers, but we have got to classify text. Now what do we do?
+# We do tokenization and vectorization to save the count of each word. Confused right.
+# keep on reading believe me you will get it in the end.
+# Now let say you have got a text like "My name is computer My life". so what exactly does the vectorizer do.??
+# 
+# Lets see,
+# first it breaks it into tokens something like this. 
+# 
+# My
+# 
+# name
+# 
+# is
+# 
+# computer
+# 
+# My
+# 
+# life
+# 
+# Pretty easy right
+# Now it first creates a vocabulary from it
+# e.g
+# My:0
+# computer:1
+# is:2
+# life:3
+# name:4
+# 
+# Still very easy
+# 
+# 
+# 
+# Now we see that we create a sparse matrix out of it,  
+# 
+# 
+# 
+# Which have 1 row and 5 columns are there were 5 unique tokens in our text
+# 
+# 
+# 
+# we see that matrix[0,0] is 2 which specifies that 0 item in dictionary which is My came 2 times and so on.
+# 
+
+# In[ ]:
+
+
+#toy example
+text=["My name is computer My life"]
+toy = CountVectorizer(lowercase=False, token_pattern=r'\w+|\,')
+toy.fit_transform(text)
+print (toy.vocabulary_)
+matrix=toy.transform(text)
+print (matrix[0,0])
+print (matrix[0,1])
+print (matrix[0,2])
+print (matrix[0,3])
+print (matrix[0,4])
+
+
+
+# Exacly like the above toy example we vectorize the text
+
+# In[ ]:
+
+
+vect = CountVectorizer(lowercase=False, token_pattern=r'\w+|\,')
+X_cv=vect.fit_transform(X)
+X_train_cv = vect.transform(X_train)
+X_test_cv = vect.transform(X_test)
+print (X_train_cv.shape)
+
+
+# Here comes the final step
+# We give the data to the clf.fit for training and test it for score.
+# We have not used log score over here for simplicity.
+
+# In[ ]:
+
+
+clf=MultinomialNB()
+clf.fit(X_train_cv, y_train)
+clf.score(X_test_cv, y_test)
+
+
+# Now we saw the accuracy on our training data we made for ourself, Now we will let the kaggle test our accuracy. So first of all we will update our vocabulary and transform raw TEST data from kaggle into vectorized form
+
+# In[ ]:
+
+
+X_test=vect.transform(testing_data["text"])
+
+
+
+
+# Now we have successfully vectorized the data given by kaggle Now we fit the whole training data without any split into our Naive Bayes Model
+# Next we give it the testing vectorized data to predict the probabilities
+
+# In[ ]:
+
+
+clf=MultinomialNB()
+clf.fit(X_cv, y)
+predicted_result=clf.predict_proba(X_test)
+predicted_result.shape
+
+
+# We see that we got a result with 8392 rows presenting each text and 3 columns each column representing probability of each author.
+
+# In[ ]:
+
+
+#NOW WE CREATE A RESULT DATA FRAME AND ADD THE COLUMNS NECESSARY TO SUBMIT HERE
+result=pd.DataFrame()
+result["id"]=testing_data["id"]
+result["EAP"]=predicted_result[:,0]
+result["HPL"]=predicted_result[:,1]
+result["MWS"]=predicted_result[:,2]
+result.head()
+
+
+# FINALLY WE SUBMIT THE RESULT TO KAGGLE FOR EVALUATION
+
+# In[ ]:
+
+
+result.to_csv("TO_SUBMIT.csv", index=False)
+
+
+# ****PLEASE UPVOTE IF YOU FIND IT USEFUL****

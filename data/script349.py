@@ -1,425 +1,244 @@
 
 # coding: utf-8
 
-# # Data reading
+# # Pikachu vs Bulbasaur Matchup
+# 
+# *Press "Fork" at the top-right of this screen and set the `your_attack_pokemon`, `their_defense_pokemon`, and `mode` parameters to run this notebook yourself. Use `mode = 'ORIGINAL'` to include all Pokémon or `mode = 'GO'` to only include Pokémon from the Pokémon Go game.*
+# 
+# This notebook enables you to find the best Pokémon to use to attack a defending Pokémon. It also visualizes the stats between both your attacking Pokémon and their defending Pokémon.
 
-# In[1]:
+# In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-from matplotlib import pyplot as plt
-import pandas as pd
+your_attack_pokemon = 'Pikachu'
+their_defense_pokemon = 'Bulbasaur'
+mode = 'GO' # GO or ORIGINAL
+
+
+# Import the libraries    
+
+# In[ ]:
+
+
 import numpy as np
+import pandas as pd
 import seaborn as sns
-from nltk.tokenize import wordpunct_tokenize
-from nltk.stem.snowball import EnglishStemmer
-from nltk.stem import WordNetLemmatizer
-from functools import lru_cache
-from tqdm import tqdm as tqdm
-from sklearn.metrics import log_loss
-from sklearn.model_selection import StratifiedKFold
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from scipy import sparse
+import matplotlib.pyplot as plt
+from io import StringIO
 
 
-# In[2]:
+# Load Pokémon stats (first 151 for Pokemon Go)
 
+# In[ ]:
 
-train = pd.read_csv('../input/train.csv')
-train.head()
 
+pokemon = pd.read_csv('../input/Pokemon.csv')
+pokemon = pokemon[pokemon['#'] < 151 if mode == 'GO' else 10000]
 
-# In[4]:
 
+# Add Pokémon type matchup multipliers
 
-train['comment_text'] = train['comment_text'].fillna('nan')
+# In[ ]:
 
 
-# In[5]:
+types = pd.read_csv(StringIO("""Attacking,Normal,Fire,Water,Electric,Grass,Ice,Fighting,Poison,Ground,Flying,Psychic,Bug,Rock,Ghost,Dragon,Dark,Steel,Fairy
+Normal,1,1,1,1,1,1,1,1,1,1,1,1,0.5,0,1,1,0.5,1
+Fire,1,0.5,0.5,1,2,2,1,1,1,1,1,2,0.5,1,0.5,1,2,1
+Water,1,2,0.5,1,0.5,1,1,1,2,1,1,1,2,1,0.5,1,1,1
+Electric,1,1,2,0.5,0.5,1,1,1,0,2,1,1,1,1,0.5,1,1,1
+Grass,1,0.5,2,1,0.5,1,1,0.5,2,0.5,1,0.5,2,1,0.5,1,0.5,1
+Ice,1,0.5,0.5,1,2,0.5,1,1,2,2,1,1,1,1,2,1,0.5,1
+Fighting,2,1,1,1,1,2,1,0.5,1,0.5,0.5,0.5,2,0,1,2,2,0.5
+Poison,1,1,1,1,2,1,1,0.5,0.5,1,1,1,0.5,0.5,1,1,0,2
+Ground,1,2,1,2,0.5,1,1,2,1,0,1,0.5,2,1,1,1,2,1
+Flying,1,1,1,0.5,2,1,2,1,1,1,1,2,0.5,1,1,1,0.5,1
+Psychic,1,1,1,1,1,1,2,2,1,1,0.5,1,1,1,1,0,0.5,1
+Bug,1,0.5,1,1,2,1,0.5,0.5,1,0.5,2,1,1,0.5,1,2,0.5,0.5
+Rock,1,2,1,1,1,2,0.5,1,0.5,2,1,2,1,1,1,1,0.5,1
+Ghost,0,1,1,1,1,1,1,1,1,1,2,1,1,2,1,0.5,1,1
+Dragon,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,0.5,0
+Dark,1,1,1,1,1,1,0.5,1,1,1,2,1,1,2,1,0.5,1,0.5
+Steel,1,0.5,0.5,0.5,1,2,1,1,1,1,1,1,2,1,1,1,0.5,2
+Fairy,1,0.5,1,1,1,1,2,0.5,1,1,1,1,1,1,2,2,0.5,1"""))
 
 
-test = pd.read_csv('../input/test.csv')
-test.head()
+# Merge Pokémon stats with type multipliers
 
+# In[ ]:
 
-# In[6]:
 
+pokemon_attack = pokemon.merge(types, left_on='Type 1', right_on='Attacking')
 
-test['comment_text'] = test['comment_text'].fillna('nan')
 
+# Find the defending Pokémon's type and multiplier to calculate the adjusted attack
 
-# In[7]:
+# In[ ]:
 
 
-submission = pd.read_csv('../input/sample_submission.csv')
-submission.head()
+opponent_type = pokemon[pokemon['Name'] == their_defense_pokemon]['Type 1'].iloc[0]
+opponent_multiplier = pokemon_attack[opponent_type]
+adjusted_attack = pokemon_attack['Total'] * opponent_multiplier
 
 
-# # Basic analysis
-# We have multilabel classification task. So let's check proportion of each label:
+# Normalize the total attack against the defending Pokémon to a number between 0 and 100
 
-# In[8]:
+# In[ ]:
 
 
-for label in ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']:
-    print(label, (train[label] == 1.0).sum() / len(train))
+pokemon_attack['Adjusted Attack'] = (adjusted_attack - adjusted_attack.min()) / (adjusted_attack.max() - adjusted_attack.min()) * 100
 
 
-# and correlation between target variables (maybe we'l could build some kind of hierarchy classification or something like it).
+# Sort by adjusted attack and plot
 
-# In[9]:
+# In[ ]:
 
 
-train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']].corr()
+pokemon_attack.sort_values('Adjusted Attack', inplace=True)
+pokemon_attack.tail(n=20).plot(kind='barh', x='Name', y='Adjusted Attack', figsize=(10, 7), title='Best 20 Pokemon to Attack %s' % their_defense_pokemon)
 
 
-# # Text postprocessing
-# 
-# I'll try models with:
-# - text as is
-# - stemmed text
-# - lemmatized text
+# Define a `pokeplot` method that creates a scatterplot
 
-# In[10]:
+# In[ ]:
 
 
-stemmer = EnglishStemmer()
+def pokeplot(x, y):
+    f = sns.FacetGrid(pokemon, hue='Type 1', size=8)        .map(plt.scatter, x, y, alpha=0.5)        .add_legend()
+    plt.subplots_adjust(top=0.9)
+    f.fig.suptitle('%s vs. %s' % (x, y))
+    f.ax.set_xlim(0,)
+    f.ax.set_ylim(0,)
 
-@lru_cache(30000)
-def stem_word(text):
-    return stemmer.stem(text)
+    attack_pokemon  = pokemon[pokemon['Name']==your_attack_pokemon]
+    defense_pokemon = pokemon[pokemon['Name']==their_defense_pokemon]
 
+    plt.scatter(attack_pokemon[x],attack_pokemon[y], s=100, c='#f46d43')
+    plt.text(attack_pokemon[x]+6,attack_pokemon[y]-3, your_attack_pokemon, 
+             fontsize=16, weight='bold', color='#f46d43')
 
-lemmatizer = WordNetLemmatizer()
+    plt.scatter(defense_pokemon[y],defense_pokemon[y], s=100, c='#74add1')
+    plt.text(defense_pokemon[x]+6,defense_pokemon[y]-3, their_defense_pokemon, 
+             fontsize=16, weight='bold', color='#74add1')
 
-@lru_cache(30000)
-def lemmatize_word(text):
-    return lemmatizer.lemmatize(text)
 
+# ## Attack vs Defense
+# Compare the Pokémons' Attack and Defense stats using a scatterplot
 
-def reduce_text(conversion, text):
-    return " ".join(map(conversion, wordpunct_tokenize(text.lower())))
+# In[ ]:
 
 
-def reduce_texts(conversion, texts):
-    return [reduce_text(conversion, str(text))
-            for text in tqdm(texts)]
+pokeplot('Attack', 'Defense')
+
 
+# ## Speed vs HP
+# Compare the Pokémons' Speed and HP stats using a scatterplot
+
+# In[ ]:
 
-# In[11]:
 
-
-train['comment_text_stemmed'] = reduce_texts(stem_word, train['comment_text'])
-test['comment_text_stemmed'] = reduce_texts(stem_word, test['comment_text'])
-train['comment_text_lemmatized'] = reduce_texts(lemmatize_word, train['comment_text'])
-test['comment_text_lemmatized'] = reduce_texts(lemmatize_word, test['comment_text'])
-
-
-# In[14]:
-
-
-train.head()
-
-
-# In[15]:
-
-
-test.head()
-
-
-# # Validation
-# 
-# Our metric is collumn-average of collumn log_loss values. So let's define custom metric based on binary log loss and define cross-validation function:
-
-# In[16]:
-
-
-def metric(y_true, y_pred):
-    assert y_true.shape == y_pred.shape
-    columns = y_true.shape[1]
-    column_losses = []
-    for i in range(0, columns):
-        column_losses.append(log_loss(y_true[:, i], y_pred[:, i]))
-    return np.array(column_losses).mean()
-
-
-# ## Cross-validation
-# 
-# I don't found quickly a way to stratified split for multilabel case.
-# 
-# So I used next way for stratified splitting:
-# 
-# - define ordered list of all possible label combinations. E.g.
-# 
-#     - 0 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=0, "identity_hate"=0]
-#     - 1 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=0]
-#     - 2 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=1]
-# 
-# - for each row replace label combination with combination index 
-# - use StratifiedKFold on this
-# - train and test model by train/test indices from StratifiedKFold
-# 
-# Basic idea is next:
-# - we can present label combination as class for multiclass classification - at least for some cases
-# - we can stratified split by combination indices
-#     - so in each split distribution of combination indices will be similar to full set
-#     - so source label distribution also will be similar
-#     
-# But I don't sure that all my assumpions are fully correct - at least, for common case.
-
-# In[17]:
-
-
-def cv(model, X, y, label2binary, n_splits=3):
-    def split(X, y):
-        return StratifiedKFold(n_splits=n_splits).split(X, y)
-    
-    def convert_y(y):
-        new_y = np.zeros([len(y)])
-        for i, val in enumerate(label2binary):
-            idx = (y == val).max(axis=1)
-            new_y[idx] = i
-        return new_y
-    
-    X = np.array(X)
-    y = np.array(y)
-    scores = []
-    for train, test in tqdm(split(X, convert_y(y)), total=n_splits):
-        fitted_model = model(X[train], y[train])
-        scores.append(metric(y[test], fitted_model(X[test])))
-    return np.array(scores)
-
-
-# Let's define possible label combinations:
-
-# In[18]:
-
-
-label2binary = np.array([
-    [0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1],
-    [0, 0, 0, 0, 1, 0],
-    [0, 0, 0, 0, 1, 1],
-    [0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 1, 0, 1],
-    [0, 0, 0, 1, 1, 0],
-    [0, 0, 0, 1, 1, 1],
-    [0, 0, 1, 0, 0, 0],
-    [0, 0, 1, 0, 0, 1],
-    [0, 0, 1, 0, 1, 0],
-    [0, 0, 1, 0, 1, 1],
-    [0, 0, 1, 1, 0, 0],
-    [0, 0, 1, 1, 0, 1],
-    [0, 0, 1, 1, 1, 0],
-    [0, 0, 1, 1, 1, 1],
-    [0, 1, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0, 1],
-    [0, 1, 0, 0, 1, 0],
-    [0, 1, 0, 0, 1, 1],
-    [0, 1, 0, 1, 0, 0],
-    [0, 1, 0, 1, 0, 1],
-    [0, 1, 0, 1, 1, 0],
-    [0, 1, 0, 1, 1, 1],
-    [0, 1, 1, 0, 0, 0],
-    [0, 1, 1, 0, 0, 1],
-    [0, 1, 1, 0, 1, 0],
-    [0, 1, 1, 0, 1, 1],
-    [0, 1, 1, 1, 0, 0],
-    [0, 1, 1, 1, 0, 1],
-    [0, 1, 1, 1, 1, 0],
-    [0, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0],
-    [1, 0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 1, 0],
-    [1, 0, 0, 0, 1, 1],
-    [1, 0, 0, 1, 0, 0],
-    [1, 0, 0, 1, 0, 1],
-    [1, 0, 0, 1, 1, 0],
-    [1, 0, 0, 1, 1, 1],
-    [1, 0, 1, 0, 0, 0],
-    [1, 0, 1, 0, 0, 1],
-    [1, 0, 1, 0, 1, 0],
-    [1, 0, 1, 0, 1, 1],
-    [1, 0, 1, 1, 0, 0],
-    [1, 0, 1, 1, 0, 1],
-    [1, 0, 1, 1, 1, 0],
-    [1, 0, 1, 1, 1, 1],
-    [1, 1, 0, 0, 0, 0],
-    [1, 1, 0, 0, 0, 1],
-    [1, 1, 0, 0, 1, 0],
-    [1, 1, 0, 0, 1, 1],
-    [1, 1, 0, 1, 0, 0],
-    [1, 1, 0, 1, 0, 1],
-    [1, 1, 0, 1, 1, 0],
-    [1, 1, 0, 1, 1, 1],
-    [1, 1, 1, 0, 0, 0],
-    [1, 1, 1, 0, 0, 1],
-    [1, 1, 1, 0, 1, 0],
-    [1, 1, 1, 0, 1, 1],
-    [1, 1, 1, 1, 0, 0],
-    [1, 1, 1, 1, 0, 1],
-    [1, 1, 1, 1, 1, 0],
-    [1, 1, 1, 1, 1, 1],
-])
-
-
-# # Dummy model
-# 
-# Let's build dummy model that always return 0.5 and compare score on cross-validation with test-set public leatherboard "All 0.5s Benchmark" (score - 0.693)
-
-# In[19]:
-
-
-def dummy_model(X, y):
-    def _predict(X):
-        return np.ones([X.shape[0], 6]) * 0.5
-    
-    return _predict
-
-cv(dummy_model,
-   train['comment_text'],
-   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
-   label2binary)
-
-
-# seems like we built metric correctly, so let's go to baseline building
-# 
-# # Baseline (binary logistic regression over word-based tf-idf)
-# 
-# Let's build model that:
-# - compute tf-idf for given train texts
-# - train 6 logistic regressions (one for each label)
-# - compute tf-idf on test texts
-# - compute probability of "1" class for all 6 regressions
-
-# In[20]:
-
-
-def regression_baseline(X, y):
-    tfidf = TfidfVectorizer()
-    X_tfidf = tfidf.fit_transform(X)
-    columns = y.shape[1]
-    regressions = [
-        LogisticRegression().fit(X_tfidf, y[:, i])
-        for i in range(columns)
-    ]
-    
-    def _predict(X):
-        X_tfidf = tfidf.transform(X)
-        predictions = np.zeros([len(X), columns])
-        for i, regression in enumerate(regressions):
-            regression_prediction = regression.predict_proba(X_tfidf)
-            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
-        return predictions
-    
-    return _predict
-
-
-# Now let's check model on source texts/stemmed texts/lemmatized texts
-
-# In[21]:
-
-
-cv(regression_baseline,
-   train['comment_text'],
-   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
-   label2binary)
-
-
-# In[22]:
-
-
-cv(regression_baseline,
-   train['comment_text_stemmed'],
-   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
-   label2binary)
-
-
-# In[23]:
-
-
-cv(regression_baseline,
-   train['comment_text_lemmatized'],
-   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
-   label2binary)
-
-
-# As you can see - this baseline gives best score on stemmed texts.
-# Anyway - let's  try to add character-level features:
-# 
-# # Regressions over tfidf over words and character n-grams
-# 
-# Let's build model that:
-# - compute tfidf of words of stemmed texts
-# - compute tfidf of character n-grams from source text
-# - train/predict regressions on computed tfidf-s.
-
-# In[25]:
-
-
-def regression_wordchars(X, y):
-    tfidf_word = TfidfVectorizer()
-    X_tfidf_word = tfidf_word.fit_transform(X[:, 1])
-    tfidf_char = TfidfVectorizer(analyzer='char', ngram_range=(1, 3), lowercase=False)
-    X_tfidf_char = tfidf_char.fit_transform(X[:, 0])
-    X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
-    
-    columns = y.shape[1]
-    regressions = [
-        LogisticRegression().fit(X_tfidf, y[:, i])
-        for i in range(columns)
-    ]
-    
-    def _predict(X):
-        X_tfidf_word = tfidf_word.transform(X[:, 1])
-        X_tfidf_char = tfidf_char.transform(X[:, 0])
-        X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
-        predictions = np.zeros([len(X), columns])
-        for i, regression in enumerate(regressions):
-            regression_prediction = regression.predict_proba(X_tfidf)
-            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
-        return predictions
-    
-    return _predict
-
-
-# In[26]:
-
-
-cv(regression_wordchars,
-   train[['comment_text', 'comment_text_stemmed']],
-   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
-   label2binary)
-
-
-# # Prediction
-# 
-# Let's use our best model - regression over word&chars tfidf to build submission:
-
-# In[27]:
-
-
-get_ipython().run_cell_magic('time', '', "model = regression_wordchars(np.array(train[['comment_text', 'comment_text_stemmed']]),\n                             np.array(train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']]))")
-
-
-# In[28]:
-
-
-get_ipython().run_cell_magic('time', '', "prediction = model(np.array(test[['comment_text', 'comment_text_stemmed']]))")
-
-
-# In[30]:
-
-
-for i, label in enumerate(['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']):
-    submission[label] = prediction[:, i]
-submission.head()
-
-
-# In[29]:
-
-
-submission.to_csv('output.csv', index=None)
+pokeplot('Speed', 'HP')
+
+
+# ## Base Stats Comparison
+# Compare the Pokémon's base stats using a radar chart
+
+# In[ ]:
+
+
+# Taken from https://www.kaggle.com/wenxuanchen/d/abcsds/pokemon/pokemon-visualization-radar-chart-t-sne
+
+TYPE_LIST = ['Grass','Fire','Water','Bug','Normal','Poison',
+            'Electric','Ground','Fairy','Fighting','Psychic',
+            'Rock','Ghost','Ice','Dragon','Dark','Steel','Flying']
+
+COLOR_LIST = ['#8ED752', '#F95643', '#53AFFE', '#C3D221', '#BBBDAF', '#AD5CA2', 
+              '#F8E64E', '#F0CA42', '#F9AEFE', '#A35449', '#FB61B4', '#CDBD72', 
+              '#7673DA', '#66EBFF', '#8B76FF', '#8E6856', '#C3C1D7', '#75A4F9']
+
+# The colors are copied from this script: https://www.kaggle.com/ndrewgele/d/abcsds/pokemon/visualizing-pok-mon-stats-with-seaborn
+# The colors look reasonable in this map: For example, Green for Grass, Red for Fire, Blue for Water...
+COLOR_MAP = dict(zip(TYPE_LIST, COLOR_LIST))
+
+
+# A radar chart example: http://datascience.stackexchange.com/questions/6084/how-do-i-create-a-complex-radar-chart
+def _scale_data(data, ranges):
+    (x1, x2), d = ranges[0], data[0]
+    return [(d - y1) / (y2 - y1) * (x2 - x1) + x1 for d, (y1, y2) in zip(data, ranges)]
+
+class RaderChart():
+    def __init__(self, fig, variables, ranges, n_ordinate_levels = 6):
+        angles = np.arange(0, 360, 360./len(variables))
+
+        axes = [fig.add_axes([0.1,0.1,0.8,0.8],polar = True, label = "axes{}".format(i)) for i in range(len(variables))]
+        _, text = axes[0].set_thetagrids(angles, labels = variables)
+        
+        for txt, angle in zip(text, angles):
+            txt.set_rotation(angle - 90)
+        
+        for ax in axes[1:]:
+            ax.patch.set_visible(False)
+            ax.xaxis.set_visible(False)
+            ax.grid('off')
+        
+        for i, ax in enumerate(axes):
+            grid = np.linspace(*ranges[i], num = n_ordinate_levels)
+            grid_label = ['']+[str(int(x)) for x in grid[1:]]
+            ax.set_rgrids(grid, labels = grid_label, angle = angles[i])
+            ax.set_ylim(*ranges[i])
+        
+        self.angle = np.deg2rad(np.r_[angles, angles[0]])
+        self.ranges = ranges
+        self.ax = axes[0]
+
+    def plot(self, data, *args, **kw):
+        sdata = _scale_data(data, self.ranges)
+        self.ax.plot(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+    def fill(self, data, *args, **kw):
+        sdata = _scale_data(data, self.ranges)
+        self.ax.fill(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+    def legend(self, *args, **kw):
+        self.ax.legend(*args, **kw)
+
+# select display colors according to Pokemon's Type 1
+def select_color(types):
+    colors = [None] * len(types)
+    used_colors = set()
+    for i, t in enumerate(types):
+        curr = COLOR_MAP[t]
+        if curr not in used_colors:
+            colors[i] = curr
+            used_colors.add(curr)
+    unused_colors = set(COLOR_LIST) - used_colors
+    for i, c in enumerate(colors):
+        if not c:
+            try:
+                colors[i] = unused_colors.pop()
+            except:
+                raise Exception('Attempt to visualize too many pokemons. No more colors available.')
+    return colors
+
+df = pd.read_csv('../input/Pokemon.csv')
+
+# In this order, 
+# HP, Defense and Sp. Def will show on left; They represent defense abilities
+# Speed, Attack and Sp. Atk will show on right; They represent attack abilities
+# Attack and Defense, Sp. Atk and Sp. Def will show on opposite positions
+use_attributes = ['Speed', 'Sp. Atk', 'Defense', 'HP', 'Sp. Def', 'Attack']
+# choose the Pokemons you like
+use_pokemons = [their_defense_pokemon, your_attack_pokemon]
+
+df_plot = df[df['Name'].map(lambda x:x in use_pokemons)==True]
+datas = df_plot[use_attributes].values 
+ranges = [[2**-20, df_plot[attr].max()] for attr in use_attributes]
+colors = select_color(df_plot['Type 1']) # select colors based on pokemon Type 1 
+
+fig = plt.figure(figsize=(10, 10))
+radar = RaderChart(fig, use_attributes, ranges)
+for data, color, pokemon in zip(datas, colors, use_pokemons):
+    radar.plot(data, color = color, label = pokemon)
+    radar.fill(data, alpha = 0.1, color = color)
+    radar.legend(loc = 1, fontsize = 'small')
+plt.title('Base Stats of '+(', '.join(use_pokemons[:-1])+' and '+use_pokemons[-1] if len(use_pokemons)>1 else use_pokemons[0]))
 

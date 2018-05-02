@@ -1,224 +1,127 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
+# # Exploring BNP Data Distributions
+# 
+# Hopefully this will run on Kaggle servers.  You should see a lot of plots (I can only see one right now, before pressing view HTML output).  
+# If it doesn't I guess you'll have to run the code on your own machine. 
 
 # In[ ]:
 
 
-train= pd.read_csv('../input/creditcard.csv')
-train.head()
-
-
-# In[ ]:
-
-
-import seaborn as sns
-sns.heatmap(train.corr())
-
-
-# In[ ]:
-
-
-sns.countplot(train['Class'])
-
-
-# In[ ]:
-
-
-from sklearn.preprocessing import StandardScaler
-train['Amount_n']= StandardScaler().fit_transform(train['Amount'].reshape(-1,1))
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-train['Time_H']= train['Time']/3600
-
-
-# In[ ]:
-
-
-sns.distplot(train['Time_H'])
-
-
-# In[ ]:
-
-
-sns.countplot(train['Class'])
-
-
-# In[ ]:
-
-
-sns.jointplot(train['Time_H'], train['Class'])
-
-
-# In[ ]:
-
-
-train= train.drop(['Time','Time_H','Amount'], axis=1)
-train.head()
-
-
-# In[ ]:
-
-
-X= train.ix[:, train.columns != 'Class']
-y= train.ix[:, train.columns == 'Class']   
-
-
-# In[ ]:
-
-
-fraud_count = len(train[train.Class == 1])
-fraud_indices = train[train.Class == 1].index
-normal_indices = train[train.Class == 0].index
-
-r_normal_indices = np.random.choice(normal_indices, fraud_count, replace = False) # random 
-
-undersample_indices = np.concatenate([fraud_indices,r_normal_indices])
-undersample_train = train.iloc[undersample_indices,:]
-
-X_undersample = undersample_train.ix[:, undersample_train.columns != 'Class']
-y_undersample = undersample_train.ix[:, undersample_train.columns == 'Class']
-
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-X_tr, X_test, y_tr, y_test = train_test_split(X,y,test_size = 0.3, random_state = 0)
-X_tr_u, X_test_u, y_tr_u, y_test_u = train_test_split(X_undersample,y_undersample,test_size = 0.3,random_state = 0)
-                                                                                                   
-
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import KFold, cross_val_score
-from sklearn.metrics import confusion_matrix,auc,roc_auc_score,recall_score,classification_report,precision_recall_curve, roc_curve
-import matplotlib.pylab as plt
+# imports
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn import preprocessing
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-logreg = LogisticRegression(C = .01, penalty = 'l1')
-logreg.fit(X_tr_u,y_tr_u.values.ravel())
-y_pred_u= logreg.predict(X_test_u)
-y_pred_u_proba=logreg.predict_proba(X_test_u)
-print('cm:', confusion_matrix(y_test_u,y_pred_u))
-print('cr:', classification_report(y_test_u,y_pred_u))
-print('recall_score:', recall_score(y_test_u,y_pred_u))
-print('roc_auc_score:',roc_auc_score(y_test_u,y_pred_u))
+# Read the Data
+train = pd.read_csv("../input/train.csv")
+train = train.drop(['ID'],axis=1)
+test = pd.read_csv("../input/test.csv")
+test = test.drop(['ID'],axis=1)
+target = train.target
+featureNames = train.columns.values
 
 
 # In[ ]:
 
 
-y_predprob_u = logreg.predict_proba(X_test_u)[:, 1]  # default threshold 0.5
-
-plt.hist(y_predprob_u, bins=8)
-plt.xlabel('predicted probability of fraud')
-plt.ylabel('frequency')
-plt.title('Histogram of predicted probabilities') 
-
-
-# In[ ]:
-
-
-logreg.fit(X_tr_u,y_tr_u.values.ravel())
-y_pred_u_proba = logreg.predict_proba(X_test_u)
-thresholds = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
-for i in thresholds:
-    y_test_pred_prob = y_pred_u_proba[:,1] > i
-    precision, recall, thresholds= precision_recall_curve(y_test_u,y_test_pred_prob)
-    plt.plot(recall, precision,label='Threshold: %s'%i)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.xlim(0,1)
-    plt.ylim(0,1)
-    plt.title('Precision-Recall curve')    
-    plt.legend(loc='center left')
+# Function to convert to hexavigesimal base
+def az_to_int(az,nanVal=None):
+    if az==az:  #catch NaN
+        hv = 0
+        for i in range(len(az)):
+            hv += (ord(az[i].lower())-ord('a')+1)*26**(len(az)-1-i)
+        return hv
+    else:
+        if nanVal is not None:
+            return nanVal
+        else:
+            return az
 
 
 # In[ ]:
 
 
-#In order to increase recall(sensitivity), we need to decrease the threshold of the classifier
-fpr, tpr, thresholds = roc_curve(y_test_u,y_predprob_u)
-roc_auc = auc(fpr,tpr)
-plt.plot(fpr,tpr)
-plt.xlabel('fpr')
-plt.ylabel('tpr')
-plt.title('ROC curve for fraud classifier')
-plt.grid(True)
+# Prepare the data: combine, process, split
+test['target'] = -999
+all_data = train.append(test)
+
+# convert v22 to hexavigesimal
+all_data.v22 = all_data.v22.apply(az_to_int)
+
+for c in all_data.columns.values:
+    if all_data[c].dtype=='object':
+        all_data[c], tmpItter = all_data[c].factorize()
+
+# replace all NA's with -1
+all_data.fillna(-1, inplace=True)
+
+# split the data
+train = all_data[all_data['target']>-999]
+test = all_data[all_data['target']==-999]
+test = test.drop(['target'],axis=1)
 
 
-# In[ ]:
-
-
-roc_auc_score(y_test_u, y_predprob_u)
-
-
-# In[ ]:
-
-
-#Decrease the threshold(0.3)for predicting frauds in order to increase the sensitivity of the classifier
-from sklearn.preprocessing import binarize
-y_pred_class_u_highrecall = binarize([y_predprob_u], 0.3)[0]
-print('cm:', confusion_matrix(y_test_u,y_pred_class_u_highrecall))
-print('cr:', classification_report(y_test_u,y_pred_class_u_highrecall))
-print('recall_score:', recall_score(y_test_u,y_pred_class_u_highrecall))
-print('roc_auc_score:',roc_auc_score(y_test_u,y_pred_class_u_highrecall))
-
-
-# In[ ]:
-
-
-logreg.fit(X_tr_u,y_tr_u.values.ravel())
-y_pred= logreg.predict_proba(X_test)[:,1]    #predicted probabilities for class 1                                          
-y_pred_class_highrecall = binarize([y_pred], 0.3)[0]
-print('cm:', confusion_matrix(y_test,y_pred_class_highrecall))
-print('cr:', classification_report(y_test,y_pred_class_highrecall))
-print('recall_score:', recall_score(y_test,y_pred_class_highrecall))
-print('roc_auc_score:',roc_auc_score(y_test,y_pred_class_highrecall))
-
+# ## Plot Descriptions
+# 
+# ### Histogram Plots on the the left:
+# * Blue:  All of the train data (normalized)
+# * Red:  Train Data where the target variable is one (again normalized)
+# * Na's are -1, so the first column is usually large
+# 
+# ### CDF Plots on the right:
+# * Blue and red as before
+# * Black line is the difference in the CDF's (x10 + 0.5 for visualization)
+# 
+# ### A few interesting insights:
+# * It's easy to see why v50 is such a powerful predictor
+# * Somewhat counterintuitive, most of the features have more NA's when the target is true.  This is indicated both by the first red bar on the left being higher than the blue and by the cdf difference line being negative at the start.  Perhaps it's the presence of certain information, not the lack of it, that prevents fast-track processing.
+# * With v22 coded in hexavigesimal, there is some large scale structure in the pdf, and possibly some structure in the CDF difference plot
 
 # In[ ]:
 
 
-logreg.fit(X_tr_u,y_tr_u.values.ravel())
-y_pr= logreg.predict_proba(X)[:,1]    #predicted probabilities for class 1                                          
-y_pr_class_highrecall = binarize([y_pr], 0.3)[0]
-print('cm:', confusion_matrix(y,y_pr_class_highrecall))
-print('cr:', classification_report(y,y_pr_class_highrecall))
-print('recall_score:', recall_score(y,y_pr_class_highrecall))
-print('roc_auc_score:',roc_auc_score(y,y_pr_class_highrecall))
+plt.rcParams['figure.max_open_warning']=300
+nbins=20
+for c in  featureNames:
+    if train[c].dtype != 'object' and c != 'target':
+        if c=='v22':
+            hbins = 100
+        else:
+            hbins = nbins
+        fig=plt.figure(figsize=(14,4))
+        ax1 = fig.add_subplot(1,2,1) 
+        
+        dataset1 = train[c][~np.isnan(train[c])]
+        dataset2 = train[c][~np.isnan(train[c]) & train.target]
+        
+        # left plot
+        hd = ax1.hist((dataset1, dataset2), bins=hbins, histtype='bar',normed=True,
+                        color=["blue", "red"],label=['all','target=1'])
+        ax1.set_xlabel('Feature: '+c)
+        ax1.set_xlim((-1,max(train[c])))
+        
+        binwidth = hd[1][1]-hd[1][0]
+        midpts = (hd[1][:-1]+hd[1][1:])/2
+        cdf_all= np.cumsum(hd[0][0])*binwidth
+        cdf_ones = np.cumsum(hd[0][1])*binwidth
+
+        # right plot
+        ax2 = fig.add_subplot(1,2,2) 
+        ax2.set_ylim((0,1))
+        ax2.set_xlim((0,nbins))
+        ax2.plot(midpts,cdf_all,color='b')
+        ax2.plot(midpts,cdf_ones,color='r')
+        ax2.plot(midpts,0.5+10*(cdf_all-cdf_ones),color='k')
+        ax2.grid()
+        ax2.set_xlim((-1,max(train[c])))
+        ax2.set_xlabel('cdfs plus cdf_diff*10+0.5')
+        ax2.axhline(0.5,color='gray',linestyle='--')
 

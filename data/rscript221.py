@@ -1,52 +1,130 @@
-from keras.models import Sequential
-from keras.utils import np_utils
-from keras.layers.core import Dense, Activation, Dropout
+########################################
+## import packages
+########################################
 
-import pandas as pd
+import datetime
 import numpy as np
+import pandas as pd
 
-# Read data
-train = pd.read_csv('../input/train.csv')
-labels = train.ix[:,0].values.astype('int32')
-X_train = (train.ix[:,1:].values).astype('float32')
-X_test = (pd.read_csv('../input/test.csv').values).astype('float32')
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import roc_auc_score
 
-# convert list of labels to binary class matrix
-y_train = np_utils.to_categorical(labels) 
+from keras.models import Model
+from keras.layers import Dense, Input, Embedding, Dropout, Activation, Reshape
+from keras.layers.merge import concatenate, dot
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras.regularizers import l2
+from keras.initializers import RandomUniform
+from keras.optimizers import RMSprop, Adam, SGD
 
-# pre-processing: divide by max and substract mean
-scale = np.max(X_train)
-X_train /= scale
-X_test /= scale
+########################################
+## load the data
+########################################
 
-mean = np.std(X_train)
-X_train -= mean
-X_test -= mean
+train = pd.read_csv('./data/train.csv')
+uid = train.msno
+sid = train.song_id
+target = train.target
 
-input_dim = X_train.shape[1]
-nb_classes = y_train.shape[1]
+test = pd.read_csv('./data/test.csv')
+id_test = test.id
+uid_test = test.msno
+sid_test = test.song_id
 
-# Here's a Deep Dumb MLP (DDMLP)
-model = Sequential()
-model.add(Dense(128, input_dim=input_dim))
-model.add(Activation('relu'))
-model.add(Dropout(0.15))
-model.add(Dense(128))
-model.add(Activation('relu'))
-model.add(Dropout(0.15))
-model.add(Dense(nb_classes))
-model.add(Activation('softmax'))
+########################################
+## encoding
+########################################
 
-# we'll use categorical xent for the loss, and RMSprop as the optimizer
-model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+usr_encoder = LabelEncoder()
+usr_encoder.fit(uid.append(uid_test))
+uid = usr_encoder.transform(uid)
+uid_test = usr_encoder.transform(uid_test)
 
-print("Training...")
-model.fit(X_train, y_train, nb_epoch=10, batch_size=16, validation_split=0.1, show_accuracy=True, verbose=2)
+sid_encoder = LabelEncoder()
+sid_encoder.fit(sid.append(sid_test))
+sid = sid_encoder.transform(sid)
+sid_test = sid_encoder.transform(sid_test)
 
-print("Generating test predictions...")
-preds = model.predict_classes(X_test, verbose=0)
+u_cnt = int(max(uid.max(), uid_test.max()) + 1)
+s_cnt = int(max(sid.max(), sid_test.max()) + 1)
 
-def write_preds(preds, fname):
-    pd.DataFrame({"ImageId": list(range(1,len(preds)+1)), "Label": preds}).to_csv(fname, index=False, header=True)
+########################################
+## train-validation split
+########################################
 
-write_preds(preds, "keras-mlp.csv")
+perm = np.random.permutation(len(train))
+trn_cnt = int(len(train) * 0.85)
+uid_trn = uid[perm[:trn_cnt]]
+uid_val = uid[perm[trn_cnt:]]
+sid_trn = sid[perm[:trn_cnt]]
+sid_val = sid[perm[trn_cnt:]]
+target_trn = target[perm[:trn_cnt]]
+target_val = target[perm[trn_cnt:]]
+
+########################################
+## define the model
+########################################
+
+def get_model():
+    user_embeddings = Embedding(u_cnt,
+            64,
+            embeddings_initializer=RandomUniform(minval=-0.1, maxval=0.1),
+            embeddings_regularizer=l2(1e-4),
+            input_length=1,
+            trainable=True)
+    song_embeddings = Embedding(s_cnt,
+            64,
+            embeddings_initializer=RandomUniform(minval=-0.1, maxval=0.1),
+            embeddings_regularizer=l2(1e-4),
+            input_length=1,
+            trainable=True)
+
+    uid_input = Input(shape=(1,), dtype='int32')
+    embedded_usr = user_embeddings(uid_input)
+    embedded_usr = Reshape((64,))(embedded_usr)
+
+    sid_input = Input(shape=(1,), dtype='int32')
+    embedded_song = song_embeddings(sid_input)
+    embedded_song = Reshape((64,))(embedded_song)
+
+    preds = dot([embedded_usr, embedded_song], axes=1)
+    preds = concatenate([embedded_usr, embedded_song, preds])
+    
+    preds = Dense(128, activation='relu')(preds)
+    preds = Dropout(0.5)(preds)
+    
+    preds = Dense(1, activation='sigmoid')(preds)
+
+    model = Model(inputs=[uid_input, sid_input], outputs=preds)
+    
+    opt = RMSprop(lr=1e-3)
+    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['acc'])
+
+    return model
+
+########################################
+## train the model
+########################################
+   
+model = get_model()
+early_stopping =EarlyStopping(monitor='val_acc', patience=5)
+model_path = 'bst_model.h5'
+model_checkpoint = ModelCheckpoint(model_path, save_best_only=True, \
+        save_weights_only=True)
+
+hist = model.fit([uid_trn, sid_trn], target_trn, validation_data=([uid_val, sid_val], \
+        target_val), epochs=100, batch_size=32768, shuffle=True, \
+        callbacks=[early_stopping, model_checkpoint])
+model.load_weights(model_path)
+
+preds_val = model.predict([uid_val, sid_val], batch_size=32768)
+val_auc = roc_auc_score(target_val, preds_val)
+
+########################################
+## make the submission
+########################################
+
+preds_test = model.predict([uid_test, sid_test], batch_size=32768, verbose=1)
+sub = pd.DataFrame({'id': id_test, 'target': preds_test.ravel()})
+sub.to_csv('./sub_%.5f.csv'%(val_auc), index=False)

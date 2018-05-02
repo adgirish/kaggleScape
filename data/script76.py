@@ -1,168 +1,159 @@
 
 # coding: utf-8
 
-# # How to load the data
-# ---
-# 
-# This kernel shows you how to resize these images and load them into an array ready to feed your models. The dataset contains 14 different disease classes, but this kernel separates the data based on which x-rays show Lung Infiltrations and which x-rays do not. This makes the data suitable for a binary classification and you can modify this kernel to classifiy any of the other disease classes. 
-# 
-# [Click here](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source) to see the second kernel, where I use the output from this kernel to train a convolutional neural network.
+# Let's start by importing the database. 
+# The row factory setting allows to use column names instead of integer when exploring a resultset.
 
 # In[ ]:
 
 
-import cv2
-import os
-import random
-import matplotlib.pylab as plt
-from glob import glob
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
+import sqlite3
+
+database = '../input/database.sqlite'
+conn = sqlite3.connect(database)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
 
 
-# # Prepare file directories and image paths and load labels
-# 
-# ---
+# Next we query a match. I chose a home game of my favourite team: Olympique Lyonnais!
 
 # In[ ]:
 
 
-# ../input/
-PATH = os.path.abspath(os.path.join('..', 'input'))
+match_api_id = 1989903
+sql = 'SELECT * From MATCH WHERE match_api_id=?'
+cur.execute(sql, (match_api_id,))
+match = cur.fetchone()
 
-# ../input/sample/images/
-SOURCE_IMAGES = os.path.join(PATH, "sample", "images")
 
-# ../input/sample/images/*.png
-images = glob(os.path.join(SOURCE_IMAGES, "*.png"))
-
-# Load labels
-labels = pd.read_csv('../input/sample_labels.csv')
-
+# We retrieve the x,y coordinates and players api
 
 # In[ ]:
 
 
-# First five images paths
-images[0:5]
+home_players_api_id = list()
+away_players_api_id = list()
+home_players_x = list()
+away_players_x = list()
+home_players_y = list()
+away_players_y = list()
+
+for i in range(1,12):
+    home_players_api_id.append(match['home_player_%d' % i])
+    away_players_api_id.append(match['away_player_%d' % i])
+    home_players_x.append(match['home_player_X%d' % i])
+    away_players_x.append(match['away_player_X%d' % i])
+    home_players_y.append(match['home_player_Y%d' % i])
+    away_players_y.append(match['away_player_Y%d' % i])
+
+print('Example, home players api id: ')
+print(home_players_api_id)
 
 
-# # Show three random images
-# 
-# ---
-
-# In[ ]:
-
-
-r = random.sample(images, 3)
-r
-
-# Matplotlib black magic
-plt.figure(figsize=(16,16))
-plt.subplot(131)
-plt.imshow(cv2.imread(r[0]))
-
-plt.subplot(132)
-plt.imshow(cv2.imread(r[1]))
-
-plt.subplot(133)
-plt.imshow(cv2.imread(r[2]));    
-
+# Next, we get the players last names from the table Player. I filter out the None values (if any) from the query and add them back later to the players_names list.
+# I try to keep the name in the same order as the other lists, so as to later map the names to the x,y coordinates
 
 # In[ ]:
 
 
-# Example of bad x-ray and good reason to use data augmentation
-e = cv2.imread(os.path.join(SOURCE_IMAGES,'00030209_008.png'))
+#Fetch players'names 
+players_api_id = [home_players_api_id,away_players_api_id]
+players_api_id.append(home_players_api_id) # Home
+players_api_id.append(away_players_api_id) # Away
+players_names = [[None]*11,[None]*11]
 
-plt.imshow(e)
+for i in range(2):
+    players_api_id_not_none = [x for x in players_api_id[i] if x is not None]
+    sql = 'SELECT player_api_id,player_name FROM Player'
+    sql += ' WHERE player_api_id IN (' + ','.join(map(str, players_api_id_not_none)) + ')'
+    cur.execute(sql)
+    players = cur.fetchall()
+    for player in players:
+        idx = players_api_id[i].index(player['player_api_id'])
+        name = player['player_name'].split()[-1] # keep only the last name
+        players_names[i][idx] = name
 
-labels[labels["Image Index"] == '00030209_008.png']
+print('Home team players names:')
+print(players_names[0])
+print('Away team players names:')
+print(players_names[1])
 
 
-# # Turn images into arrays and make a list of classes
-# ---
-# 
-# Images with Lung Infiltrations will be labeled "Infiltration" and everything else goes into "Not Infiltration". In this process I am creating two arrays, one for the images and one for the labels. I am also resizing the images from 1024x1024 to 128x128.
-
-# In[ ]:
-
-
-def proc_images():
-    """
-    Returns two arrays: 
-        x is an array of resized images
-        y is an array of labels
-    """
-    
-    disease="Infiltration"
-
-    x = [] # images as arrays
-    y = [] # labels Infiltration or Not_infiltration
-    WIDTH = 128
-    HEIGHT = 128
-
-    for img in images:
-        base = os.path.basename(img)
-        finding = labels["Finding Labels"][labels["Image Index"] == base].values[0]
-
-        # Read and resize image
-        full_size_image = cv2.imread(img)
-        x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
-
-        # Labels
-        if disease in finding:
-            #finding = str(disease)
-            finding = 1
-            y.append(finding)
-
-        else:
-            #finding = "Not_" + str(disease)
-            finding = 0
-            y.append(finding)
-
-    return x,y
-
+# Next we need to rework the x coordinate a little bit, replacing 1 (the goal keeper) with 5. You will understand why when we do the plot.
 
 # In[ ]:
 
 
-x,y = proc_images()
+home_players_x = [5 if x==1 else x for x in home_players_x]
+away_players_x = [5 if x==1 else x for x in away_players_x]
 
 
-# In[ ]:
-
-
-# Set it up as a dataframe if you like
-df = pd.DataFrame()
-df["labels"]=y
-df["images"]=x
-
+# Finally let's plot the lineup with a top-down view of the pitch. 
+# You should clearly see the differences between the two squad formations.
+# Lyon plays in 4-3-1-2 shape while St Etienne (the away team) uses a 4-2-3-1 formation.
 
 # In[ ]:
 
 
-print(len(df), df.images[0].shape)
+import matplotlib.pyplot as plt
+
+# Home team (in blue)
+plt.subplot(2, 1, 1)
+plt.rc('grid', linestyle="-", color='black')
+plt.rc('figure', figsize=(12,20))
+plt.gca().invert_yaxis() # Invert y axis to start with the goalkeeper at the top
+for label, x, y in zip(players_names[0], home_players_x, home_players_y):
+    plt.annotate(
+        label, 
+        xy = (x, y), xytext = (-20, 20),
+        textcoords = 'offset points', va = 'bottom')
+plt.scatter(home_players_x, home_players_y,s=480,c='blue')
+plt.grid(True)
+
+# Away team (in red)
+plt.subplot(2, 1, 2)
+plt.rc('grid', linestyle="-", color='black')
+plt.rc('figure', figsize=(12,20))
+plt.gca().invert_xaxis() # Invert x axis to have right wingers on the right
+for label, x, y in zip(players_names[1], away_players_x, away_players_y):
+    plt.annotate(
+        label, 
+        xy = (x, y), xytext = (-20, 20),
+        textcoords = 'offset points', va = 'bottom')
+plt.scatter(away_players_x, away_players_y,s=480,c='red')
+plt.grid(True)
 
 
-# # Saving arrays for use in another kernel
-# ----
-# 
-# Since this kernel takes up valuable time modifying the data to feed into a predictive model, it makes sense to save the arrays so that we don't have to process them again. We can use the output from this kernal as a data source for another kernel where we  can train a model. 
+ax = [plt.subplot(2,2,i+1) for i in range(0)]
+for a in ax:
+    a.set_xticklabels([])
+    a.set_yticklabels([])
+plt.subplots_adjust(wspace=0, hspace=0)
+
+
+plt.show()
+
+
+# We can also buil a string with the formations and print it:
 
 # In[ ]:
 
 
-np.savez("x_images_arrays", x)
-np.savez("y_infiltration_labels", y)
+from collections import Counter
+
+players_y = [home_players_y,away_players_y]
+formations = [None] * 2
+for i in range(2):
+    formation_dict=Counter(players_y[i]);
+    sorted_keys = sorted(formation_dict)
+    formation = ''
+    for key in sorted_keys[1:-1]:
+        y = formation_dict[key]
+        formation += '%d-' % y
+    formation += '%d' % formation_dict[sorted_keys[-1]] 
+    formations[i] = formation
 
 
-# In[ ]:
+print('Home team formation: ' + formations[0])
+print('Away team formation: ' + formations[1])
 
-
-get_ipython().system('ls -1')
-
-
-# ### Click here to see how I use the output from this kernel as input for a CNN with Keras:<br>
-# [https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source)

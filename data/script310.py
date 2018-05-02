@@ -1,337 +1,314 @@
 
 # coding: utf-8
 
-# # About the dataset
-# This dataset is about the show about "nothing". Yeah, you guessed it right. I am talking about Seinfeld, one of the greatest sitcoms of all time. This dataset provides episodic analysis of the series including the entire script and significant amount of information about each episode.
-
-# # What have I done here?
-# I have tried to create a classifier to predict the name of the speaker of a given dialogue. I have used the scripts database for this purpose. So, if a line is given to the predictor, it returns the person who said or might say that line.
-
 # In[ ]:
 
 
-# Importing libraries and data
 import numpy as np
 import pandas as pd
+
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
+from sklearn.cross_validation import train_test_split
+
 import matplotlib.pyplot as plt
-import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-# importing data
-df = pd.read_csv("../input/scripts.csv")
-del df["Unnamed: 0"]
-
-df.head()
+import math
 
 
-# Now, we don't really require the EpisodeNo, SEID and Season columns so we remove them.
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
 
 # In[ ]:
 
 
-dial_df = df.drop(["EpisodeNo","SEID","Season"],axis=1)
-dial_df.head()
+def rmsle(y, y_pred):
+    assert len(y) == len(y_pred)
+    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
+    return (sum(to_sum) * (1.0/len(y))) ** 0.5
+#Source: https://www.kaggle.com/marknagelberg/rmsle-function
 
-
-# Time for some EDA
-
-# # Plot by number of dialogues spoken
 
 # In[ ]:
 
 
-dial_df["Character"].value_counts().head(12).plot(kind="bar")
+#LOAD DATA
+print("Loading data...")
+train = pd.read_table("../input/train.tsv")
+test = pd.read_table("../input/test.tsv")
+print(train.shape)
+print(test.shape)
 
-
-# For creating a corpus out of the data, we will create a datframe concatenating all dialogues of a character. We are choosing 12 characters(by number of dialogues) 
 
 # In[ ]:
 
 
-def corpus_creator(name):
-    st = "" 
-    for i in dial_df["Dialogue"][dial_df["Character"]==name]:
-        st = st + i
-    return st
+#HANDLE MISSING VALUES
+print("Handling missing values...")
+def handle_missing(dataset):
+    dataset.category_name.fillna(value="missing", inplace=True)
+    dataset.brand_name.fillna(value="missing", inplace=True)
+    dataset.item_description.fillna(value="missing", inplace=True)
+    return (dataset)
 
-corpus_df = pd.DataFrame()
-corpus_df["Character"] = list(dial_df["Character"].value_counts().head(12).index)
+train = handle_missing(train)
+test = handle_missing(test)
+print(train.shape)
+print(test.shape)
 
-li = []
-for i in corpus_df["Character"]:
-    li.append(corpus_creator(i))
-
-corpus_df["Dialogues"] = li
-
-corpus_df
-
-
-# # Preparing stopwords(words that are obsolete for NLP or words that hinder modelling). Very helpful in human speech but useless when trained for modelling
 
 # In[ ]:
 
 
-from sklearn.feature_extraction import text
-punc = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}',"%"]
-stop_words = text.ENGLISH_STOP_WORDS.union(punc)
+train.head(3)
 
-
-# Now, we create a text_processor function to tokenize concatenated dialogues and removing stop words
 
 # In[ ]:
 
 
-from nltk.tokenize import word_tokenize
-def text_processor(dialogue):
-    dialogue = word_tokenize(dialogue)
-    nopunc=[word.lower() for word in dialogue if word not in stop_words]
-    nopunc=' '.join(nopunc)
-    return [word for word in nopunc.split()]
+#PROCESS CATEGORICAL DATA
+print("Handling categorical variables...")
+le = LabelEncoder()
 
+le.fit(np.hstack([train.category_name, test.category_name]))
+train.category_name = le.transform(train.category_name)
+test.category_name = le.transform(test.category_name)
 
-# Now, we apply this method
+le.fit(np.hstack([train.brand_name, test.brand_name]))
+train.brand_name = le.transform(train.brand_name)
+test.brand_name = le.transform(test.brand_name)
+del le
+
+train.head(3)
+
 
 # In[ ]:
 
 
-corpus_df["Dialogues"] = corpus_df["Dialogues"].apply(lambda x: text_processor(x))
-corpus_df
+#PROCESS TEXT: RAW
+print("Text to seq process...")
+from keras.preprocessing.text import Tokenizer
+raw_text = np.hstack([train.item_description.str.lower(), train.name.str.lower()])
 
+print("   Fitting tokenizer...")
+tok_raw = Tokenizer()
+tok_raw.fit_on_texts(raw_text)
+print("   Transforming text to seq...")
 
-# Adding a length column to the new dataframe which contains length of the concatenated dialogues
+train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
+test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
+train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
+test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
+train.head(3)
+
 
 # In[ ]:
 
 
-corpus_df["Length"] = corpus_df["Dialogues"].apply(lambda x: len(x))
-corpus_df
+#SEQUENCES VARIABLES ANALYSIS
+max_name_seq = np.max([np.max(train.seq_name.apply(lambda x: len(x))), np.max(test.seq_name.apply(lambda x: len(x)))])
+max_seq_item_description = np.max([np.max(train.seq_item_description.apply(lambda x: len(x)))
+                                   , np.max(test.seq_item_description.apply(lambda x: len(x)))])
+print("max name seq "+str(max_name_seq))
+print("max item desc seq "+str(max_seq_item_description))
 
-
-# # Who has spoken the most in Seinfeld?
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(10,10))
-sns.barplot(ax=ax,y="Length",x="Character",data=corpus_df)
+train.seq_name.apply(lambda x: len(x)).hist()
 
-
-# Obviously, Jerry speaks the most followed by George, Elaine and Kramer
-
-# Now, we do some **correlation analysis**  to find out how similar are the dialogues of different characters to each other.
-# (For this, we will use a library called **gensim**. Next cell is the most important yet.)
 
 # In[ ]:
 
 
-import gensim
-# Creating a dictionary for mapping every word to a number
-dictionary = gensim.corpora.Dictionary(corpus_df["Dialogues"])
-print(dictionary[567])
-print(dictionary.token2id['cereal'])
-print("Number of words in dictionary: ",len(dictionary))
+train.seq_item_description.apply(lambda x: len(x)).hist()
 
-# Now, we create a corpus which is a list of bags of words. A bag-of-words representation for a document just lists the number of times each word occurs in the document.
-corpus = [dictionary.doc2bow(bw) for bw in corpus_df["Dialogues"]]
 
-# Now, we use tf-idf model on our corpus
-tf_idf = gensim.models.TfidfModel(corpus)
+# In[ ]:
 
-# Creating a Similarity objectr
-sims = gensim.similarities.Similarity('',tf_idf[corpus],num_features=len(dictionary))
 
-# Creating a dataframe out of similarities
-sim_list = []
-for i in range(12):
-    query = dictionary.doc2bow(corpus_df["Dialogues"][i])
-    query_tf_idf = tf_idf[query]
-    sim_list.append(sims[query_tf_idf])
+#EMBEDDINGS MAX VALUE
+#Base on the histograms, we select the next lengths
+MAX_NAME_SEQ = 10
+MAX_ITEM_DESC_SEQ = 75
+MAX_TEXT = np.max([np.max(train.seq_name.max())
+                   , np.max(test.seq_name.max())
+                  , np.max(train.seq_item_description.max())
+                  , np.max(test.seq_item_description.max())])+2
+MAX_CATEGORY = np.max([train.category_name.max(), test.category_name.max()])+1
+MAX_BRAND = np.max([train.brand_name.max(), test.brand_name.max()])+1
+MAX_CONDITION = np.max([train.item_condition_id.max(), test.item_condition_id.max()])+1
+
+
+# In[ ]:
+
+
+#SCALE target variable
+train["target"] = np.log(train.price+1)
+target_scaler = MinMaxScaler(feature_range=(-1, 1))
+train["target"] = target_scaler.fit_transform(train.target.reshape(-1,1))
+pd.DataFrame(train.target).hist()
+
+
+# In[ ]:
+
+
+#EXTRACT DEVELOPTMENT TEST
+dtrain, dvalid = train_test_split(train, random_state=123, train_size=0.99)
+print(dtrain.shape)
+print(dvalid.shape)
+
+
+# In[ ]:
+
+
+#KERAS DATA DEFINITION
+from keras.preprocessing.sequence import pad_sequences
+
+def get_keras_data(dataset):
+    X = {
+        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
+        ,'item_desc': pad_sequences(dataset.seq_item_description, maxlen=MAX_ITEM_DESC_SEQ)
+        ,'brand_name': np.array(dataset.brand_name)
+        ,'category_name': np.array(dataset.category_name)
+        ,'item_condition': np.array(dataset.item_condition_id)
+        ,'num_vars': np.array(dataset[["shipping"]])
+    }
+    return X
+
+X_train = get_keras_data(dtrain)
+X_valid = get_keras_data(dvalid)
+X_test = get_keras_data(test)
+
+
+# In[ ]:
+
+
+#KERAS MODEL DEFINITION
+from keras.layers import Input, Dropout, Dense, BatchNormalization, Activation, concatenate, GRU, Embedding, Flatten, BatchNormalization
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from keras import backend as K
+
+def get_callbacks(filepath, patience=2):
+    es = EarlyStopping('val_loss', patience=patience, mode="min")
+    msave = ModelCheckpoint(filepath, save_best_only=True)
+    return [es, msave]
+
+def rmsle_cust(y_true, y_pred):
+    first_log = K.log(K.clip(y_pred, K.epsilon(), None) + 1.)
+    second_log = K.log(K.clip(y_true, K.epsilon(), None) + 1.)
+    return K.sqrt(K.mean(K.square(first_log - second_log), axis=-1))
+
+def get_model():
+    #params
+    dr_r = 0.15
     
-corr_df = pd.DataFrame()
-j=0
-for i in corpus_df["Character"]:
-    corr_df[i] = sim_list[j]
-    j = j + 1   
+    #Inputs
+    name = Input(shape=[X_train["name"].shape[1]], name="name")
+    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
+    brand_name = Input(shape=[1], name="brand_name")
+    category_name = Input(shape=[1], name="category_name")
+    item_condition = Input(shape=[1], name="item_condition")
+    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
+    
+    #Embeddings layers
+    emb_name = Embedding(MAX_TEXT, 50)(name)
+    emb_item_desc = Embedding(MAX_TEXT, 50)(item_desc)
+    emb_brand_name = Embedding(MAX_BRAND, 10)(brand_name)
+    emb_category_name = Embedding(MAX_CATEGORY, 10)(category_name)
+    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
+    
+    #rnn layer
+    rnn_layer1 = GRU(16) (emb_item_desc)
+    rnn_layer2 = GRU(8) (emb_name)
+    
+    #main layer
+    main_l = concatenate([
+        Flatten() (emb_brand_name)
+        , Flatten() (emb_category_name)
+        , Flatten() (emb_item_condition)
+        , rnn_layer1
+        , rnn_layer2
+        , num_vars
+    ])
+    main_l = Dropout(dr_r) (Dense(128) (main_l))
+    main_l = Dropout(dr_r) (Dense(64) (main_l))
+    
+    #output
+    output = Dense(1, activation="linear") (main_l)
+    
+    #model
+    model = Model([name, item_desc, brand_name
+                   , category_name, item_condition, num_vars], output)
+    model.compile(loss="mse", optimizer="adam", metrics=["mae", rmsle_cust])
+    
+    return model
 
-
-# # Heatmap to detect similarity between characters' dialogues
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(figsize=(12,12))
-sns.heatmap(corr_df,ax=ax,annot=True)
-ax.set_yticklabels(corpus_df.Character)
-plt.savefig('similarity.png')
-plt.show()
-
-
-# This plot can actually depict how different the cahracters are from each other. Like **Jerry, George, Elaine and Kramer** speak highly similar lines. Maybe, that's why they are friends(This might have happened because they are usually talking to each other and also because their dialogues are more than others). **[Setting] has lowest correlation scores** well because it is the odd one out because it is not a person. **Jerry and George have highly similar dialogues with 81%  correlation.**
-
-# # An awesome way to use classification
-# I am predicting the dialogues said by Elaine, George and Kramer only, so we will choose only their dialogues(I wanted to include Jerry, I mean what is Seinfeld without Jerry Seinfeld but I will later tell you why I didn't do that. Look for clues in markdown)
-
-# In[ ]:
-
-
-dial_df = dial_df[(dial_df["Character"]=="ELAINE") | (dial_df["Character"]=="GEORGE") | (dial_df["Character"]=="KRAMER")]
-dial_df.head(8)
-
-
-# Way too many dialogues by george will certainly affect the classifier.
-
-# # A text processor for processing dialogues
-
-# In[ ]:
-
-
-def text_process(dialogue):
-    nopunc=[word.lower() for word in dialogue if word not in stop_words]
-    nopunc=''.join(nopunc)
-    return [word for word in nopunc.split()]
-
-
-# # Preparation for classifier
-
-# In[ ]:
-
-
-X = dial_df["Dialogue"]
-y = dial_df["Character"]
-
-
-# # TF-IDF Vectorizer
-# Convert a collection of raw documents to a matrix of TF-IDF features. Equivalent to CountVectorizer followed by TfidfTransformer.
-# 
-# In information retrieval, tf–idf or TFIDF, short for term frequency–inverse document frequency, is a numerical statistic that is intended to reflect how important a word is to a document in a collection or corpus. It is often used as a weighting factor in searches of information retrieval, text mining, and user modeling. The tf-idf value increases proportionally to the number of times a word appears in the document and is offset by the frequency of the word in the corpus, which helps to adjust for the fact that some words appear more frequently in general. Nowadays, tf-idf is one of the most popular term-weighting schemes; 83% of text-based recommender systems in the domain of digital libraries use tf-idf.
-# 
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-vectorizer = TfidfVectorizer(analyzer=text_process).fit(X)
+    
+model = get_model()
+model.summary()
+    
+5
 
 
 # In[ ]:
 
 
-print(len(vectorizer.vocabulary_))
-X = vectorizer.transform(X)
+#FITTING THE MODEL
+BATCH_SIZE = 10000
+epochs = 3
+
+model = get_model()
+model.fit(X_train, dtrain.target, epochs=epochs, batch_size=BATCH_SIZE
+          , validation_data=(X_valid, dvalid.target)
+          , verbose=1)
 
 
 # In[ ]:
 
 
-# Splitting the data into train and test set
-from sklearn.model_selection import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=101)
+#EVLUEATE THE MODEL ON DEV TEST: What is it doing?
+val_preds = model.predict(X_valid)
+val_preds = target_scaler.inverse_transform(val_preds)
+val_preds = np.exp(val_preds)+1
 
-
-# # Creating a voting classifier with Multinomial Naive Bayes, logistic regression and random forest classifier
-# The EnsembleVoteClassifier is a meta-classifier for combining similar or conceptually different machine learning classifiers for classification via majority or plurality voting.
-# 
-# The EnsembleVoteClassifier implements "hard" and "soft" voting. In hard voting, we predict the final class label as the class label that has been predicted most frequently by the classification models. In soft voting, we predict the class labels by averaging the class-probabilities (only recommended if the classifiers are well-calibrated).
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import MultinomialNB as MNB
-from sklearn.linear_model import LogisticRegression as LR
-from sklearn.ensemble import RandomForestClassifier as RFC
-from sklearn.ensemble import VotingClassifier as VC
-mnb = MNB(alpha=10)
-lr = LR(random_state=101)
-rfc = RFC(n_estimators=80, criterion="entropy", random_state=42, n_jobs=-1)
-clf = VC(estimators=[('mnb', mnb), ('lr', lr), ('rfc', rfc)], voting='hard')
+#mean_absolute_error, mean_squared_log_error
+y_true = np.array(dvalid.price.values)
+y_pred = val_preds[:,0]
+v_rmsle = rmsle(y_true, y_pred)
+print(" RMSLE error on dev test: "+str(v_rmsle))
 
 
 # In[ ]:
 
 
-# Fitting and predicting
-clf.fit(X_train,y_train)
+#CREATE PREDICTIONS
+preds = model.predict(X_test, batch_size=BATCH_SIZE)
+preds = target_scaler.inverse_transform(preds)
+preds = np.exp(preds)-1
 
-predict = clf.predict(X_test)
-
-
-# In[ ]:
-
-
-# Classification report
-from sklearn.metrics import confusion_matrix, classification_report
-print(confusion_matrix(y_test, predict))
-print('\n')
-print(classification_report(y_test, predict))
-
-
-# So we get about 51% precision which is not bad considering the limited vocablury. George is dominant here due to high recall value of 0.80. So, unless a dialogue has words that don't exist at all in George's vocablury, there is a high chance George will the speaker of most lines. The situation was worse when Jerry was inclued. **This is why I decided to drop Jerry's dialogues from the dataset.** 
-
-# # The Predictor
-
-# In[ ]:
-
-
-def predictor(s):
-    s = vectorizer.transform(s)
-    pre = clf.predict(s)
-    print(pre)
-
-
-# # Now, we predict...
-
-# In[ ]:
-
-
-# Answer should be Kramer
-predictor(['I\'m on the Mexican, whoa oh oh, radio.'])
+submission = test[["test_id"]]
+submission["price"] = preds
 
 
 # In[ ]:
 
 
-# Answer should be Elaine
-predictor(['Do you have any idea how much time I waste in this apartment?'])
+submission.to_csv("./myNNsubmission.csv", index=False)
+submission.price.hist()
 
 
-# In[ ]:
-
-
-# Answer should be George 
-predictor(['Yeah. I figured since I was lying about my income for a couple of years, I could afford a fake house in the Hamptons.'])
-
-
-# In[ ]:
-
-
-# Now, a random sentence
-predictor(['Jerry, I\'m gonna go join the circus.'])
-
-
-# In[ ]:
-
-
-# A random sentence
-predictor(['I wish we can find some way to move past this.'])
-
-
-# In[ ]:
-
-
-# Answer should be Kramer
-predictor(['You’re becoming one of the glitterati.'])
-
-
-# In[ ]:
-
-
-# Answer should be Elaine
-predictor(['Jerry, we have to have sex to save the friendship.'])
-
-
-# See, this "george effect" can lead to awkward results. That's why I am trying to find a way to get rid of that high recall value and also improve the precision of classifier. I am open to suggestions.
-
-# This is not the end. More is yet to come.
-# Coming soon:
-# 1. Alternative deep learning approach using Keras
-# 2. Sentimental Analysis
+# This was just an example how nn can solve this problems. Potencial improvements of the kernel:
+#     - Increase the embeddings factos
+#     - Decrease the batch size
+#     - Add Batch Normalization
+#     - Try LSTM, Bidirectional RNN, stack RNN
+#     - Try with more dense layers or more rnn outputs
+#     -  etc. Or even try a new architecture!
+#     
+# Any comment will be welcome. Thanks!
+#  
+#     

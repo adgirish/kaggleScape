@@ -1,165 +1,247 @@
-#!/usr/bin/python
-
-'''
-Based on https://www.kaggle.com/justdoit/rossmann-store-sales/xgboost-in-python-with-rmspe/code
-Public Score :  0.11389
-Private Validation Score :  0.096959
-'''
-
 import pandas as pd
 import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-import operator
-import matplotlib
-matplotlib.use("Agg") #Needed to save figures
-import matplotlib.pyplot as plt
+import os
+import imageio
 
-def create_feature_map(features):
-    outfile = open('xgb.fmap', 'w')
-    for i, feat in enumerate(features):
-        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
-    outfile.close()
-
-def rmspe(y, yhat):
-    return np.sqrt(np.mean((yhat/y-1) ** 2))
-
-def rmspe_xg(yhat, y):
-    y = np.expm1(y.get_label())
-    yhat = np.expm1(yhat)
-    return "rmspe", rmspe(y,yhat)
-
-# Gather some features
-def build_features(features, data):
-    # remove NaNs
-    data.fillna(0, inplace=True)
-    data.loc[data.Open.isnull(), 'Open'] = 1
-    # Use some properties directly
-    features.extend(['Store', 'CompetitionDistance', 'Promo', 'Promo2', 'SchoolHoliday'])
-
-    # Label encode some features
-    features.extend(['StoreType', 'Assortment', 'StateHoliday'])
-    mappings = {'0':0, 'a':1, 'b':2, 'c':3, 'd':4}
-    data.StoreType.replace(mappings, inplace=True)
-    data.Assortment.replace(mappings, inplace=True)
-    data.StateHoliday.replace(mappings, inplace=True)
-
-    features.extend(['DayOfWeek', 'Month', 'Day', 'Year', 'WeekOfYear'])
-    data['Year'] = data.Date.dt.year
-    data['Month'] = data.Date.dt.month
-    data['Day'] = data.Date.dt.day
-    data['DayOfWeek'] = data.Date.dt.dayofweek
-    data['WeekOfYear'] = data.Date.dt.weekofyear
-
-    # CompetionOpen en PromoOpen from https://www.kaggle.com/ananya77041/rossmann-store-sales/randomforestpython/code
-    # Calculate time competition open time in months
-    features.append('CompetitionOpen')
-    data['CompetitionOpen'] = 12 * (data.Year - data.CompetitionOpenSinceYear) + \
-        (data.Month - data.CompetitionOpenSinceMonth)
-    # Promo open time in months
-    features.append('PromoOpen')
-    data['PromoOpen'] = 12 * (data.Year - data.Promo2SinceYear) + \
-        (data.WeekOfYear - data.Promo2SinceWeek) / 4.0
-    data['PromoOpen'] = data.PromoOpen.apply(lambda x: x if x > 0 else 0)
-    data.loc[data.Promo2SinceYear == 0, 'PromoOpen'] = 0
-
-    # Indicate that sales on that day are in promo interval
-    features.append('IsPromoMonth')
-    month2str = {1:'Jan', 2:'Feb', 3:'Mar', 4:'Apr', 5:'May', 6:'Jun', \
-             7:'Jul', 8:'Aug', 9:'Sept', 10:'Oct', 11:'Nov', 12:'Dec'}
-    data['monthStr'] = data.Month.map(month2str)
-    data.loc[data.PromoInterval == 0, 'PromoInterval'] = ''
-    data['IsPromoMonth'] = 0
-    for interval in data.PromoInterval.unique():
-        if interval != '':
-            for month in interval.split(','):
-                data.loc[(data.monthStr == month) & (data.PromoInterval == interval), 'IsPromoMonth'] = 1
-
-    return data
+from keras.utils import plot_model
+from keras.models import Model
+from keras.layers import Input
+from keras.layers import Dense
+from keras.layers import Flatten
+from keras.layers import Activation
+from keras.layers import Dropout
+from keras.layers import Maximum
+from keras.layers import ZeroPadding2D
+from keras.layers.convolutional import Conv2D
+from keras.layers.pooling import MaxPooling2D
+from keras.layers.merge import concatenate
+from keras import regularizers
+from keras.layers import BatchNormalization
+from keras.optimizers import Adam, SGD
+from keras.preprocessing.image import ImageDataGenerator
+from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
+from keras.layers.advanced_activations import LeakyReLU
+from keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+from skimage.transform import resize as imresize
+from tqdm import tqdm
 
 
-## Start of main script
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-print("Load the training, test and store data using pandas")
-types = {'CompetitionOpenSinceYear': np.dtype(int),
-         'CompetitionOpenSinceMonth': np.dtype(int),
-         'StateHoliday': np.dtype(str),
-         'Promo2SinceWeek': np.dtype(int),
-         'SchoolHoliday': np.dtype(float),
-         'PromoInterval': np.dtype(str)}
-train = pd.read_csv("../input/train.csv", parse_dates=[2], dtype=types)
-test = pd.read_csv("../input/test.csv", parse_dates=[3], dtype=types)
-store = pd.read_csv("../input/store.csv")
 
-print("Assume store open, if not provided")
-train.fillna(1, inplace=True)
-test.fillna(1, inplace=True)
+BATCH_SIZE = 16
+EPOCHS = 30
+RANDOM_STATE = 11
 
-print("Consider only open stores for training. Closed stores wont count into the score.")
-train = train[train["Open"] != 0]
-print("Use only Sales bigger then zero. Simplifies calculation of rmspe")
-train = train[train["Sales"] > 0]
+CLASS = {
+    'Black-grass': 0,
+    'Charlock': 1,
+    'Cleavers': 2,
+    'Common Chickweed': 3,
+    'Common wheat': 4,
+    'Fat Hen': 5,
+    'Loose Silky-bent': 6,
+    'Maize': 7,
+    'Scentless Mayweed': 8,
+    'Shepherds Purse': 9,
+    'Small-flowered Cranesbill': 10,
+    'Sugar beet': 11
+}
 
-print("Join with store")
-train = pd.merge(train, store, on='Store')
-test = pd.merge(test, store, on='Store')
+INV_CLASS = {
+    0: 'Black-grass',
+    1: 'Charlock',
+    2: 'Cleavers',
+    3: 'Common Chickweed',
+    4: 'Common wheat',
+    5: 'Fat Hen',
+    6: 'Loose Silky-bent',
+    7: 'Maize',
+    8: 'Scentless Mayweed',
+    9: 'Shepherds Purse',
+    10: 'Small-flowered Cranesbill',
+    11: 'Sugar beet'
+}
 
-features = []
+# Dense layers set
+def dense_set(inp_layer, n, activation, drop_rate=0.):
+    dp = Dropout(drop_rate)(inp_layer)
+    dns = Dense(n)(dp)
+    bn = BatchNormalization(axis=-1)(dns)
+    act = Activation(activation=activation)(bn)
+    return act
 
-print("augment features")
-build_features(features, train)
-build_features([], test)
-print(features)
+# Conv. layers set
+def conv_layer(feature_batch, feature_map, kernel_size=(3, 3),strides=(1,1), zp_flag=False):
+    if zp_flag:
+        zp = ZeroPadding2D((1,1))(feature_batch)
+    else:
+        zp = feature_batch
+    conv = Conv2D(filters=feature_map, kernel_size=kernel_size, strides=strides)(zp)
+    bn = BatchNormalization(axis=3)(conv)
+    act = LeakyReLU(1/10)(bn)
+    return act
 
-print('training data processed')
+# simple model 
+def get_model():
+    inp_img = Input(shape=(51, 51, 3))
 
-params = {"objective": "reg:linear",
-          "booster" : "gbtree",
-          "eta": 0.3,
-          "max_depth": 10,
-          "subsample": 0.9,
-          "colsample_bytree": 0.7,
-          "silent": 1,
-          "seed": 1301
-          }
-num_boost_round = 300
+    # 51
+    conv1 = conv_layer(inp_img, 64, zp_flag=False)
+    conv2 = conv_layer(conv1, 64, zp_flag=False)
+    mp1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv2)
+    # 23
+    conv3 = conv_layer(mp1, 128, zp_flag=False)
+    conv4 = conv_layer(conv3, 128, zp_flag=False)
+    mp2 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv4)
+    # 9
+    conv7 = conv_layer(mp2, 256, zp_flag=False)
+    conv8 = conv_layer(conv7, 256, zp_flag=False)
+    conv9 = conv_layer(conv8, 256, zp_flag=False)
+    mp3 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv9)
+    # 1
+    # dense layers
+    flt = Flatten()(mp3)
+    ds1 = dense_set(flt, 128, activation='tanh')
+    out = dense_set(ds1, 12, activation='softmax')
 
-print("Train a XGBoost model")
-X_train, X_valid = train_test_split(train, test_size=0.012, random_state=10)
-y_train = np.log1p(X_train.Sales)
-y_valid = np.log1p(X_valid.Sales)
-dtrain = xgb.DMatrix(X_train[features], y_train)
-dvalid = xgb.DMatrix(X_valid[features], y_valid)
+    model = Model(inputs=inp_img, outputs=out)
+    
+    # The first 50 epochs are used by Adam opt.
+    # Then 30 epochs are used by SGD opt.
+    
+    #mypotim = Adam(lr=2 * 1e-3, beta_1=0.9, beta_2=0.999, epsilon=1e-08)
+    mypotim = SGD(lr=1 * 1e-1, momentum=0.9, nesterov=True)
+    model.compile(loss='categorical_crossentropy',
+                   optimizer=mypotim,
+                   metrics=['accuracy'])
+    model.summary()
+    return model
 
-watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
-gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, \
-  early_stopping_rounds=100, feval=rmspe_xg, verbose_eval=True)
 
-print("Validating")
-yhat = gbm.predict(xgb.DMatrix(X_valid[features]))
-error = rmspe(X_valid.Sales.values, np.expm1(yhat))
-print('RMSPE: {:.6f}'.format(error))
+def get_callbacks(filepath, patience=5):
+    lr_reduce = ReduceLROnPlateau(monitor='val_acc', factor=0.1, epsilon=1e-5, patience=patience, verbose=1)
+    msave = ModelCheckpoint(filepath, save_best_only=True)
+    return [lr_reduce, msave]
 
-print("Make predictions on the test set")
-dtest = xgb.DMatrix(test[features])
-test_probs = gbm.predict(dtest)
-# Make Submission
-result = pd.DataFrame({"Id": test["Id"], 'Sales': np.expm1(test_probs)})
-result.to_csv("xgboost_10_submission.csv", index=False)
+# I trained model about 12h on GTX 950.
+def train_model(img, target):
+    callbacks = get_callbacks(filepath='model_weight_SGD.hdf5', patience=6)
+    gmodel = get_model()
+    gmodel.load_weights(filepath='model_weight_Adam.hdf5')
+    x_train, x_valid, y_train, y_valid = train_test_split(
+                                                        img,
+                                                        target,
+                                                        shuffle=True,
+                                                        train_size=0.8,
+                                                        random_state=RANDOM_STATE
+                                                        )
+    gen = ImageDataGenerator(
+            rotation_range=360.,
+            width_shift_range=0.3,
+            height_shift_range=0.3,
+            zoom_range=0.3,
+            horizontal_flip=True,
+            vertical_flip=True
+    )
+    gmodel.fit_generator(gen.flow(x_train, y_train,batch_size=BATCH_SIZE),
+               steps_per_epoch=10*len(x_train)/BATCH_SIZE,
+               epochs=EPOCHS,
+               verbose=1,
+               shuffle=True,
+               validation_data=(x_valid, y_valid),
+               callbacks=callbacks)
 
-# XGB feature importances
-# Based on https://www.kaggle.com/mmueller/liberty-mutual-group-property-inspection-prediction/xgb-feature-importance-python/code
+def test_model(img, label):
+    gmodel = get_model()
+    gmodel.load_weights(filepath='../input/plant-weight/model_weight_SGD.hdf5')
+    prob = gmodel.predict(img, verbose=1)
+    pred = prob.argmax(axis=-1)
+    sub = pd.DataFrame({"file": label,
+                         "species": [INV_CLASS[p] for p in pred]})
+    sub.to_csv("sub.csv", index=False, header=True)
 
-create_feature_map(features)
-importance = gbm.get_fscore(fmap='xgb.fmap')
-importance = sorted(importance.items(), key=operator.itemgetter(1))
+# Resize all image to 51x51 
+def img_reshape(img):
+    img = imresize(img, (51, 51, 3))
+    return img
 
-df = pd.DataFrame(importance, columns=['feature', 'fscore'])
-df['fscore'] = df['fscore'] / df['fscore'].sum()
+# get image tag
+def img_label(path):
+    return str(str(path.split('/')[-1]))
 
-featp = df.plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(6, 10))
-plt.title('XGBoost Feature Importance')
-plt.xlabel('relative importance')
-fig_featp = featp.get_figure()
-fig_featp.savefig('feature_importance_xgb.png', bbox_inches='tight', pad_inches=1)
+# get plant class on image
+def img_class(path):
+    return str(path.split('/')[-2])
 
+# fill train and test dict
+def fill_dict(paths, some_dict):
+    text = ''
+    if 'train' in paths[0]:
+        text = 'Start fill train_dict'
+    elif 'test' in paths[0]:
+        text = 'Start fill test_dict'
+
+    for p in tqdm(paths, ascii=True, ncols=85, desc=text):
+        img = imageio.imread(p)
+        img = img_reshape(img)
+        some_dict['image'].append(img)
+        some_dict['label'].append(img_label(p))
+        if 'train' in paths[0]:
+            some_dict['class'].append(img_class(p))
+
+    return some_dict
+
+# read image from dir. and fill train and test dict
+def reader():
+    file_ext = []
+    train_path = []
+    test_path = []
+
+    for root, dirs, files in os.walk('../input'):
+        if dirs != []:
+            print('Root:\n'+str(root))
+            print('Dirs:\n'+str(dirs))
+        else:
+            for f in files:
+                ext = os.path.splitext(str(f))[1][1:]
+
+                if ext not in file_ext:
+                    file_ext.append(ext)
+
+                if 'train' in root:
+                    path = os.path.join(root, f)
+                    train_path.append(path)
+                elif 'test' in root:
+                    path = os.path.join(root, f)
+                    test_path.append(path)
+    train_dict = {
+        'image': [],
+        'label': [],
+        'class': []
+    }
+    test_dict = {
+        'image': [],
+        'label': []
+    }
+
+    #train_dict = fill_dict(train_path, train_dict)
+    test_dict = fill_dict(test_path, test_dict)
+    return train_dict, test_dict
+# I commented out some of the code for learning the model.
+def main():
+    train_dict, test_dict = reader()
+    #X_train = np.array(train_dict['image'])
+    #y_train = to_categorical(np.array([CLASS[l] for l in train_dict['class']]))
+
+    X_test = np.array(test_dict['image'])
+    label = test_dict['label']
+    
+    # I do not recommend trying to train the model on a kaggle.
+    #train_model(X_train, y_train)
+    test_model(X_test, label)
+
+if __name__=='__main__':
+    main()

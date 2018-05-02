@@ -1,119 +1,177 @@
-#scikit learn ensembe workflow for binary probability
-import time; start_time = time.time()
+"""
+Ref: https://www.kaggle.com/the1owl/surprise-me
+"""
+
 import numpy as np
 import pandas as pd
-from sklearn import ensemble
+from sklearn import preprocessing
+from sklearn.model_selection import GridSearchCV
 import xgboost as xgb
-from sklearn.metrics import log_loss, make_scorer
-from sklearn.grid_search import GridSearchCV
-from sklearn.cross_validation import train_test_split
-import random; random.seed(2016)
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-num_train = train.shape[0]
+# Data wrangling brought to you by the1owl
+# https://www.kaggle.com/the1owl/surprise-me
 
-y_train = train['target']
-train = train.drop(['target'],axis=1)
-id_test = test['ID']
+data = {
+    'tra':
+    pd.read_csv('../input/air_visit_data.csv'),
+    'as':
+    pd.read_csv('../input/air_store_info.csv'),
+    'hs':
+    pd.read_csv('../input/hpg_store_info.csv'),
+    'ar':
+    pd.read_csv('../input/air_reserve.csv'),
+    'hr':
+    pd.read_csv('../input/hpg_reserve.csv'),
+    'id':
+    pd.read_csv('../input/store_id_relation.csv'),
+    'tes':
+    pd.read_csv('../input/sample_submission.csv'),
+    'hol':
+    pd.read_csv('../input/date_info.csv').rename(columns={
+        'calendar_date': 'visit_date'
+    })
+}
 
-def fill_nan_null(val):
-    ret_fill_nan_null = 0.0
-    if val == True:
-        ret_fill_nan_null = 1.0
-    return ret_fill_nan_null
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-df_all = pd.concat((train, test), axis=0, ignore_index=True)
-df_all['null_count'] = df_all.isnull().sum(axis=1).tolist()
-df_all_temp = df_all['ID']
-df_all = df_all.drop(['ID'],axis=1)
-df_data_types = df_all.dtypes[:] #{'object':0,'int64':0,'float64':0,'datetime64':0}
-d_col_drops = []
+for df in ['ar', 'hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(
+        lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    data[df] = data[df].groupby(
+        ['air_store_id', 'visit_datetime'], as_index=False)[[
+            'reserve_datetime_diff', 'reserve_visitors'
+        ]].sum().rename(columns={
+            'visit_datetime': 'visit_date'
+        })
+    print(data[df].head())
 
-for i in range(len(df_data_types)):
-    df_all[str(df_data_types.index[i])+'_nan_'] = df_all[str(df_data_types.index[i])].map(lambda x:fill_nan_null(pd.isnull(x)))
-df_all = df_all.fillna(-9999)
-#df_all = df_all.replace(0, -9999)
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
-for i in range(len(df_data_types)):
-    if str(df_data_types[i])=='object':
-        df_u = pd.unique(df_all[str(df_data_types.index[i])].ravel())
-        print("Column: ", str(df_data_types.index[i]), " Length: ", len(df_u))
-        d={}
-        j = 1000
-        for s in df_u:
-            d[str(s)]=j
-            j+=5
-        df_all[str(df_data_types.index[i])+'_vect_'] = df_all[str(df_data_types.index[i])].map(lambda x:d[str(x)])
-        d_col_drops.append(str(df_data_types.index[i]))
-        if len(df_u)<150:
-            dummies = pd.get_dummies(df_all[str(df_data_types.index[i])]).rename(columns=lambda x: str(df_data_types.index[i]) + '_' + str(x))
-            df_all_temp = pd.concat([df_all_temp, dummies], axis=1)
+data['tes']['visit_date'] = data['tes']['id'].map(
+    lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(
+    lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
 
-df_all_temp = df_all_temp.drop(['ID'],axis=1)
-df_all = pd.concat([df_all, df_all_temp], axis=1)
-print(len(df_all), len(df_all.columns))
-#df_all.to_csv("df_all.csv")
-train = df_all.iloc[:num_train]
-test = df_all.iloc[num_train:]
-train = train.drop(d_col_drops,axis=1)
-test = test.drop(d_col_drops,axis=1)
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat(
+    [
+        pd.DataFrame({
+            'air_store_id': unique_stores,
+            'dow': [i] * len(unique_stores)
+        }) for i in range(7)
+    ],
+    axis=0,
+    ignore_index=True).reset_index(drop=True)
 
-def flog_loss(ground_truth, predictions):
-    flog_loss_ = log_loss(ground_truth, predictions) #, eps=1e-15, normalize=True, sample_weight=None)
-    return flog_loss_
-LL  = make_scorer(flog_loss, greater_is_better=False)
+#sure it can be compressed...
+tmp = data['tra'].groupby(
+    ['air_store_id', 'dow'],
+    as_index=False)['visitors'].min().rename(columns={
+        'visitors': 'min_visitors'
+    })
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
+tmp = data['tra'].groupby(
+    ['air_store_id', 'dow'],
+    as_index=False)['visitors'].mean().rename(columns={
+        'visitors': 'mean_visitors'
+    })
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
+tmp = data['tra'].groupby(
+    ['air_store_id', 'dow'],
+    as_index=False)['visitors'].median().rename(columns={
+        'visitors': 'median_visitors'
+    })
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
+tmp = data['tra'].groupby(
+    ['air_store_id', 'dow'],
+    as_index=False)['visitors'].max().rename(columns={
+        'visitors': 'max_visitors'
+    })
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
+tmp = data['tra'].groupby(
+    ['air_store_id', 'dow'],
+    as_index=False)['visitors'].count().rename(columns={
+        'visitors': 'count_observations'
+    })
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id', 'dow'])
 
-g={'ne':150,'md':6,'mf':80,'rs':2016} #change to g={'ne':500,'md':40,'mf':60,'rs':2016}
-etc = ensemble.ExtraTreesClassifier(n_estimators=g['ne'], max_depth=g['md'], max_features=g['mf'], random_state=g['rs'], criterion='entropy', min_samples_split= 4, min_samples_leaf= 2, verbose = 0, n_jobs =-1)      
-etr = ensemble.ExtraTreesRegressor(n_estimators=g['ne'], max_depth=g['md'], max_features=g['mf'], random_state=g['rs'], min_samples_split= 4, min_samples_leaf= 2, verbose = 0, n_jobs =-1)      
-rfc = ensemble.RandomForestClassifier(n_estimators=g['ne'], max_depth=g['md'], max_features=g['mf'], random_state=g['rs'], criterion='entropy', min_samples_split= 4, min_samples_leaf= 2, verbose = 0, n_jobs =-1)
-rfr = ensemble.RandomForestRegressor(n_estimators=g['ne'], max_depth=g['md'], max_features=g['mf'], random_state=g['rs'], min_samples_split= 4, min_samples_leaf= 2, verbose = 0, n_jobs =-1)
-xgr = xgb.XGBRegressor(n_estimators=g['ne'], max_depth=g['md'], seed=g['rs'], missing=np.nan, learning_rate=0.02, subsample=0.9, colsample_bytree=0.85, objective='reg:linear')
-xgc = xgb.XGBClassifier(n_estimators=g['ne'], max_depth=g['md'], seed=g['rs'], missing=np.nan, learning_rate=0.02, subsample=0.9, colsample_bytree=0.85, objective='binary:logistic') #try 'binary:logitraw'
-#clf = {'etc':etc, 'etr':etr, 'rfc':rfc, 'rfr':rfr, 'xgr':xgr, 'xgc':xgc} # use this line instead
-clf = {'etr':etr, 'rfr':rfr, 'xgr':xgr} # removed due to kaggle performance, would prefer less time and more cores than more time and less cores :)
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id'])
+lbl = preprocessing.LabelEncoder()
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
 
-y_pred=[]
-best_score = 0.0
-id_results = id_test[:]
-for c in clf:
-    if c[:1] != "x": #not xgb
-        model = GridSearchCV(estimator=clf[c], param_grid={}, n_jobs =-1, cv=2, verbose=0, scoring=LL)
-        model.fit(train, y_train.values)
-        if c[-1:] != "c": #not classifier
-            y_pred = model.predict(test)
-            print("Ensemble Model: ", c, " Best CV score: ", model.best_score_, " Time: ", round(((time.time() - start_time)/60),2))
-        else: #classifier
-            best_score = (log_loss(y_train.values, model.predict_proba(train)))*-1
-            y_pred = model.predict_proba(test)[:,1]
-            print("Ensemble Model: ", c, " Best CV score: ", best_score, " Time: ", round(((time.time() - start_time)/60),2))
-    else: #xgb
-        X_fit, X_eval, y_fit, y_eval= train_test_split(train, y_train, test_size=0.35, train_size=0.65, random_state=g['rs'])
-        model = clf[c]
-        model.fit(X_fit, y_fit.values, early_stopping_rounds=20, eval_metric="logloss", eval_set=[(X_eval, y_eval)], verbose=0)
-        if c == "xgr": #xgb regressor
-            best_score = (log_loss(y_train.values, model.predict(train)))*-1
-            y_pred = model.predict(test)
-        else: #xgb classifier
-            best_score = (log_loss(y_train.values, model.predict_proba(train)))*-1
-            y_pred = model.predict_proba(test)[:,1]
-        print("Ensemble Model: ", c, " Best CV score: ", best_score, " Time: ", round(((time.time() - start_time)/60),2))
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
 
-    for i in range(len(y_pred)):
-        if y_pred[i]<0.0:
-            y_pred[i] = 0.0
-        if y_pred[i]>1.0:
-            y_pred[i] = 1.0
-    df_in = pd.DataFrame({"ID": id_test, c: y_pred})
-    id_results = pd.concat([id_results, df_in[c]], axis=1)
-id_results['avg'] = id_results.drop('ID', axis=1).apply(np.average, axis=1)
-id_results['min'] = id_results.drop('ID', axis=1).apply(min, axis=1)
-id_results['max'] = id_results.drop('ID', axis=1).apply(max, axis=1)
-id_results['diff'] = id_results['max'] - id_results['min']
-for i in range(10):
-    print(i, len(id_results[id_results['diff']>(i/10)]))
-id_results.to_csv("results_analysis.csv", index=False)
-ds = id_results[['ID','avg']]
-ds.columns = ['ID','PredictedProb']
-ds.to_csv('submission.csv',index=False)
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date'])
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date'])
+
+train = pd.merge(data['tra'], stores, how='left', on=['air_store_id', 'dow'])
+test = pd.merge(data['tes'], stores, how='left', on=['air_store_id', 'dow'])
+
+for df in ['ar', 'hr']:
+    train = pd.merge(
+        train, data[df], how='left', on=['air_store_id', 'visit_date'])
+    test = pd.merge(
+        test, data[df], how='left', on=['air_store_id', 'visit_date'])
+
+col = [
+    c for c in train
+    if c not in ['id', 'air_store_id', 'visit_date', 'visitors']
+]
+train = train.fillna(-1)
+test = test.fillna(-1)
+
+# XGB starter template borrowed from @anokas
+# https://www.kaggle.com/anokas/simple-xgboost-starter-0-0655
+
+print('Binding to float32')
+
+for c, dtype in zip(train.columns, train.dtypes):
+    if dtype == np.float64:
+        train[c] = train[c].astype(np.float32)
+
+for c, dtype in zip(test.columns, test.dtypes):
+    if dtype == np.float64:
+        test[c] = test[c].astype(np.float32)
+
+train_x = train.drop(['air_store_id', 'visit_date', 'visitors'], axis=1)
+train_y = np.log1p(train['visitors'].values)
+print(train_x.shape, train_y.shape)
+test_x = test.drop(['id', 'air_store_id', 'visit_date', 'visitors'], axis=1)
+
+# parameter tuning of xgboost
+# start from default setting
+boost_params = {'eval_metric': 'rmse'}
+xgb0 = xgb.XGBRegressor(
+    max_depth=8,
+    learning_rate=0.01,
+    n_estimators=10000,
+    objective='reg:linear',
+    gamma=0,
+    min_child_weight=1,
+    subsample=1,
+    colsample_bytree=1,
+    scale_pos_weight=1,
+    seed=27,
+    **boost_params)
+
+xgb0.fit(train_x, train_y)
+predict_y = xgb0.predict(test_x)
+test['visitors'] = np.expm1(predict_y)
+test[['id', 'visitors']].to_csv(
+    'xgb0_submission.csv', index=False, float_format='%.3f')  # LB0.495

@@ -1,158 +1,76 @@
-import gc
-import time
 import numpy as np
 import pandas as pd
 
-from scipy.sparse import csr_matrix, hstack
+# Is access information for landing page of ad click in page_views.csv?
+df_test = pd.read_csv('../input/clicks_test.csv')
+df_ad = pd.read_csv('../input/promoted_content.csv',
+    usecols  = ('ad_id','document_id'),
+    dtype={'ad_id': np.int, 'uuid': np.str, 'document_id': np.str})
+df_events = pd.read_csv('../input/events.csv',
+    usecols  = ('display_id','uuid','timestamp'),
+    dtype={'display_id': np.int, 'uuid': np.str, 'timestamp': np.int})
+df_test = pd.merge(df_test, df_ad, on='ad_id', how='left')
+df_test = pd.merge(df_test, df_events, on='display_id', how='left')
+df_test['usr_doc'] = df_test['uuid'] + '_' + df_test['document_id']
+df_test = df_test.set_index('usr_doc')
+time_dict = df_test[['timestamp']].to_dict()['timestamp']
+f = open("../input/page_views.csv", "r")
+line = f.readline().strip()
+head_arr = line.split(",")
+fld_index = dict(zip(head_arr,range(0,len(head_arr))))
+total = 0
+found = 0
+while 1:
+    line = f.readline().strip()
+    total += 1
+    if total % 100000000 == 0:
+        print('Read {} lines, found {}'.format(total,found))
+    if line == '':
+        break
+    arr = line.split(",")
+    usr_doc = arr[fld_index['uuid']] + '_' + arr[fld_index['document_id']]
+    if usr_doc in time_dict:
+        #don't use timestamp yet.
+        #time_diff = time_dict[usr_doc] - int(arr[fld_index['timestamp']])
+        #if abs(time_diff) < 600:
+            time_dict[usr_doc] = -1
+            found += 1
+print(found)
+# found (total access found in page_views.csv) would be 271994
 
-from sklearn.linear_model import Ridge
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split, cross_val_score
-import lightgbm as lgb
+df_test=df_test.reset_index()
+df_test['fixed_timestamp'] = df_test['usr_doc'].apply(lambda x: time_dict[x])
 
-NUM_BRANDS = 4000
-NUM_CATEGORIES = 1000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 55000
+# following code is  based on clustifier's BTB scripts
+train = pd.read_csv("../input/clicks_train.csv")
+cnt = train[train.clicked==1].ad_id.value_counts()
+cntall = train.ad_id.value_counts()
+ave_ctr = np.sum(cnt)/float(np.sum(cntall))
 
+def get_prob(x):
+    if x[0] < 0:
+        return 1
+    k = x[1]
+    if k in cnt:
+        return cnt[k] / (float(cntall[k]) + 10)
+    else:
+        if k in cntall:
+            # use -imps for 0 click penalty
+            return -1 * cntall[k]
+        else:
+            # use average value for no imp ad
+            return ave_ctr
 
-def handle_missing_inplace(dataset):
-    dataset['category_name'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
+def agg2arr(x):
+    return list(x)
 
+def val_sort(x):
+    id_dict = dict(zip(x[0], x[1]))
+    id_list_sorted =  [k for k,v in sorted(id_dict.items(), key=lambda x:x[1], reverse=True)]
+    return " ".join(map(str,id_list_sorted))
 
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category = dataset['category_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['category_name'].isin(pop_category), 'category_name'] = 'missing'
-
-
-def to_categorical(dataset):
-    dataset['category_name'] = dataset['category_name'].astype('category')
-    dataset['brand_name'] = dataset['brand_name'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
-
-
-def main():
-    start_time = time.time()
-
-    train = pd.read_table('../input/train.tsv', engine='c')
-    test = pd.read_table('../input/test.tsv', engine='c')
-    print('[{}] Finished to load data'.format(time.time() - start_time))
-    print('Train shape: ', train.shape)
-    print('Test shape: ', test.shape)
-
-    nrow_train = train.shape[0]
-    y = np.log1p(train["price"])
-    merge: pd.DataFrame = pd.concat([train, test])
-    submission: pd.DataFrame = test[['test_id']]
-
-    del train
-    del test
-    gc.collect()
-
-    handle_missing_inplace(merge)
-    print('[{}] Finished to handle missing'.format(time.time() - start_time))
-
-    cutting(merge)
-    print('[{}] Finished to cut'.format(time.time() - start_time))
-
-    to_categorical(merge)
-    print('[{}] Finished to convert categorical'.format(time.time() - start_time))
-
-    cv = CountVectorizer(min_df=NAME_MIN_DF)
-    X_name = cv.fit_transform(merge['name'])
-    print('[{}] Finished count vectorize `name`'.format(time.time() - start_time))
-
-    cv = CountVectorizer()
-    X_category = cv.fit_transform(merge['category_name'])
-    print('[{}] Finished count vectorize `category_name`'.format(time.time() - start_time))
-
-    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                         ngram_range=(1, 3),
-                         stop_words='english')
-    X_description = tv.fit_transform(merge['item_description'])
-    print('[{}] Finished TFIDF vectorize `item_description`'.format(time.time() - start_time))
-
-    lb = LabelBinarizer(sparse_output=True)
-    X_brand = lb.fit_transform(merge['brand_name'])
-    print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
-
-    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-    print('[{}] Finished to get dummies on `item_condition_id` and `shipping`'.format(time.time() - start_time))
-
-    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category, X_name)).tocsr()
-    print('[{}] Finished to create sparse merge'.format(time.time() - start_time))
-
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_train:]
-
-    # def rmsle(y, y0):
-    #     assert len(y) == len(y0)
-    #     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
-    
-    model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3)
-    model.fit(X, y)
-    print('[{}] Finished to train ridge sag'.format(time.time() - start_time))
-    predsR = model.predict(X=X_test)
-    print('[{}] Finished to predict ridge sag'.format(time.time() - start_time))
-
-    model = Ridge(solver="lsqr", fit_intercept=True, random_state=145, alpha = 3)
-    model.fit(X, y)
-    print('[{}] Finished to train ridge lsqrt'.format(time.time() - start_time))
-    predsR2 = model.predict(X=X_test)
-    print('[{}] Finished to predict ridge lsqrt'.format(time.time() - start_time))
-
-    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.1, random_state = 144) 
-    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
-    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
-    watchlist = [d_train, d_valid]
-    
-    params = {
-        'learning_rate': 0.76,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 99,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'nthread': 4
-    }
-
-    params2 = {
-        'learning_rate': 0.85,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 110,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'nthread': 4
-    }
-
-    model = lgb.train(params, train_set=d_train, num_boost_round=7500, valid_sets=watchlist, \
-    early_stopping_rounds=500, verbose_eval=500) 
-    predsL = model.predict(X_test)
-    
-    print('[{}] Finished to predict lgb 1'.format(time.time() - start_time))
-    
-    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
-    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
-    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
-    watchlist2 = [d_train2, d_valid2]
-
-    model = lgb.train(params2, train_set=d_train2, num_boost_round=3000, valid_sets=watchlist2, \
-    early_stopping_rounds=50, verbose_eval=500) 
-    predsL2 = model.predict(X_test)
-
-    print('[{}] Finished to predict lgb 2'.format(time.time() - start_time))
-
-    preds = predsR2*0.15 + predsR*0.15 + predsL*0.5 + predsL2*0.2
-
-    submission['price'] = np.expm1(preds)
-    submission.to_csv("submission_lgbm_ridge_11.csv", index=False)
-
-if __name__ == '__main__':
-    main()
+df_test['prob'] = df_test[['fixed_timestamp','ad_id']].apply(lambda x: get_prob(x),axis=1)
+subm = df_test.groupby("display_id").agg({'ad_id': agg2arr, 'prob': agg2arr})
+subm['ad_id'] = subm[['ad_id','prob']].apply(lambda x: val_sort(x),axis=1)
+del subm['prob']
+subm.to_csv("subm_leak.csv")

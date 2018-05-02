@@ -1,367 +1,407 @@
 
 # coding: utf-8
 
-# # Intro
-# This kernel is **not for beginners** but for those who are already familiar with Titanic dataset. Maybe some day I'll write a kernel for beginners, but not now.
+# This LightGBM runs on Kaggle as well as on my 3-year old i5/8GB Surface laptop in less than 15 minutes to generate a submission. It has 19 features and produced LB 0.386 (19% when first submitted). Part of it is similar to the many public kernels (such as Fabien Vavrand, Khaled Elshamouty, Paul-Antoine Nguyen, China, etc. These kernels have all in common a global single threshold of around 0.21 and they lead to F1 around 0.375 - 0.38 (perhaps corresponding to the peak in the distribution of LB score just at this level). What is different here is that this kernel runs on Kaggle in the allowed time of 20 minutes using 100% of the data. With a single threshold it also gives 0.38 but when this is relaxed and the calculation is repeated for several thresholds (eg 0.17, 0.21, 0.25) and then a second classifier is applied to train again on the "train" data to select the best F1 of the three thresholds for each order we get meaningfull improvement to 0.386 and a jump of 130 places on LB. The new features for the second clf are the mean,max,min of thw reorder probabilities for each of the three thresholds (chosen just for simplicity).
 # 
-# Now I'd like to point something out. Keep in mind that I'm talking just from *my experience on Titanic* so the following may not be true for you, so be cautious.
+# I started this exercise before I had a chance to look at the theoretical papers on multilabel classification such as Nan Ye at al, Optimizing F-measures, 2012 and Z. Lipton et al, Thresholding classifiers, 2014 that are probably used by people who achieved score over 0.4 (ie Faron's kernel). I entered this competition too late to dig into it deaper. I was initially puzzled by the fact that maximum F1 gives a much bigger cart size (about 8 products instead of 6) - see the chart below. Since the deadline is tomorrow I implemented at least a partial optimization of F1 with three separate thresholds.
 # 
-#  - "Has_Cabin" feature does not help. I engineered a feature with 0 if a passenger has no Cabin (NaN) and 1 if he got one may make sense as cabin data of 1st class passengers was found (IRL) on the body of steward Herbert Cave, so I tried it. But that doesn't seem to help.
-#  - "Deck" feature does not help. Based on letters found in Cabin column we may engineer a Deck feature, indicating which deck (A - G, T or U for Unknown) the passenger was on. But it's rather noisy, it doesn't help the score.
-#  - "Embarked" does not help, I have no idea why people even include it in their kernels. It has no impact on survival chances.
-#  - *Edit*: actually certain algorithms may perform better if you turn categorical features into ordinal ones (like turning Pclass to Pclass_1, Pclass_2 and Pclass_3 features with possible values {0, 1}). Pros are higher accuracy in certain cases, cons are - you lose relation between Pclasses (meaning the algorithm will think those are independent, unordered classes, when in fact they are ordered - Pclass=1 is "better" than Pclass=3) and you add dimensions which is not always good because of the curse of dimensionality. In my specific case turning Pclass into 3 features did not help, but as I learned it's a good idea to try both approaches and see what's better in your case.
-#  - Making Bins in Fare and Age helps a little bit.
-#  - Standard Scaler is our friend. It helps to boost the score. Scaling features is helpful for many ML algorithms like KNN for example, it really boosts their score. This kind of scaler may assume normal distribution of the features and sometimes MinMaxScaler may be better, but from what I've tried, the standard one leads to better results in this case.
-#  - I don't know about feature scaling in R, maybe R methods scale them by default? If not, and if you're using R, try scaling, it may help.
-#  - There is not much sence in scaling features that are already 0 or 1 like Sex, but for now I scale them all. You can try to pick features for scaling. If you don't use bins (if you use Age or Fare "as is"), scaling may help to boost your score a bit, try it.
+# This was my first real Kaggle competition and I have learned great deal doing it - thank you all.
 # 
-# # About Kaggle scoring
-# I've spent a lot of time doggedly fighting to improve my score by even the tiny bit and got from 0.72 to 0.82-0.83 (as of now), but that was out of interest - just to see if it's possible and if I can do it. To tell you the truth, I think that all the models within 0.80-0.85 public score interval are really close and, almost equal.
-# MLA builds and "returns" you a specific mathematical function, the "final hypothesis" g(x). I think that models within 0.80-0.85 interval return very similar functions, it just so happens that some of them yield a public score of 0.81 and others 0.82, this does really does not mean that the 0.82 one is better. On the private dataset, the first model of those two may prove to be better actually.
-# So I think models with public scores of 0.80-0.85 (maybe even starting from 0.79) are more or less the same.
-# 
-# Don't try to chase the Public score too eagerly. As Kaggle states:
-# 
-# > Your final score may not be based on the same exact subset of data as the public leaderboard, but rather a different private data subset of your full submission — your public score is only a rough indication of what your final score is. You should thus choose submissions that will most likely be best overall, and not necessarily on the public subset.
-# 
-# Look at competitions where you've got 20% of data as public, and the rest is private. You see the guy on, say, the first place? Well, come the end of competition and private scoring starts, he may find himself in 12th position, while the 12th guy may become the best :)
-# 
-# Moreover, if you submit your results too many times, you subconsciously "bleed" public test set data into your models, and your models adapt to the public test set a little more. They may tend to overfit to the public test set, meaning your score on a private test set may drop significantly. In this kernel I'm trying to get the highest public score that I can, but again, you can say that in a way I'm overfitting my data to the test set.
-# 
-# So generally your aim should be constructing the most robust and generalizable model with a solid public score, but not necessarily the best score. On private dataset your model may actually turn out to be the best, keep that in mind.
-# 
-# Now let's roll.
 
-# ## Loading a bunch of stuff
-# Imports are from my Jupyter notebooks on my PC, in those notebooks I import 'em all so that later I don't have to bother with importing things.
+# ![alt text](F1_vs_mean_cart_size.jpg "F1 vs Mean Cart Size")
 
-# In[ ]:
+# In[2]:
 
 
-# NumPy
-import numpy as np
-
-# Dataframe operations
 import pandas as pd
-
-# Data visualization
-import seaborn as sns
+import numpy as np
+import gc
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-# Scalers
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.preprocessing import StandardScaler
-from sklearn.utils import shuffle
+myfolder = '../input/'
+print('loading files ...')
 
-# Models
-from sklearn.linear_model import LogisticRegression #logistic regression
-from sklearn.linear_model import Perceptron
-from sklearn import svm #support vector Machine
-from sklearn.ensemble import RandomForestClassifier #Random Forest
-from sklearn.neighbors import KNeighborsClassifier #KNN
-from sklearn.naive_bayes import GaussianNB #Naive bayes
-from sklearn.tree import DecisionTreeClassifier #Decision Tree
-from sklearn.model_selection import train_test_split #training and testing data split
-from sklearn import metrics #accuracy measure
-from sklearn.metrics import confusion_matrix #for confusion matrix
-from sklearn.ensemble import VotingClassifier
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.neural_network import MLPClassifier
+prior = pd.read_csv(myfolder + 'order_products__prior.csv', dtype={'order_id': np.uint32,
+           'product_id': np.uint16, 'reordered': np.uint8, 'add_to_cart_order': np.uint8})
 
-# Cross-validation
-from sklearn.model_selection import KFold #for K-fold cross validation
-from sklearn.model_selection import cross_val_score #score evaluation
-from sklearn.model_selection import cross_val_predict #prediction
-from sklearn.model_selection import cross_validate
+train_orders = pd.read_csv(myfolder + 'order_products__train.csv', dtype={'order_id': np.uint32,
+           'product_id': np.uint16, 'reordered': np.int8, 'add_to_cart_order': np.uint8 })
 
-# GridSearchCV
-from sklearn.model_selection import GridSearchCV
+orders = pd.read_csv(myfolder + 'orders.csv', dtype={'order_hour_of_day': np.uint8,
+           'order_number': np.uint8, 'order_id': np.uint32, 'user_id': np.uint32,
+           'order_dow': np.uint8, 'days_since_prior_order': np.float16})
 
-#Common Model Algorithms
-from sklearn import svm, tree, linear_model, neighbors, naive_bayes, ensemble, discriminant_analysis, gaussian_process
+orders.eval_set = orders.eval_set.replace({'prior': 0, 'train': 1, 'test':2}).astype(np.uint8)
+orders.days_since_prior_order = orders.days_since_prior_order.fillna(30).astype(np.uint8)
 
-#Common Model Helpers
-from sklearn.preprocessing import OneHotEncoder, LabelEncoder
-from sklearn import feature_selection
-from sklearn import model_selection
+products = pd.read_csv(myfolder + 'products.csv', dtype={'product_id': np.uint16,
+            'aisle_id': np.uint8, 'department_id': np.uint8},
+             usecols=['product_id', 'aisle_id', 'department_id'])
+
+print('done loading')
+
+
+# In[3]:
+
+
+print('merge prior and orders and keep train separate ...')
+
+orders_products = orders.merge(prior, how = 'inner', on = 'order_id')
+train_orders = train_orders.merge(orders[['user_id','order_id']], left_on = 'order_id', right_on = 'order_id', how = 'inner')
+
+del prior
+gc.collect()
+
+
+# In[4]:
+
+
+print('Creating features I ...')
+
+# sort orders and products to get the rank or the reorder frequency
+prdss = orders_products.sort_values(['user_id', 'order_number', 'product_id'], ascending=True)
+prdss['product_time'] = prdss.groupby(['user_id', 'product_id']).cumcount()+1
+
+# getting products ordered first and second times to calculate probability later
+sub1 = prdss[prdss['product_time'] == 1].groupby('product_id').size().to_frame('prod_first_orders')
+sub2 = prdss[prdss['product_time'] == 2].groupby('product_id').size().to_frame('prod_second_orders')
+sub1['prod_orders'] = prdss.groupby('product_id')['product_id'].size()
+sub1['prod_reorders'] = prdss.groupby('product_id')['reordered'].sum()
+sub2 = sub2.reset_index().merge(sub1.reset_index())
+sub2['prod_reorder_probability'] = sub2['prod_second_orders']/sub2['prod_first_orders']
+sub2['prod_reorder_ratio'] = sub2['prod_reorders']/sub2['prod_orders']
+prd = sub2[['product_id', 'prod_orders','prod_reorder_probability', 'prod_reorder_ratio']]
+
+del sub1, sub2, prdss
+gc.collect()
+
+
+# In[5]:
+
+
+print('Creating features II ...')
+
+# extracting prior information (features) by user
+users = orders[orders['eval_set'] == 0].groupby(['user_id'])['order_number'].max().to_frame('user_orders')
+users['user_period'] = orders[orders['eval_set'] == 0].groupby(['user_id'])['days_since_prior_order'].sum()
+users['user_mean_days_since_prior'] = orders[orders['eval_set'] == 0].groupby(['user_id'])['days_since_prior_order'].mean()
+
+# merging features about users and orders into one dataset
+us = orders_products.groupby('user_id').size().to_frame('user_total_products')
+us['eq_1'] = orders_products[orders_products['reordered'] == 1].groupby('user_id')['product_id'].size()
+us['gt_1'] = orders_products[orders_products['order_number'] > 1].groupby('user_id')['product_id'].size()
+us['user_reorder_ratio'] = us['eq_1'] / us['gt_1']
+us.drop(['eq_1', 'gt_1'], axis = 1, inplace = True)
+us['user_distinct_products'] = orders_products.groupby(['user_id'])['product_id'].nunique()
+
+# the average basket size of the user
+users = users.reset_index().merge(us.reset_index())
+users['user_average_basket'] = users['user_total_products'] / users['user_orders']
+
+us = orders[orders['eval_set'] != 0]
+us = us[['user_id', 'order_id', 'eval_set', 'days_since_prior_order']]
+users = users.merge(us)
+
+del us
+gc.collect()
+
+
+# In[6]:
+
+
+print('Finalizing features and the main data file  ...')
+# merging orders and products and grouping by user and product and calculating features for the user/product combination
+data = orders_products.groupby(['user_id', 'product_id']).size().to_frame('up_orders')
+data['up_first_order'] = orders_products.groupby(['user_id', 'product_id'])['order_number'].min()
+data['up_last_order'] = orders_products.groupby(['user_id', 'product_id'])['order_number'].max()
+data['up_average_cart_position'] = orders_products.groupby(['user_id', 'product_id'])['add_to_cart_order'].mean()
+data = data.reset_index()
+
+#merging previous data with users
+data = data.merge(prd, on = 'product_id')
+data = data.merge(users, on = 'user_id')
+
+#user/product combination features about the particular order
+data['up_order_rate'] = data['up_orders'] / data['user_orders']
+data['up_orders_since_last_order'] = data['user_orders'] - data['up_last_order']
+data = data.merge(train_orders[['user_id', 'product_id', 'reordered']], 
+                  how = 'left', on = ['user_id', 'product_id'])
+data = data.merge(products, on = 'product_id')
+
+del orders_products     #, orders, train_orders
+gc.collect()
+
+
+# In[7]:
+
+
+print(' Training and test data for later use in F1 optimization and training  ...')
+
+#save the actual reordered products of the train set in a list format and then delete the original frames
+train_orders = train_orders[train_orders['reordered']==1].drop('reordered',axis=1)
+orders.set_index('order_id', drop=False, inplace=True)
+train1=orders[['order_id','eval_set']].loc[orders['eval_set']==1]
+train1['actual'] = train_orders.groupby('order_id').aggregate({'product_id':lambda x: list(x)})
+train1['actual']=train1['actual'].fillna('')
+n_actual = train1['actual'].apply(lambda x: len(x)).mean()   # this is the average cart size
+
+test1=orders[['order_id','eval_set']].loc[orders['eval_set']==2]
+test1['actual']=' '
+traintest1=pd.concat([train1,test1])
+traintest1.set_index('order_id', drop=False, inplace=True)
+
+del orders, train_orders, train1, test1
+gc.collect()
+
+
+# In[8]:
+
+
+print('setting dtypes for data ...')
+
+#reduce the size by setting data types
+data = data.astype(dtype= {'user_id' : np.uint32, 'product_id'  : np.uint16,
+            'up_orders'  : np.uint8, 'up_first_order' : np.uint8, 'up_last_order' : np.uint8,
+            'up_average_cart_position' : np.uint8, 'prod_orders' : np.uint16, 
+            'prod_reorder_probability' : np.float16,   
+            'prod_reorder_ratio' : np.float16, 'user_orders' : np.uint8,
+            'user_period' : np.uint8, 'user_mean_days_since_prior' : np.uint8,
+            'user_total_products' : np.uint8, 'user_reorder_ratio' : np.float16, 
+            'user_distinct_products' : np.uint8, 'user_average_basket' : np.uint8,
+            'order_id'  : np.uint32, 'eval_set' : np.uint8, 
+            'days_since_prior_order' : np.uint8, 'up_order_rate' : np.float16, 
+            'up_orders_since_last_order':np.uint8,
+            'aisle_id': np.uint8, 'department_id': np.uint8})
+
+data['reordered'].fillna(0, inplace=True)  # replace NaN with zeros (not reordered) 
+data['reordered']=data['reordered'].astype(np.uint8)
+
+gc.collect()
+
+
+# In[9]:
+
+
+print('Preparing Train and Test sets ...')
+
+# filter by eval_set (train=1, test=2) and dropp the id's columns (not part of training features) 
+# but keep prod_id and user_id in test
+
+train = data[data['eval_set'] == 1].drop(['eval_set', 'user_id', 'product_id', 'order_id'], axis = 1)
+test =  data[data['eval_set'] == 2].drop(['eval_set', 'user_id', 'reordered'], axis = 1)
+
+check =  data.drop(['eval_set', 'user_id', 'reordered'], axis = 1)
+
+del data
+gc.collect()
+
+
+# In[10]:
+
+
+print('preparing X,y for LightGBM ...')
+
+# for preliminary runs sample a fraction of the data by (un)commenting the next two lines
+#print('sampling train data ...')
+#train = train.sample(frac=0.25)
+
+# Splitting the training set to train and validation set
+X_train, X_eval, y_train, y_eval = train_test_split(
+    train[train.columns.difference(['reordered'])], train['reordered'], test_size=0.1, random_state=2)
+
+del train
+gc.collect()
+
+
+# In[11]:
+
+
+print('formatting and training LightGBM ...')
+
+lgb_train = lgb.Dataset(X_train, label=y_train)
+lgb_eval = lgb.Dataset(X_eval, y_eval, reference = lgb_train)
+
+# there is some room to change the parameters and improve - I have not done it systematically
+
+params = {'task': 'train', 'boosting_type': 'gbdt',   'objective': 'binary', 'metric': {'binary_logloss', 'auc'},
+    'num_iterations' : 1000, 'max_bin' : 100, 'num_leaves': 512, 'feature_fraction': 0.8,  'bagging_fraction': 0.95,
+    'bagging_freq': 5, 'min_data_in_leaf' : 200, 'learning_rate' : 0.05}
+
+#lgb_model = lgb.train(params, lgb_train, num_boost_round = 300, valid_sets = lgb_eval, early_stopping_rounds=10)
+# set lower num_boost_round to avoid tmout on Kaggle
+
+lgb_model = lgb.train(params, lgb_train, num_boost_round = 50, valid_sets = lgb_eval, early_stopping_rounds=10)
+
+del lgb_train, X_train, y_train
+gc.collect()
+
+
+# In[12]:
+
+
+# Define an auxiliary function to combine the product data into orders
+
+def combi(z,df):
+    
+    prd_bag = dict()
+    z_bag = dict()
+    for row in df.itertuples():
+        if row.reordered > z:   
+            try:
+                prd_bag[row.order_id] += ' ' + str(row.product_id)
+                z_bag[row.order_id]+= ' ' + str(int(100*row.reordered))
+            except:
+                prd_bag[row.order_id] = str(row.product_id)
+                z_bag[row.order_id]= str(int(100*row.reordered))
+
+    for order in df.order_id:
+        if order not in prd_bag:
+            prd_bag[order] = ' '
+            z_bag[order] = ' '
+
+    return prd_bag,z_bag 
+
+# F1 function uses the actual products as a list in the train set and the list of predicted products
+
+def f1_score_single(x):                 #from LiLi but modified to get 1 for both empty
+
+    y_true = x.actual
+    y_pred = x.list_prod
+    if y_true == '' and y_pred ==[] : return 1.
+    y_true = set(y_true)
+    y_pred = set(y_pred)
+    cross_size = len(y_true & y_pred)
+    if cross_size == 0: return 0.
+    p = 1. * cross_size / len(y_pred)
+    r = 1. * cross_size / len(y_true)
+    return 2 * p * r / (p + r)
+
+
+# In[13]:
+
+
+# check feature importance
+#lgb.plot_importance(lgb_model, figsize=(7,9))
+#plt.show()
+
+
+# In[14]:
+
+
+print(' Applying model to all data - both train and test ')
+
+
+check['reordered'] = lgb_model.predict(check[check.columns.difference(
+    ['order_id', 'product_id'])], num_iteration = lgb_model.best_iteration)
+
+gc.collect()
+
+
+# The next step is to chose a threshold to select the reordered products. We know that a single global threshold of 0.21 maximizes F1 (given that the max is about 0.4 - see also the chart at the begining or end). The method here is to use several (eg 3 such as 0.17,0.21,0.25) thresholds and recalculate F1 on the training set. In addition to the products for each order we will collect the probabilities and store them in list and calculate the mean, max and min as our new features. Then we set up a new classification problem with the target [0,1, or 2] corresponding to which threshold maximizes F1. Alltogether we will use 9 features (we could easily generalize to more thresholds and features) .  This is relatively easy problem and we use Gradient Boosting Classifier with default parameters. 
+
+# In[15]:
+
+
+print(' summarizing products and probabilities ...')
+
+# get the prediction for a range of thresholds
+
+tt=traintest1.copy()
+i=0
+
+for z in [0.17, 0.21, 0.25]:
+    
+    prd_bag,z_bag = combi(z,check)
+    ptemp = pd.DataFrame.from_dict(prd_bag, orient='index')
+    ptemp.reset_index(inplace=True)
+    ztemp = pd.DataFrame.from_dict(z_bag, orient='index')
+    ztemp.reset_index(inplace=True)
+    ptemp.columns = ['order_id', 'products']
+    ztemp.columns = ['order_id', 'zs']
+    ptemp['list_prod'] = ptemp['products'].apply(lambda x: list(map(int, x.split())))
+    ztemp['list_z'] = ztemp['zs'].apply(lambda x: list(map(int, x.split())))
+    n_cart = ptemp['products'].apply(lambda x: len(x.split())).mean()
+    tt = tt.merge(ptemp,on='order_id',how='inner')
+    tt = tt.merge(ztemp,on='order_id',how='inner')
+    tt.drop(['products','zs'],axis=1,inplace=True)
+    tt['zavg'] = tt['list_z'].apply(lambda x: 0.01*np.mean(x) if x!=[] else 0.).astype(np.float16)
+    tt['zmax'] = tt['list_z'].apply(lambda x: 0.01*np.max(x) if x!=[] else 0.).astype(np.float16)
+    tt['zmin'] = tt['list_z'].apply(lambda x: 0.01*np.min(x) if x!=[] else 0.).astype(np.float16)
+    tt['f1']=tt.apply(f1_score_single,axis=1).astype(np.float16)
+    F1 = tt['f1'].loc[tt['eval_set']==1].mean()
+    tt = tt.rename(columns={'list_prod': 'prod'+str(i), 'f1': 'f1'+str(i), 'list_z': 'z'+str(i),
+                'zavg': 'zavg'+str(i), 'zmax': 'zmax'+str(i),  'zmin': 'zmin'+str(i)})
+    print(' z,F1,n_actual,n_cart :  ', z,F1,n_actual,n_cart)
+    i=i+1
+
+tt['fm'] = tt[['f10', 'f11', 'f12']].idxmax(axis=1)
+tt['f1'] = tt[['f10', 'f11', 'f12']].max(axis=1)
+tt['fm'] = tt.fm.replace({'f10': 0,'f11': 1, 'f12':2}).astype(np.uint8)
+print(' f1 maximized ', tt['f1'].loc[tt['eval_set']==1].mean())
+    
+del prd_bag, z_bag, ptemp, ztemp
+gc.collect()
+
+
+# In[16]:
+
+
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn import metrics
 
-#Visualization
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.pylab as pylab
-import seaborn as sns
-from pandas.tools.plotting import scatter_matrix
+print('Fitting the second classifier for F1 ...')
+
+X=tt[[ 'zavg0', 'zmax0','zmin0', 'zavg1', 'zmax1', 'zmin1', 'zavg2', 'zmax2', 'zmin2']].loc[tt['eval_set']==1]
+y=tt['fm'].loc[tt['eval_set']==1]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
+
+clf = GradientBoostingClassifier().fit(X_train, y_train)
+print('GB Accuracy on training set: {:.2f}' .format(clf.score(X_train, y_train)))
+print('Accuracy on test set: {:.2f}' .format(clf.score(X_test, y_test)))
+#pd.DataFrame(clf.feature_importances_, index=X_train.columns, columns=["Importance"]).plot(kind='bar')
+#plt.show()
+
+final=tt[['order_id','prod0','prod1','prod2']].loc[tt['eval_set']==2]
+df_test=tt[[ 'zavg0', 'zmax0','zmin0', 'zavg1', 'zmax1', 'zmin1', 'zavg2', 'zmax2', 'zmin2']].loc[tt['eval_set']==2]
+final['fit']= clf.predict(df_test)
+final['best'] = final.apply(lambda row: row['prod0'] if row['fit']==0 else 
+                                 ( row['prod1'] if row['fit']==1 else  row['prod2'] )  , axis=1)
+
+final['products']=final['best'].apply(lambda x: ' '.join(str(i) for i in x) if x!=[] else 'None')
+final[['order_id','products']].to_csv('final_submission1.csv', index=False)  
+
+gc.collect()
+
+
+# In[17]:
+
+
+#I saved one of the previous runs so that it is not timed out on Kaggle
+X=np.arange(0.12,0.31,0.01)
+Y2 = np.empty(19)
+Y2.fill(6.31)
+Y1=[ 0.3701,0.3757,0.38,0.3839,0.3867,0.3886,0.3897,0.3905,0.3906,0.3903,
+    0.3892,0.3877,0.3857,0.3834,0.3808,0.3779,0.3746,0.371,0.3669]
+Y3=[ 15.45,14.29,13.26,12.34,11.51,10.76,10.09,9.47,8.91,8.39,7.92,7.49,
+    7.08,6.7,6.35,6.03,5.72,5.43,5.16]
+#replace X,Y1,Y2,Y3 with arrays from z,F1,n_actual,n_cart to update (running the above cell for the corresponding rane of z's)
+
+plt.clf()
+fig = plt.figure()
+ax = fig.add_subplot(111)
+lns1 = ax.plot(X, Y2, '-', label = 'Actual')
+lns2 = ax.plot(X, Y3, '-', label = 'Predicted')
+ax2 = ax.twinx()
+lns3 = ax2.plot(X, Y1, '-r', label = 'F1')
+lns = lns1+lns2+lns3
+labs = [l.get_label() for l in lns]
+ax.legend(lns, labs, loc=0)
+ax.set_xlabel('Threshold')
+ax.set_ylabel('Mean Cart Size')
+ax2.set_ylabel('F1')
+plt.suptitle('F1 vs Mean Cart Size', size=12)
+plt.savefig('F1_vs_mean_cart_size.jpg')
+plt.show()
 
-
-# ## Loading datasets
-
-# In[ ]:
-
-
-train_df = pd.read_csv("../input/train.csv")
-test_df = pd.read_csv("../input/test.csv")
-data_df = train_df.append(test_df) # The entire data: train + test.
-
-
-# # Engineering features
-# 
-#  - **Imputing Age**
-#  
-# I make a Title feature for imputing ages more precisely. Median is used because ages distribution is not always normal, so it's generally preferred over mean. But I don't think this matters a lot, you can use mean too.
-# I don't use Title feature for fitting models so it's discarded.
-
-# In[ ]:
-
-
-data_df['Title'] = data_df['Name']
-# Cleaning name and extracting Title
-for name_string in data_df['Name']:
-    data_df['Title'] = data_df['Name'].str.extract('([A-Za-z]+)\.', expand=True)
-
-# Replacing rare titles with more common ones
-mapping = {'Mlle': 'Miss', 'Major': 'Mr', 'Col': 'Mr', 'Sir': 'Mr', 'Don': 'Mr', 'Mme': 'Miss',
-          'Jonkheer': 'Mr', 'Lady': 'Mrs', 'Capt': 'Mr', 'Countess': 'Mrs', 'Ms': 'Miss', 'Dona': 'Mrs'}
-data_df.replace({'Title': mapping}, inplace=True)
-titles = ['Dr', 'Master', 'Miss', 'Mr', 'Mrs', 'Rev']
-for title in titles:
-    age_to_impute = data_df.groupby('Title')['Age'].median()[titles.index(title)]
-    data_df.loc[(data_df['Age'].isnull()) & (data_df['Title'] == title), 'Age'] = age_to_impute
-    
-# Substituting Age values in TRAIN_DF and TEST_DF:
-train_df['Age'] = data_df['Age'][:891]
-test_df['Age'] = data_df['Age'][891:]
-
-# Dropping Title feature
-data_df.drop('Title', axis = 1, inplace = True)
-
-
-#  - **Adding Family_Size**
-#  
-# That's just Parch + SibSp.
-
-# In[ ]:
-
-
-data_df['Family_Size'] = data_df['Parch'] + data_df['SibSp']
-
-# Substituting Age values in TRAIN_DF and TEST_DF:
-train_df['Family_Size'] = data_df['Family_Size'][:891]
-test_df['Family_Size'] = data_df['Family_Size'][891:]
-
-
-#  - **Adding Family_Survival**
-#  
-#  This feature is from [S.Xu's kernel](https://www.kaggle.com/shunjiangxu/blood-is-thicker-than-water-friendship-forever), he groups families and people with the same tickets togerher and researches the info. I've cleaned the code a bit but it still does the same, I left it as is. For comments see the original kernel.
-
-# In[ ]:
-
-
-data_df['Last_Name'] = data_df['Name'].apply(lambda x: str.split(x, ",")[0])
-data_df['Fare'].fillna(data_df['Fare'].mean(), inplace=True)
-
-DEFAULT_SURVIVAL_VALUE = 0.5
-data_df['Family_Survival'] = DEFAULT_SURVIVAL_VALUE
-
-for grp, grp_df in data_df[['Survived','Name', 'Last_Name', 'Fare', 'Ticket', 'PassengerId',
-                           'SibSp', 'Parch', 'Age', 'Cabin']].groupby(['Last_Name', 'Fare']):
-    
-    if (len(grp_df) != 1):
-        # A Family group is found.
-        for ind, row in grp_df.iterrows():
-            smax = grp_df.drop(ind)['Survived'].max()
-            smin = grp_df.drop(ind)['Survived'].min()
-            passID = row['PassengerId']
-            if (smax == 1.0):
-                data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 1
-            elif (smin==0.0):
-                data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 0
-
-print("Number of passengers with family survival information:", 
-      data_df.loc[data_df['Family_Survival']!=0.5].shape[0])
-
-
-# In[ ]:
-
-
-for _, grp_df in data_df.groupby('Ticket'):
-    if (len(grp_df) != 1):
-        for ind, row in grp_df.iterrows():
-            if (row['Family_Survival'] == 0) | (row['Family_Survival']== 0.5):
-                smax = grp_df.drop(ind)['Survived'].max()
-                smin = grp_df.drop(ind)['Survived'].min()
-                passID = row['PassengerId']
-                if (smax == 1.0):
-                    data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 1
-                elif (smin==0.0):
-                    data_df.loc[data_df['PassengerId'] == passID, 'Family_Survival'] = 0
-                        
-print("Number of passenger with family/group survival information: " 
-      +str(data_df[data_df['Family_Survival']!=0.5].shape[0]))
-
-# # Family_Survival in TRAIN_DF and TEST_DF:
-train_df['Family_Survival'] = data_df['Family_Survival'][:891]
-test_df['Family_Survival'] = data_df['Family_Survival'][891:]
-
-
-#  - **Making FARE BINS**
-#  
-# It's ordinal. FareBin = 3 is indeed greater than FareBin = 1. I've seen people turning it into dummies for some reason...
-
-# In[ ]:
-
-
-data_df['Fare'].fillna(data_df['Fare'].median(), inplace = True)
-
-# Making Bins
-data_df['FareBin'] = pd.qcut(data_df['Fare'], 5)
-
-label = LabelEncoder()
-data_df['FareBin_Code'] = label.fit_transform(data_df['FareBin'])
-
-train_df['FareBin_Code'] = data_df['FareBin_Code'][:891]
-test_df['FareBin_Code'] = data_df['FareBin_Code'][891:]
-
-train_df.drop(['Fare'], 1, inplace=True)
-test_df.drop(['Fare'], 1, inplace=True)
-
-
-#  - **Making AGE BINS**
-#  
-# Note here that it is better to use the entire dataset for mean/median/mode calculation, otherwise we will miss out useful information. 
-
-# In[ ]:
-
-
-data_df['AgeBin'] = pd.qcut(data_df['Age'], 4)
-
-label = LabelEncoder()
-data_df['AgeBin_Code'] = label.fit_transform(data_df['AgeBin'])
-
-train_df['AgeBin_Code'] = data_df['AgeBin_Code'][:891]
-test_df['AgeBin_Code'] = data_df['AgeBin_Code'][891:]
-
-train_df.drop(['Age'], 1, inplace=True)
-test_df.drop(['Age'], 1, inplace=True)
-
-
-#  - **Mapping SEX and cleaning data (dropping garbage) **
-
-# In[ ]:
-
-
-train_df['Sex'].replace(['male','female'],[0,1],inplace=True)
-test_df['Sex'].replace(['male','female'],[0,1],inplace=True)
-
-train_df.drop(['Name', 'PassengerId', 'SibSp', 'Parch', 'Ticket', 'Cabin',
-               'Embarked'], axis = 1, inplace = True)
-test_df.drop(['Name','PassengerId', 'SibSp', 'Parch', 'Ticket', 'Cabin',
-              'Embarked'], axis = 1, inplace = True)
-
-
-# So now our datasets look like this:
-
-# In[ ]:
-
-
-train_df.head(3)
-
-
-# # Training
-# 
-#  - **Creating X and y**
-
-# In[ ]:
-
-
-X = train_df.drop('Survived', 1)
-y = train_df['Survived']
-X_test = test_df.copy()
-
-
-#  - **Scaling features**
-
-# In[ ]:
-
-
-std_scaler = StandardScaler()
-X = std_scaler.fit_transform(X)
-X_test = std_scaler.transform(X_test)
-
-
-#  - **Grid Search CV**
-#  
-#  Here I use KNN.
-
-# In[ ]:
-
-
-n_neighbors = [6,7,8,9,10,11,12,14,16,18,20,22]
-algorithm = ['auto']
-weights = ['uniform', 'distance']
-leaf_size = list(range(1,50,5))
-hyperparams = {'algorithm': algorithm, 'weights': weights, 'leaf_size': leaf_size, 
-               'n_neighbors': n_neighbors}
-gd=GridSearchCV(estimator = KNeighborsClassifier(), param_grid = hyperparams, verbose=True, 
-                cv=10, scoring = "roc_auc")
-gd.fit(X, y)
-print(gd.best_score_)
-print(gd.best_estimator_)
-
-
-# 
-# 
-# In case you get a different result here (result may vary), what I got was:
-# 
-# > KNeighborsClassifier(algorithm='auto', leaf_size=26, metric='minkowski', metric_params=None, n_jobs=1, n_neighbors=18, p=2, weights='uniform')
-# 
-# This gave 0.884103388207 ROC_AUC score (not accuracy score!). I had a ton of models with roc_auc around 0.93-0.94 but when tested, they mostly showed lower results. Doesn't mean they are worse though.
-
-#  - **Using a model found by grid searching**
-
-# In[ ]:
-
-
-gd.best_estimator_.fit(X, y)
-y_pred = gd.best_estimator_.predict(X_test)
-
-
-# When I submitted the result, the model I've specified above yielded [0.82775] public score.
-
-# - **Using another K**
-# 
-# This guy comes from empirical messing around with amount of neighbors in KNN. It's the same as the above one, but with another n:
-
-# In[ ]:
-
-
-knn = KNeighborsClassifier(algorithm='auto', leaf_size=26, metric='minkowski', 
-                           metric_params=None, n_jobs=1, n_neighbors=6, p=2, 
-                           weights='uniform')
-knn.fit(X, y)
-y_pred = knn.predict(X_test)
-
-
-# Being a fan of simple models there's no way I couldn't try playing with n_neighbors lowering it (the lower it is --> the less complex the model is, though too simple model is bad news too).
-
-# - **Making submission**
-
-# In[ ]:
-
-
-temp = pd.DataFrame(pd.read_csv("../input/test.csv")['PassengerId'])
-temp['Survived'] = y_pred
-temp.to_csv("../working/submission.csv", index = False)
-
-
-#  ## Result
-#  So when I submitted the score I got 0.83253.
-
-# # Conclusion
-# A couple of points here too.
-#  - Of course KNN is not the only model I used. I used SVMs, AdaBoosting, GradientBoosting, RandomForests etc. etc., many many various models, all this is omited here. But KNN shows solid results on all my latest engineered datasets so I preferred it for simplicity. Feel free to try the dataset with other estimators, on particular you can try XGBoost with tuned hyperparams. There's a chance you may achieve a higher score on the same features as described in this kernel.
-#  - If you engineer Family groups further, I think you may get better results. Check out [Finding the 'real' families on the Titanic by Eric Bruin](https://www.kaggle.com/erikbruin/finding-the-real-families-on-the-titanic) to gain insight into families.
-#  - Generally, grouping passengers is a good way to improve your score. Try searching for groups.
-#  - You can use interesting features like [SLogL in Oscar's kernel](https://www.kaggle.com/pliptor/divide-and-conquer-0-82296), give it a try.
-# 
-# However, do be prepared to invest a lot of time for only a small revenue. Oscar's 0.82296 score appears to be pretty much the limit, I think that's as far as we can get; if you get a score above that but below 0.86 or so, that means your model is more or less the same as mine or as Oscar's or as Erik's. The truly better model would yield 86-88+, but it's very tough to get there.

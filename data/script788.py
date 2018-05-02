@@ -1,276 +1,208 @@
 
 # coding: utf-8
 
+# In most competition I am way too greedy searching for a better rank on the so-called Public Leaderboard ;-)
+# 
+# My personnal algorithm goes like this :
+# 1. Choose an algorithm at random but contains boost: XGBoost, LightGBM or CatBoost? Or whateverBoost
+# 2. Perform 5/10 fold CV mean scoring
+# 3. Search for the holly grail feature and check if mean score has improved by 1e-11
+# 4. Submit to the LB
+# 5. If rank is up, keep the change, if its down I'm sad and I drop the change
+# 6. Go to 3 and loop until the end of the competition
+# 
+# This works not so bad in many challenges but I've seen at least 2 competitions where this was clearly not the way to go :
+# 1. [santander-customer-satisfaction ](http://www.kaggle.com/c/santander-customer-satisfaction)
+# 2. [mercedes-benz-greener-manufacturing](http://www.kaggle.com/c/mercedes-benz-greener-manufacturing)
+# 
+# I'm wondering if Porto Seguro’s Safe Driver Prediction competition will end up in these competitions since sometimes Public LB scores are really off compared to local CV.
+# 
+# The question then ibecomes how can we make sure that what we are doing locally is significant?
+# 
+# I came across an article by Thomas G. Dietterich written in 1997 about 5 iterations of 2-fold cross-validation used for a Null hypothesis statistical test.
+# 
+# The paper is [here](http://sci2s.ugr.es/keel/pdf/algorithm/articulo/dietterich1998.pdf) so you can have a look at it if you don't know about it already.
+# 
+# I'm not saying thisis good or bad I just would like to start a thread on Null hypothesis testing and see how you carry out these things yourself in your day to day competition tasks...
+
 # In[ ]:
 
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# Any results you write to the current directory are saved as output.
-
-
-# This kernel is specifically is for Beginners who want's to experiment building CNN using Keras. By using this kernel, you can expect to get good score and also learn keras. 
-# Keras is simple frameworks where we can initialize the model and keep stacking the layers we want. It makes building deep neural networks very easy.
-
-# In[ ]:
-
-
-import numpy as np
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from os.path import join as opj
-from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import pylab
-plt.rcParams['figure.figsize'] = 10, 10
-get_ipython().run_line_magic('matplotlib', 'inline')
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score, accuracy_score
+from lightgbm import LGBMClassifier
 
 
 # In[ ]:
 
 
-#Load the data.
-train = pd.read_json("../input/train.json")
+trn = pd.read_csv("../input/train.csv")
+target = trn.target
+del trn["target"]
 
 
 # In[ ]:
 
 
-test = pd.read_json("../input/test.json")
+clf1 = LGBMClassifier(n_estimators=100, n_jobs=2)
+clf2 = LGBMClassifier(n_estimators=100, reg_alpha=1, reg_lambda=1, min_split_gain=2, n_jobs=2)
 
 
-# #Intro about the Data.
+# ## 5 by 2-fold CV t paired test
+# We will first use the 5 by 2-fold CV t paired test
 # 
-# Sentinet -1 sat is at about 680 Km above earth. Sending pulses of signals at a particular angle of incidence and then recoding it back. Basically those reflected signals are called backscatter. The data we have been given is backscatter coefficient which is the conventional form of backscatter coefficient given by:
+# As its name says the test runs five 2-fold cross validation for each classifier. Score differences are then used to compute the folowing t statistic :
+# $$
+# t = \frac{p_1^{(1)}}{\sqrt{\frac{1}{5}\sum_{i=1}^{5}{s_i^2}}}
+# $$
 # 
-# $σo (dB) = βo (dB) + 10log10 [ sin(ip) / sin (ic)] $
+# where :
+# - $p_1^{(1)}$ is the classifiers' scores difference for the first fold of the first iteration 
+# - $s_i^2$ is the estimated variance of the score difference for $i^{th}$ iteration. This variance computes as $ \left(p_i^{(1)} - \overline{p_i} \right)^2 + \left(p_i^{(2)} - \overline{p_i} \right)^2$ 
+# - $p_i^{(j)}$ is the classifiers' scores difference for the $i^{th}$ iteration and fold $j$
+# - $\overline{p}_i = \left( p_i^{1} +  p_i^{2} \right) / 2$
 # 
-# where
-# 1. ip=is angle of incidence for a particular pixel
-# 2. 'ic ' is angle of incidence for center of the image
-# 3. K =constant.
+# Hopefully this will become clear as you see the code.
 # 
-# We have been given $σo$ directly in the data. 
-# ###Now coming to the features of $σo$
-# Basically σo varies with the surface on which the signal is scattered from. For example, for a particular angle of incidence, it varies like:
-# *             WATER...........           SETTLEMENTS........           AGRICULTURE...........          BARREN........
+# What we need to know is that under the null hypothesis (i.e. both classifiers are statistically equal) the score difference between the two classifiers in each fold is assumed to follow a normal distribution. With this assumption statistic $t$ is assumed to follow a t distribution with 5 degrees of freedom. The proof of this is in the paper itself ;-)
 # 
-# 1.**HH:**     -27.001   ................                     2.70252       .................                -12.7952        ................    -17.25790909
+# To test the null hypothesis we compute the value of $t$ and check if it statisfies a t distribution with 5 degree of freedom. Namely we check if the value looks like an outlier or not. If the value stays close enough to 0 then the null hypothesis is satisfied and classifiers are asummed to be equal.
 # 
-# 2.**HV: **      -28.035      ................            -20.2665             ..................          -21.4471       .................     -20.019
+# The thresholds for various t distributions are available on [this web page](http://www.medcalc.org/manual/t-distribution.php).
 # 
-# As you can see, the HH component varies a lot but HV doesn't.
-# **I don't have the data for scatter from ship, but being a metal object, it should vary differently as compared to ice object.**
+# Please note that most of the statistical test for classifiers use the accuracy score and that I extend this to Gini without being sure the test still holds (I would have to check the distribution of score differences over several 2-fold iterations).
 # 
-# ###WTF is HH HV?
-# 
-# Ok, so this Sentinal Settalite is equivalent to RISTSAT(an Indian remote sensing Sat) and they only Transmit pings in H polarization, **AND NOT IN V polarization**.  Those H-pings gets scattered, objects change their polarization and returns as a mix of H and V.
-# **Since Sentinel has only H-transmitter, return signals are of the form of HH and HV only**. Don't ask why VV is not given(because Sentinel don't have V-ping transmitter).
-# 
-# Now coming to features, for the purpose of this demo code, I am extracting all two bands and taking avg of them as 3rd channel to create a 3-channel RGB equivalent. 
-# 
+# Let's look at the code now
 
 # In[ ]:
 
 
-#Generate the training data
-#Create 3 bands having HH, HV and avg of both
-X_band_1=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_1"]])
-X_band_2=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_2"]])
-X_train = np.concatenate([X_band_1[:, :, :, np.newaxis], X_band_2[:, :, :, np.newaxis],((X_band_1+X_band_2)/2)[:, :, :, np.newaxis]], axis=-1)
+# Choose seeds for each 2-fold iterations
+seeds = [13, 51, 137, 24659, 347]
+# Initialize the score difference for the 1st fold of the 1st iteration 
+p_1_1 = 0.0
+# Initialize a place holder for the variance estimate
+s_sqr = 0.0
+# Initialize scores list for both classifiers
+scores_1 = []
+scores_2 = []
+diff_scores = []
+# Iterate through 5 2-fold CV
+for i_s, seed in enumerate(seeds):
+    # Split the dataset in 2 parts with the current seed
+    folds = StratifiedKFold(n_splits=2, shuffle=True, random_state=seed)
+    # Initialize score differences
+    p_i = np.zeros(2)
+    # Go through the current 2 fold
+    for i_f, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
+        # Split the data
+        trn_x, trn_y = trn.iloc[trn_idx], target.iloc[trn_idx]
+        val_x, val_y = trn.iloc[val_idx], target.iloc[val_idx]
+        # Train classifiers
+        clf1.fit(trn_x, trn_y, eval_set=[(val_x, val_y)], early_stopping_rounds=20, verbose=0)
+        clf2.fit(trn_x, trn_y, eval_set=[(val_x, val_y)], early_stopping_rounds=20, verbose=0)
+        # Compute scores
+        preds_1 = clf1.predict_proba(val_x, num_iteration=clf1.best_iteration_)[:, 1]
+        score_1 = roc_auc_score(val_y, preds_1)
+        preds_2 = clf2.predict_proba(val_x, num_iteration=clf2.best_iteration_)[:, 1]
+        score_2 = roc_auc_score(val_y, preds_2)
+        # keep score history for mean and stdev calculation
+        scores_1.append(score_1)
+        scores_2.append(score_2)
+        diff_scores.append(score_1 - score_2)
+        print("Fold %2d score difference = %.6f" % (i_f + 1, score_1 - score_2))
+        # Compute score difference for current fold  
+        p_i[i_f] = score_1 - score_2
+        # Keep the score difference of the 1st iteration and 1st fold
+        if (i_s == 0) & (i_f == 0):
+            p_1_1 = p_i[i_f]
+    # Compute mean of scores difference for the current 2-fold CV
+    p_i_bar = (p_i[0] + p_i[1]) / 2
+    # Compute the variance estimate for the current 2-fold CV
+    s_i_sqr = (p_i[0] - p_i_bar) ** 2 + (p_i[1] - p_i_bar) ** 2 
+    # Add up to the overall variance
+    s_sqr += s_i_sqr
+    
+# Compute t value as the first difference divided by the square root of variance estimate
+t_bar = p_1_1 / ((s_sqr / 5) ** .5) 
+
+print("Classifier 1 mean score and stdev : %.6f + %.6f" % (np.mean(scores_1), np.std(scores_1)))
+print("Classifier 2 mean score and stdev : %.6f + %.6f" % (np.mean(scores_2), np.std(scores_2)))
+print("Score difference mean + stdev : %.6f + %.6f" 
+      % (np.mean(diff_scores), np.std(diff_scores)))
 
 
-# In[ ]:
-
-
-#Take a look at a iceberg
-import plotly.offline as py
-import plotly.graph_objs as go
-py.init_notebook_mode(connected=True)
-def plotmy3d(c, name):
-
-    data = [
-        go.Surface(
-            z=c
-        )
-    ]
-    layout = go.Layout(
-        title=name,
-        autosize=False,
-        width=700,
-        height=700,
-        margin=dict(
-            l=65,
-            r=50,
-            b=65,
-            t=90
-        )
-    )
-    fig = go.Figure(data=data, layout=layout)
-    py.iplot(fig)
-plotmy3d(X_band_1[12,:,:], 'iceberg')
-
-
-# That's a cool looking iceberg we have. Remember, in radar data, the shape of the iceberg is going to be like a mountain as shown in here. Since this is not a actual image but scatter from radar, the shape is going to have peaks and distortions like these. The shape of the ship is going to be like a point, may be like a elongated point. From here the structural differences arise and we can exploit those differences using a CNN. It would be helpful if we can create composite images using the backscatter from radar.
-
-# In[ ]:
-
-
-plotmy3d(X_band_1[14,:,:], 'Ship')
-
-
-# That's a ship, looks like a elongated point. We don't have much resolution in images to visualize the shape of the ship. However CNN is here to help. There are few papers on ship iceberg classification like this:
-# http://elib.dlr.de/99079/2/2016_BENTES_Frost_Velotto_Tings_EUSAR_FP.pdf
-# However their data have much better resolution so I don't  feel that the CNN they used would be suitable here.
-
-# Get back to building a CNN using Keras. Much better frameworks then others. You will enjoy for sure.
-
-# In[ ]:
-
-
-#Import Keras.
-from matplotlib import pyplot
-from keras.preprocessing.image import ImageDataGenerator
-from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Activation
-from keras.layers import GlobalMaxPooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.layers.merge import Concatenate
-from keras.models import Model
-from keras import initializers
-from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
-
-
-# In[ ]:
-
-
-#define our model
-def getModel():
-    #Building the model
-    gmodel=Sequential()
-    #Conv Layer 1
-    gmodel.add(Conv2D(64, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
-    gmodel.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
-    gmodel.add(Dropout(0.2))
-
-    #Conv Layer 2
-    gmodel.add(Conv2D(128, kernel_size=(3, 3), activation='relu' ))
-    gmodel.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    gmodel.add(Dropout(0.2))
-
-    #Conv Layer 3
-    gmodel.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
-    gmodel.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    gmodel.add(Dropout(0.2))
-
-    #Conv Layer 4
-    gmodel.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
-    gmodel.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    gmodel.add(Dropout(0.2))
-
-    #Flatten the data for upcoming dense layers
-    gmodel.add(Flatten())
-
-    #Dense Layers
-    gmodel.add(Dense(512))
-    gmodel.add(Activation('relu'))
-    gmodel.add(Dropout(0.2))
-
-    #Dense Layer 2
-    gmodel.add(Dense(256))
-    gmodel.add(Activation('relu'))
-    gmodel.add(Dropout(0.2))
-
-    #Sigmoid Layer
-    gmodel.add(Dense(1))
-    gmodel.add(Activation('sigmoid'))
-
-    mypotim=Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-    gmodel.compile(loss='binary_crossentropy',
-                  optimizer=mypotim,
-                  metrics=['accuracy'])
-    gmodel.summary()
-    return gmodel
-
-
-def get_callbacks(filepath, patience=2):
-    es = EarlyStopping('val_loss', patience=patience, mode="min")
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [es, msave]
-file_path = ".model_weights.hdf5"
-callbacks = get_callbacks(filepath=file_path, patience=5)
-
-
-# In[ ]:
-
-
-target_train=train['is_iceberg']
-X_train_cv, X_valid, y_train_cv, y_valid = train_test_split(X_train, target_train, random_state=1, train_size=0.75)
-
-
-# In[ ]:
-
-
-#Without denoising, core features.
-import os
-gmodel=getModel()
-gmodel.fit(X_train_cv, y_train_cv,
-          batch_size=24,
-          epochs=50,
-          verbose=1,
-          validation_data=(X_valid, y_valid),
-          callbacks=callbacks)
-
-
-# ###Though the score may be different here,  it works good on LB, I got 0.210 score.
-
-# In[ ]:
-
-
-gmodel.load_weights(filepath=file_path)
-score = gmodel.evaluate(X_valid, y_valid, verbose=1)
-print('Test loss:', score[0])
-print('Test accuracy:', score[1])
-
-
-# In[ ]:
-
-
-
-X_band_test_1=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_1"]])
-X_band_test_2=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_2"]])
-X_test = np.concatenate([X_band_test_1[:, :, :, np.newaxis]
-                          , X_band_test_2[:, :, :, np.newaxis]
-                         , ((X_band_test_1+X_band_test_2)/2)[:, :, :, np.newaxis]], axis=-1)
-predicted_test=gmodel.predict_proba(X_test)
-
-
-# In[ ]:
-
-
-submission = pd.DataFrame()
-submission['id']=test['id']
-submission['is_iceberg']=predicted_test.reshape((predicted_test.shape[0]))
-submission.to_csv('sub.csv', index=False)
-
-
-# #### Conclusion
-# To increase the score, I have tried Speckle filtering, Indicence angle normalization and other preprocessing and they don't seems to work.  You may try and see but for me they are not giving any good results.
+# Again, under the null hypothesis t_bar is assumed to follow a t distribution with 5 degrees of freedom. 
+# As such its value should remain in a given confidence interval. 
 # 
-# You can't be on top-10 using this kernel, so here is one beautiful peice of information. The test dataset contain 8000 images, We can exploit this. We can do pseudo labelling to increase the predictions. Here is the article related to that:
-# https://towardsdatascience.com/simple-explanation-of-semi-supervised-learning-and-pseudo-labeling-c2218e8c769b
+# This interval is **2.571** for a 5% threshold and **3.365** for a 2% thresholds (value taken from [this web page](http://www.medcalc.org/manual/t-distribution.php))
+
+# In[ ]:
+
+
+"t_value for the current test is %.6f" % t_bar
+
+
+# **t value** is within the confidence interval so we can say both classifiers are not statistically different based on a 5 iteration of 2-fold cross validation t test.
 # 
-# Upvote if you liked this kernel.
+# 
+
+# ## k-fold cross-validated paired t test
+# I believe this is the most used statistical test.
+# 
+# In this test we use a simple k-fold cross validation (usually 10) where both classifiers are trained and tested on each fold we then compute the following statistics t: 
+# $$
+# t = \frac{\overline{p}.\sqrt{n}}{\sqrt{\frac{\sum_{i=1}^{n-1}{\left(p^{(i)} - \overline{p}\right)^2}}{n-1}}}
+# $$
+# 
+# where $\overline{p}$ is the mean difference of scores between classifier 1 and 2 over the folds and $p^{(i)}$ is the score difference for the $i^{th}$ fold.
+# 
+# Under the null hypothesis, $t$ has a t distribution with k-1 degrees of freedom. The null hypothesis can be rejected if $\left |  t \right | > t_{k-1} $ is greater than for a 95% :
+# - for 10-fold CV :  $t_{9, 0.95} =  2.262$ or $t_{9, 0.98} =  2.821$
+# - for 7-fold CV : $t_{6, 0.95} =  2.447$ or $t_{6, 0.98} =  3.143$
+# - for 5-fold CV : $t_{4, 0.95} =  2.776$ or $t_{4, 0.98} =  3.747$
+# 
+# Let's check this on a 5-fold CV
+
+# In[ ]:
+
+
+n_splits = 10 
+scores_1 = []
+scores_2 = []
+oof_1 = np.zeros(len(trn))
+oof_2 = np.zeros(len(trn))
+diff_scores = []
+folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=15)
+p_i = np.zeros(2)
+for i_f, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
+    trn_x, trn_y = trn.iloc[trn_idx], target.iloc[trn_idx]
+    val_x, val_y = trn.iloc[val_idx], target.iloc[val_idx]
+    # Train classifiers
+    clf1.fit(trn_x, trn_y, eval_set=[(val_x, val_y)], early_stopping_rounds=20, verbose=0)
+    clf2.fit(trn_x, trn_y, eval_set=[(val_x, val_y)], early_stopping_rounds=20, verbose=0)
+    # Compute scores
+    preds_1 = clf1.predict_proba(val_x, num_iteration=clf1.best_iteration_)[:, 1]
+    oof_1[val_idx] = preds_1
+    score_1 = roc_auc_score(val_y, preds_1)
+    preds_2 = clf2.predict_proba(val_x, num_iteration=clf2.best_iteration_)[:, 1]
+    score_2 = roc_auc_score(val_y, preds_2)
+    oof_2[val_idx] = preds_2
+    # keep score history for mean and stdev calculation
+    scores_1.append(score_1)
+    scores_2.append(score_2)
+    diff_scores.append(score_1 - score_2)
+    print("Fold %2d score difference = %.6f" % (i_f + 1, diff_scores[i_f]))
+# Compute t value
+centered_diff = np.array(diff_scores) - np.mean(diff_scores)
+t = np.mean(diff_scores) * (n_splits ** .5) / (np.sqrt(np.sum(centered_diff ** 2) / (n_splits - 1)))
+print("OOF score for classifier 1 : %.6f" % roc_auc_score(target, oof_1))
+print("OOF score for classifier 2 : %.6f" % roc_auc_score(target, oof_2))
+print("t statistic for %2d-fold CV = %.6f" % (n_splits, t))
+
+
+# The t statistic is below the threshold of $t_{9, 0.95} =  2.262$ so both classifiers are statistically equal under the 10-fold CV paired t test.
+
+# You are more than welcome to comment on this and please shout if you see anything wrong in the notebook. As I said my goal is to open a discussion on the subject.

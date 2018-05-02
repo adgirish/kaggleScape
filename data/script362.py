@@ -1,196 +1,301 @@
 
 # coding: utf-8
 
-# # Start-to-Finish Solution in Keras
+# # Kiva's Current Poverty Targeting System
 # 
-# Here is my basic method for getting a LB submission churned out. No parameter tuning or data augmentation has been attempted, which should increase the score significantly. 
+# ## The Challenge
+# Kiva.org provides zero-interest, risk-tolerant capital to microfinance institutions and businesses around the world with the goal of supporting financial services to poor and financially excluded borrowers. Because we reach the borrowers on our [Lending Page](http://www.kiva.org/lend) through field partners, we don't usually have a chance to directly assess their level of wealth or poverty. Having a more accurate or precise estimate of each borrower's level of poverty would be valuable to us for several reasons. For example:
+# 
+# Making sure new funding sources target the poorest Kiva borrowers.
+# Allowing lenders to select low-income borrowers when that's their goal.
+# Assessing new potential field partners
+# 
+# While we don't have direct measures, we do have a variety of informative variables that (we suspect) could jointly predict levels of income or financial access given the right training data. We're working with Kaggle because we'd like to build such a model. Our primary criteria for a good predictive model of poverty will be accuracy and coverage. Improvements on our current global model would be welcome progress, but equally welcome would be a highly accurate country-level model, especially in a country with lots of borrowers like Kenya, the Philippines, Senegal, Paraguay, or many others.
 
-# In[ ]:
+# ## Kiva's Current Poverty Targeting System
+# Now I'll introduce you to Kiva's current poverty targeting system, which assigns scores to field partners and loan themes based on their location using the [Multi-dimensional Poverty Index (MPI)](http://ophi.org.uk/multidimensional-poverty-index/global-mpi-2017/mpi-data/) and the Global Findex dataset for financial inclusion.
+
+# ## MPI Scores
+# MPI scores are assigned at two levels of granularity, national and sub-national.
+# 
+# ### National MPI Scores
+# Nation-level MPI Scores are broken into rural and urban scores. So Kiva's broadest measure simply assigns each field partner an average of these two numbers, weighted by rural_pct. About a dozen field partners also serve multiple countries, in which case we take a volume-weighted average.
+
+# In[1]:
 
 
-import os, cv2, random
+# Load libraries
+get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import log_loss
-from sklearn.preprocessing import LabelEncoder
+from numpy import log10, ceil, ones
+from numpy.linalg import inv 
+from matplotlib import pyplot as plt
+from seaborn import regplot
+import statsmodels.formula.api as smf
 
-import matplotlib.pyplot as plt
-from matplotlib import ticker
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings("ignore")
 
-from keras.models import Sequential
-from keras.layers import Dropout, Flatten, Convolution2D, MaxPooling2D, ZeroPadding2D, Dense, Activation
-from keras.optimizers import RMSprop, Adam
-from keras.callbacks import EarlyStopping
-from keras.utils import np_utils
-from keras import backend as K
-
-TRAIN_DIR = '../input/train/'
-TEST_DIR = '../input/test_stg1/'
-FISH_CLASSES = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
-ROWS = 90  #720
-COLS = 160 #1280
-CHANNELS = 3
+# Print all rows and columns
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
 
 
-# # Loading and Preprocessing Data
+# In[2]:
+
+
+# Load data
+LT = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv") #.set_index([''])
+MPI = pd.read_csv("../input/mpi/MPI_national.csv")[['ISO','MPI Urban','MPI Rural']].set_index("ISO")
+LT = LT.join(MPI,how='left',on="ISO")[['Partner ID','Field Partner Name','ISO','MPI Rural','MPI Urban','rural_pct','amount']].dropna()
+
+LT.head()
+
+
+# #### Compute the MPI score for each partner: 
+# The MPI score is a weighted average of the (cumulative?) amount that a partner has received given the partners presence in rural and urban areas. 
 # 
-# Not much processing, other than resizing to 90x160, but you will probably want to run larger images on a GPU for a higher score. I am also keeping track of the labels as I loop through each image folder.  
+# These rural and mpi scores are an indication of the poverty level of the borrowers. However, the goal of this challenge is to give a more precise indication of the poverty level of a borrower given his or her precise location. 
 
-# In[ ]:
-
-
-def get_images(fish):
-    """Load files from train folder"""
-    fish_dir = TRAIN_DIR+'{}'.format(fish)
-    images = [fish+'/'+im for im in os.listdir(fish_dir)]
-    return images
-
-def read_image(src):
-    """Read and resize individual images"""
-    im = cv2.imread(src, cv2.IMREAD_COLOR)
-    im = cv2.resize(im, (COLS, ROWS), interpolation=cv2.INTER_CUBIC)
-    return im
+# In[3]:
 
 
-files = []
-y_all = []
+#~ Convert rural percentage to 0-1
+LT['rural_pct'] /= 100
+#~ Compute the MPI Score for each loan theme
+LT['MPI Score'] = LT['rural_pct']*LT['MPI Rural'] + (1-LT['rural_pct'])*LT['MPI Urban']
 
-for fish in FISH_CLASSES:
-    fish_files = get_images(fish)
-    files.extend(fish_files)
+#~ Need a volume-weighted average for mutli-country partners. 
+weighted_avg = lambda df: np.average(df['MPI Score'],weights=df['amount'])
+#~ Get total volume & average MPI Score for each partner country 
+FP = LT.groupby(['Partner ID','ISO']).agg({'MPI Score': np.mean,'amount':np.sum})
+#~ and get weighted average over countries. Done!
+Scores = FP.groupby(level='Partner ID').apply(weighted_avg)
+
+
+# So we can see that the scores in this case follow a predictable distribution with a long tail. The MPI is clearly suited to differentiating one poor country from another, and does less to differentiate among middle-income countries. You can also see that rual MPI scores are (pretty much) always higher than urban scores, as you might expect.
+
+# In[4]:
+
+
+fig, ax = plt.subplots(1, 3,figsize=(12,4))
+Scores.plot(kind='hist', bins=30,ax=ax[0], title= "Rural-weighted MPI Scores by Field Parnter")
+MPI['MPI Rural'].plot(kind='hist', bins=30,ax=ax[1], title="Rural MPI Scores by Country")
+MPI.plot(kind='scatter',x = 'MPI Rural', y = 'MPI Urban', title = "Urban vs. Rural MPI Scores by Country\n(w/ y=x line)", ax=ax[2])
+ax[2].plot(ax[2].get_xlim(),ax[2].get_ylim())
+#regplot('MPI Rural','MPI Urban', data=MPI, ax=ax[2]) ; ax[2].set_title("Urban vs. Rural MPI Scores by Country")
+plt.tight_layout()
+
+
+# ### Sub-National MPI Scores
+# A primary reason for chosing OPHI's MPI as our poverty index was that it is disaggregated at the administrative region level, so that we can account for targeting within countries to some extent. Here I'll demonstrate the current system for assigning a given loan or loan theme to a given MPI region. Those scores then get aggregated as a volume-weighted average.
+
+# In[5]:
+
+
+# Load data
+
+MPIsubnat = pd.read_csv("../input/mpi/MPI_subnational.csv")[['Country', 'Sub-national region', 'World region', 'MPI National', 'MPI Regional']]
+# Create new column LocationName that concatenates the columns Country and Sub-national region
+MPIsubnat['LocationName'] = MPIsubnat[['Sub-national region', 'Country']].apply(lambda x: ', '.join(x), axis=1)
+
+LT = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv")[['Partner ID', 'Loan Theme ID', 'region', 'mpi_region', 'ISO', 'number', 'amount', 'LocationName', 'names']]
+
+# Merge dataframes
+LT = LT.merge(MPIsubnat, left_on='mpi_region', right_on='LocationName', suffixes=('_lt', '_mpi'))[['Partner ID', 'Loan Theme ID', 'Country', 'ISO', 'mpi_region', 'MPI Regional', 'number', 'amount']]
+
+LT.head()
+
+
+# In[6]:
+
+
+#~ Get total volume and average MPI Regional Score for each partner loan theme
+LS = LT.groupby(['Partner ID', 'Loan Theme ID', 'Country', 'ISO']).agg({'MPI Regional': np.mean, 'amount': np.sum, 'number': np.sum})
+#~ Get a volume-weighted average of partners loanthemes.
+weighted_avg_lt = lambda df: np.average(df['MPI Regional'], weights=df['amount'])
+#~ and get weighted average for partners. 
+MPI_regional_scores = LS.groupby(level='Partner ID').apply(weighted_avg_lt)
+
+
+# If we compare the Rural/Urban weighted MPI Scores of a field partner with the Regional weighted MPI Scores, we see a peak between an MPI score of 0.3 and 0.4 if we use Regional-weighted MPI Scores. So if Kiva uses a more detailed score for poverty, we see that we lend to borrowers that are actually in poorer areas than the Rural weighted scores show us.   
+
+# In[7]:
+
+
+fig, ax = plt.subplots(1, 2, figsize=(12,4))
+MPI_regional_scores.plot(kind='hist', bins=30, ax=ax[0], title= "Regional-weighted MPI Scores by Field Partner")
+Scores.plot(kind='hist', bins=30, ax=ax[1], title= "Rural-weighted MPI Scores by Field Partner")
+plt.tight_layout()
+
+
+# Although Kiva gives larger loan amounts to field partners that have a lower MPI score, this doesn't necessarily mean that there are also more loans given to borrowers of these field partners.  
+
+# In[8]:
+
+
+# plot amount per partner by regional partner MPI score
+A = LS.groupby(level='Partner ID').agg({'amount':np.sum})
+N = LS.groupby(level='Partner ID').agg({'number':np.sum})
+
+fig,ax = plt.subplots(1,2, figsize=(12,4))
+pd.concat([A, MPI_regional_scores], axis=1).plot(kind='scatter', x=0, y='amount', title="Amount invested by Field Partner MPI score", ax=ax[0])
+pd.concat([N, MPI_regional_scores], axis=1).plot(kind='scatter', x=0, y='number', title="Number of loans invested by Field Partner MPI score", ax=ax[1])
+plt.tight_layout()
+for ax in ax.flat:
+    ax.set(xlabel='MPI score')
+
+
+# ## Financial Inclusion
+# 
+# Apart from measuring poverty levels, Kiva is concerned with financial exlusive areas. The [Global Findex ](http://www.worldbank.org/en/programs/globalfindex) database published by the World Bank is an example of a dataset that measures financial inclusion per country.
+# This database provides in-depth data on how individuals save, borrow, make payments, and manage risks.
+# 
+# In this example we show how you could incorporate this data to come up with a metric for financial exclusion per country.
+# 
+# The Global Findex data is stored in the 'findex-world-bank' folder and is called 'FINDEXData.csv'.
+
+# ### Findex Score
+# 
+# To measure a country's financial inclusion we chose three indicators from the Global Findex dataset that capture the essence of financial inclusion: 
+# * Having a savingsaccount at a formal financial institution
+# * Being able to borrow from a formal financial institution
+# * Having access to a fund in the case of an emergency
+# 
+# For these indicators we used the data that corresponds to the answers of the population whose income is lower than the mean income.   
+
+# In[23]:
+
+
+def read_findex(datafile=None, interpolate=False, invcov=True, variables = ["Account", "Loan", "Emergency"], norm=True):
+    """
+    Returns constructed findex values for each country
+
+    Read in Findex data - Variables include: Country ISO Code, Country Name,
+                          Pct with Account at Financial institution (Poor),
+                          Pct with a loan from a Financial institution (Poor),
+                          Pct who say they could get an emergency loan (Poor)
+
+    Take average of 'poorest 40%' values for each value in `variables'
+
+     If `normalize':
+        Apply the normalization function to every MPI variable
+    """
+    if datafile == None: datafile = "../input/findex-world-bank/FINDEXData.csv"
+
+    F = pd.read_csv(datafile)#~ [["ISO","Country Name", "Indicator Name", "MRV"]]
     
-    y_fish = np.tile(fish, len(fish_files))
-    y_all.extend(y_fish)
-    print("{0} photos of {1}".format(len(fish_files), fish))
+    Fcols = {'Country Name': 'Country',
+        'Country Code': 'ISO',
+        'Indicator Name': 'indicator',
+        'Indicator Code': 'DROP',
+        '2011': 'DROP',
+        '2014': 'DROP',
+        'MRV': 'Val'
+        }
+    F = F.rename(columns=Fcols).drop("DROP",1)
+    F['Val'] /= 100.
     
-y_all = np.array(y_all)
+    indicators = {"Account at a financial institution, income, poorest 40% (% ages 15+) [ts]": "Account",
+        "Coming up with emergency funds: somewhat possible, income, poorest 40% (% ages 15+) [w2]": "Emergency",
+        "Coming up with emergency funds: very possible, income, poorest 40% (% ages 15+) [w2]": "Emergency",
+        "Borrowed from a financial institution, income, poorest 40% (% ages 15+) [ts]": "Loan"
+        }
 
+    F['Poor'] = F['indicator'].apply(lambda ind: "Poor" if "poorest" in ind else "Rich") 
+    F['indicator'] = F['indicator'].apply(lambda ind: indicators.setdefault(ind,np.nan)) 
+    F = F.dropna(subset=["indicator"])
+    F = F.groupby(["Poor","ISO","indicator"])["Val"].sum()
+    F = 1 - F.loc["Poor"]
 
-# In[ ]:
-
-
-X_all = np.ndarray((len(files), ROWS, COLS, CHANNELS), dtype=np.uint8)
-
-for i, im in enumerate(files): 
-    X_all[i] = read_image(TRAIN_DIR+im)
-    if i%1000 == 0: print('Processed {} of {}'.format(i, len(files)))
-
-print(X_all.shape)
-
-
-# In[ ]:
-
-
-## Uncomment to check out a fish from each class
-#uniq = np.unique(y_all, return_index=True)
-# for f, i in zip(uniq[0], uniq[1]):
-    #plt.imshow(X_all[i])
-    #plt.title(f)
-    #plt.show()
-
-
-# # Splitting the Training Data
-# 
-# One-Hot-Encode the labels, then create a stratified train/validation split. 
-
-# In[ ]:
-
-
-# One Hot Encoding Labels
-y_all = LabelEncoder().fit_transform(y_all)
-y_all = np_utils.to_categorical(y_all)
-
-X_train, X_valid, y_train, y_valid = train_test_split(X_all, y_all, 
-                                                    test_size=0.2, random_state=23, 
-                                                    stratify=y_all)
-
-
-# ## The Model
-# 
-# Pretty typical CNN in Keras with a plenty of dropout regularization between the fully connected layers. Note: I set the epochs to 1 to avoid timing out - change it to around 20. 
-
-# In[ ]:
-
-
-optimizer = RMSprop(lr=1e-4)
-objective = 'categorical_crossentropy'
-
-def center_normalize(x):
-    return (x - K.mean(x)) / K.std(x)
-
-model = Sequential()
-
-model.add(Activation(activation=center_normalize, input_shape=(ROWS, COLS, CHANNELS)))
-
-model.add(Convolution2D(32, 5, 5, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(Convolution2D(32, 5, 5, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
-
-model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
-
-model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
-
-model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
-model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
-
-
-model.add(Flatten())
-model.add(Dense(256, activation='relu'))
-model.add(Dropout(0.5))
-
-model.add(Dense(64, activation='relu'))
-model.add(Dropout(0.5))
-
-model.add(Dense(len(FISH_CLASSES)))
-model.add(Activation('sigmoid'))
-
-model.compile(loss=objective, optimizer=optimizer)
-
-
-# In[ ]:
-
-
-early_stopping = EarlyStopping(monitor='val_loss', patience=4, verbose=1, mode='auto')        
+    F = F.unstack("indicator")
+    
+    # fill missing values for the emergency indicator with a predicted score from OLS regression analysis 
+    if interpolate:
+        results = smf.ols("Emergency ~ Loan + Account",data=F).fit()
+        F['Emergency_fit'] = results.params['Intercept'] + F[['Loan','Account']].mul(results.params[['Loan','Account']]).sum(1)
+        F['Emergency'].fillna(F['Emergency_fit'],inplace=True)
+    if invcov: F['Findex'] = invcov_index(F[variables]) #.mean(1)
+    else: F['Findex'] = F[variables].mean(1,skipna=True)
         
-model.fit(X_train, y_train, batch_size=64, nb_epoch=1,
-              validation_split=0.2, verbose=1, shuffle=True, callbacks=[early_stopping])
-
-
-# In[ ]:
-
-
-preds = model.predict(X_valid, verbose=1)
-print("Validation Log Loss: {}".format(log_loss(y_valid, preds)))
-
-
-# # Predicting the Test Set
-# 
-# Finishing off with predictions on the test set. Scored LB 1.279 
-
-# In[ ]:
-
-
-test_files = [im for im in os.listdir(TEST_DIR)]
-test = np.ndarray((len(test_files), ROWS, COLS, CHANNELS), dtype=np.uint8)
-
-for i, im in enumerate(test_files): 
-    test[i] = read_image(TEST_DIR+im)
+    flatvar = flatten(F['Findex'].dropna(), use_buckets = False, return_buckets = False)
+    F = F.join(flatvar,how='left',lsuffix=' (raw)')
     
-test_preds = model.predict(test, verbose=1)
+    return F
+
+def invcov_index(indicators):
+    """
+    Convert a dataframe of indicators into an inverse covariance matrix index
+    """
+    df = indicators.copy()
+    df = (df-df.mean())/df.std()
+    I  = np.ones(df.shape[1])
+    E  = inv(df.cov())
+    s1  = I.dot(E).dot(I.T)
+    s2  = I.dot(E).dot(df.T)
+    try:
+        int(s1)
+        S  = s2/s1
+    except TypeError: 
+        S  = inv(s1).dot(s2)
+    
+    S = pd.Series(S,index=indicators.index)
+
+    return S
+
+def flatten(Series, outof = 10., bins = 20, use_buckets = False, write_buckets = False, return_buckets = False):
+    """
+    NOTE: Deal with missing values, obviously!
+    Convert Series to a uniform distribution from 0 to `outof'
+    use_buckets uses the bucketing rule from a previous draw.
+    """
+
+    tempSeries = Series.dropna()
+    if use_buckets: #~ Use a previously specified bucketing rule
+        cuts, pcts = list(rule['Buckets']), np.array(rule['Values']*(100./outof))
+    else: #~ Make Bucketing rule to enforce a uniform distribution
+        pcts = np.append(np.arange(0,100,100/bins),[100])
+        cuts = [ np.percentile(tempSeries,p) for p in pcts ]
+        while len(cuts)>len(set(cuts)):
+            bins -= 1
+            pcts = np.append(np.arange(0,100,100/bins),[100])
+            cuts = [ np.percentile(tempSeries,p) for p in pcts ]
+
+    S = pd.cut(tempSeries,cuts,labels = pcts[1:]).astype(float)
+    S *= outof/100
+
+    buckets = pd.DataFrame({"Buckets":cuts,"Values":pcts*(outof/100)})
+
+    if return_buckets: return S, 
+    else: return S
 
 
-# In[ ]:
+# In[24]:
 
 
-submission = pd.DataFrame(test_preds, columns=FISH_CLASSES)
-submission.insert(0, 'image', test_files)
-submission.head()
+F = read_findex()
+F.head()
 
+
+# ### Compare Findex Score and MPI Score
+# 
+# From here you can merge the Findex Scores with MPI Scores and compare the metric for financial inclusion with the multidimensional poverty score. 
+# The below figure shows that countries with high poverty levels often score high on the financial inclusion index. However we don't see a clear correlation between the two metrics, which means that the Findex data measures something that is unrelated to poverty.  
+
+# In[25]:
+
+
+# Compare scores on a country level
+MPI.join(F).plot(kind='scatter', x='MPI Rural', y='Findex', title="MPI Rural Score versus Findex Score");
+
+
+# ## Further Analysis
+# 
+# More importantly, how would these metrices and other relevant data sources define poverty and financial inclusion?
+# How detailed can we go? 
+# 
+# Do you have an idea of a general metric that is scalable for **each** country? How would you fill missing values for countries? 
+# 
+# Or would you rather focus on one country in detail?

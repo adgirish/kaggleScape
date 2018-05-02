@@ -1,136 +1,109 @@
 
 # coding: utf-8
 
-# I suspect that the pups will be difficult to count on the images because they are dark grey just like the rocks, they are usually very close to their mother, and they are pretty similar in shape, size, and color to the seals (see 5.jpg for example). However, all other sea lion types are light brown so they should be easier to locate and count. I explore in this notebook whether it is possible to predict the number of pups based on the number of other sea lions. That is, the pups are not directly counted but their number is inferred/estimated based on the number of males, females, juveniles, and subadult males using a regression model. This alternative approach could turn out to be more accurate than directly counting the pups and I hope some of you will find it useful to improve the overall accuracy of the counts.
+# Welcome to the wonderful world of Markov Chain Monte Carlo
+# 
+# Here I present a toy example of how one can use MCMC to get a pretty good improvement over straight averaging
 
 # In[ ]:
 
 
-# load packages and read in the data
-
-from subprocess import check_output
 import numpy as np
-import xgboost as xgb
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from pymc3 import *
+from sklearn.metrics import mean_absolute_error
 import matplotlib.pyplot as plt
-import matplotlib
-
-data = np.genfromtxt('../input/Train/train.csv', delimiter=',',skip_header=1,usecols=(1,2,3,4,5))
-X = data[:,:4]
-Y = data[:,4]
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# **Step 1)** It is probably relatively easy to count the light brown blobs on the image (the sum of non-pup sea lions). So the first step is to check if the number of pups correlate with the number of non-pup sea lions. 
+# The following cell creates the two models with noise based on a target.
+# One should note that the first model has more noise than the second model so one would expect model 1 to perform worse than model 2
 
 # In[ ]:
 
 
-blobs = np.sum(X,axis=1)
+size = 200
+true_intercept = 1
+true_slope = 2
+x = np.linspace(0, 1, size)
+# y = a + b*x
+true_regression_line = true_intercept + true_slope * x
+# add noise
+model1 = true_regression_line + np.random.normal(scale=.5, size=size) #Noisy
+model2 = true_regression_line + np.random.normal(scale=.2, size=size) #Less Noisy
 
-plt.scatter(blobs,Y)
-plt.xlabel('#non-pup sea lions')
-plt.ylabel('#pups')
-plt.show()
 
-
-# The correlation looks pretty weak because often the sea lion colony has zero or very few pups. 
-# 
-# **Step 2)** Develop a regression model and use the number of adult_males, subadult_males, adult_females, and juveniles as features. The idea is that the family demography of sea lion colonies might help to improve the prediction.  
-# 
-# The data is split into train (80%) and test (20%),  GridSearchCV is used on the training set to tune some xgboost parameters (learning rate and the number of trees only), and the test set is used to report RMSE and to save the feature importances. These steps (random splitting, grid search, RMSE, feature importances) are performed 10 times to assess the impact of random splitting on the RMSE. 
-# 
-# The prediction of the last model is visualized as well as the feature importances with their standard deviations.
-# 
+# Let us see what the MAE looks like
 
 # In[ ]:
 
 
-# a function to do the training and prediction
-def train_pred(n_sims,X,Y,f_names,test_size):
-    RMSE = np.zeros(n_sims)
-    f_imp = np.zeros([n_sims,np.shape(X)[1]])
+print(mean_absolute_error(true_regression_line,model1))
+print(mean_absolute_error(true_regression_line,model2))
 
-    for i in range(n_sims):
 
-        # split the data
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=test_size)
-        # initialize XGBRegressor
-        GB = xgb.XGBRegressor()
+# As expected the noisier model does worse
 
-        # the parameter grid below was too much on the kaggle kernel
-        #param_grid = {"learning_rate": [0.01,0.03,0.1],
-        #              "objective": ['reg:linear'],
-        #              "n_estimators": [300,1000,3000]}
-        # do GridSearch
-        #search_GB = GridSearchCV(GB,param_grid,cv=4,n_jobs=-1).fit(X_train,Y_train)
-        # the best parameters should not be on the edges of the parameter grid
-        #print('   ',search_GB.best_params_)
-        # train the best model
-        #xgb_pups = xgb.XGBRegressor(**search_GB.best_params_).fit(X_train, Y_train)
-
-        # preselected parameters
-        param_grid = {"learning_rate": 0.03,
-                      "objective": 'reg:linear',
-                      "n_estimators": 300}
-        xgb_pups = xgb.XGBRegressor(**param_grid).fit(X_train, Y_train)
-
-        # predict on the test set
-        preds = xgb_pups.predict(X_test)
-
-        # feature importance
-        b = xgb_pups.booster()
-        f_imp[i,:] = list(b.get_fscore().values())
-
-        # rmse of prediction
-        RMSE[i] = np.sqrt(mean_squared_error(Y_test, preds))
-    
-    # visualize the prediction of the last model
-    plt.scatter(Y_test,preds,label = 'regression model')
-    plt.plot(np.arange(np.max(Y_test)),np.arange(np.max(Y_test)),color='k',label='perfect prediction')
-    plt.title('predictions of the last model')
-    plt.legend(loc='best')
-    plt.xlabel('true #pups')
-    plt.ylabel('predicted #pups')
-    plt.show()
-    
-    return RMSE, f_imp
-
+# Now let us look at the straight average
 
 # In[ ]:
 
 
-f_names = ['adult males','subadult males','adult females','juveniles']
-RMSE, f_imp = train_pred(10,X,Y,f_names,test_size=0.2)
-
-print('RMSE = ',np.around(np.mean(RMSE),1),'+/-',np.around(np.std(RMSE),1))
-
-plt.bar(range(len(f_names)),np.mean(f_imp,axis=0),width=0.8,yerr = np.std(f_imp,axis=0))
-plt.ylabel('f score')
-plt.xticks(range(len(f_names)), f_names)
-plt.show()
+print(mean_absolute_error(true_regression_line,model1*.5+model2*.5))
 
 
-# **Step 3)** Let's do some feature engineering! The sea lion counts are normalized by the total count, and the total count is added as an additional feature. 
+# As one can see this isn't as good as our top model
+
+# Now comes the cool part.  We are going to use MCMC to draw samples from our data and get stats on how we can obtain a model that gets the best out of our raw models.
 # 
-# As before, the prediction of the last model is visualized as well as the feature importances with their standard deviations.
+# Important:  Please look at the documentation [here][1] (https://pymc-devs.github.io/pymc3/index.html) for details
+# 
+# 
+#   [1]: https://pymc-devs.github.io/pymc3/index.html
 
 # In[ ]:
 
 
-X_sum = np.sum(X,axis=1)
-X_new = np.hstack((X/X_sum[:,None],X_sum[:,None]))
-f_names_new = np.append(f_names,'sum')
-
-RMSE_new, f_imp_new = train_pred(10,X_new,Y,f_names_new,test_size=0.2)
-
-print('RMSE = ',np.around(np.mean(RMSE_new),1),'+/-',np.around(np.std(RMSE_new),1))
-
-plt.bar(range(len(f_names_new)),np.mean(f_imp_new,axis=0),width=0.8,yerr = np.std(f_imp_new,axis=0))
-plt.ylabel('f score')
-plt.xticks(range(len(f_names_new)), f_names_new,rotation='vertical')
-plt.show()
+data = dict(x1=model1, x2=model2, y=true_regression_line)
+with Model() as model:
+    # specify glm and pass in data. The resulting linear model, its likelihood and 
+    # and all its parameters are automatically added to our model.
+    glm.glm('y ~ x1 + x2', data)
+    step = NUTS() # Instantiate MCMC sampling algorithm
+    trace = sample(2000, step, progressbar=False)
 
 
-# The RMSE did not improve significantly.
+# It takes a while - now is time to look at what goodness it gives to us
+
+# In[ ]:
+
+
+plt.figure(figsize=(7, 7))
+traceplot(trace)
+plt.tight_layout();
+
+
+# One can see that for every drawn sample it gives the parameter values for the intercept, x1 and x2
+
+# In[ ]:
+
+
+intercept = np.median(trace.Intercept)
+print(intercept)
+x1param = np.median(trace.x1)
+print(x1param)
+x2param = np.median(trace.x2)
+print(x2param)
+
+
+# Now is the time to see how well we have done!
+
+# In[ ]:
+
+
+print('Model 1:',mean_absolute_error(true_regression_line,model1))
+print('Model 2:', mean_absolute_error(true_regression_line,model2))
+print('Average:',mean_absolute_error(true_regression_line,model1*.5+model2*.5))
+print('MCMC:',mean_absolute_error(true_regression_line,intercept+x1param*model1+x2param*model2))
+
+
+# I hope this helps!

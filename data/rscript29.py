@@ -1,336 +1,259 @@
-"""Sea Lion Prognostication Engine
+# Based on Bojan -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
+# and Nishant -> https://www.kaggle.com/nishkgp/more-improved-ridge-2-lgbm
 
-https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count
-"""
+import gc
+import time
+import numpy as np
+import pandas as pd
+from scipy.sparse import csr_matrix, hstack
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
+import lightgbm as lgb
 
 import sys
-import os
-from collections import namedtuple
-import operator
-import glob
-import csv 
-from math import sqrt
 
-import numpy as np
+###Add https://www.kaggle.com/anttip/wordbatch to your kernel Data Sources, 
+###until Kaggle admins fix the wordbatch pip package installation
+###sys.path.insert(0, '../input/wordbatch/wordbatch/')
+import wordbatch
 
-import PIL
-from PIL import Image, ImageDraw, ImageFilter
+from wordbatch.extractors import WordBag, WordHash
+from wordbatch.models import FTRL, FM_FTRL
 
-import skimage
-import skimage.io
-import skimage.measure
+from nltk.corpus import stopwords
+import re
 
-import shapely
-import shapely.geometry
-from shapely.geometry import Polygon
+NUM_BRANDS = 4500
+NUM_CATEGORIES = 1200
 
-# Notes
-# cls -- sea lion class 
-# tid -- train, train dotted, or test image id 
-# _nb -- short for number
-# x, y -- don't forget image arrays organized row, col, channels
-#
-# With contributions from @bitsofbits ...
-#
+develop = False
+# develop= True
+
+def rmsle(y, y0):
+    assert len(y) == len(y0)
+    return np.sqrt(np.mean(np.power(np.log1p(y) - np.log1p(y0), 2)))
 
 
-# ================ Meta ====================
-__description__ = 'Sea Lion Prognostication Engine'
-__version__ = '0.1.0'
-__license__ = 'MIT'
-__author__ = 'Gavin Crooks (@threeplusone)'
-__status__ = "Prototype"
-__copyright__ = "Copyright 2017"
-
-# python -c 'import sealiondata; sealiondata.package_versions()'
-def package_versions():
-    print('sealionengine \t', __version__)
-    print('python        \t', sys.version[0:5])
-    print('numpy         \t', np.__version__)
-    print('skimage       \t', skimage.__version__)
-    print('pillow (PIL)  \t', PIL.__version__)
-    print('shapely       \t', shapely.__version__)
+def split_cat(text):
+    try:
+        return text.split("/")
+    except:
+        return ("No Label", "No Label", "No Label")
 
 
-SOURCEDIR = os.path.join('..', 'input')
-
-DATADIR = '.'
-
-VERBOSITY = namedtuple('VERBOSITY', ['QUITE', 'NORMAL', 'VERBOSE', 'DEBUG'])(0,1,2,3)
-
-
-SeaLionCoord = namedtuple('SeaLionCoord', ['tid', 'cls', 'x', 'y'])
+def handle_missing_inplace(dataset):
+    dataset['general_cat'].fillna(value='missing', inplace=True)
+    dataset['subcat_1'].fillna(value='missing', inplace=True)
+    dataset['subcat_2'].fillna(value='missing', inplace=True)
+    dataset['brand_name'].fillna(value='missing', inplace=True)
+    dataset['item_description'].fillna(value='missing', inplace=True)
 
 
-class SeaLionData(object):
-    
-    def __init__(self, sourcedir=SOURCEDIR, datadir=DATADIR, verbosity=VERBOSITY.NORMAL):
-        self.sourcedir = sourcedir
-        self.datadir = datadir
-        self.verbosity = verbosity
-        
-        self.cls_nb = 5
-        
-        self.cls_names = (
-            'adult_males',
-            'subadult_males',
-            'adult_females',
-            'juveniles',
-            'pups',
-            'NOT_A_SEA_LION')
-            
-        self.cls = namedtuple('ClassIndex', self.cls_names)(*range(0,6))
-    
-        # backported from @bitsofbits. Average actual color of dot centers.
-        self.cls_colors = (
-            (243,8,5),          # red
-            (244,8,242),        # magenta
-            (87,46,10),         # brown 
-            (25,56,176),        # blue
-            (38,174,21),        # green
-            )
-    
-            
-        self.dot_radius = 3
-        
-        self.train_nb = 947
-        
-        self.test_nb = 18636
-       
-        self.paths = {
-            # Source paths
-            'sample'     : os.path.join(sourcedir, 'sample_submission.csv'),
-            'counts'     : os.path.join(sourcedir, 'Train', 'train.csv'),
-            'train'      : os.path.join(sourcedir, 'Train', '{tid}.jpg'),
-            'dotted'     : os.path.join(sourcedir, 'TrainDotted', '{tid}.jpg'),
-            'test'       : os.path.join(sourcedir, 'Test', '{tid}.jpg'),
-            # Data paths
-            'coords'     : os.path.join(datadir, 'coords.csv'),  
-            }
-        
-        # From MismatchedTrainImages.txt
-        self.bad_train_ids = (
-            3, 7, 9, 21, 30, 34, 71, 81, 89, 97, 151, 184, 215, 234, 242, 
-            268, 290, 311, 331, 344, 380, 384, 406, 421, 469, 475, 490, 499, 
-            507, 530, 531, 605, 607, 614, 621, 638, 644, 687, 712, 721, 767, 
-            779, 781, 794, 800, 811, 839, 840, 869, 882, 901, 903, 905, 909, 
-            913, 927, 946)
-            
-        self._counts = None
-
-        
-    @property
-    def trainshort_ids(self):
-        return (0,1,2,4,5,6,8,10)  # Trainshort1
-        #return range(41,51)         # Trainshort2
-        
-    @property 
-    def train_ids(self):
-        """List of all valid train ids"""
-        tids = range(0, self.train_nb)
-        tids = list(set(tids) - set(self.bad_train_ids) )  # Remove bad ids
-        tids.sort()
-        return tids
-                    
-    @property 
-    def test_ids(self):
-        return range(0, self.test_nb)
-    
-    def path(self, name, **kwargs):
-        """Return path to various source files"""
-        path = self.paths[name].format(**kwargs)
-        return path        
-
-    @property
-    def counts(self) :
-        """A map from train_id to list of sea lion class counts"""
-        if self._counts is None :
-            counts = {}
-            fn = self.path('counts')
-            with open(fn) as f:
-                f.readline()
-                for line in f:
-                    tid_counts = list(map(int, line.split(',')))
-                    counts[tid_counts[0]] = tid_counts[1:]
-            self._counts = counts
-        return self._counts
-
-    def rmse(self, tid_counts) :
-        true_counts = self.counts
-        
-        error = np.zeros(shape=[5] )
-        
-        for tid in tid_counts:
-            true_counts = self.counts[tid]
-            obs_counts = tid_counts[tid]
-            diff = np.asarray(true_counts) - np.asarray(obs_counts)
-            error += diff*diff
-        #print(error)
-        error /= len(tid_counts)
-        rmse = np.sqrt(error).sum() / 5
-        return rmse 
-        
-
-    def load_train_image(self, train_id, border=0, mask=False):
-        """Return image as numpy array
-         
-        border -- add a black border of this width around image
-        mask -- If true mask out masked areas from corresponding dotted image
-        """
-        img = self._load_image('train', train_id, border)
-        if mask :
-            # The masked areas are not uniformly black, presumable due to 
-            # jpeg compression artifacts
-            dot_img = self._load_image('dotted', train_id, border).astype(np.uint16).sum(axis=-1)
-            img = np.copy(img)
-            img[dot_img<40] = 0
-        return img
-   
-
-    def load_dotted_image(self, train_id, border=0):
-        return self._load_image('dotted', train_id, border)
- 
- 
-    def load_test_image(self, test_id, border=0):    
-        return self._load_image('test', test_id, border)
+def cutting(dataset):
+    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
+    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
+    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
+    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
 
 
-    def _load_image(self, itype, tid, border=0) :
-        fn = self.path(itype, tid=tid)
-        img = np.asarray(Image.open(fn))
-        if border :
-            height, width, channels = img.shape
-            bimg = np.zeros( shape=(height+border*2, width+border*2, channels), dtype=np.uint8)
-            bimg[border:-border, border:-border, :] = img
-            img = bimg
-        return img
-    
-
-    def coords(self, train_id):
-        """Extract coordinates of dotted sealions and return list of SeaLionCoord objects)"""
-        
-        # Empirical constants
-        MIN_DIFFERENCE = 16
-        MIN_AREA = 9
-        MAX_AREA = 100
-        MAX_AVG_DIFF = 50
-        MAX_COLOR_DIFF = 32
-       
-        src_img = np.asarray(self.load_train_image(train_id, mask=True), dtype = np.float)
-        dot_img = np.asarray(self.load_dotted_image(train_id), dtype = np.float)
-
-        img_diff = np.abs(src_img-dot_img)
-        
-        # Detect bad data. If train and dotted images are very different then somethings wrong.
-        avg_diff = img_diff.sum() / (img_diff.shape[0] * img_diff.shape[1])
-        if avg_diff > MAX_AVG_DIFF: return None
-        
-        img_diff = np.max(img_diff, axis=-1)   
-           
-        img_diff[img_diff<MIN_DIFFERENCE] = 0
-        img_diff[img_diff>=MIN_DIFFERENCE] = 255
-
-        sealions = []
-        
-        for cls, color in enumerate(self.cls_colors):
-            # color search backported from @bitsofbits.
-            color_array = np.array(color)[None, None, :]
-            has_color = np.sqrt(np.sum(np.square(dot_img * (img_diff > 0)[:,:,None] - color_array), axis=-1)) < MAX_COLOR_DIFF 
-            contours = skimage.measure.find_contours(has_color.astype(float), 0.5)
-            
-            if self.verbosity == VERBOSITY.DEBUG :
-                print()
-                fn = 'diff_{}_{}.png'.format(train_id,cls)
-                print('Saving train/dotted difference: {}'.format(fn))
-                Image.fromarray((has_color*255).astype(np.uint8)).save(fn)
-
-            for cnt in contours :
-                p = Polygon(shell=cnt)
-                area = p.area 
-                if(area > MIN_AREA and area < MAX_AREA) :
-                    y, x= p.centroid.coords[0] # DANGER : skimage and cv2 coordinates transposed?
-                    x = int(round(x))
-                    y = int(round(y))
-                    sealions.append( SeaLionCoord(train_id, cls, x, y) )
-                
-        if self.verbosity >= VERBOSITY.VERBOSE :
-            counts = [0,0,0,0,0]
-            for c in sealions :
-                counts[c.cls] +=1
-            print()
-            print('train_id','true_counts','counted_dots', 'difference', sep='\t')   
-            true_counts = self.counts[train_id]
-            print(train_id, true_counts, counts, np.array(true_counts) - np.array(counts) , sep='\t' )
-          
-        if self.verbosity == VERBOSITY.DEBUG :
-            img = np.copy(sld.load_dotted_image(train_id))
-            r = self.dot_radius
-            dy,dx,c = img.shape
-            for tid, cls, cx, cy in sealions :                    
-                for x in range(cx-r, cx+r+1) : img[cy, x, :] = 255
-                for y in range(cy-r, cy+r+1) : img[y, cx, :] = 255    
-            fn = 'cross_{}.png'.format(train_id)
-            print('Saving crossed dots: {}'.format(fn))
-            Image.fromarray(img).save(fn)
-     
-        return sealions
-        
-
-    def save_coords(self, train_ids=None): 
-        if train_ids is None: train_ids = self.train_ids
-        fn = self.path('coords')
-        self._progress('Saving sealion coordinates to {}'.format(fn))
-        with open(fn, 'w') as csvfile:
-            writer =csv.writer(csvfile)
-            writer.writerow( SeaLionCoord._fields )
-            for tid in train_ids :
-                self._progress()
-                for coord in self.coords(tid):
-                    writer.writerow(coord)
-        self._progress('done')
-        
-    def load_coords(self):
-        fn = self.path('coords')
-        self._progress('Loading sea lion coordinates from {}'.format(fn))
-        with open(fn) as f:
-            f.readline()
-            return [SeaLionCoord(*[int(n) for n in line.split(',')]) for line in f]
-
-    
-            
-    def save_sea_lion_chunks(self, coords, chunksize=128):
-        self._progress('Saving image chunks...')
-        self._progress('\n', verbosity=VERBOSITY.VERBOSE)
-        
-        last_tid = -1
-        
-        for tid, cls, x, y in coords :
-            if tid != last_tid:
-                img = self.load_train_image(tid, border=chunksize//2, mask=True)
-                last_tid = tid
-
-            fn = 'chunk_{tid}_{cls}_{x}_{y}_{size}.png'.format(size=chunksize, tid=tid, cls=cls, x=x, y=y)
-            self._progress(' Saving '+fn, end='\n', verbosity=VERBOSITY.VERBOSE)
-            Image.fromarray( img[y:y+chunksize, x:x+chunksize, :]).save(fn)
-            self._progress()
-        self._progress('done')
-        
-            
-    def _progress(self, string=None, end=' ', verbosity=VERBOSITY.NORMAL):
-        if self.verbosity < verbosity: return
-        if not string :
-            print('.', end='')
-        elif string == 'done':
-            print(' done') 
-        else:
-            print(string, end=end)
-        sys.stdout.flush()
-
-# end SeaLionData
+def to_categorical(dataset):
+    dataset['general_cat'] = dataset['general_cat'].astype('category')
+    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
+    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
+    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
 
 
-# Count sea lion dots and compare to truth from train.csv
-sld = SeaLionData()
-sld.verbosity = VERBOSITY.VERBOSE
-for tid in sld.trainshort_ids:
-    coord = sld.coords(tid)
+# Define helpers for text normalization
+stopwords = {x: 1 for x in stopwords.words('english')}
+non_alphanums = re.compile(u'[^A-Za-z0-9]+')
+
+
+def normalize_text(text):
+    return u" ".join(
+        [x for x in [y for y in non_alphanums.sub(' ', text).lower().strip().split(" ")] \
+         if len(x) > 1 and x not in stopwords])
+
+
+def main():
+    start_time = time.time()
+    from time import gmtime, strftime
+    print(strftime("%Y-%m-%d %H:%M:%S", gmtime()))
+
+    # if 1 == 1:
+    ###train = pd.read_table('../input/mercari-price-suggestion-challenge/train.tsv', engine='c')
+    ###test = pd.read_table('../input/mercari-price-suggestion-challenge/test.tsv', engine='c')
+
+    train = pd.read_table('../input/train.tsv', engine='c')
+    test = pd.read_table('../input/test.tsv', engine='c')
+
+    print('[{}] Finished to load data'.format(time.time() - start_time))
+    print('Train shape: ', train.shape)
+    print('Test shape: ', test.shape)
+    nrow_test = train.shape[0]  # -dftt.shape[0]
+    dftt = train[(train.price < 1.0)]
+    train = train.drop(train[(train.price < 1.0)].index)
+    del dftt['price']
+    nrow_train = train.shape[0]
+    # print(nrow_train, nrow_test)
+    y = np.log1p(train["price"])
+    merge: pd.DataFrame = pd.concat([train, dftt, test])
+    submission: pd.DataFrame = test[['test_id']]
+
+    del train
+    del test
+    gc.collect()
+
+    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
+        zip(*merge['category_name'].apply(lambda x: split_cat(x)))
+    merge.drop('category_name', axis=1, inplace=True)
+    print('[{}] Split categories completed.'.format(time.time() - start_time))
+
+    handle_missing_inplace(merge)
+    print('[{}] Handle missing completed.'.format(time.time() - start_time))
+
+    cutting(merge)
+    print('[{}] Cut completed.'.format(time.time() - start_time))
+
+    to_categorical(merge)
+    print('[{}] Convert categorical completed'.format(time.time() - start_time))
+
+    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.5, 1.0],
+                                                                  "hash_size": 2 ** 29, "norm": None, "tf": 'binary',
+                                                                  "idf": None,
+                                                                  }), procs=8)
+    wb.dictionary_freeze= True
+    X_name = wb.fit_transform(merge['name'])
+    del(wb)
+    X_name = X_name[:, np.array(np.clip(X_name.getnnz(axis=0) - 1, 0, 1), dtype=bool)]
+    print('[{}] Vectorize `name` completed.'.format(time.time() - start_time))
+
+    wb = CountVectorizer()
+    X_category1 = wb.fit_transform(merge['general_cat'])
+    X_category2 = wb.fit_transform(merge['subcat_1'])
+    X_category3 = wb.fit_transform(merge['subcat_2'])
+    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
+
+    # wb= wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 3, "hash_ngrams_weights": [1.0, 1.0, 0.5],
+    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.0, 1.0],
+                                                                  "hash_size": 2 ** 28, "norm": "l2", "tf": 1.0,
+                                                                  "idf": None})
+                             , procs=8)
+    wb.dictionary_freeze= True
+    X_description = wb.fit_transform(merge['item_description'])
+    del(wb)
+    X_description = X_description[:, np.array(np.clip(X_description.getnnz(axis=0) - 1, 0, 1), dtype=bool)]
+    print('[{}] Vectorize `item_description` completed.'.format(time.time() - start_time))
+
+    lb = LabelBinarizer(sparse_output=True)
+    X_brand = lb.fit_transform(merge['brand_name'])
+    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
+
+    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
+                                          sparse=True).values)
+    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
+    print(X_dummies.shape, X_description.shape, X_brand.shape, X_category1.shape, X_category2.shape, X_category3.shape,
+          X_name.shape)
+    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
+
+    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
+
+    #    pd.to_pickle((sparse_merge, y), "xy.pkl")
+    # else:
+    #    nrow_train, nrow_test= 1481661, 1482535
+    #    sparse_merge, y = pd.read_pickle("xy.pkl")
+
+    # Remove features with document frequency <=1
+    print(sparse_merge.shape)
+    mask = np.array(np.clip(sparse_merge.getnnz(axis=0) - 1, 0, 1), dtype=bool)
+    sparse_merge = sparse_merge[:, mask]
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_test:]
+    print(sparse_merge.shape)
+
+    gc.collect()
+    train_X, train_y = X, y
+    if develop:
+        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
+
+    model = FTRL(alpha=0.01, beta=0.1, L1=0.00001, L2=1.0, D=sparse_merge.shape[1], iters=50, inv_link="identity", threads=1)
+
+    model.fit(train_X, train_y)
+    print('[{}] Train FTRL completed'.format(time.time() - start_time))
+    if develop:
+        preds = model.predict(X=valid_X)
+        print("FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
+
+    predsF = model.predict(X_test)
+    print('[{}] Predict FTRL completed'.format(time.time() - start_time))
+
+    model = FM_FTRL(alpha=0.01, beta=0.01, L1=0.00001, L2=0.1, D=sparse_merge.shape[1], alpha_fm=0.01, L2_fm=0.0, init_fm=0.01,
+                    D_fm=200, e_noise=0.0001, iters=15, inv_link="identity", threads=4)
+
+    model.fit(train_X, train_y)
+    print('[{}] Train ridge v2 completed'.format(time.time() - start_time))
+    if develop:
+        preds = model.predict(X=valid_X)
+        print("FM_FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
+
+    predsFM = model.predict(X_test)
+    print('[{}] Predict FM_FTRL completed'.format(time.time() - start_time))
+
+    params = {
+        'learning_rate': 0.6,
+        'application': 'regression',
+        'max_depth': 4,
+        'num_leaves': 31,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 1,
+        'bagging_fraction': 0.6,
+        'bagging_freq': 5,
+        'feature_fraction': 0.6,
+        'nthread': 4,
+        'min_data_in_leaf': 100,
+        'max_bin': 31
+    }
+
+    # Remove features with document frequency <=100
+    print(sparse_merge.shape)
+    mask = np.array(np.clip(sparse_merge.getnnz(axis=0) - 100, 0, 1), dtype=bool)
+    sparse_merge = sparse_merge[:, mask]
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_test:]
+    print(sparse_merge.shape)
+
+    train_X, train_y = X, y
+    if develop:
+        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
+
+    d_train = lgb.Dataset(train_X, label=train_y)
+    watchlist = [d_train]
+    if develop:
+        d_valid = lgb.Dataset(valid_X, label=valid_y)
+        watchlist = [d_train, d_valid]
+
+    model = lgb.train(params, train_set=d_train, num_boost_round=6000, valid_sets=watchlist, \
+                      early_stopping_rounds=1000, verbose_eval=1000)
+
+    if develop:
+        preds = model.predict(valid_X)
+        print("LGB dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
+
+    predsL = model.predict(X_test)
+
+    print('[{}] Predict LGB completed.'.format(time.time() - start_time))
+
+    preds = (predsF * 0.2 + predsL * 0.3 + predsFM * 0.5)
+
+    submission['price'] = np.expm1(preds)
+    submission.to_csv("submission_wordbatch_ftrl_fm_lgb.csv", index=False)
+
+
+if __name__ == '__main__':
+    main()

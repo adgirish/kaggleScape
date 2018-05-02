@@ -1,208 +1,115 @@
-import sys
+# -*- coding: utf-8 -*-
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-sys.path.insert(0, '../input/wordbatch-133/wordbatch/')
-sys.path.insert(0, '../input/randomstate/randomstate/')
-import wordbatch
-from wordbatch.extractors import WordHash
-from wordbatch.models import FM_FTRL
-from wordbatch.data_utils import *
-import threading
-import pandas as pd
-from sklearn.metrics import roc_auc_score
-import time
 import numpy as np
-import gc
-from contextlib import contextmanager
-@contextmanager
-def timer(name):
-	t0 = time.time()
-	yield
-	print(f'[{name}] done in {time.time() - t0:.0f} s')
+import gzip
+import os
+import glob
+import time
+import cv2
+import pandas as pd
+import random
+from PIL import Image
 
-import os, psutil
-def cpuStats():
-	pid = os.getpid()
-	py = psutil.Process(pid)
-	memoryUse = py.memory_info()[0] / 2. ** 30
-	print('memory GB:', memoryUse)
+random.seed(2017)
+np.random.seed(2017)
 
-start_time = time.time()
+NUM_OF_IMAGES_FROM_TRAIN = 600
+INPUT_PATH = '../input/'
+OUTPUT_PATH = './'
 
-mean_auc= 0
 
-def fit_batch(clf, X, y, w):  clf.partial_fit(X, y, sample_weight=w)
+def rle(img):
+    '''
+    img: numpy array, 1 - mask, 0 - background
+    Returns run length as string formated
+    '''
+    bytes = np.where(img.flatten() == 1)[0]
+    runs = []
+    prev = -2
+    for b in bytes:
+        if (b > prev + 1): runs.extend((b + 1, 0))
+        runs[-1] += 1
+        prev = b
 
-def predict_batch(clf, X):  return clf.predict(X)
+    return ' '.join([str(i) for i in runs])
 
-def evaluate_batch(clf, X, y, rcount):
-	auc= roc_auc_score(y, predict_batch(clf, X))
-	global mean_auc
-	if mean_auc==0:
-		mean_auc= auc
-	else: mean_auc= 0.2*(mean_auc*4 + auc)
-	print(rcount, "ROC AUC:", auc, "Running Mean:", mean_auc)
-	return auc
 
-def df_add_counts(df, cols, tag="_count"):
-	arr_slice = df[cols].values
-	unq, unqtags, counts = np.unique(np.ravel_multi_index(arr_slice.T, arr_slice.max(0) + 1),
-									 return_inverse=True, return_counts=True)
-	df["_".join(cols)+tag] = counts[unqtags]
-	return df
+def dice(im1, im2, empty_score=1.0):
+    im1 = im1.astype(np.bool)
+    im2 = im2.astype(np.bool)
 
-def df_add_uniques(df, cols, tag="_unique"):
-	gp = df[cols].groupby(by=cols[0:len(cols) - 1])[cols[len(cols) - 1]].nunique().reset_index(). \
-		rename(index=str, columns={cols[len(cols) - 1]: "_".join(cols)+tag})
-	df= df.merge(gp, on=cols[0:len(cols) - 1], how='left')
-	return df
+    if im1.shape != im2.shape:
+        raise ValueError("Shape mismatch: im1 and im2 must have the same shape.")
 
-def df2csr(wb, df, pick_hours=None):
-	df.reset_index(drop=True, inplace=True)
-	with timer("Adding counts"):
-		df['click_time']= pd.to_datetime(df['click_time'])
-		dt= df['click_time'].dt
-		df['day'] = dt.day.astype('uint8')
-		df['hour'] = dt.hour.astype('uint8')
-		del(dt)
-		df= df_add_counts(df, ['ip', 'day', 'hour'])
-		df= df_add_counts(df, ['ip', 'app'])
-		df= df_add_counts(df, ['ip', 'app', 'os'])
-		df= df_add_counts(df, ['ip', 'device'])
-		df= df_add_counts(df, ['app', 'channel'])
-		df= df_add_uniques(df, ['ip', 'channel'])
+    im_sum = im1.sum() + im2.sum()
+    if im_sum == 0:
+        return empty_score
 
-	with timer("Adding next click times"):
-		D= 2**26
-		df['category'] = (df['ip'].astype(str) + "_" + df['app'].astype(str) + "_" + df['device'].astype(str) \
-						 + "_" + df['os'].astype(str)).apply(hash) % D
-		click_buffer= np.full(D, 3000000000, dtype=np.uint32)
-		df['epochtime']= df['click_time'].astype(np.int64) // 10 ** 9
-		next_clicks= []
-		for category, time in zip(reversed(df['category'].values), reversed(df['epochtime'].values)):
-			next_clicks.append(click_buffer[category]-time)
-			click_buffer[category]= time
-		del(click_buffer)
-		df['next_click']= list(reversed(next_clicks))
+    intersection = np.logical_and(im1, im2)
+    return 2. * intersection.sum() / im_sum
 
-	with timer("Log-binning features"):
-		for fea in ['ip_day_hour_count','ip_app_count','ip_app_os_count','ip_device_count',
-				'app_channel_count','next_click','ip_channel_unique']: 
-				    df[fea]= np.log2(1 + df[fea].values).astype(int)
 
-	with timer("Generating str_array"):
-		str_array= ("I" + df['ip'].astype(str) \
-			+ " A" + df['app'].astype(str) \
-			+ " D" + df['device'].astype(str) \
-			+ " O" + df['os'].astype(str) \
-			+ " C" + df['channel'].astype(str) \
-			+ " WD" + df['day'].astype(str) \
-			+ " H" + df['hour'].astype(str) \
-			+ " AXC" + df['app'].astype(str)+"_"+df['channel'].astype(str) \
-			+ " OXC" + df['os'].astype(str)+"_"+df['channel'].astype(str) \
-			+ " AXD" + df['app'].astype(str)+"_"+df['device'].astype(str) \
-			+ " IXA" + df['ip'].astype(str)+"_"+df['app'].astype(str) \
-			+ " AXO" + df['app'].astype(str)+"_"+df['os'].astype(str) \
-			+ " IDHC" + df['ip_day_hour_count'].astype(str) \
-			+ " IAC" + df['ip_app_count'].astype(str) \
-			+ " AOC" + df['ip_app_os_count'].astype(str) \
-			+ " IDC" + df['ip_device_count'].astype(str) \
-			+ " AC" + df['app_channel_count'].astype(str) \
-			+ " NC" + df['next_click'].astype(str) \
-			+ " ICU" + df['ip_channel_unique'].astype(str)
-		  ).values
-	#cpuStats()
-	if 'is_attributed' in df.columns:
-		labels = df['is_attributed'].values
-		weights = np.multiply([1.0 if x == 1 else 0.2 for x in df['is_attributed'].values],
-							  df['hour'].apply(lambda x: 1.0 if x in pick_hours else 0.5))
-	else:
-		labels = []
-		weights = []
-	return str_array, labels, weights
+def get_score(train_masks, avg_mask, thr):
+    d = 0.0
+    for i in range(train_masks.shape[0]):
+        d += dice(train_masks[i], avg_mask)
+    return d/train_masks.shape[0]
 
-class ThreadWithReturnValue(threading.Thread):
-	def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
-		threading.Thread.__init__(self, group, target, name, args, kwargs, daemon=daemon)
-		self._return = None
-	def run(self):
-		if self._target is not None:
-			self._return = self._target(*self._args, **self._kwargs)
-	def join(self):
-		threading.Thread.join(self)
-		return self._return
 
-batchsize = 10000000
-D = 2 ** 20
+def validation_get_optimal_thr():
+    train_files = glob.glob(INPUT_PATH + 'train_masks/*.gif')[:NUM_OF_IMAGES_FROM_TRAIN]
+    train_masks = []
+    div_factor = 1
 
-wb = wordbatch.WordBatch(None, extractor=(WordHash, {"ngram_range": (1, 1), "analyzer": "word",
-													 "lowercase": False, "n_features": D,
-													 "norm": None, "binary": True})
-						 , minibatch_size=batchsize // 80, procs=8, freeze=True, timeout=1800, verbose=0)
-clf = FM_FTRL(alpha=0.05, beta=0.1, L1=0.0, L2=0.0, D=D, alpha_fm=0.02, L2_fm=0.0, init_fm=0.01, weight_fm=1.0,
-			  D_fm=8, e_noise=0.0, iters=2, inv_link="sigmoid", e_clip=1.0, threads=4, use_avx=1, verbose=0)
+    avg_mask = np.zeros((1280 // div_factor, 1918 // div_factor), dtype=np.float64)
+    print('AVG Mask shape: {}'.format(avg_mask.shape))
+    for f in train_files:
+        mask = np.array(Image.open(f), dtype=np.uint8)
+        if div_factor != 1:
+            mask = cv2.resize(mask, (mask.shape[1] // div_factor, mask.shape[0] // div_factor), cv2.INTER_LINEAR)
+        # print(mask.min(), mask.max(), mask.mean())
+        train_masks.append(mask)
+        avg_mask += mask.astype(np.float64)
+    avg_mask /= len(train_files)
+    train_masks = np.array(train_masks, dtype=np.uint8)
+    print(avg_mask.min(), avg_mask.max(), train_masks.shape)
 
-dtypes = {
-		'ip'            : 'uint32',
-		'app'           : 'uint16',
-		'device'        : 'uint16',
-		'os'            : 'uint16',
-		'channel'       : 'uint16',
-		'is_attributed' : 'uint8',
-		}
+    best_score = 0
+    best_thr = -1
+    for t in range(370, 400):
+        thr = t/1000
+        avg_mask_thr = avg_mask.copy()
+        avg_mask_thr[avg_mask_thr > thr] = 1
+        avg_mask_thr[avg_mask_thr <= thr] = 0
+        score = get_score(train_masks, avg_mask_thr, thr)
+        print('THR: {:.3f} SCORE: {:.6f}'.format(thr, score))
+        if score > best_score:
+            best_score = score
+            best_thr = thr
 
-p = None
-rcount = 0
-for df_c in pd.read_csv('../input/talkingdata-adtracking-fraud-detection/train.csv', engine='c', chunksize=batchsize,
-#for df_c in pd.read_csv('../input/train.csv', engine='c', chunksize=batchsize, 
-						skiprows= range(1,9308569), sep=",", dtype=dtypes):
-	rcount += batchsize
-	if rcount== 130000000:
-		df_c['click_time'] = pd.to_datetime(df_c['click_time'])
-		df_c['day'] = df_c['click_time'].dt.day.astype('uint8')
-		df_c= df_c[df_c['day']==8]
-	str_array, labels, weights= df2csr(wb, df_c, pick_hours={4, 5, 10, 13, 14})
-	del(df_c)
-	if p != None:
-		p.join()
-		del(X)
-	gc.collect()
-	X= wb.transform(str_array)
-	del(str_array)
-	if rcount % (2 * batchsize) == 0:
-		if p != None:  p.join()
-		p = threading.Thread(target=evaluate_batch, args=(clf, X, labels, rcount))
-		p.start()
-	print("Training", rcount, time.time() - start_time)
-	cpuStats()
-	if p != None:  p.join()
-	p = threading.Thread(target=fit_batch, args=(clf, X, labels, weights))
-	p.start()
-	if rcount == 130000000:  break
-if p != None:  p.join()
+    print('Best score: {} Best thr: {}'.format(best_score, best_thr))
+    avg_mask_thr = avg_mask.copy()
+    avg_mask_thr[avg_mask_thr > best_thr] = 1
+    avg_mask_thr[avg_mask_thr <= best_thr] = 0
+    avg_mask_thr = cv2.resize(avg_mask_thr, (1918, 1280), cv2.INTER_LINEAR)
+    avg_mask_thr[avg_mask_thr > 0.5] = 1
+    avg_mask_thr[avg_mask_thr <= 0.5] = 0
+    print(avg_mask.shape, avg_mask_thr.shape)
+    cv2.imwrite('avg_mask.jpg', (255*avg_mask_thr).astype(np.uint8))
 
-del(X)
-p = None
-click_ids= []
-test_preds = []
-rcount = 0
-for df_c in pd.read_csv('../input/talkingdata-adtracking-fraud-detection/test.csv', engine='c', chunksize=batchsize,
-#for df_c in pd.read_csv('../input/test.csv', engine='c', chunksize=batchsize,
-						sep=",", dtype=dtypes):
-	rcount += batchsize
-	if rcount % (10 * batchsize) == 0:
-		print(rcount)
-	str_array, labels, weights = df2csr(wb, df_c)
-	click_ids+= df_c['click_id'].tolist()
-	del(df_c)
-	if p != None:
-		test_preds += list(p.join())
-		del (X)
-	gc.collect()
-	X = wb.transform(str_array)
-	del (str_array)
-	p = ThreadWithReturnValue(target=predict_batch, args=(clf, X))
-	p.start()
-if p != None:  test_preds += list(p.join())
+    return best_score, avg_mask_thr
 
-df_sub = pd.DataFrame({"click_id": click_ids, 'is_attributed': test_preds})
-df_sub.to_csv("wordbatch_fm_ftrl.csv", index=False)
+
+def create_submission(best_score, avg_mask):
+    print('Create submission...')
+    t = pd.read_csv(INPUT_PATH + 'sample_submission.csv')
+    str = rle(avg_mask)
+    t['rle_mask'] = str
+    t.to_csv('subm_{}.gz'.format(best_score), index=False, compression='gzip')
+
+
+if __name__ == '__main__':
+    best_score, avg_mask = validation_get_optimal_thr()
+    create_submission(best_score, avg_mask)
+

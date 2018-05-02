@@ -1,411 +1,229 @@
 """
-XGBoost on Hist mode with lossguide to give lightgbm characteristic
-- Features from Andy Harless' script https://www.kaggle.com/aharless/try-pranav-s-r-lgbm-in-python
-- Processing last 50 million observations in two chunks and then wa 
-- Note that available disk space is 1 GB only so save chunk wise preds in gzip
-- With this method, you can process entire training data in chunks without hitting memory limit. 
-- And lastly, please excuse my not-so-efficient/ repititive code chunks in Python. 
+Contributions from:
+DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
+https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
+JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
+https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
+hklee - weighted mean comparisons, LB 0.497, 1ST
+https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+
+Also all comments for changes, encouragement, and forked scripts rock
+
+Keep the Surprise Going
 """
 
-import pandas as pd
-import time
+import glob, re
 import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-from xgboost import plot_tree
-from xgboost import plot_importance
-import matplotlib.pyplot as plt
-from scipy.special import expit, logit
-import gc
-
-"""
-Part 1: First XGB with last 25 million observations
-"""
-
-print("processing first chunk of 25 mln observations...")
-
-path = '../input/'
-
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
-
-print('loading train data...')
-
-train_cols = ['ip','app','device','os', 'channel', 'click_time', 'is_attributed']
-train_df = pd.read_csv(path+"train.csv", skiprows=range(1,159903891), nrows=25000000,dtype=dtypes, usecols=train_cols)
-# total observations: 184,903,891
-
-y = train_df['is_attributed']
-train_df.drop(['is_attributed'], axis=1, inplace=True)
-
-print('loading test data...')
-test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=test_cols)
-
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id']
-test_df.drop(['click_id'], axis=1, inplace=True)
-
-len_train = len(train_df)
-df=train_df.append(test_df)
-
-del test_df
-gc.collect()
-
-print('Data preparation...')
-
-most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
-least_freq_hours_in_test_data = [6, 11, 15]
-
-df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
-df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
-df.drop(['click_time'], axis=1, inplace=True)
-gc.collect()
-
-df['in_test_hh'] = (   3 
-                     - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
-                     - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
-
-print('group by : ip_day_test_hh')
-gp = df[['ip', 'day', 'in_test_hh', 'channel']].groupby(by=['ip', 'day',
-         'in_test_hh'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_day_test_hh'})
-df = df.merge(gp, on=['ip','day','in_test_hh'], how='left')
-del gp
-df.drop(['in_test_hh'], axis=1, inplace=True)
-df['nip_day_test_hh'] = df['nip_day_test_hh'].astype('uint32')
-gc.collect()
-
-print('group by : ip_day_hh')
-gp = df[['ip', 'day', 'hour', 'channel']].groupby(by=['ip', 'day', 
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_day_hh'})
-df = df.merge(gp, on=['ip','day','hour'], how='left')
-del gp
-df['nip_day_hh'] = df['nip_day_hh'].astype('uint16')
-gc.collect()
-
-print('group by : ip_hh_os')
-gp = df[['ip', 'day', 'os', 'hour', 'channel']].groupby(by=['ip', 'os', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_os'})
-df = df.merge(gp, on=['ip','os','hour','day'], how='left')
-del gp
-df['nip_hh_os'] = df['nip_hh_os'].astype('uint16')
-gc.collect()
-
-print('group by : ip_hh_app')
-gp = df[['ip', 'app', 'hour', 'day', 'channel']].groupby(by=['ip', 'app', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_app'})
-df = df.merge(gp, on=['ip','app','hour','day'], how='left')
-del gp
-df['nip_hh_app'] = df['nip_hh_app'].astype('uint16')
-gc.collect()
-
-print('group by : ip_hh_dev')
-gp = df[['ip', 'device', 'hour', 'day', 'channel']].groupby(by=['ip', 'device', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_dev'})
-df = df.merge(gp, on=['ip','device','day','hour'], how='left')
-del gp
-df['nip_hh_dev'] = df['nip_hh_dev'].astype('uint32')
-gc.collect()
-
-df.drop( ['ip','day'], axis=1, inplace=True )
-gc.collect()
-print( df.info() )
-
-
-#split back
-test  = df[len_train:]
-train = df[:(len_train)]
-del df
-gc.collect()
-
-print("train size: ", len(train))
-print("test size : ", len(test))
-
-start_time = time.time()
-
-"""
-XGBoost parameters tuning guide:
-https://github.com/dmlc/xgboost/blob/master/doc/how_to/param_tuning.md
-https://github.com/dmlc/xgboost/blob/master/doc/parameter.md
-"""
-params = {'eta': 0.1, 
-          'tree_method': "hist",      # Fast histogram optimized approximate greedy algorithm. 
-          'grow_policy': "lossguide", # split at nodes with highest loss change
-          'max_leaves': 1400,         # Maximum number of nodes to be added. (for lossguide grow policy)
-          'max_depth': 0,             # 0 means no limit (useful only for depth wise grow policy)
-          'subsample': 0.7,           
-          'colsample_bytree': 0.7, 
-          'colsample_bylevel':0.7,
-          'min_child_weight':0,       # The larger, the more conservative the algorithm will be
-          'alpha':4,                  # L1 reglrz. on weights | large value = more conservative model
-          'objective': 'binary:logistic', 
-          'scale_pos_weight':99.7,
-          'eval_metric': 'auc', 
-          'nthread':4,
-          'random_state': 84, 
-          'silent': True}
-
-x1, x2, y1, y2 = train_test_split(train, y, test_size=0.1, random_state=84)
-
-del train
-gc.collect()
-
-# watch list to observe the change in error in training and holdout data
-watchlist = [(xgb.DMatrix(x2, y2), 'valid')]
-
-model = xgb.train(params, xgb.DMatrix(x1, y1), 50, watchlist, maximize=True, early_stopping_rounds = 5, verbose_eval=10)
-
-del x1, x2, y1, y2
-gc.collect()
-
-print('[{}]: Training time for 1st XGB'.format(time.time() - start_time))
-
-
-print("predicting...")
-sub['is_attributed'] = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit)
-sub.to_csv('sub_xgb1.csv',index=False)
-
-#Model evaluation
-print("Extract feature importance matrix")
-plot_importance(model)
-plt.gcf().savefig('xgb1_fe.png')
-del(model)
-print("part 1 finished...")
-
-print("clear everything before processing second chunk..")
-
-#I hope this is equivalent to R's rm( list = ls())
-
-for name in dir():
- if not name.startswith('_'):
-      del globals()[name]
-del(name)
-
-
-"""
-Part 2: Second XGB with second last 25 million observations
-"""
-print("processing second chunk of 25 mln observations...")
-
 import pandas as pd
-import time
-import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-from xgboost import plot_tree
-from xgboost import plot_importance
-import matplotlib.pyplot as plt
-from scipy.special import expit, logit
-import gc
+from sklearn import *
+from datetime import datetime
+#from xgboost import XGBRegressor
 
-path = '../input/'
+#"START HKLEE FEATURE"
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
+for k, v in dfs.items(): locals()[k] = v
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
+wkend_holidays = date_info.apply(lambda x: (x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1, axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
 
-print('loading train data...')
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
-train_cols = ['ip','app','device','os', 'channel', 'click_time', 'is_attributed']
-train_df = pd.read_csv(path+"train.csv", skiprows=range(1,134903891), nrows=25000000,dtype=dtypes, usecols=train_cols)
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) 
 
-y = train_df['is_attributed']
-train_df.drop(['is_attributed'], axis=1, inplace=True)
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
-print('loading test data...')
-test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=test_cols)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), how='left')['visitors_y'].values
 
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id']
-test_df.drop(['click_id'], axis=1, inplace=True)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), on='air_store_id', how='left')['visitors_y'].values
 
-len_train = len(train_df)
-df=train_df.append(test_df)
+test_visit_var = sample_submission.visitors.map(pd.np.expm1)
 
-del test_df
-gc.collect()
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv')
+    }
 
-print('Data preparation...')
+data['tra'] = data['tra'].merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+data['tra'] = data['tra'].merge(visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
-most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
-least_freq_hours_in_test_data = [6, 11, 15]
+missings = data['tra'].visitors_y.isnull()
+data['tra'].loc[missings, 'visitors_y'] = data['tra'][missings].merge(visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), how='left')['visitors_y'].values
 
-df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
-df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
-df.drop(['click_time'], axis=1, inplace=True)
-gc.collect()
+missings = data['tra'].visitors_y.isnull()
+data['tra'].loc[missings, 'visitors_y'] = data['tra'][missings].merge(visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), on='air_store_id', how='left')['visitors_y'].values
 
-df['in_test_hh'] = (   3 
-                     - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
-                     - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
+train_visit_var = data['tra'].visitors_y.map(pd.np.expm1)
+#"END HKLEE FEATURE"
 
-print('group by : ip_day_test_hh')
-gp = df[['ip', 'day', 'in_test_hh', 'channel']].groupby(by=['ip', 'day',
-         'in_test_hh'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_day_test_hh'})
-df = df.merge(gp, on=['ip','day','in_test_hh'], how='left')
-del gp
-df.drop(['in_test_hh'], axis=1, inplace=True)
-df['nip_day_test_hh'] = df['nip_day_test_hh'].astype('uint32')
-gc.collect()
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
 
-print('group by : ip_day_hh')
-gp = df[['ip', 'day', 'hour', 'channel']].groupby(by=['ip', 'day', 
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_day_hh'})
-df = df.merge(gp, on=['ip','day','hour'], how='left')
-del gp
-df['nip_day_hh'] = df['nip_day_hh'].astype('uint16')
-gc.collect()
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-print('group by : ip_hh_os')
-gp = df[['ip', 'day', 'os', 'hour', 'channel']].groupby(by=['ip', 'os', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_os'})
-df = df.merge(gp, on=['ip','os','hour','day'], how='left')
-del gp
-df['nip_hh_os'] = df['nip_hh_os'].astype('uint16')
-gc.collect()
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime']).dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime']).dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
 
-print('group by : ip_hh_app')
-gp = df[['ip', 'app', 'hour', 'day', 'channel']].groupby(by=['ip', 'app', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_app'})
-df = df.merge(gp, on=['ip','app','hour','day'], how='left')
-del gp
-df['nip_hh_app'] = df['nip_hh_app'].astype('uint16')
-gc.collect()
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
-print('group by : ip_hh_dev')
-gp = df[['ip', 'device', 'hour', 'day', 'channel']].groupby(by=['ip', 'device', 'day',
-         'hour'])[['channel']].count().reset_index().rename(index=str, 
-         columns={'channel': 'nip_hh_dev'})
-df = df.merge(gp, on=['ip','device','day','hour'], how='left')
-del gp
-df['nip_hh_dev'] = df['nip_hh_dev'].astype('uint32')
-gc.collect()
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
 
-df.drop( ['ip','day'], axis=1, inplace=True )
-gc.collect()
-print( df.info() )
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+#OPTIMIZED BY JEROME VALLET
+tmp = data['tra'].groupby(['air_store_id','dow']).agg({'visitors' : [np.min,np.mean,np.median,np.max,np.size]}).reset_index()
+tmp.columns = ['air_store_id', 'dow', 'min_visitors', 'mean_visitors', 'median_visitors','max_visitors','count_observations']
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
 
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+# NEW FEATURES FROM Georgii Vyshnia
+stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
+stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
+lbl = preprocessing.LabelEncoder()
+for i in range(10):
+    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
 
-#split back
-test  = df[len_train:]
-train = df[:(len_train)]
-del df
-gc.collect()
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
 
-print("train size: ", len(train))
-print("test size : ", len(test))
+train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
+test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
 
-start_time = time.time()
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
 
-"""
-XGBoost parameters tuning guide:
-https://github.com/dmlc/xgboost/blob/master/doc/how_to/param_tuning.md
-https://github.com/dmlc/xgboost/blob/master/doc/parameter.md
-"""
-params = {'eta': 0.1, 
-          'tree_method': "hist",      # Fast histogram optimized approximate greedy algorithm. 
-          'grow_policy': "lossguide", # split at nodes with highest loss change
-          'max_leaves': 1400,         # Maximum number of nodes to be added. (for lossguide grow policy)
-          'max_depth': 0,             # 0 means no limit (useful only for depth wise grow policy)
-          'subsample': 0.7,           
-          'colsample_bytree': 0.7, 
-          'colsample_bylevel':0.7,
-          'min_child_weight':0,       # The larger, the more conservative the algorithm will be
-          'alpha':4,                  # L1 reglrz. on weights | large value = more conservative model
-          'objective': 'binary:logistic', 
-          'scale_pos_weight':99.7,
-          'eval_metric': 'auc', 
-          'nthread':4,
-          'random_state': 84, 
-          'silent': True}
+train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
 
-x1, x2, y1, y2 = train_test_split(train, y, test_size=0.1, random_state=84)
+train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
+train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
+train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
 
-del train
-gc.collect()
+test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
+test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
+test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
 
-# watch list to observe the change in error in training and holdout data
-watchlist = [(xgb.DMatrix(x2, y2), 'valid')]
+# NEW FEATURES FROM JMBULL
+train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+train['var_max_lat'] = train['latitude'].max() - train['latitude']
+train['var_max_long'] = train['longitude'].max() - train['longitude']
+test['var_max_lat'] = test['latitude'].max() - test['latitude']
+test['var_max_long'] = test['longitude'].max() - test['longitude']
 
-model = xgb.train(params, xgb.DMatrix(x1, y1), 50, watchlist, maximize=True, early_stopping_rounds = 10, verbose_eval=10)
+# NEW FEATURES FROM Georgii Vyshnia
+train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
+test['lon_plus_lat'] = test['longitude'] + test['latitude']
 
-del x1, x2, y1, y2
-gc.collect()
+lbl = preprocessing.LabelEncoder()
+train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
+test['air_store_id2'] = lbl.transform(test['air_store_id'])
 
-print('[{}]: Training time for 2nd XGB'.format(time.time() - start_time))
+train['hklee_feature'] = train_visit_var 
+test['hklee_feature'] = test_visit_var
 
+col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
+train = train.fillna(-1)
+test = test.fillna(-1)
 
-print("predicting...")
-sub['is_attributed'] = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit)
-sub.to_csv('sub_xgb2.csv',index=False)
+def RMSLE(y, pred):
+    return metrics.mean_squared_error(y, pred)**0.5
 
-#Model evaluation
-print("Extract feature importance matrix")
-plot_importance(model)
-plt.gcf().savefig('xgb2_fe.png')
+#Bojan Tunguz / Surprise Me 2!
+model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8, max_depth =10)
+model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
+#model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8, colsample_bytree=0.8, max_depth =10)
 
-print("part 2 finished...")
+model1.fit(train[col], np.log1p(train['visitors'].values))
+model2.fit(train[col], np.log1p(train['visitors'].values))
+#model3.fit(train[col], np.log1p(train['visitors'].values))
+print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), model1.predict(train[col])))
+print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), model2.predict(train[col])))
+#print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), model3.predict(train[col])))
+#test['visitors'] = (model1.predict(test[col]) + model2.predict(test[col]) + model3.predict(test[col])) / 3
+test['visitors'] = (model1.predict(test[col]) + model2.predict(test[col])) / 2
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
+del train; del data;
 
-print("clear everything before processing third part..")
-for name in dir():
- if not name.startswith('_'):
-      del globals()[name]
-del(name)
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
+for k, v in dfs.items(): locals()[k] = v
 
-"""
-Part 3: Average of both models for total 50 mln observations
-"""
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
 
-import pandas as pd
-import time
-import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-from xgboost import plot_tree
-from xgboost import plot_importance
-import matplotlib.pyplot as plt
-from scipy.special import expit, logit
-import gc
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
-print("part 3...")
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
 
-almost_zero = 1e-10
-almost_one = 1 - almost_zero
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
-xgb1 = pd.read_csv("sub_xgb1.csv")
-xgb2 = pd.read_csv("sub_xgb2.csv") 
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
+    how='left')['visitors_y'].values
 
-final_sub = pd.DataFrame()
-final_sub['click_id'] = xgb1['click_id']
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
+    on='air_store_id', how='left')['visitors_y'].values
 
-final_sub['is_attributed'] = (  (xgb1['is_attributed'].clip(almost_zero,almost_one).apply(logit) * 0.5) +
-                                (xgb2['is_attributed'].clip(almost_zero,almost_one).apply(logit) * 0.5)).apply(expit)
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
 
-final_sub.to_csv("sub_xgb_wa_50mln.csv.gz", index=False,compression='gzip')
-
-print("All done....")
-
+sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y']* 1.1)/2
+sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)

@@ -1,91 +1,78 @@
-"""
-Beating the Benchmark
-West Nile Virus Prediction @ Kaggle
-__author__ : Abhihsek
-"""
-
+import sqlite3
 import pandas as pd
-import numpy as np
-from sklearn import ensemble, preprocessing
+import matplotlib.pyplot as plt
 
-# Load dataset 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-sample = pd.read_csv('../input/sampleSubmission.csv')
-weather = pd.read_csv('../input/weather.csv')
+# This script identifies which communication styles receive highest ranks
+# For illustration purposes I defined 3 styles such as Passive, Assertive and Aggressive
+# The list of key words must of course be extended
 
-# Get labels
-labels = train.WnvPresent.values
+sql_conn = sqlite3.connect('../input/database.sqlite')
 
-# Not using codesum for this benchmark
-weather = weather.drop('CodeSum', axis=1)
+df = pd.read_sql("SELECT score, body FROM May2015 WHERE LENGTH(body) > 5 AND LENGTH(body) < 100 LIMIT 10000", sql_conn)
+    
+keywords = pd.DataFrame({'Passive': pd.Series(['if you have the time','hmm','well','that was my fault','not sure']),
+                         'Assertive': pd.Series(['good idea','great idea','thanks for','good to know','really like', 'too','sorry for']),
+                         'Aggressive': pd.Series(['I shot','fuck','fucking','ass','idiot'])})
 
-# Split station 1 and 2 and join horizontally
-weather_stn1 = weather[weather['Station']==1]
-weather_stn2 = weather[weather['Station']==2]
-weather_stn1 = weather_stn1.drop('Station', axis=1)
-weather_stn2 = weather_stn2.drop('Station', axis=1)
-weather = weather_stn1.merge(weather_stn2, on='Date')
+content_summary = pd.DataFrame()
+for col in keywords:
+    content = df[df.body.apply(lambda x: any(keyword in x.split() for keyword in keywords[col]))]
+    content_summary[col] = content.describe().score
 
-# replace some missing values and T with -1
-weather = weather.replace('M', -1)
-weather = weather.replace('-', -1)
-weather = weather.replace('T', -1)
-weather = weather.replace(' T', -1)
-weather = weather.replace('  T', -1)
+keys = content_summary.keys()
 
-# Functions to extract month and day from dataset
-# You can also use parse_dates of Pandas.
-def create_month(x):
-    return x.split('-')[1]
+content_summary = content_summary.transpose()
 
-def create_day(x):
-    return x.split('-')[2]
+# Setting the positions and width for the bars
+pos = list(range(len(content_summary['count'])))
+width = 0.25
 
-train['month'] = train.Date.apply(create_month)
-train['day'] = train.Date.apply(create_day)
-test['month'] = test.Date.apply(create_month)
-test['day'] = test.Date.apply(create_day)
+# Plotting the bars
+fig, ax = plt.subplots(figsize=(10,5))
 
-# Add integer latitude/longitude columns
-train['Lat_int'] = train.Latitude.apply(int)
-train['Long_int'] = train.Longitude.apply(int)
-test['Lat_int'] = test.Latitude.apply(int)
-test['Long_int'] = test.Longitude.apply(int)
+clrs = []
+for v in content_summary['mean'].values:
+    if v < 2:
+        clrs.append('#FFC1C1')
+    elif v < 5:
+        clrs.append('#F08080')
+    elif v < 10:
+        clrs.append('#EE6363')
+    else:
+        clrs.append('r')
 
-# drop address columns
-train = train.drop(['Address', 'AddressNumberAndStreet','WnvPresent', 'NumMosquitos'], axis = 1)
-test = test.drop(['Id', 'Address', 'AddressNumberAndStreet'], axis = 1)
+plt.bar(pos,
+        content_summary['count'],
+        width,
+        alpha=0.5,
+        # with color
+        color=clrs,
+        label=keys)
 
-# Merge with weather data
-train = train.merge(weather, on='Date')
-test = test.merge(weather, on='Date')
-train = train.drop(['Date'], axis = 1)
-test = test.drop(['Date'], axis = 1)
+# Set the y axis label
+ax.set_ylabel('Number of comments')
 
-# Convert categorical data to numbers
-lbl = preprocessing.LabelEncoder()
-lbl.fit(list(train['Species'].values) + list(test['Species'].values))
-train['Species'] = lbl.transform(train['Species'].values)
-test['Species'] = lbl.transform(test['Species'].values)
+# Set the chart's title
+ax.set_title('Which communication style receives highest ranks?')
 
-lbl.fit(list(train['Street'].values) + list(test['Street'].values))
-train['Street'] = lbl.transform(train['Street'].values)
-test['Street'] = lbl.transform(test['Street'].values)
+# Set the position of the x ticks
+ax.set_xticks([p + 0.5 * width for p in pos])
 
-lbl.fit(list(train['Trap'].values) + list(test['Trap'].values))
-train['Trap'] = lbl.transform(train['Trap'].values)
-test['Trap'] = lbl.transform(test['Trap'].values)
+# Set the labels for the x ticks
+ax.set_xticklabels(keys)
 
-# drop columns with -1s
-train = train.ix[:,(train != -1).any(axis=0)]
-test = test.ix[:,(test != -1).any(axis=0)]
+# Setting the x-axis and y-axis limits
+plt.xlim(min(pos)-width, max(pos)+width*4)
+plt.ylim([0, max(content_summary['count'])+20])
 
-# Random Forest Classifier 
-clf = ensemble.RandomForestClassifier(n_jobs=-1, n_estimators=1000, min_samples_split=1)
-clf.fit(train, labels)
+rects = ax.patches
 
-# create predictions and submission file
-predictions = clf.predict_proba(test)[:,1]
-sample['WnvPresent'] = predictions
-sample.to_csv('beat_the_benchmark.csv', index=False)
+# Now make some labels
+for ii,rect in enumerate(rects):
+        height = rect.get_height()
+        plt.text(rect.get_x()+rect.get_width()/2., 1.02*height, '%s'% ("Score {0:.2f}".format(content_summary['mean'][ii])),
+                 ha='center', va='bottom')
+
+plt.grid()
+
+plt.savefig("CommunicationStyles.png")

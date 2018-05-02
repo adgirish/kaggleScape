@@ -1,18 +1,9 @@
 
 # coding: utf-8
 
-# **Created by Peter Nagy February 2017 [Github][1]**
-# 
-# **Sentiment Analysis:** the process of computationally identifying and categorizing opinions expressed in a piece of text, especially in order to determine whether the writer's attitude towards a particular topic, product, etc. is positive, negative, or neutral.
-# 
-# 
-#   [1]: https://github.com/nagypeterjob
+# This kernel provides an overview of the KKBox  competition dataset  with some useful data transformations.
 
-# As an improvement to my previous [Kernel][1], here I am trying to achieve better results with a Recurrent Neural Network.
-# 
-#   [1]: https://www.kaggle.com/ngyptr/d/crowdflower/first-gop-debate-twitter-sentiment/python-nltk-sentiment-analysis
-
-# In[34]:
+# In[ ]:
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
@@ -22,144 +13,326 @@
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-from sklearn.feature_extraction.text import CountVectorizer
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.models import Sequential
-from keras.layers import Dense, Embedding, LSTM, SpatialDropout1D
-from sklearn.model_selection import train_test_split
-from keras.utils.np_utils import to_categorical
-import re
-
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Only keeping the necessary columns.
-
-# In[35]:
-
-
-data = pd.read_csv('../input/Sentiment.csv')
-# Keeping only the neccessary columns
-data = data[['text','sentiment']]
+# Any results you write to the current directory are saved as output.
 
 
-# Next, I am dropping the 'Neutral' sentiments as my goal was to only differentiate positive and negative tweets. After that, I am filtering the tweets so only valid texts and words remain.  Then, I define the number of max features as 2000 and use Tokenizer to vectorize and convert text into Sequences so the Network can deal with it as input.
+# ## Members
 
-# In[36]:
-
-
-data = data[data.sentiment != "Neutral"]
-data['text'] = data['text'].apply(lambda x: x.lower())
-data['text'] = data['text'].apply((lambda x: re.sub('[^a-zA-z0-9\s]','',x)))
-
-print(data[ data['sentiment'] == 'Positive'].size)
-print(data[ data['sentiment'] == 'Negative'].size)
-
-for idx,row in data.iterrows():
-    row[0] = row[0].replace('rt',' ')
-    
-max_fatures = 2000
-tokenizer = Tokenizer(num_words=max_fatures, split=' ')
-tokenizer.fit_on_texts(data['text'].values)
-X = tokenizer.texts_to_sequences(data['text'].values)
-X = pad_sequences(X)
-
-
-# Next, I compose the LSTM Network. Note that **embed_dim**, **lstm_out**, **batch_size**, **droupout_x** variables are hyperparameters, their values are somehow intuitive, can be and must be played with in order to achieve good results. Please also note that I am using softmax as activation function. The reason is that our Network is using categorical crossentropy, and softmax is just the right activation method for that.
-
-# In[44]:
-
-
-embed_dim = 128
-lstm_out = 196
-
-model = Sequential()
-model.add(Embedding(max_fatures, embed_dim,input_length = X.shape[1]))
-model.add(SpatialDropout1D(0.4))
-model.add(LSTM(lstm_out, dropout=0.2, recurrent_dropout=0.2))
-model.add(Dense(2,activation='softmax'))
-model.compile(loss = 'categorical_crossentropy', optimizer='adam',metrics = ['accuracy'])
-print(model.summary())
-
-
-# Hereby I declare the train and test dataset.
-
-# In[45]:
-
-
-Y = pd.get_dummies(data['sentiment']).values
-X_train, X_test, Y_train, Y_test = train_test_split(X,Y, test_size = 0.33, random_state = 42)
-print(X_train.shape,Y_train.shape)
-print(X_test.shape,Y_test.shape)
-
-
-# Here we train the Network. We should run much more than 7 epoch, but I would have to wait forever for kaggle, so it is 7 for now.
-
-# In[46]:
-
-
-batch_size = 32
-model.fit(X_train, Y_train, epochs = 7, batch_size=batch_size, verbose = 2)
-
-
-# Extracting a validation set, and measuring score and accuracy.
-
-# In[47]:
-
-
-validation_size = 1500
-
-X_validate = X_test[-validation_size:]
-Y_validate = Y_test[-validation_size:]
-X_test = X_test[:-validation_size]
-Y_test = Y_test[:-validation_size]
-score,acc = model.evaluate(X_test, Y_test, verbose = 2, batch_size = batch_size)
-print("score: %.2f" % (score))
-print("acc: %.2f" % (acc))
-
-
-# Finally measuring the number of correct guesses.  It is clear that finding negative tweets goes very well for the Network but deciding whether is positive is not really. My educated guess here is that the positive training set is dramatically smaller than the negative, hence the "bad" results for positive tweets.
-
-# In[52]:
-
-
-pos_cnt, neg_cnt, pos_correct, neg_correct = 0, 0, 0, 0
-for x in range(len(X_validate)):
-    
-    result = model.predict(X_validate[x].reshape(1,X_test.shape[1]),batch_size=1,verbose = 2)[0]
-   
-    if np.argmax(result) == np.argmax(Y_validate[x]):
-        if np.argmax(Y_validate[x]) == 0:
-            neg_correct += 1
-        else:
-            pos_correct += 1
-       
-    if np.argmax(Y_validate[x]) == 0:
-        neg_cnt += 1
-    else:
-        pos_cnt += 1
-
-
-
-print("pos_acc", pos_correct/pos_cnt*100, "%")
-print("neg_acc", neg_correct/neg_cnt*100, "%")
-
-
-# Finally, an example on predicting an arbitrary tweet's sentiment:
+# First of all we are going to explore the Members dataset. We are dealing with 34403 members.
 
 # In[ ]:
 
 
-twt = 'Meetings: Because none of us is as dumb as all of us.'
-#vectorizing the tweet by the pre-fitted tokenizer instance
-twt = tokenizer.texts_to_sequences(twt)
-#padding the tweet to have exactly the same shape as `embedding_2` input
-twt = pad_sequences(twt, maxlen=28, dtype='int32', padding='post', truncating='post', value=0)
-sentiment = model.predict(twt,batch_size=1,verbose = 2)[0]
-if(np.argmax(sentiment) == 0):
-    print("negative")
-elif (np.argmax(sentiment) == 1):
-    print("positive")
+members = pd.read_csv('../input/members.csv')
+members.head()
 
+
+# In[ ]:
+
+
+members.shape
+
+
+# Here follows the distribution of the members ages. As you can see there are several with age set to 0. That is obsviously something we'll have to manage.
+
+# In[ ]:
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+f,axarray = plt.subplots(1,1,figsize=(15,10))
+agehist = members.groupby(['bd'],as_index=False).count()
+sns.barplot(x=agehist['bd'],y=agehist['gender'])
+
+
+# Members come from 21 different cities identified with an integer index ranging from 1 to 21. Here is the distribution of the members cities.
+
+# In[ ]:
+
+
+f,axarray = plt.subplots(1,1,figsize=(15,10))
+cityhist = members.groupby(['city'],as_index=False).count()
+sns.barplot(x=cityhist['city'],y=cityhist['gender'])
+
+
+# ## Songs
+
+# Now let's have a look at the Songs dataset.
+
+# In[ ]:
+
+
+songs = pd.read_csv('../input/songs.csv')
+songs.head()
+
+
+# There are 329825 composers ...
+
+# In[ ]:
+
+
+len(songs['composer'].unique())
+
+
+# ... for 1046 genres ...
+
+# In[ ]:
+
+
+len(songs['genre_ids'].unique())
+
+
+# and 11 different languages !
+
+# In[ ]:
+
+
+len(songs['language'].unique())
+
+
+# ## Train Data
+
+# In order to create the complete dataset we have to mearge the train, members and songs dataframe.
+
+# In[ ]:
+
+
+train = pd.read_csv('../input/train.csv')
+train.head()
+
+
+# In[ ]:
+
+
+df = train.merge(members,how='inner',on='msno')
+
+
+# In[ ]:
+
+
+df = df.merge(songs,how='inner',on='song_id')
+df.head()
+
+
+# In[ ]:
+
+
+df.shape
+
+
+# In[ ]:
+
+
+cities = df['city'].unique()
+ca = []
+for c in cities:
+    ages = []
+    tmp = df[df['city']==c].groupby(['bd'],as_index=False).count()
+    for i in range(60):
+        if i in tmp['bd'].values:
+            if i ==0:
+                ages.append(0)
+            else:
+                ages.append(tmp[tmp['bd']==i].values[0][1])
+        else:
+            ages.append(0)
+    ca.append(ages)
+cadf = pd.DataFrame(ca)
+
+
+# It may be interesting to see how the members ages are distributed among the 21 cities. Let's create a heatmap for that !
+
+# In[ ]:
+
+
+f,axarray = plt.subplots(1,1,figsize=(13,8))
+sns.heatmap(cadf)
+
+
+# In[ ]:
+
+
+fdf = df[np.abs(df['bd']-df['bd'].mean())<=(3*df['bd'].std())]
+
+
+# In[ ]:
+
+
+cities = fdf['city'].unique()
+ca = []
+for c in cities:
+    ages = []
+    tmp = fdf[fdf['city']==c]['bd'].values
+    ages.append(tmp)
+    ca.append(ages)
+cadf = pd.DataFrame(ca)
+
+
+# In[ ]:
+
+
+f,axarray = plt.subplots(21,1,figsize=(20,38),sharex=True)
+plt.xlim(10,60)
+for i in range(21):
+    axarray[i].set_title('Members Ages in City '+str(i))
+    sns.distplot(ca[i], hist=False, color="purple", kde_kws={"shade": True},ax=axarray[i])
+
+
+# Now let's turn registration and expiration times into datetime types.
+
+# In[ ]:
+
+
+df['registration_init_time'] = pd.to_datetime(df['registration_init_time'],format="%Y%m%d")
+df['expiration_date'] = pd.to_datetime(df['expiration_date'],format="%Y%m%d")
+
+
+# In[ ]:
+
+
+df.head()
+
+
+# In[ ]:
+
+
+days = df.expiration_date - df.registration_init_time
+days = [d.days for d in days]
+df['days']=days
+
+
+# In[ ]:
+
+
+np.max(days)
+
+
+# This allows us to easily count the days of each membership.
+
+# In[ ]:
+
+
+df.head()
+
+
+# Let's remove the outliers:
+
+# In[ ]:
+
+
+fdf = df[np.abs(df['days']-df['days'].mean())<=(3*df['days'].std())]
+
+
+# In[ ]:
+
+
+dayshist = df.groupby(['days'],as_index=False).count()
+dayshist = dayshist.drop(0,axis=0)
+
+
+# In[ ]:
+
+
+sns.distplot(dayshist['days'], hist=True, color="g", kde_kws={"shade": True})
+
+
+# In[ ]:
+
+
+cities = fdf['city'].unique()
+cduration = []
+for c in cities:
+    duration = []
+    tmp = fdf[fdf['city']==c]['days']
+    cduration.append(tmp)
+
+
+# Let's analyze the distrubution of th  subscription durations among the 21 cities.
+
+# In[ ]:
+
+
+f,axarray = plt.subplots(21,1,figsize=(20,38),sharex=True)
+for i in range(21):
+    axarray[i].set_title('Subscription Durations in City '+str(i))
+    sns.distplot(cduration[i], hist=False, color="g", kde_kws={"shade": True},ax=axarray[i])
+
+
+# In[ ]:
+
+
+malec = len(df[df['gender']=='male'])
+femalec = len(df[df['gender']=='female'])
+
+
+# Members are homogenously distributed between the two genders.
+
+# In[ ]:
+
+
+f,axarray = plt.subplots(1,1,figsize=(8,5))
+sns.barplot(x=['male','female'],y=[malec,femalec])
+
+
+# unforunately 40% of rows have NaN gender 
+
+# In[ ]:
+
+
+len(df[pd.isnull(df['gender'])])/len(df)
+
+
+# There are 573 differen genres, let's see what are the most appreciated.
+
+# In[ ]:
+
+
+len(df['genre_ids'].unique())
+
+
+# In[ ]:
+
+
+ghist = df.groupby(['genre_ids'],as_index=False).count()
+
+
+# In[ ]:
+
+
+f,axa = plt.subplots(1,1, figsize=(12,18))
+tghist = ghist[ghist['msno']>1000]
+sns.barplot(y=tghist['genre_ids'],x=tghist['msno'],orient='h')
+
+
+# ## Prediction
+
+# target feature is the target variable. target=1 means there are recurring listening event(s) triggered within a month after the user’s very first observable listening event, target=0 otherwise .
+
+# In[ ]:
+
+
+df.head()
+
+
+# In[ ]:
+
+
+tmp= df.groupby(['msno'],as_index=False).count()['song_id']
+tmp.describe()
+
+
+# In[ ]:
+
+
+f,axa = plt.subplots(1,1,figsize=(15,8))
+sns.distplot(tmp.values)
+
+
+# work in progress...

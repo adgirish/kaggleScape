@@ -1,83 +1,260 @@
-"""Makes a table of score contributions for every (kid, toy) combo and
-demonstrates using it to score the sample submission.
-
-Rev. A - Reduced from ~1 sec to ~0.2 sec evaluation using numba (thanks to
-Luis Bronchal for the suggestion!)
-
-***Important*** - Uncomment the lines 50 and 60 to save table to your
-hard drive.
-
-"""
 import pandas as pd
 import numpy as np
-import time
-from numba import jit
-
-n_toys = 1000
-n_kids = 1000000
-
-
-# CREATE LOOKUP TABLE - DELTA_SCORE(KID, TOY) -------------------------------
-
-# Load data
-santa_pref = pd.read_csv('../input/gift_goodkids.csv', header=None,
-                         index_col=0).values
-kids_pref = pd.read_csv('../input/child_wishlist.csv', header=None,
-                         index_col=0).values
-
-# Make table with score contribution from Santa's preference
-print('Creating look-up table...')
-score_lookup = np.zeros((1000000, 1000), dtype='float32')
-for toy in range(santa_pref.shape[0]):
-    for kid_index in range(santa_pref.shape[1]):
-        kid = santa_pref[toy, kid_index]
-        score_lookup[kid, toy] += (1000 - kid_index) * 2. \
-                                  / (2000. * n_toys) / 1000.
-
-# Fill in pairs not in Santa's preference list
-score_lookup[score_lookup == 0.] = -1. / (2000 * n_toys) / 1000.
-
-# Make list of (kid, toy) combos in kid pref
-kid_mask = np.zeros((n_kids, n_toys), dtype='bool')
-
-# Go through kid prefs and update score table
-for kid in range(kids_pref.shape[0]):
-    for toy_index in range(kids_pref.shape[1]):
-        toy = kids_pref[kid, toy_index]
-        score_lookup[kid, toy] += (10 - toy_index) * 2. / (20. * n_kids)
-        kid_mask[kid, toy] = True
-
-# Fill in pairs not in kid's preference list
-score_lookup[~kid_mask] -= 1. / (20. * n_kids)
-
-# Save lookup table
-#np.save('score_lookup.npy', score)
-print('Done.')
+import copy
+import re
+from keras.preprocessing.text import text_to_word_sequence
+from nltk import WordNetLemmatizer
 
 
-# SCORE SAMPLE SUBMISSION --------------------------------------------------
+class BaseTokenizer(object):
+    def process_text(self, text):
+        raise NotImplemented
 
-# Load sample submission
-submission = pd.read_csv('../input/sample_submission_random.csv').values
-
-# Load score_lookup table
-#score_lookup = np.load('score_lookup.npy')
-
-# Accumulate score
-@jit(nopython=True)
-def score_submission(submission, score_lookup):
-    score = 0
-    for row in range(submission.shape[0]):
-        score += score_lookup[submission[row][0], submission[row][1]]
-    return score
+    def process(self, texts):
+        for text in texts:
+            yield self.process_text(text)
 
 
-print('Starting scoring...')
-start = time.time()
-score = score_submission(submission, score_lookup)
-print('Done scoring.')
-print('Elapsed time: %4.2f sec, Score: %10.9f' % (time.time() - start,
-                                                  score))
+RE_PATTERNS = {
+    ' american ':
+        [
+            'amerikan'
+        ],
+
+    ' adolf ':
+        [
+            'adolf'
+        ],
 
 
-#---------------------------------------------------------------------------
+    ' hitler ':
+        [
+            'hitler'
+        ],
+
+    ' fuck':
+        [
+            '(f)(u|[^a-z0-9 ])(c|[^a-z0-9 ])(k|[^a-z0-9 ])([^ ])*',
+            '(f)([^a-z]*)(u)([^a-z]*)(c)([^a-z]*)(k)',
+            ' f[!@#\$%\^\&\*]*u[!@#\$%\^&\*]*k', 'f u u c',
+            '(f)(c|[^a-z ])(u|[^a-z ])(k)', r'f\*',
+            'feck ', ' fux ', 'f\*\*', 
+            'f\-ing', 'f\.u\.', 'f###', ' fu ', 'f@ck', 'f u c k', 'f uck', 'f ck'
+        ],
+
+    ' ass ':
+        [
+            '[^a-z]ass ', '[^a-z]azz ', 'arrse', ' arse ', '@\$\$'
+                                                           '[^a-z]anus', ' a\*s\*s', '[^a-z]ass[^a-z ]',
+            'a[@#\$%\^&\*][@#\$%\^&\*]', '[^a-z]anal ', 'a s s'
+        ],
+
+    ' ass hole ':
+        [
+            ' a[s|z]*wipe', 'a[s|z]*[w]*h[o|0]+[l]*e', '@\$\$hole'
+        ],
+
+    ' bitch ':
+        [
+            'b[w]*i[t]*ch', 'b!tch',
+            'bi\+ch', 'b!\+ch', '(b)([^a-z]*)(i)([^a-z]*)(t)([^a-z]*)(c)([^a-z]*)(h)',
+            'biatch', 'bi\*\*h', 'bytch', 'b i t c h'
+        ],
+
+    ' bastard ':
+        [
+            'ba[s|z]+t[e|a]+rd'
+        ],
+
+    ' trans gender':
+        [
+            'transgender'
+        ],
+
+    ' gay ':
+        [
+            'gay'
+        ],
+
+    ' cock ':
+        [
+            '[^a-z]cock', 'c0ck', '[^a-z]cok ', 'c0k', '[^a-z]cok[^aeiou]', ' cawk',
+            '(c)([^a-z ])(o)([^a-z ]*)(c)([^a-z ]*)(k)', 'c o c k'
+        ],
+
+    ' dick ':
+        [
+            ' dick[^aeiou]', 'deek', 'd i c k'
+        ],
+
+    ' suck ':
+        [
+            'sucker', '(s)([^a-z ]*)(u)([^a-z ]*)(c)([^a-z ]*)(k)', 'sucks', '5uck', 's u c k'
+        ],
+
+    ' cunt ':
+        [
+            'cunt', 'c u n t'
+        ],
+
+    ' bull shit ':
+        [
+            'bullsh\*t', 'bull\$hit'
+        ],
+
+    ' homo sex ual':
+        [
+            'homosexual'
+        ],
+
+    ' jerk ':
+        [
+            'jerk'
+        ],
+
+    ' idiot ':
+        [
+            'i[d]+io[t]+', '(i)([^a-z ]*)(d)([^a-z ]*)(i)([^a-z ]*)(o)([^a-z ]*)(t)', 'idiots'
+                                                                                      'i d i o t'
+        ],
+
+    ' dumb ':
+        [
+            '(d)([^a-z ]*)(u)([^a-z ]*)(m)([^a-z ]*)(b)'
+        ],
+
+    ' shit ':
+        [
+            'shitty', '(s)([^a-z ]*)(h)([^a-z ]*)(i)([^a-z ]*)(t)', 'shite', '\$hit', 's h i t'
+        ],
+
+    ' shit hole ':
+        [
+            'shythole'
+        ],
+
+    ' retard ':
+        [
+            'returd', 'retad', 'retard', 'wiktard', 'wikitud'
+        ],
+
+    ' rape ':
+        [
+            ' raped'
+        ],
+
+    ' dumb ass':
+        [
+            'dumbass', 'dubass'
+        ],
+
+    ' ass head':
+        [
+            'butthead'
+        ],
+
+    ' sex ':
+        [
+            'sexy', 's3x', 'sexuality'
+        ],
+
+
+    ' nigger ':
+        [
+            'nigger', 'ni[g]+a', ' nigr ', 'negrito', 'niguh', 'n3gr', 'n i g g e r'
+        ],
+
+    ' shut the fuck up':
+        [
+            'stfu'
+        ],
+
+    ' pussy ':
+        [
+            'pussy[^c]', 'pusy', 'pussi[^l]', 'pusses'
+        ],
+
+    ' faggot ':
+        [
+            'faggot', ' fa[g]+[s]*[^a-z ]', 'fagot', 'f a g g o t', 'faggit',
+            '(f)([^a-z ]*)(a)([^a-z ]*)([g]+)([^a-z ]*)(o)([^a-z ]*)(t)', 'fau[g]+ot', 'fae[g]+ot',
+        ],
+
+    ' mother fucker':
+        [
+            ' motha ', ' motha f', ' mother f', 'motherucker',
+        ],
+
+    ' whore ':
+        [
+            'wh\*\*\*', 'w h o r e'
+        ],
+}
+
+
+class PatternTokenizer(BaseTokenizer):
+    def __init__(self, lower=True, initial_filters=r"[^a-z0-9!@#\$%\^\&\*_\-,\.' ]", patterns=RE_PATTERNS,
+                 remove_repetitions=True):
+        self.lower = lower
+        self.patterns = patterns
+        self.initial_filters = initial_filters
+        self.remove_repetitions = remove_repetitions
+
+    def process_text(self, text):
+        x = self._preprocess(text)
+        for target, patterns in self.patterns.items():
+            for pat in patterns:
+                x = re.sub(pat, target, x)
+        x = re.sub(r"[^a-z' ]", ' ', x)
+        return x.split()
+
+    def process_ds(self, ds):
+        ### ds = Data series
+
+        # lower
+        ds = copy.deepcopy(ds)
+        if self.lower:
+            ds = ds.str.lower()
+        # remove special chars
+        if self.initial_filters is not None:
+            ds = ds.str.replace(self.initial_filters, ' ')
+        # fuuuuck => fuck
+        if self.remove_repetitions:
+            pattern = re.compile(r"(.)\1{2,}", re.DOTALL) 
+            ds = ds.str.replace(pattern, r"\1")
+
+        for target, patterns in self.patterns.items():
+            for pat in patterns:
+                ds = ds.str.replace(pat, target)
+
+        ds = ds.str.replace(r"[^a-z' ]", ' ')
+
+        return ds.str.split()
+
+    def _preprocess(self, text):
+        # lower
+        if self.lower:
+            text = text.lower()
+
+        # remove special chars
+        if self.initial_filters is not None:
+            text = re.sub(self.initial_filters, ' ', text)
+
+        # fuuuuck => fuck
+        if self.remove_repetitions:
+            pattern = re.compile(r"(.)\1{2,}", re.DOTALL)
+            text = pattern.sub(r"\1", text)
+        return text
+        
+def main():
+    train = pd.read_csv("../input/train.csv")
+    test = pd.read_csv("../input/test.csv")
+    
+    tokenizer = PatternTokenizer()
+    train["comment_text"] = tokenizer.process_ds(train["comment_text"]).str.join(sep=" ")
+    test["comment_text"] = tokenizer.process_ds(test["comment_text"]).str.join(sep=" ")
+    train.to_csv("train_preprocessed.csv", index=False)
+    test.to_csv("test_preprocessed.csv", index=False)
+    
+if __name__ == "__main__":
+    main()

@@ -1,186 +1,319 @@
-# THANK YOU AND ACKNOLEDGEMENTS:
-# This kernel develops further the ideas suggested in:
-#   *  "lgbm starter - early stopping 0.9539" by Aloisio Dourado, https://www.kaggle.com/aloisiodn/lgbm-starter-early-stopping-0-9539/code
-#   * "LightGBM (Fixing unbalanced data)" by Pranav Pandya, https://www.kaggle.com/pranav84/lightgbm-fixing-unbalanced-data-auc-0-9787?scriptVersionId=2777211
-#   * "LightGBM with count features" by Ravi Teja Gutta, https://www.kaggle.com/rteja1113/lightgbm-with-count-features
-# I would like to extend my gratitude to these individuals for sharing their work.
+import argparse
+import functools
+from collections import defaultdict
 
-# WHAT IS NEW IN THIS VERSION? 
-# In addition to some cosmetic changes to the code/LightGBM parameters, I am adding the 'ip' feature to and 
-# removing the 'day' feature from the training set, and using the last chunk of the training data to build the model.
-
-import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
-import gc
+import pandas as pd
+import xgboost as xgb
 
-path = '../input/' 
-path_train = path + 'train.csv'
-path_test = path + 'test.csv'
+from nltk.corpus import stopwords
+from collections import Counter
+from sklearn.metrics import log_loss
+from sklearn.cross_validation import train_test_split
 
-train_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
-test_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time']
+from xgboost import XGBClassifier
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
-        
-skip = range(1, 140000000)
 
-print('Loading the training data...')
-train = pd.read_csv(path_train, skiprows=skip, dtype=dtypes, header=0, usecols=train_cols)
-print('Loading the test data...')
-test = pd.read_csv(path_test, dtype=dtypes, header=0, usecols=test_cols)
+def word_match_share(row, stops=None):
+    q1words = {}
+    q2words = {}
+    for word in row['question1']:
+        if word not in stops:
+            q1words[word] = 1
+    for word in row['question2']:
+        if word not in stops:
+            q2words[word] = 1
+    if len(q1words) == 0 or len(q2words) == 0:
+        # The computer-generated chaff includes a few questions that are nothing but stopwords
+        return 0
+    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
+    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
+    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
+    return R
 
-len_train = len(train)
-print('The initial size of the train set is', len_train)
-print('Binding the training and test set together...')
-train=train.append(test)
+def jaccard(row):
+    wic = set(row['question1']).intersection(set(row['question2']))
+    uw = set(row['question1']).union(row['question2'])
+    if len(uw) == 0:
+        uw = [1]
+    return (len(wic) / len(uw))
 
-del test
-gc.collect()
+def common_words(row):
+    return len(set(row['question1']).intersection(set(row['question2'])))
 
-print("Creating new time features: 'hour' and 'day'...")
-train['hour'] = pd.to_datetime(train.click_time).dt.hour.astype('uint8')
-train['day'] = pd.to_datetime(train.click_time).dt.day.astype('uint8')
+def total_unique_words(row):
+    return len(set(row['question1']).union(row['question2']))
 
-gc.collect()
+def total_unq_words_stop(row, stops):
+    return len([x for x in set(row['question1']).union(row['question2']) if x not in stops])
 
-print("Creating new count features: 'n_channels', 'ip_app_count', 'ip_app_os_count'...")
+def wc_diff(row):
+    return abs(len(row['question1']) - len(row['question2']))
 
-print('Computing the number of channels associated with ')
-print('a given IP address within each hour...')
-n_chans = train[['ip','day','hour','channel']].groupby(by=['ip','day',
-          'hour'])[['channel']].count().reset_index().rename(columns={'channel': 'n_channels'})
+def wc_ratio(row):
+    l1 = len(row['question1'])*1.0 
+    l2 = len(row['question2'])
+    if l2 == 0:
+        return np.nan
+    if l1 / l2:
+        return l2 / l1
+    else:
+        return l1 / l2
 
-print('Merging the channels data with the main data set...')
-train = train.merge(n_chans, on=['ip','day','hour'], how='left')
-del n_chans
-gc.collect()
+def wc_diff_unique(row):
+    return abs(len(set(row['question1'])) - len(set(row['question2'])))
 
-print('Computing the number of channels associated with ')
-print('a given IP address and app...')
-n_chans = train[['ip','app', 'channel']].groupby(by=['ip', 
-          'app'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_count'})
-          
-print('Merging the channels data with the main data set...')
-train = train.merge(n_chans, on=['ip','app'], how='left')
-del n_chans
-gc.collect()
+def wc_ratio_unique(row):
+    l1 = len(set(row['question1'])) * 1.0
+    l2 = len(set(row['question2']))
+    if l2 == 0:
+        return np.nan
+    if l1 / l2:
+        return l2 / l1
+    else:
+        return l1 / l2
 
-print('Computing the number of channels associated with ')
-print('a given IP address, app, and os...')
-n_chans = train[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 
-          'os'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_os_count'})
-          
-print('Merging the channels data with the main data set...')       
-train = train.merge(n_chans, on=['ip','app', 'os'], how='left')
-del n_chans
-gc.collect()
+def wc_diff_unique_stop(row, stops=None):
+    return abs(len([x for x in set(row['question1']) if x not in stops]) - len([x for x in set(row['question2']) if x not in stops]))
 
-print("Adjusting the data types of the new count features... ")
-train.info()
-train['n_channels'] = train['n_channels'].astype('uint16')
-train['ip_app_count'] = train['ip_app_count'].astype('uint16')
-train['ip_app_os_count'] = train['ip_app_os_count'].astype('uint16')
+def wc_ratio_unique_stop(row, stops=None):
+    l1 = len([x for x in set(row['question1']) if x not in stops])*1.0 
+    l2 = len([x for x in set(row['question2']) if x not in stops])
+    if l2 == 0:
+        return np.nan
+    if l1 / l2:
+        return l2 / l1
+    else:
+        return l1 / l2
 
-test = train[len_train:]
-print('The size of the test set is ', len(test))
+def same_start_word(row):
+    if not row['question1'] or not row['question2']:
+        return np.nan
+    return int(row['question1'][0] == row['question2'][0])
 
-r = 0.1 # the fraction of the train data to be used for validation
-val = train[(len_train-round(r*len_train)):len_train]
-print('The size of the validation set is ', len(val))
+def char_diff(row):
+    return abs(len(''.join(row['question1'])) - len(''.join(row['question2'])))
 
-train = train[:(len_train-round(r*len_train))]
-print('The size of the train set is ', len(train))
+def char_ratio(row):
+    l1 = len(''.join(row['question1'])) 
+    l2 = len(''.join(row['question2']))
+    if l2 == 0:
+        return np.nan
+    if l1 / l2:
+        return l2 / l1
+    else:
+        return l1 / l2
 
-target = 'is_attributed'
-train[target] = train[target].astype('uint8')
-train.info()
+def char_diff_unique_stop(row, stops=None):
+    return abs(len(''.join([x for x in set(row['question1']) if x not in stops])) - len(''.join([x for x in set(row['question2']) if x not in stops])))
 
-predictors = ['ip', 'device', 'app', 'os', 'channel', 'hour', 'n_channels', 'ip_app_count', 'ip_app_os_count']
-categorical = ['ip', 'app', 'device', 'os', 'channel', 'hour']
-gc.collect()
 
-print("Preparing the datasets for training...")
-
-params = {
-    'boosting_type': 'gbdt',
-    'objective': 'binary',
-    'metric': 'auc',
-    'learning_rate': 0.1,
-    'num_leaves': 255,  
-    'max_depth': 8,  
-    'min_child_samples': 100,  
-    'max_bin': 100,  
-    'subsample': 0.7,  
-    'subsample_freq': 1,  
-    'colsample_bytree': 0.7,  
-    'min_child_weight': 0,  
-    'subsample_for_bin': 200000,  
-    'min_split_gain': 0,  
-    'reg_alpha': 0,  
-    'reg_lambda': 0,  
-   # 'nthread': 8,
-    'verbose': 0,
-    'scale_pos_weight':99 
-    }
+def get_weight(count, eps=10000, min_count=2):
+    if count < min_count:
+        return 0
+    else:
+        return 1 / (count + eps)
     
-dtrain = lgb.Dataset(train[predictors].values, label=train[target].values,
-                      feature_name=predictors,
-                      categorical_feature=categorical
-                      )
-dvalid = lgb.Dataset(val[predictors].values, label=val[target].values,
-                      feature_name=predictors,
-                      categorical_feature=categorical
-                      )
-                      
-# When I ran the code, I get two warnings related to this chunk of the code: 
-# 1. Saying that I have categorical features in my Dataset 
-# 2. Saying something about overwriting the 'params' dictionary introduced below.
-# The warnings seem to be harmless but if you know how to get rid of them please let me know.
+def tfidf_word_match_share_stops(row, stops=None, weights=None):
+    q1words = {}
+    q2words = {}
+    for word in row['question1']:
+        if word not in stops:
+            q1words[word] = 1
+    for word in row['question2']:
+        if word not in stops:
+            q2words[word] = 1
+    if len(q1words) == 0 or len(q2words) == 0:
+        # The computer-generated chaff includes a few questions that are nothing but stopwords
+        return 0
+    
+    shared_weights = [weights.get(w, 0) for w in q1words.keys() if w in q2words] + [weights.get(w, 0) for w in q2words.keys() if w in q1words]
+    total_weights = [weights.get(w, 0) for w in q1words] + [weights.get(w, 0) for w in q2words]
+    
+    R = np.sum(shared_weights) / np.sum(total_weights)
+    return R
 
-evals_results = {}
+def tfidf_word_match_share(row, weights=None):
+    q1words = {}
+    q2words = {}
+    for word in row['question1']:
+        q1words[word] = 1
+    for word in row['question2']:
+        q2words[word] = 1
+    if len(q1words) == 0 or len(q2words) == 0:
+        # The computer-generated chaff includes a few questions that are nothing but stopwords
+        return 0
+    
+    shared_weights = [weights.get(w, 0) for w in q1words.keys() if w in q2words] + [weights.get(w, 0) for w in q2words.keys() if w in q1words]
+    total_weights = [weights.get(w, 0) for w in q1words] + [weights.get(w, 0) for w in q2words]
+    
+    R = np.sum(shared_weights) / np.sum(total_weights)
+    return R
 
-print("Training the model...")
 
-lgb_model = lgb.train(params, 
-                 dtrain, 
-                 valid_sets=[dtrain, dvalid], 
-                 valid_names=['train','valid'], 
-                 evals_result=evals_results, 
-                 num_boost_round=350,
-                 early_stopping_rounds=30,
-                 verbose_eval=True, 
-                 feval=None)
+def build_features(data, stops, weights):
+    X = pd.DataFrame()
+    f = functools.partial(word_match_share, stops=stops)
+    X['word_match'] = data.apply(f, axis=1, raw=True) #1
 
-del train
-del val
-gc.collect()
+    f = functools.partial(tfidf_word_match_share, weights=weights)
+    X['tfidf_wm'] = data.apply(f, axis=1, raw=True) #2
 
-# Feature names:
-print('Feature names:', lgb_model.feature_name())
+    f = functools.partial(tfidf_word_match_share_stops, stops=stops, weights=weights)
+    X['tfidf_wm_stops'] = data.apply(f, axis=1, raw=True) #3
 
-# Feature importances:
-print('Feature importances:', list(lgb_model.feature_importance()))
+    X['jaccard'] = data.apply(jaccard, axis=1, raw=True) #4
+    X['wc_diff'] = data.apply(wc_diff, axis=1, raw=True) #5
+    X['wc_ratio'] = data.apply(wc_ratio, axis=1, raw=True) #6
+    X['wc_diff_unique'] = data.apply(wc_diff_unique, axis=1, raw=True) #7
+    X['wc_ratio_unique'] = data.apply(wc_ratio_unique, axis=1, raw=True) #8
 
-print("Preparing data for submission...")
+    f = functools.partial(wc_diff_unique_stop, stops=stops)    
+    X['wc_diff_unq_stop'] = data.apply(f, axis=1, raw=True) #9
+    f = functools.partial(wc_ratio_unique_stop, stops=stops)    
+    X['wc_ratio_unique_stop'] = data.apply(f, axis=1, raw=True) #10
 
-submit = pd.read_csv(path_test, dtype='int', usecols=['click_id'])
+    X['same_start'] = data.apply(same_start_word, axis=1, raw=True) #11
+    X['char_diff'] = data.apply(char_diff, axis=1, raw=True) #12
 
-print("Predicting the submission data...")
+    f = functools.partial(char_diff_unique_stop, stops=stops) 
+    X['char_diff_unq_stop'] = data.apply(f, axis=1, raw=True) #13
 
-submit['is_attributed'] = lgb_model.predict(test[predictors], num_iteration=lgb_model.best_iteration)
+#     X['common_words'] = data.apply(common_words, axis=1, raw=True)  #14
+    X['total_unique_words'] = data.apply(total_unique_words, axis=1, raw=True)  #15
 
-print("Writing the submission data into a csv file...")
+    f = functools.partial(total_unq_words_stop, stops=stops)
+    X['total_unq_words_stop'] = data.apply(f, axis=1, raw=True)  #16
+    
+    X['char_ratio'] = data.apply(char_ratio, axis=1, raw=True) #17    
 
-submit.to_csv('submission.csv', index=False)
+    return X
 
-print("All done...")
+
+def main():
+    parser = argparse.ArgumentParser(description='XGB with Handcrafted Features')
+    parser.add_argument('--save', type=str, default='XGB_leaky',
+                        help='save_file_names')
+    args = parser.parse_args()
+
+    df_train = pd.read_csv('../data/train_features.csv', encoding="ISO-8859-1")
+    X_train_ab = df_train.iloc[:, 2:-1]
+    X_train_ab = X_train_ab.drop('euclidean_distance', axis=1)
+    X_train_ab = X_train_ab.drop('jaccard_distance', axis=1)
+
+    df_train = pd.read_csv('../data/train.csv')
+    df_train = df_train.fillna(' ')
+
+    df_test = pd.read_csv('../data/test.csv')
+    ques = pd.concat([df_train[['question1', 'question2']], \
+        df_test[['question1', 'question2']]], axis=0).reset_index(drop='index')
+    q_dict = defaultdict(set)
+    for i in range(ques.shape[0]):
+            q_dict[ques.question1[i]].add(ques.question2[i])
+            q_dict[ques.question2[i]].add(ques.question1[i])
+
+    def q1_freq(row):
+        return(len(q_dict[row['question1']]))
+        
+    def q2_freq(row):
+        return(len(q_dict[row['question2']]))
+        
+    def q1_q2_intersect(row):
+        return(len(set(q_dict[row['question1']]).intersection(set(q_dict[row['question2']]))))
+
+    df_train['q1_q2_intersect'] = df_train.apply(q1_q2_intersect, axis=1, raw=True)
+    df_train['q1_freq'] = df_train.apply(q1_freq, axis=1, raw=True)
+    df_train['q2_freq'] = df_train.apply(q2_freq, axis=1, raw=True)
+
+    df_test['q1_q2_intersect'] = df_test.apply(q1_q2_intersect, axis=1, raw=True)
+    df_test['q1_freq'] = df_test.apply(q1_freq, axis=1, raw=True)
+    df_test['q2_freq'] = df_test.apply(q2_freq, axis=1, raw=True)
+
+    test_leaky = df_test.loc[:, ['q1_q2_intersect','q1_freq','q2_freq']]
+    del df_test
+
+    train_leaky = df_train.loc[:, ['q1_q2_intersect','q1_freq','q2_freq']]
+
+    # explore
+    stops = set(stopwords.words("english"))
+
+    df_train['question1'] = df_train['question1'].map(lambda x: str(x).lower().split())
+    df_train['question2'] = df_train['question2'].map(lambda x: str(x).lower().split())
+
+    train_qs = pd.Series(df_train['question1'].tolist() + df_train['question2'].tolist())
+
+    words = [x for y in train_qs for x in y]
+    counts = Counter(words)
+    weights = {word: get_weight(count) for word, count in counts.items()}
+
+    print('Building Features')
+    X_train = build_features(df_train, stops, weights)
+    X_train = pd.concat((X_train, X_train_ab, train_leaky), axis=1)
+    y_train = df_train['is_duplicate'].values
+
+    X_train, X_valid, y_train, y_valid = train_test_split(X_train, y_train, test_size=0.1, random_state=4242)
+
+    #UPDownSampling
+    pos_train = X_train[y_train == 1]
+    neg_train = X_train[y_train == 0]
+    X_train = pd.concat((neg_train, pos_train.iloc[:int(0.8*len(pos_train))], neg_train))
+    y_train = np.array([0] * neg_train.shape[0] + [1] * pos_train.iloc[:int(0.8*len(pos_train))].shape[0] + [0] * neg_train.shape[0])
+    print(np.mean(y_train))
+    del pos_train, neg_train
+
+    pos_valid = X_valid[y_valid == 1]
+    neg_valid = X_valid[y_valid == 0]
+    X_valid = pd.concat((neg_valid, pos_valid.iloc[:int(0.8 * len(pos_valid))], neg_valid))
+    y_valid = np.array([0] * neg_valid.shape[0] + [1] * pos_valid.iloc[:int(0.8 * len(pos_valid))].shape[0] + [0] * neg_valid.shape[0])
+    print(np.mean(y_valid))
+    del pos_valid, neg_valid
+
+
+    params = {}
+    params['objective'] = 'binary:logistic'
+    params['eval_metric'] = 'logloss'
+    params['eta'] = 0.02
+    params['max_depth'] = 7
+    params['subsample'] = 0.6
+    params['base_score'] = 0.2
+    # params['scale_pos_weight'] = 0.2
+
+    d_train = xgb.DMatrix(X_train, label=y_train)
+    d_valid = xgb.DMatrix(X_valid, label=y_valid)
+
+    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
+
+    bst = xgb.train(params, d_train, 2500, watchlist, early_stopping_rounds=50, verbose_eval=50)
+    print(log_loss(y_valid, bst.predict(d_valid)))
+    bst.save_model(args.save + '.mdl')
+
+
+    print('Building Test Features')
+    df_test = pd.read_csv('../data/test_features.csv', encoding="ISO-8859-1")
+    x_test_ab = df_test.iloc[:, 2:-1]
+    x_test_ab = x_test_ab.drop('euclidean_distance', axis=1)
+    x_test_ab = x_test_ab.drop('jaccard_distance', axis=1)
+    
+    df_test = pd.read_csv('../data/test.csv')
+    df_test = df_test.fillna(' ')
+
+    df_test['question1'] = df_test['question1'].map(lambda x: str(x).lower().split())
+    df_test['question2'] = df_test['question2'].map(lambda x: str(x).lower().split())
+    
+    x_test = build_features(df_test, stops, weights)
+    x_test = pd.concat((x_test, x_test_ab, test_leaky), axis=1)
+    d_test = xgb.DMatrix(x_test)
+    p_test = bst.predict(d_test)
+    sub = pd.DataFrame()
+    sub['test_id'] = df_test['test_id']
+    sub['is_duplicate'] = p_test
+    sub.to_csv('../predictions/' + args.save + '.csv')
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+

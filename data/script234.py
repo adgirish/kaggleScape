@@ -1,660 +1,309 @@
 
 # coding: utf-8
 
-# **Data Visualization**
+# # Whose questions you can answer and which questions you might be interested in? 
+
+# ## Outline
+
+# The content of this kernel will cover two parts.
 # 
-# **Applying Machine Learning Techniques**
+# Part 1: Finding the users who always ask the similar questions with the specific user. 
+# Part 2: Finding the users who always provide similar answers with the specific user.
 # 
-# work in progress. suggestions and comments highly appreciated
+# Both parts will be finished with a two-step process: NLP and KNN model fitting. While the first part will be  analyzed with the text of questions while the second part will use the text of answers to solve and analyze.
+
+# ## Fire up
 
 # In[ ]:
 
 
-# numpy, pandas
-import numpy as np 
-import pandas as pd 
-import datetime
-import numpy as np
-
-# plots
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import sklearn
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib
-matplotlib.style.use('ggplot')
+from sklearn.cross_validation import train_test_split
+from wordcloud import WordCloud,STOPWORDS
+
+Questions=pd.read_csv('../input/Questions.csv',encoding = 'iso-8859-1')
+Answers=pd.read_csv('../input/Answers.csv',encoding = 'iso-8859-1')
 
 
+# In order to shrink the volume of the data-set, I just use the data of users who both post questions on stack-overflow and answer other's questions.   
+
+# In[ ]:
 
 
-# machine learning
-from sklearn import preprocessing
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-
-from subprocess import check_output
-
-# Supress unnecessary warnings so that presentation looks clean
-import warnings
-warnings.filterwarnings('ignore')
-
-#Print all rows and columns. Dont hide any
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
+User_id_inQ= Questions['OwnerUserId'].unique()
+User_id_inA= Answers['OwnerUserId'].unique()
 
 
 # In[ ]:
 
 
-print(check_output(["ls", "../input"]).decode("utf8"))
-df_ac= pd.read_csv('../input/accident.csv')
-import sklearn.utils
-df_ac = sklearn.utils.shuffle(df_ac)
-#print(df_ac.head(5))
-#print(df_ac.info())
-
-
-# ## **Statewise accident** ##
-
-# In[ ]:
-
-
-states = {1: 'AL', 2: 'AK', 4: 'AZ', 5: 'AR', 
-          6: 'CA', 8: 'CO', 9: 'CT', 10: 'DE', 
-          11: 'DC', 12: 'FL', 13: 'GA', 15: 'HI', 
-          16: 'ID', 17: 'IL', 18: 'IN', 19: 'IA', 20: 'KS', 
-          21: 'KY', 22: 'LA', 23: 'ME', 24: 'MD', 
-          25: 'MA', 26: 'MI', 27: 'MN', 
-          28:'MS', 29: 'MO', 30: 'MT', 31: 'NE', 
-          32: 'NV', 33: 'NH', 34: 'NJ', 35: 'NM', 
-          36: 'NY', 37: 'NC', 38: 'ND', 39: 'OH', 
-          40: 'OK', 41: 'OR', 42: 'PN', 43: 'PR', 
-          44: 'RI', 45: 'SC', 46: 'SD', 47: 'TN', 
-          48: 'TX', 49: 'UT', 50: 'VT', 51: 'VA', 52: 'VI', 
-          53: 'WA', 54: 'WV', 55: 'WI', 56: 'WY'}
-
-
-fig, axes = plt.subplots(nrows=4, ncols=1,figsize=(8, 8))
-fig.subplots_adjust(hspace=0.8)
-
-df_ac['state']=df_ac['STATE'].apply(lambda x: states[x])
-Total_ac=df_ac['state'].value_counts()
-df_ac['state'].value_counts().plot(ax=axes[0],kind='bar',title='state-wise accidents')
-
-
-df_drinking=pd.concat([df_ac['state'],df_ac['DRUNK_DR']],axis=1)
-#print(df_drinking.head())
-#print('\n grouped \n')
-drk_state=df_drinking.groupby('state')
-#print(drk_state.sum().head())
-drk_state.sum().sort_index(by='DRUNK_DR',ascending=False).plot(ax=axes[1],kind='bar',title='state-wise drunk drivers')
-
-
-Total_ac.sort_index(ascending=True)
-drk_break=pd.concat([Total_ac.sort_index(ascending=True),drk_state.sum()],axis=1)
-drk_break.columns=['People_involved','Drunk_drivers']
-#print(drk_break.head())
-#print('\n\n')
-drk_break['NoN Drinking individuals']= drk_break['People_involved']-drk_break['Drunk_drivers']
-#print(drk_break[['NoN Drinking individuals','Drunk_drivers']].head())
-drk_break[['NoN Drinking individuals','Drunk_drivers']].sort_index(by='NoN Drinking individuals',ascending=False).plot.bar(ax=axes[2],stacked='True')
-
-
-
-drk_break['Drunk_Dr_per_population']= drk_break['Drunk_drivers']/drk_break['People_involved']
-drk_break.head()
-drk_break[['Drunk_Dr_per_population']].sort_index(by='Drunk_Dr_per_population',ascending=False).plot(ax=axes[3],kind='bar')
-
-
-# This is super interesting drunk drivers per total individuals shows in Maine you have highest chance of having accidents due to drinking. and Texas who was leading the most amount of accidents are one of the least dangerous states in terms of drunk driving accidents.
-
-# ----------
-# Lets see how month-wise accident data changes 
-# ----------
-
-# In[ ]:
-
-
-month = {1: '1jan', 2: '2feb', 3: '3mar', 4: '4april', 
-          5: '5may', 6: '6june', 7: '7july', 8: '8aug', 
-          9: '90sep', 10: '91oct',11: '92nov',12: '93dec'}
-
-fig, axes = plt.subplots(nrows=2, ncols=2,figsize=(9, 6))
-fig.subplots_adjust(hspace=.6)
-
-##### month breakdown
-df_ac['month']=df_ac['MONTH'].apply(lambda x: month[x])
-df_ac['month'].value_counts().sort_index(level='month').plot(ax=axes[0,0],kind='bar',title='Month-wise accident')
-
-### month day wise breakdown
-df_ac['DAY'].value_counts().sort_index().plot(ax=axes[0,1],title='Day-wise accident')
-
-####### week day break down
-day = {1: '1_SAT', 2: '2_SUN', 3: '3_MON', 4: '4_TUE', 
-          5: '5_WED', 6: '6_THU', 7: '7_FRI'}
-df_ac['day_week']=df_ac['DAY_WEEK'].apply(lambda x: day[x])
-df_ac['day_week'].value_counts().sort_index().plot(ax=axes[1,0],kind='bar',title='Week_Day-wise accident')
-
-#############Hourly Breakdown
-df_ac=df_ac[df_ac.HOUR != 99]
-
-df_ac['HOUR'].value_counts().sort_index().plot(ax=axes[1,1],kind='bar',title='Hour-wise accident')
-
-
-# So Friday & Saturday are the most dangerous day of the week (as expected)
-# 5-9 PM is the most accident prone hours of the day. 
-# 99: is unreported event.
-
-# ## **Let's see harmful environment status** ##
-
-# In[ ]:
-
-
-df_ac['HARM_EV'].value_counts().head()
-harm_ev= {12: 'SameRoadVehicle', 8: 'Pedestrian', 1: 'OverTurn', 42: 'Trees', 
-          33: 'Curb', 34: 'Ditch', 35: 'Embankment'}
-df_ac['harm_ev']=df_ac['HARM_EV'].apply(lambda x: harm_ev[x] if (x==12 or x==8 or x==1 or x==42 or x==33 or x==34 or x== 35)  else 'Other')
-df_ac['harm_ev'].value_counts().plot(kind='pie',title='How harmful environment played role')
-
-
-# 12 = Motor Vehicle in Transport on same roadway
-# 8= Pedestrian
-# 1= over turn
-# 42= Trees
-# 33=Curb
-# 34=Ditch
-# 35=Embankment
-
-# ## **Decision Tree - Is the driver Drunk or Sober** ##
-
-# In[ ]:
-
-
-df_ml= df_ac[['state','MONTH','DAY_WEEK','DAY','HOUR','harm_ev','DRUNK_DR']]
-df_ml['state']=df_ml['state'].fillna('TX')
-df_ml['MONTH']=df_ml['MONTH'].fillna(0)
-df_ml['DAY_WEEK']=df_ml['DAY_WEEK'].fillna(6)
-df_ml['DAY']=df_ml['DAY'].fillna(3)
-df_ml['HOUR']=df_ml['HOUR'].fillna(18)
-df_ml['harm_ev']=df_ml['harm_ev'].fillna('Embankment')
-df_ml['DRUNK_DR']=df_ml['DRUNK_DR'].fillna(0)
-df_ml['harm_ev'].unique()
+All_id=set(User_id_inQ).intersection(User_id_inA)
 
 
 # In[ ]:
 
 
-df_ml['harm_ev'] = df_ml['harm_ev'].replace(['Embankment', 'SameRoadVehicle'], ['EM', 'SRV'])
-x=pd.get_dummies(df_ml['harm_ev'], prefix = 'harm_ev')
-x = pd.concat([x, pd.get_dummies(df_ml['state'], prefix ='state')], axis=1)
-#x = pd.concat([x, pd.get_dummies(df_ml['DRUNK_DR'], prefix ='DD')], axis=1)
-x = pd.concat([x, pd.get_dummies(df_ml['MONTH'], prefix ='MONTH')], axis=1)
-x = pd.concat([x, pd.get_dummies(df_ml['DAY_WEEK'], prefix ='Dw')], axis=1)
-x = pd.concat([x, pd.get_dummies(df_ml['DAY'], prefix ='DAY')], axis=1)
-x = pd.concat([x, pd.get_dummies(df_ml['HOUR'], prefix ='HOUR')], axis=1)
-x.head(3)
+print('So we have '+str(len(All_id))+' users that post both questions and answers on StackOverFlow')
+
+
+# ## Natural Language Processing and Dataframe Transformation
+
+# Before moving to the next step, I first select the top 10000 users in terms of the total number of questions and answers posted on the website. If I perform the analysis on all data, the kernel will kill itself.... So let us finish the selection first.
+
+# In[ ]:
+
+
+users=pd.DataFrame({'idUser':list(All_id)})
+users['Quantity']=users['idUser'].apply(lambda x: len(Questions[Questions['OwnerUserId']==x]['Body'])+len(Answers[Answers['OwnerUserId']==x]['Body']))
 
 
 # In[ ]:
 
 
-df_ml['DRUNK_DR']=df_ml['DRUNK_DR'].apply(lambda x: 0 if (x==0)  else 1)
-df_ml['DRUNK_DR'].value_counts()
+users_final=users.sort(['Quantity'],ascending=0).reset_index(drop=True)
 
 
 # In[ ]:
 
 
-from sklearn.tree import DecisionTreeClassifier, export_graphviz
-from sklearn import preprocessing
-le = preprocessing.LabelEncoder()
-Y = le.fit_transform(df_ml['DRUNK_DR'])
-le.inverse_transform([0, 1])
-dt = DecisionTreeClassifier(max_depth = 4)
-dt.fit(x.values, Y)
+users_final=users_final.iloc[0:10000,]
 
 
 # In[ ]:
 
 
-from sklearn import cross_validation
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print(scores)
-print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+All_id=list(users_final['idUser'])
+
+
+# Firstly, create a function that can clean the body of questions and answers. Only the main body of questions will be used.
+
+# In[ ]:
+
+
+from html.parser import HTMLParser
+import re
+import nltk
+from nltk.corpus import stopwords
 
 
 # In[ ]:
 
 
-print(pd.value_counts(Y))
-print("Statistical Accuracy")
-print(23304/len(Y))
+class MLStripper(HTMLParser):
+    def __init__(self):
+        self.reset()
+        self.strict = False
+        self.convert_charrefs= True
+        self.fed = []
+    def handle_data(self, d):
+        self.fed.append(d)
+    def get_data(self):
+        return ''.join(self.fed)
+
+def strip_tags(html):
+    s = MLStripper()
+    s.feed(html)
+    return s.get_data()
+
+def clean(text):
+    removed_html=strip_tags(text)
+    letters_only = re.sub("[^a-zA-Z]", " ", removed_html) 
+    words = letters_only.lower().split()                             
+    stops = set(stopwords.words("english"))                  
+    meaningful_words = [w for w in words if not w in stops] 
+    return(meaningful_words)
+
+
+# The clean function works. Great. Next, I will shrink the dataset and only keep the data of users who both ask and answer questions.
+
+# In[ ]:
+
+
+Q_data=Questions[['OwnerUserId','Body']]
+A_data=Answers[['OwnerUserId','Body']]
+Question=Q_data[Q_data['OwnerUserId'].isin(All_id)]
+Answer=A_data[A_data['OwnerUserId'].isin(All_id)]
 
 
 # In[ ]:
 
 
-s = []
-
-for i in range(13):
-  s.append(0)
+Question['Non_html_body']=Question['Body'].apply(lambda x:strip_tags(str(x)))
+Answer['Non_html_body']=Answer['Body'].apply(lambda x:strip_tags(str(x)))
 
 
-dt = DecisionTreeClassifier(max_depth = 1,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-i=0
-s[i]=scores.mean()
-i=i+1
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+# Then, we create a new data frame with each row containing all questions and answers the specific user has posted on Stack-overflow.
 
-dt = DecisionTreeClassifier(max_depth = 2,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
+# In[ ]:
 
-dt = DecisionTreeClassifier(max_depth = 3,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
 
-dt = DecisionTreeClassifier(max_depth = 4,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 5,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 6,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 7,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 8,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 9,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 10,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 12,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 14,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 16,criterion='entropy')
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
+Question['Q_words']=Question['Body'].apply(lambda x:clean(str(x)))
+Answer['A_words']=Answer['Body'].apply(lambda x:clean(str(x)))
 
 
 # In[ ]:
 
 
-n = [1,2,3,4,5,6,7,8,9,10,12,14,16]
-
-plt.plot(n,s, 'r',lw=3)
-plt.title('Accuracy vs Depth of Decision Tree with entropy as criterion')
-plt.show()
-
-
-# In[ ]:
-
-
-s = []
-
-for i in range(10):
-   s.append(0)
-
-
-dt = DecisionTreeClassifier(max_depth = 1)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-i=0
-s[i]=scores.mean()
-i=i+1
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-
-dt = DecisionTreeClassifier(max_depth = 2)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 3)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 4)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 5)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 6)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 7)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 8)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 9)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 10)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-
-
-# In[ ]:
-
-
-plt.plot( s, 'r',lw=3)
-plt.title('Accuracy vs Depth of Decision Tree with information gain as leafing criterion')
-plt.show()
-
-
-# In[ ]:
-
-
-df_ac['MAN_COLL'].value_counts()
-
-man_coll = {0:'NoCol',6:'angle',2:'headOn',1:'Rear',7:'sideswipe'}
-
-df_ac['man_coll']=df_ac['MAN_COLL'].apply(lambda x: man_coll[x] if (x==0 or x==6 or x==2 or x==1 or x==7)  else 'NoCol')
-df_ac['man_coll'].value_counts().plot(kind='pie',title='Manner of collisions')
-
-
-# In[ ]:
-
-
-x = pd.concat([x, pd.get_dummies(df_ac['man_coll'], prefix ='man_coll')], axis=1)
-
-
-# In[ ]:
-
-
-s = []
-for i in range(10):
-   s.append(0)
-
-
-dt = DecisionTreeClassifier(max_depth = 1)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-i=0
-s[i]=scores.mean()
-i=i+1
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-
-dt = DecisionTreeClassifier(max_depth = 2)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 3)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 4)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 5)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 6)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 7)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 8)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 9)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 10)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-
-
-# In[ ]:
-
-
-df_ac['WEATHER'].value_counts()
-weather = {1:'clear',10:'couldy',2:'rain',5:'fog',4:'snow',99:'unknown',3:'sleet',98:'unreported',8:'other',12:'drizzle',11:'blowingSnow',6:'crosswinds',7:'blowingSand'}
-
-df_ac['weather']=df_ac['WEATHER'].apply(lambda x: weather[x] )
-df_ac['weather'].value_counts().plot.bar(figsize=(8,4))
-
-
-# In[ ]:
-
-
-x = pd.concat([x, pd.get_dummies(df_ac['weather'], prefix ='weather')], axis=1)
-
-
-# In[ ]:
-
-
-s = []
-for i in range(10):
-   s.append(0)
-
-
-dt = DecisionTreeClassifier(max_depth = 1)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-i=0
-s[i]=scores.mean()
-i=i+1
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-
-dt = DecisionTreeClassifier(max_depth = 2)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 3)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 4)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 5)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 6)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 7)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 8)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 9)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-i=i+1
-
-dt = DecisionTreeClassifier(max_depth = 10)
-scores = cross_validation.cross_val_score(dt, x, Y, cv = 10)
-print("Accuracy: %0.4f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-s[i]=scores.mean()
-
-
-# In[ ]:
-
-
-n=3000
-
-xx=x.iloc[0:n]
-label=df_ml['DRUNK_DR'].iloc[0:n]
-
-msk = np.random.rand(len(xx)) < 0.8
-train_f=xx[msk]
-test_f=xx[~msk]
-train_l=label[msk]
-test_l=label[~msk]
-
-from sklearn.metrics import accuracy_score, log_loss
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC, LinearSVC, NuSVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
-
-classifiers = [
-    KNeighborsClassifier(3),
-    SVC(kernel="rbf", C=0.025, probability=True),
-    #NuSVC(probability=True),
-    #DecisionTreeClassifier(),
-    RandomForestClassifier(),
-    AdaBoostClassifier(),
-    GradientBoostingClassifier(),
-    GaussianNB(),
-    LinearDiscriminantAnalysis()]
-    #QuadraticDiscriminantAnalysis()
-
-# Logging for Visual Comparison
-log_cols=["Classifier", "Accuracy", "Log Loss"]
-log = pd.DataFrame(columns=log_cols)
-
-for clf in classifiers:
-    clf.fit(train_f, train_l)
-    name = clf.__class__.__name__
+User_id=All_id
+Question_corpus=[]
+Answer_corpus=[]
+for id in All_id:
+    Q_frame=Question[Question['OwnerUserId']==id].reset_index(drop=True)
+    A_frame=Answer[Answer['OwnerUserId']==id].reset_index(drop=True)
+    for i in range(len(Q_frame['OwnerUserId'])):
+        if i==0:
+            tmp=Q_frame['Q_words'][i]
+        else:
+            tmp=tmp+Q_frame['Q_words'][i]
+    Question_corpus.append(tmp)
     
-    print("="*30)
-    print(name)
-    
-    print('****Results****')
-    train_predictions = clf.predict(test_f)
-    acc = accuracy_score(test_l, train_predictions)
-    print("Accuracy: {:.4%}".format(acc))
-    
-    train_predictions = clf.predict_proba(test_f)
-    ll = log_loss(test_l, train_predictions)
-    print("Log Loss: {}".format(ll))
-    
-    log_entry = pd.DataFrame([[name, acc*100, ll]], columns=log_cols)
-    log = log.append(log_entry)
-    
-print("="*30)
+    for j in range(len(A_frame['OwnerUserId'])):
+        if j==0:
+            tmp2=A_frame['A_words'][j]
+        else:
+            tmp2=tmp2+A_frame['A_words'][j]
+    Answer_corpus.append(tmp2)
 
 
 # In[ ]:
 
 
-import seaborn as sns
-#sns.set_color_codes("muted")
-sns.barplot(x='Accuracy', y='Classifier', data=log)
+User_id[0]
 
-plt.xlabel('Accuracy %')
-plt.title('Classifier Accuracy')
-plt.show()
 
-#sns.set_color_codes("muted")
-sns.barplot(x='Log Loss', y='Classifier', data=log)
+# In[ ]:
 
-plt.xlabel('Log Loss')
-plt.title('Classifier Log Loss')
-plt.show()
 
+Question_C=[]
+Answer_C=[]
+for i in range(10000):
+    tmp1=" ".join(Question_corpus[i])
+    tmp2=" ".join(Answer_corpus[i])
+    Question_C.append(tmp1)
+    Answer_C.append(tmp2)
+
+
+# In[ ]:
+
+
+Final_frame=pd.DataFrame({'User_id':User_id,'Question':Question_C,'Answer':Answer_C})
+
+
+# Finally, create tfidf matrix for both questions and answers
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+tfidf=TfidfVectorizer()
+Q_features=tfidf.fit_transform(Question_C)
+A_features=tfidf.fit_transform(Answer_C)
+
+
+# ## KNN Models
+
+# In[ ]:
+
+
+from sklearn.neighbors import NearestNeighbors
+knn_1=NearestNeighbors(n_neighbors=30,algorithm='brute',metric='cosine')
+knn_2=NearestNeighbors(n_neighbors=30,algorithm='brute',metric='cosine')
+Question_fit=knn_1.fit(Q_features)
+Answer_fit=knn_2.fit(A_features)
+
+
+# ### Answer question 1: Whose questions will also get your attention?
+
+# I tend to use the KNN model that focuses on question text to answer this question. Namely, the model will calculate the nearest neighbor of the user based on the question text and see which user also ask the same question. The process is enclosed in a single function.
+
+# In[ ]:
+
+
+def Question_f(user_id):
+    ###Find the corresponding features##
+    index=Final_frame[Final_frame['User_id']==user_id].index.tolist()
+    ### Word Cloud##
+    Question_word=Question_C[index[0]]
+    wordcloud = WordCloud(background_color='black',
+                      width=3000,
+                      height=2500
+                     ).generate(Question_word)
+    Neighbors = Question_fit.kneighbors(Q_features[index[0]])[1].tolist()[0][1:]
+    Users=np.array(User_id)[Neighbors].tolist()
+    print('= ='*50)
+    print("User's question is always featured by words below")
+    plt.figure(1,figsize=(8,8))
+    plt.imshow(wordcloud)
+    plt.axis('off')
+    plt.show()
+    print('= ='*50)
+    print('The top five users that always ask similar questions are: '+str(Users[0])+' '+str(Users[1])+' '+str(Users[2])+' '+str(Users[3])+' '+str(Users[4]))
+    print('= ='*50)
+    User_question=Question[Question['OwnerUserId']==user_id].reset_index(drop=True)['Non_html_body'][0]
+    print('Example: Question of user:\n'+User_question)
+    print('= ='*50)
+    Question2=Question[Question['OwnerUserId']==Users[0]].reset_index(drop=True)['Non_html_body'][0]
+    print('Example: Question from a similar user:\n'+Question2)
+
+
+# **An example**
+
+# In[ ]:
+
+
+Question_f(100297)
+
+
+# ### Answer question 2: Which users share similar expertise with you?
+
+# In[ ]:
+
+
+def Answer_f(user_id):
+    ###Find the corresponding features##
+    index=Final_frame[Final_frame['User_id']==user_id].index.tolist()
+    ### Word Cloud##
+    Answer_word=Answer_C[index[0]]
+    wordcloud = WordCloud(background_color='blue',
+                      width=3000,
+                      height=2500
+                     ).generate(Answer_word)
+    Neighbors = Answer_fit.kneighbors(A_features[index[0]])[1].tolist()[0][1:]
+    Users=np.array(User_id)[Neighbors].tolist()
+    print('= ='*50)
+    print("User's answer is always featured by words below")
+    plt.figure(1,figsize=(8,8))
+    plt.imshow(wordcloud)
+    plt.axis('off')
+    plt.show()
+    print('= ='*50)
+    print('The top five users that always provide similar answers are: '+str(Users[0])+' '+str(Users[1])+' '+str(Users[2])+' '+str(Users[3])+' '+str(Users[4]))
+    print('= ='*50)
+    User_answer=Answer[Answer['OwnerUserId']==user_id].reset_index(drop=True)['Non_html_body'][0]
+    print('Example: Answer from user:\n'+User_answer)
+    print('= ='*50)
+    Answer2=Answer[Answer['OwnerUserId']==Users[0]].reset_index(drop=True)['Non_html_body'][0]
+    print('Example: Answer from a similar user:\n'+Answer2)
+
+
+# **An example**
+
+# In[ ]:
+
+
+Answer_f(100297)
+
+
+# **Both the questions and answers are quite technical.... So I am really not sure whether the implementation of model is good or bad.**
+
+# ## Conclusion
+
+# 1. The script takes a really long time to run. I need more elegant coding skill as well as the NLP technique.
+# 
+# 2. I am really not sure the result of clustering. The context is quite technical.
+# 
+# 3. For the part of grouping users who provide similar answer, it is also scientific to use the question the user answered. But it needs more codes for data frame transformation.

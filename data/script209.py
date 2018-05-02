@@ -1,338 +1,311 @@
 
 # coding: utf-8
 
-# # **Introduction**
-# > In this notebook, I will be analyzing 'Google Job Skills' dataset. Firstly I will be analyzing which programming language is popular for Google Jobs.
+# # Using the Wisconsin breast cancer diagnostic data set for predictive analysis
+# ## Buddhini Waidyawansa (12-03-2016)
+# Attribute Information:
 # 
-# ## Table of contents
-# > 1. **[Load the data](#load_the_data)** 
-# > 2.  **[Which languages are asked most in Google Jobs requirement?](#language_popularity)**
-# > 3. **[Which degrees are most popular at Google Jobs? ](#degree_popularity)**
-# > 4. **[How many years of experiences are needed for Google Jobs?](#years_experiences)** 
-# > 5. **[Let's find out which job category Google wants more experiences](#years_experiences_in_different_category)**
-# > 6. **[Which location does Google need more employee? ](#location_job)**
-# > 7. **[Which job categories have more jobs?](#job_categories_popularity)**
-# > 8. **[Let's find out in which category Google has most open jobs in different locations](#pop_cat_location)**
+#  - 1) ID number 
+#  - 2) Diagnosis (M = malignant, B = benign) 
+#  
+# -3-32.Ten real-valued features are computed for each cell nucleus:
+# 
+#  - a) radius (mean of distances from center to points on the perimeter) 
+#  - b) texture (standard deviation of gray-scale values) 
+#  - c) perimeter 
+#  - d) area 
+#  - e) smoothness (local variation in radius lengths) 
+#  - f) compactness (perimeter^2 / area - 1.0) 
+#  - g). concavity (severity of concave portions of the contour) 
+#  - h). concave points (number of concave portions of the contour) 
+#  - i). symmetry 
+#  - j). fractal dimension ("coastline approximation" - 1)
+# 
+# The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features. For instance, field 3 is Mean Radius, field 13 is Radius SE, field 23 is Worst Radius.
+# 
+# 
+# For this analysis, as a guide to predictive analysis I followed the instructions and discussion on "A Complete Tutorial on Tree Based Modeling from Scratch (in R & Python)" at Analytics Vidhya.
+
+# #Load Libraries
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-# pandas for handling our dataset
-import pandas as pd
-# numpy for numeric operations
-import numpy as np
-from collections import defaultdict
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# matplotlib for plotting
-import matplotlib.pyplot as plt
-# use ggplot style
-plt.style.use('ggplot')
-# seaborn for beautiful visualizations
-import seaborn as sns
-# regualar expression
-import re
-# print inline in this notebook
+# keeps the plots in one place. calls image as static pngs
 get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt # side-stepping mpl backend
+import matplotlib.gridspec as gridspec # subplots
+import mpld3 as mpl
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+#Import models from scikit learn module:
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_validation import KFold   #For K-fold cross validation
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier, export_graphviz
+from sklearn import metrics
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Any results you write to the current directory are saved as output.
+# # Load the data
+
+# In[ ]:
 
 
-# <a id="load_the_data"></a>
+df = pd.read_csv("../input/data.csv",header = 0)
+df.head()
+
+
+# # Clean and prepare data
+
+# In[ ]:
+
+
+df.drop('id',axis=1,inplace=True)
+df.drop('Unnamed: 32',axis=1,inplace=True)
+# size of the dataframe
+len(df)
+
+
+# In[ ]:
+
+
+df.diagnosis.unique()
+
+
+# In[ ]:
+
+
+df['diagnosis'] = df['diagnosis'].map({'M':1,'B':0})
+df.head()
+
+
+# # Explore data
+
+# In[ ]:
+
+
+df.describe()
+
+
+# In[ ]:
+
+
+df.describe()
+plt.hist(df['diagnosis'])
+plt.title('Diagnosis (M=1 , B=0)')
+plt.show()
+
+
+# ### nucleus features vs diagnosis
+
+# In[ ]:
+
+
+features_mean=list(df.columns[1:11])
+# split dataframe into two based on diagnosis
+dfM=df[df['diagnosis'] ==1]
+dfB=df[df['diagnosis'] ==0]
+
+
+# In[ ]:
+
+
+#Stack the data
+plt.rcParams.update({'font.size': 8})
+fig, axes = plt.subplots(nrows=5, ncols=2, figsize=(8,10))
+axes = axes.ravel()
+for idx,ax in enumerate(axes):
+    ax.figure
+    binwidth= (max(df[features_mean[idx]]) - min(df[features_mean[idx]]))/50
+    ax.hist([dfM[features_mean[idx]],dfB[features_mean[idx]]], bins=np.arange(min(df[features_mean[idx]]), max(df[features_mean[idx]]) + binwidth, binwidth) , alpha=0.5,stacked=True, normed = True, label=['M','B'],color=['r','g'])
+    ax.legend(loc='upper right')
+    ax.set_title(features_mean[idx])
+plt.tight_layout()
+plt.show()
+
+
+# ###Observations
 # 
-# # 1. Load the data
+# 1. mean values of cell radius, perimeter, area, compactness, concavity and concave points can be used in classification of the cancer. Larger values of these parameters tends to show a correlation with malignant tumors. 
+# 2. mean values of texture, smoothness, symmetry or fractual dimension does not show a particular preference of one diagnosis over the other. In any of the histograms there are no noticeable large outliers that warrants further cleanup.
+
+# ## Creating a test set and a training set
+# Since this data set is not ordered, I am going to do a simple 70:30 split to create a training data set and a test data set.
 
 # In[ ]:
 
 
-# read the data set using pandas .read_csv() method
-df_job_skills = pd.read_csv('../input/job_skills.csv')
-# print the top 5 row from the dataframe
-df_job_skills.head()
+traindf, testdf = train_test_split(df, test_size = 0.3)
 
 
-# <a id="language_popularity"></a>
-# # 2. Which languages are asked most in Google Jobs?
-# > In this section, I will be analyzing which programming languages are asked at Google Jobs. 
-
-# In[ ]:
-
-
-# most popular language list 
-programing_language_list = ['python', 'java', 'c++', 'php', 'javascript', 'objective-c', 'ruby', 'perl','c','c#', 'sql','kotlin']
-
-
-# In[ ]:
-
-
-# get our Minimum Qualifications column and convert all of the values to a list
-minimum_qualifications = df_job_skills['Minimum Qualifications'].tolist()
-# let's join our list to a single string and lower case the letter
-miniumum_qualifications_string = "".join(str(v) for v in minimum_qualifications).lower()
-
-
-# In[ ]:
-
-
-# find out which language occurs in most in minimum Qualifications string
-wordcount = dict((x,0) for x in programing_language_list)
-for w in re.findall(r"[\w'+#-]+|[.!?;’]", miniumum_qualifications_string):
-    if w in wordcount:
-        wordcount[w] += 1
-# print
-print(wordcount)
-
-
-# In[ ]:
-
-
-# sort the dict
-programming_language_popularity = sorted(wordcount.items(), key=lambda kv: kv[1], reverse=True)
-
-
-# In[ ]:
-
-
-# make a new dataframe using programming_language_popularity for easy use cases
-df_popular_programming_lang = pd.DataFrame(programming_language_popularity,columns=['Language','Popularity'])
-# Capitalize each programming language first letter
-df_popular_programming_lang['Language'] = df_popular_programming_lang.Language.str.capitalize()
-df_popular_programming_lang = df_popular_programming_lang[::-1]
-
-
-# In[ ]:
-
-
-# plot
-df_popular_programming_lang.plot.barh(x='Language',y='Popularity',figsize=(10,8), legend=False)
-# add a suptitle
-plt.suptitle("Programming Languages popularity at Google Jobs", fontsize=18)
-# set xlabel to ""
-plt.xlabel("")
-# change xticks fontsize to 14
-plt.yticks(fontsize=14)
-# finally show the plot
-plt.show()
-
-
-# **Wow! It's look like Python hold the first position.**
-
-# <a id="degree_popularity"></a>
+# ## Model Classification
 # 
-# # 3. Which degrees are most popular at Google Jobs?
-# > In this section, I will analyze which degree is often asked at Google Jobs.
-
-# In[ ]:
-
-
-miniumum_qualifications_string = " ".join(str(v) for v in minimum_qualifications)
-
-
-# In[ ]:
-
-
-degree_list = ["BA", "BS", "Bachelor's", "PhD"]
-
-
-# In[ ]:
-
-
-wordcount = dict((x,0) for x in degree_list)
-for w in re.findall(r"[\w']+|[.,!?;’]", miniumum_qualifications_string):
-    if w in wordcount:
-        wordcount[w] += 1
-# print
-print(wordcount)
-
-
-# In[ ]:
-
-
-degree_popularity = sorted(wordcount.items(), key=lambda kv: kv[1], reverse=True)
-
-
-# In[ ]:
-
-
-df_degree_popular = pd.DataFrame(degree_popularity,columns=['Degree','Popularity'])
-
-
-# In[ ]:
-
-
-df_degree_popular = df_degree_popular[::-1] 
-# plot
-df_degree_popular.plot.barh(x='Degree',y='Popularity',figsize=(15,10), stacked=True)
-# add a suptitle
-plt.suptitle("Popularity of academic degree at Google Jobs ", fontsize=18)
-# set xlabel to ""
-plt.xlabel("")
-# change xticks fontsize to 14
-plt.yticks(fontsize=18)
-# finally show the plot
-plt.show()
-
-
-# ### It's look like BA and BS degree are most popular at Google Jobs
-
-# <a id="years_experiences"></a>
+# Here we are going to build a classification model and evaluate its performance using the training set.
 # 
-# # 4. How many years of experiences are needed for Google Jobs?
-# > In this section, I will analyze how many years of experience are needed to get a job at Google. 
-
-# In[ ]:
-
-
-# this portion of code is taken from https://www.kaggle.com/djcarlos/are-you-experienced-enough-to-work-at-google 
-years_exp = defaultdict(lambda: 0)
-
-for w in re.findall(r'([0-9]+) year', miniumum_qualifications_string):
-     years_exp[w] += 1
-        
-print(years_exp)
-
-
-# In[ ]:
-
-
-years_exp = sorted(years_exp.items(), key=lambda kv: kv[1], reverse=True)
-
-
-# In[ ]:
-
-
-df_years_exp = pd.DataFrame(years_exp,columns=['Years of experience','Popularity'])
-df_years_exp = df_years_exp[::-1] 
-
-
-# In[ ]:
-
-
-# plot
-df_years_exp.plot.barh(x='Years of experience',y='Popularity',figsize=(10, 8), legend=False,stacked=True)
-# add a suptitle
-plt.title("Years of experiences needed for Google Jobs", fontsize=18)
-# set xlabel to ""
-plt.xlabel("Popularity", fontsize=14)
-plt.ylabel("Years of experiences",fontsize=18)
-# change xticks fontsize to 14
-plt.yticks(fontsize=18)
-# finally show the plot
-plt.show()
-
-
-# ### It's look like most of the jobs at Google need 5 years of experiences. 
-
-# <a id="years_experiences_in_different_category"></a>
-# # 5. Let's find out which job category Google wants more experiences. 
-
-# In[ ]:
-
-
-df_job_skills['Experience'] = df_job_skills['Minimum Qualifications'].str.extract(r'([0-9]+) year')
-
-
-# In[ ]:
-
-
-dff = df_job_skills[['Experience','Category']]
-dff = dff.dropna()
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(10,15))
-plt.title('Experiences needed in different job category', fontsize=24)
-sns.countplot(y='Category', hue='Experience', data=dff, hue_order=dff.Experience.value_counts().iloc[:3].index)
-plt.yticks(fontsize=18)
-plt.show()
-
-
-# **Takeaways from the plot:** The above plot shows us really important information. Let's analyze:
-# 1. In marketing field Google wants more experience to compare to other categories. 
-# 2. In software development category Google wants highest 3 years of experiences. 
-
-# <a id="location_job"></a>
 # 
-# # 6. Which location does Google need more employee? 
-# > In this section, I will analyze which branch of Google need more employee. 
 
 # In[ ]:
 
 
-# where is most job located
-threshold = 10
-location_value_counts = df_job_skills.Location.value_counts()
-to_remove = location_value_counts[location_value_counts <= threshold].index
-df_job_skills['Location'].replace(to_remove, np.nan, inplace=True)
-location_value_counts = df_job_skills.Location.value_counts()
-location_value_counts = location_value_counts[::-1]
+#Generic function for making a classification model and accessing the performance. 
+# From AnalyticsVidhya tutorial
+def classification_model(model, data, predictors, outcome):
+  #Fit the model:
+  model.fit(data[predictors],data[outcome])
+  
+  #Make predictions on training set:
+  predictions = model.predict(data[predictors])
+  
+  #Print accuracy
+  accuracy = metrics.accuracy_score(predictions,data[outcome])
+  print("Accuracy : %s" % "{0:.3%}".format(accuracy))
+
+  #Perform k-fold cross-validation with 5 folds
+  kf = KFold(data.shape[0], n_folds=5)
+  error = []
+  for train, test in kf:
+    # Filter training data
+    train_predictors = (data[predictors].iloc[train,:])
+    
+    # The target we're using to train the algorithm.
+    train_target = data[outcome].iloc[train]
+    
+    # Training the algorithm using the predictors and target.
+    model.fit(train_predictors, train_target)
+    
+    #Record error from each cross-validation run
+    error.append(model.score(data[predictors].iloc[test,:], data[outcome].iloc[test]))
+    
+    print("Cross-Validation Score : %s" % "{0:.3%}".format(np.mean(error)))
+    
+  #Fit the model again so that it can be refered outside the function:
+  model.fit(data[predictors],data[outcome]) 
 
 
-# In[ ]:
-
-
-location_value_counts.plot.barh(figsize=(15, 15))
-# add a suptitle
-plt.title("Google Jobs Location Popularity", fontsize=24)
-# set xlabel to ""
-plt.xlabel("Popularity", fontsize=20)
-plt.ylabel("Location",fontsize=20)
-# change xticks fontsize to 14
-plt.yticks(fontsize=24)
-# finally show the plot
-plt.show()
-
-
-# ### It's look like most Google Jobs coming from United States and Ireland
-
-# <a id="job_categories_popularity"></a>
+# ### Logistic Regression model
 # 
-# # 7. Which job categories have more jobs?
-# > Google has many job categories. Let's find out which categories have more jobs. 
+# Logistic regression is widely used for classification of discrete data. In this case we will use it for binary (1,0) classification.
+# 
+# Based on the observations in the histogram plots, we can reasonably hypothesize that the cancer diagnosis depends on the mean cell radius, mean perimeter, mean area, mean compactness, mean concavity and mean concave points. We can then  perform a logistic regression analysis using those features as follows:
 
 # In[ ]:
 
 
-category_value_counts = df_job_skills.Category.value_counts()
-category_value_counts = category_value_counts[::-1]
-category_value_counts.plot.barh(figsize=(15, 15))
-# add a suptitle
-plt.title("What is the most popular job category at Google?", fontsize=24)
-# set xlabel to ""
-plt.xlabel("Popularity", fontsize=20)
-plt.ylabel("Job Category",fontsize=20)
-# change xticks fontsize to 14
-plt.yticks(fontsize=24)
-# finally show the plot
-plt.show()
+predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
+outcome_var='diagnosis'
+model=LogisticRegression()
+classification_model(model,traindf,predictor_var,outcome_var)
 
 
-# ### It's look like Sales & Account Management and Marketing categories have more jobs compare to others. 
-
-# <a id="pop_cat_location"></a>
-# # 8. Let's find out in which category Google has most open jobs in different locations. 
+# The prediction accuracy is reasonable. 
+# What happens if we use just one predictor? 
+# Use the mean_radius:
 
 # In[ ]:
 
 
-plt.figure(figsize=(10,15))
-plt.title('Google job categories popularity in different locations', fontsize=24)
-sns.countplot(y='Location', hue='Category', data=df_job_skills, hue_order=dff.Category.value_counts().iloc[:3].index)
-plt.yticks(fontsize=18)
-plt.show()
+predictor_var = ['radius_mean']
+model=LogisticRegression()
+classification_model(model,traindf,predictor_var,outcome_var)
 
 
-# #### The plot is self-explanatory. It shows that in United States Google need more employee in  marketing and communications field. 
+# This gives a similar prediction accuracy and a cross-validation score.
+# 
 
-# *Thank you for reading the notebook. Please upvote if this helps you and if you have any suggestion please post it at the comment.*
-# *To be continued*
+# The accuracy of the predictions are good but not great. The cross-validation scores are reasonable. 
+# Can we do better with another model?
+
+# ### Decision Tree Model
+
+# In[ ]:
+
+
+predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
+model = DecisionTreeClassifier()
+classification_model(model,traindf,predictor_var,outcome_var)
+
+
+# Here we are over-fitting the model probably due to the large number of predictors.
+# Let use a single predictor, the obvious one is the radius of the cell.
+
+# In[ ]:
+
+
+predictor_var = ['radius_mean']
+model = DecisionTreeClassifier()
+classification_model(model,traindf,predictor_var,outcome_var)
+
+
+# The accuracy of the prediction is much much better here.  But does it depend on the predictor?
+
+# Using a single predictor gives a 97% prediction accuracy for this model but the cross-validation score is not that great. 
+
+# ### Randome Forest
+
+# In[ ]:
+
+
+# Use all the features of the nucleus
+predictor_var = features_mean
+model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
+classification_model(model, traindf,predictor_var,outcome_var)
+
+
+# Using all the features improves the prediction accuracy and the cross-validation score is great.
+
+#  An advantage with Random Forest is that it returns a feature importance matrix which can be used to select features. So lets select the top 5 features and use them as predictors.
+
+# In[ ]:
+
+
+#Create a series with feature importances:
+featimp = pd.Series(model.feature_importances_, index=predictor_var).sort_values(ascending=False)
+print(featimp)
+
+
+# In[ ]:
+
+
+# Using top 5 features
+predictor_var = ['concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean',]
+model = RandomForestClassifier(n_estimators=100, min_samples_split=25, max_depth=7, max_features=2)
+classification_model(model,traindf,predictor_var,outcome_var)
+
+
+# Using the top 5 features only changes the prediction accuracy a bit but I think we get a better result if we use all the predictors.
+# 
+# What happens if we use a single predictor as before? Just check.
+
+# In[ ]:
+
+
+predictor_var =  ['radius_mean']
+model = RandomForestClassifier(n_estimators=100)
+classification_model(model, traindf,predictor_var,outcome_var)
+
+
+# This gives a better prediction accuracy too but the cross-validation is not great.
+# 
+
+# ## Using on the test data set
+
+# In[ ]:
+
+
+# Use all the features of the nucleus
+predictor_var = features_mean
+model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
+classification_model(model, testdf,predictor_var,outcome_var)
+
+
+# The prediction accuracy for the test data set using the above Random Forest model is 95%!
+
+# ## Conclusion
+# 
+# The best model to be used for diagnosing breast cancer as found in this analysis is the Random Forest model with the top 5 predictors, 'concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean'. It gives a prediction accuracy of ~95% and a cross-validation score ~ 93% for the test data set.
+# 
+# 
+# I will see if I can improve this more by tweaking the model further and trying out other models in a later version of this analysis.

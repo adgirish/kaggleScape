@@ -1,739 +1,627 @@
 
 # coding: utf-8
 
-# ## Table of Content:
+# ##Hi all as we know credit card fraud detection will have a imbalanced data i.e having more number of normal class than the number of fraud class
 # 
-
-# # **// Part 0 // First Kaggle Competition - 'Hello World'**
+# ###In this I will use Basic method of handling imbalance data which are
+#  ** This all I have done by using Analytics Vidya's blog please find the link [Analytics Vidya](https://www.analyticsvidhya.com/blog/2017/03/read-commonly-used-formats-using-python/)  **
 # 
-# This is the first competition I enter and the first real-world problem that I am publishing on. I hope to learn a lot myself and why not help some of my fellow learners along the way. Here is the table of content:
+# Undersampling:- it means taking the less number of majority class (In our case taking less number of Normal transactions so that our new data will be balanced
 # 
-# * [Problem Description](#Part1)
-# * [Initial Analysis](#Part2)
-# * [Further Analysis](#Part3)
-# * [Building a new classification](#Part4)
-# * [A few more points](#Part5)
+# Oversampling: it means using replicating the data of minority class (fraud class) so that we can have a balanced data
 # 
-# # **// Part 1 // Problem Description**<a class="anchor" id="Part1"></a>
+# SMOTE: it is also a type of oversampling but in this we will make the synthetic example of Minority data and will give as a balanced data
 # 
-# The competition is called : **Corporacion Favorita Grocery Sales Forecasting**.
+# First I will start with the Undersampling and will try to classify using these Models
+# 1. Decision Tree Classifier/ Random Forest Classifier
 # 
-# The task is to predict sales in the stores of an Ecuadorian supermarket chain so that they can avoid overstocking, which would reduce waste and loss, and minimize understocking, which induces opportunity cost and lower customer satisfaction. For the sake of both the buisiness and the environment, better predictions are highly desirable. This increased efficiency could also result in higher profits for the stakeholders and/or a better pricepoint for customers, depending on the choices made by the chain.
+# 2. Logistic regression
 # 
-# The given data is a table with the following variables/features: date, store id, item id, sales volume, promotion.
-# Whereas store id and item id are integers, promotion is a boolean and sales volume is a float (integers for discrete items, float for volume/weight). We can see the data as N time series, one per (store, item) combination. Many of these time series are most likely correlated to each other and some sort of dimensional reduction will be most welcome here. 
+# 3. SVM
 # 
-# The company also offers some other data sets, such as a list of stores with their location, a time series of daily transactions per store, a list of holidays and events, a list of products by category, and the price of oil, of which a good chunk of the ecuadorian economy is allegedly tied to. These are additional tools to simplify and/or enhance the predictions, and some other external data could also be used in this regard. We will most likely do so in future kernels.
-# 
-# The primary task is therefore forecasting. For the sake of simplicity, and as it is our first dip in time series, this kernel will focus on the daily transactions data of a single store instead of the sales data for all stores.
-# 
-
-# # // Set-up
-# 
-#   Kaggle allows for the data to be used from their server directly and has most libraries available, it is therefore a great place to work on your project instead of using you own machine. Combined with Jupyter, it becomes an extremely intuitive tool for exploratory work, doing things step-by-step and tuning our approach as we go. Moreover it allows readers to learn, fork the project and get their hands dirty. We are really looking forward to publishing!
-#   
-#   Let's then start by loading the libraries and methods we need:  
+# 4. XGboost
 
 # In[ ]:
 
 
-import warnings
-warnings.filterwarnings("ignore")
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-# DATA MANIPULATION
 import numpy as np # linear algebra
-import random as rd # generating random numbers
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import datetime # manipulating date formats
-from operator import add # elementwise addition
 
-# VIZUALIZATION
-import matplotlib.pyplot as plt # basic plotting
-import seaborn # for prettier plots
-import folium # plotting data on interactive maps
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# UNSUPERVISED LEARNING
-from sklearn.cluster import AgglomerativeClustering as AggClust # Hierarchical Clustering
-from scipy.cluster.hierarchy import ward,dendrogram # Hierarchical Clustering + Dendograms
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# TIME SERIES
-from statsmodels.tsa.arima_model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from pandas.plotting import autocorrelation_plot
-from statsmodels.tsa.stattools import adfuller, acf, pacf,arma_order_select_ic
+# Any results you write to the current directory are saved as output.
 
 
-# We can also import the data. First let us look at a simple version of the problem and see if it can guide us. One of the files is a record of the number of transactions per store per day. This can be seen as a simpler problem - predicting the traffic in a given store.
+# ###Lets start with Importing Libraries and data
 
 # In[ ]:
 
 
-# Reading daily transfers per store
-sales=pd.read_csv('../input/transactions.csv')
-
-# Reading store list
-stores=pd.read_csv('../input/stores.csv')
-stores.type=stores.type.astype('category')
-
-# Adding information about the stores
-sales=pd.merge(sales,stores,how='left')
-
-# Reading the holiday and events schedule
-holidays=pd.read_csv('../input/holidays_events.csv')
-
-# Formatting the dates properly
-sales['date']=sales.date.apply(lambda x:datetime.datetime.strptime(x, '%Y-%m-%d'))
-holidays['date']=holidays.date.apply(lambda x:datetime.datetime.strptime(x, '%Y-%m-%d'))
-
-# Isolating events that do not correspond to holidays
-events=holidays.loc[holidays.type=='Event']
-holidays=holidays.loc[holidays.type!='Event']
-
-# Extracting year, week and day
-sales['year'],sales['week'],sales['day']=list(zip(*sales.date.apply(lambda x: x.isocalendar())))
-
-# Creating a categorical variable showing weekends
-sales['dayoff']=[x in [6,7] for x in sales.day]
-
-# Adjuusting this variable to show all holidays
-for (d,t,l,n) in zip(holidays.date,holidays.type,holidays.locale,holidays.locale_name):
-  if t!='Work Day':
-    if l=='National':
-      sales.loc[sales.date==d,'dayoff']=True
-    elif l=='Regional':
-      sales.loc[(sales.date==d)&(sales.state==n),'dayoff']=True
-    else:
-      sales.loc[(sales.date==d)&(sales.city==n),'dayoff']=True
-  else:
-    sales.loc[(sales.date==d),'dayoff']=False
+import pandas as pd # to import csv and for data manipulation
+import matplotlib.pyplot as plt # to plot graph
+import seaborn as sns # for intractve graphs
+import numpy as np # for linear algebra
+import datetime # to dela with date and time
+get_ipython().run_line_magic('matplotlib', 'inline')
+from sklearn.preprocessing import StandardScaler # for preprocessing the data
+from sklearn.ensemble import RandomForestClassifier # Random forest classifier
+from sklearn.tree import DecisionTreeClassifier # for Decision Tree classifier
+from sklearn.svm import SVC # for SVM classification
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_validation import train_test_split # to split the data
+from sklearn.cross_validation import KFold # For cross vbalidation
+from sklearn.model_selection import GridSearchCV # for tunnig hyper parameter it will use all combination of given parameters
+from sklearn.model_selection import RandomizedSearchCV # same for tunning hyper parameter but will use random combinations of parameters
+from sklearn.metrics import confusion_matrix,recall_score,precision_recall_curve,auc,roc_curve,roc_auc_score,classification_report
+import warnings
+warnings.filterwarnings('ignore')
 
 
-# # // Exploratory Analysis
+# In[ ]:
+
+
+data = pd.read_csv("../input/creditcard.csv",header = 0)
+
+
+# ####Now explore the data to get insight in it
+
+# In[ ]:
+
+
+data.info()
+
+
+# 1. Hence we can see there are 284,807 rows and 31 columns which is a huge data
+# 2.  Time is also in float here mean it can be only seconds starting from a particular time
+
+# In[ ]:
+
+
+# Now lets check the class distributions
+sns.countplot("Class",data=data)
+
+
+# 1. As we know data is imbalanced and this graph also confirmed it 
+
+# In[ ]:
+
+
+# now let us check in the number of Percentage
+Count_Normal_transacation = len(data[data["Class"]==0]) # normal transaction are repersented by 0
+Count_Fraud_transacation = len(data[data["Class"]==1]) # fraud by 1
+Percentage_of_Normal_transacation = Count_Normal_transacation/(Count_Normal_transacation+Count_Fraud_transacation)
+print("percentage of normal transacation is",Percentage_of_Normal_transacation*100)
+Percentage_of_Fraud_transacation= Count_Fraud_transacation/(Count_Normal_transacation+Count_Fraud_transacation)
+print("percentage of fraud transacation",Percentage_of_Fraud_transacation*100)
+
+
+# 1. Hence in data there is only 0.17 % are the fraud transcation while 99.83 are valid transcation
+# 2. So now we have to do resampling of this data
+# 3. before doing resampling lets have look at the amount related to valid transcation and fraud transcation
+
+# In[ ]:
+
+
+Fraud_transacation = data[data["Class"]==1]
+Normal_transacation= data[data["Class"]==0]
+plt.figure(figsize=(10,6))
+plt.subplot(121)
+Fraud_transacation.Amount.plot.hist(title="Fraud Transacation")
+plt.subplot(122)
+Normal_transacation.Amount.plot.hist(title="Normal Transaction")
+
+
+# In[ ]:
+
+
+# the distribution for Normal transction is not clear and it seams that all transaction are less than 2.5 K
+# So plot graph for same 
+Fraud_transacation = data[data["Class"]==1]
+Normal_transacation= data[data["Class"]==0]
+plt.figure(figsize=(10,6))
+plt.subplot(121)
+Fraud_transacation[Fraud_transacation["Amount"]<= 2500].Amount.plot.hist(title="Fraud Tranascation")
+plt.subplot(122)
+Normal_transacation[Normal_transacation["Amount"]<=2500].Amount.plot.hist(title="Normal Transaction")
+
+
+# 1. Here now after exploring data we can say there is no pattern in data
+# 2. Now lets start with resmapling of data
+
+# ###ReSampling - Under Sampling
+
+# Before re sampling lets have look at the different accuracy matrices
 # 
-# Let us start by seeing what our tables look like. We'll use head() and info() on the **sales** table:
-
-# In[ ]:
-
-
-sales.info()
-
-
-# In[ ]:
-
-
-sales.head(20)
-
-
-# ### **Store #47**
-# The chain established itselft in Quito in 1952 ([Wikipedia](https://es.wikipedia.org/wiki/Corporaci%C3%B3n_Favorita)), so let's pick a shop in Quito as a starting point, as the brand is well established there. Let us pick #47 and plot the corresponding transactions time series. 
-# With a well established store, we can predict that the time series will be almost stationary. High seasonality is expected too, as people consume more during celebration periods. Let's see what we get:
-
-# In[ ]:
-
-
-ts=sales.loc[sales['store_nbr']==47,['date','transactions']].set_index('date')
-ts=ts.transactions.astype('float')
-plt.figure(figsize=(12,12))
-plt.title('Daily transactions in store #47')
-plt.xlabel('time')
-plt.ylabel('Number of transactions')
-plt.plot(ts);
-
-
-# ### ** Seasonality and Outliers **
-# We can easily identify a peak around Christmas, a very low volume day mid 2015 and a fairly stable behavior in between. The surge in volume around Christmas was expected, but what happened mid 2015? As it turns out it corresponds to a giant national protest in Ecuador, which will most likely impact other stores as well. [Wikipedia](https://en.wikipedia.org/wiki/2015_Ecuadorian_protests#24_June)
+# Accuracy = TP+TN/Total
 # 
-#   We can also see that outside of this holiday period, the transactions have quite a lot of variance, the volume oscillating between 3000 and 5000. Let's check the rolling mean and standard deviation with a window of a month::
+# Precison = TP/(TP+FP)
+# 
+# Recall = TP/(TP+FN)
+# 
+# TP = True possitive means no of possitve cases which are predicted possitive
+# 
+# TN = True negative means no of negative cases which are predicted negative
+# 
+# FP = False possitve means no of negative cases which are predicted possitive
+# 
+# FN= False Negative means no of possitive cases which are predicted negative
+# 
+# Now for our case recall will be a better option because in these case no of normal transacations will be very high than the no of fraud cases and sometime a fraud case will be predicted as normal. So, recall will give us a sense of only fraud cases
+# 
+# Resampling
+# 
+# in this we will resample our data with different size
+# 
+# then we will try to use this resampled data to train our model
+# 
+# then we will use this model to predict for our original data
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,12))
-plt.plot(ts.rolling(window=30,center=False).mean(),label='Rolling Mean');
-plt.plot(ts.rolling(window=30,center=False).std(),label='Rolling sd');
-plt.legend();
-
-
-# In[ ]:
-
-
-def test_stationarity(timeseries):
+# for undersampling we need a portion of majority class and will take whole data of minority class
+# count fraud transaction is the total number of fraud transaction
+# now lets us see the index of fraud cases
+fraud_indices= np.array(data[data.Class==1].index)
+normal_indices = np.array(data[data.Class==0].index)
+#now let us a define a function for make undersample data with different proportion
+#different proportion means with different proportion of normal classes of data
+def undersample(normal_indices,fraud_indices,times):#times denote the normal data = times*fraud data
+    Normal_indices_undersample = np.array(np.random.choice(normal_indices,(times*Count_Fraud_transacation),replace=False))
+    undersample_data= np.concatenate([fraud_indices,Normal_indices_undersample])
+    undersample_data = data.iloc[undersample_data,:]
     
-    #Perform Dickey-Fuller test:
-    print('Results of Dickey-Fuller Test:')
-    dftest = adfuller(timeseries, autolag='AIC')
-    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic','p-value','#Lags Used','Number of Observations Used'])
-    for key,value in dftest[4].items():
-        dfoutput['Critical Value (%s)'%key] = value
-    print (dfoutput)
+    print("the normal transacation proportion is :",len(undersample_data[undersample_data.Class==0])/len(undersample_data[undersample_data.Class]))
+    print("the fraud transacation proportion is :",len(undersample_data[undersample_data.Class==1])/len(undersample_data[undersample_data.Class]))
+    print("total number of record in resampled data is:",len(undersample_data[undersample_data.Class]))
+    return(undersample_data)
 
-test_stationarity(ts)
-
-
-# The Dickey-Fuller test has for null-hypothesis that the time-series is not stationary. With a p-value of 0 up to the 9th decimal we can safely reject it and conclude that our time-series is indeed stationary. Let us then proceed with the forecasting.
-
-# # **// Part 2 // Initial Analysis** <a class="anchor" id="Part1"></a>
-# 
-#   We will start by using an ARIMA model on this time series and see how successful we are. ARIMA stands for AutoRegressive Integrated Moving Average. I based my work on [**this page**](https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/) and [**this page**](https://machinelearningmastery.com/arima-for-time-series-forecasting-with-python/), that I found quite helpful. Penn State also offers the content of its Applied Time Series Analysis [**online**](https://onlinecourses.science.psu.edu/stat510/node/33).
-
-# The ARIMA models have three parameters, corresponging to its AR, I and MA components:
-# 
-# - The number of autoregressive (AR) terms (p): AR terms are just lags of the dependent variable.
-# - The number of differences (d): These are the number of non-seasonal differences.
-# - The number of moving average (MA) terms (q): MA terms are lagged forecast errors in the prediction equation.
-# 
-# We will set d to zero and not use the Integrated part of the model, effectivefly using an ARMA model. Let's start with checking for the auto-correlation of our time series, so as to understand it better and gauge what the parameters of our model should be.
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-autocorrelation_plot(ts);
-plt.figure(figsize=(12,6))
-autocorrelation_plot(ts);
-plt.xlim(xmax=100);
-plt.figure(figsize=(12,6))
-autocorrelation_plot(ts);
-plt.xlim(xmax=10);
-
-
-# The highest auto-correclation peaks are every ~365 day and oscillates with a frequence of about 7 days. This corresponds with our intuitive ideas about shopping - that it is a weekly chore. Even though ecuadorians are most likely paid monthly, there is no significant periodicity visible on this scale.
-# 
-# From the last diagram it seems that the autocorrelation is significant (above the dashed line) for a period of maximum 2 days. All the references then suggest to use 2 for the p parameter. But the stats.model library contains a nifty tool for coefficient selection : arma_order_select_ic(). It performs a grid search with the p and q parameters. Let's see what it says for max parameters 10 and the [Baysian Information Criterion](https://en.wikipedia.org/wiki/Bayesian_information_criterion) for estimator:
-
-# In[ ]:
-
-
-
-result = arma_order_select_ic(ts,max_ar=10, max_ma=10, ic=['aic','bic'], trend='c', fit_kw=dict(method='css',maxiter=500))
-print('The bic prescribes these (p,q) parameters : {}'.format(result.bic_min_order))
-print('The aic prescribes these (p,q) parameters : {}'.format(result.aic_min_order))
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.title('bic results')
-seaborn.heatmap(result.bic);
-plt.subplot(1,2,2)
-plt.title('aic results')
-seaborn.heatmap(result.aic);
-
-
-# With the initial parameters, we are getting many many convergence warnings, which may show that the model does not fit well the time series. It may be important to factor out seasonality first, which we shall do in a later part of the analysis. To reduce the amount of warnings, we raised the number of iterations to a maximum of 500, in case of a very slow converging rate. We also plotted heatmaps of the results for both the aic and bic, for comparison.
-# 
-#   It is clear from the heatmap that we can afford to run the model with parameters (5,0,5)
-
-# In[ ]:
-
-
-pdq=(5,0,5)
-model = ARIMA(ts, order = pdq, freq='W')
-model_fit = model.fit(disp=False,method='css',maxiter=100)
-# plot residual errors
-residuals = pd.DataFrame(model_fit.resid)
-fig,axes = plt.subplots(nrows=1, ncols=2,figsize=(12,6))
-residuals.plot(ax=axes[0])
-residuals.plot(kind='kde',ax=axes[1]);
-residuals.describe().T
-
-
-# We can check on the residuals that the model found, which will for sure contain our outlier of mid-2015. We can plot the residuals and their distribution. We can see that we are getting a Gaussian, centered at 0 with  as tandard deviation of about 380 transactions.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-plt.subplot
-plt.plot(ts);
-plt.plot(model_fit.fittedvalues,alpha=.7);
-
-
-# That seems rather good. We can note that the outlier is fitted though so that is a sign we are overfitting. 
-# Let us carry on nonetheless and split the data into training and testing so as to see the quality of predictions it gives..
-# 
-
-# In[ ]:
-
-
-forecast_len=30
-size = int(len(ts)-forecast_len)
-train, test = ts[0:size], ts[size:len(ts)]
-history = [x for x in train]
-predictions = list()
-
-print('Starting the ARIMA predictions...')
-print('\n')
-for t in range(len(test)):
-    model = ARIMA(history, order = pdq, freq='W');
-    model_fit = model.fit(disp=0);
-    output = model_fit.forecast()
-    yhat = output[0]
-    predictions.append(float(yhat))
-    obs = test[t]
-    history.append(obs)
-print('Predictions finished.\n')
+## first make a model function for modeling with confusion matrix
+def model(model,features_train,features_test,labels_train,labels_test):
+    clf= model
+    clf.fit(features_train,labels_train.values.ravel())
+    pred=clf.predict(features_test)
+    cnf_matrix=confusion_matrix(labels_test,pred)
+    print("the recall for this model is :",cnf_matrix[1,1]/(cnf_matrix[1,1]+cnf_matrix[1,0]))
+    fig= plt.figure(figsize=(6,3))# to plot the graph
+    print("TP",cnf_matrix[1,1,]) # no of fraud transaction which are predicted fraud
+    print("TN",cnf_matrix[0,0]) # no. of normal transaction which are predited normal
+    print("FP",cnf_matrix[0,1]) # no of normal transaction which are predicted fraud
+    print("FN",cnf_matrix[1,0]) # no of fraud Transaction which are predicted normal
+    sns.heatmap(cnf_matrix,cmap="coolwarm_r",annot=True,linewidths=0.5)
+    plt.title("Confusion_matrix")
+    plt.xlabel("Predicted_class")
+    plt.ylabel("Real class")
+    plt.show()
+    print("\n----------Classification Report------------------------------------")
+    print(classification_report(labels_test,pred))
     
 
-predictions_series = pd.Series(predictions, index = test.index)
+
+# In[ ]:
+
+
+def data_prepration(x): # preparing data for training and testing as we are going to use different data 
+    #again and again so make a function
+    x_features= x.ix[:,x.columns != "Class"]
+    x_labels=x.ix[:,x.columns=="Class"]
+    x_features_train,x_features_test,x_labels_train,x_labels_test = train_test_split(x_features,x_labels,test_size=0.3)
+    print("length of training data")
+    print(len(x_features_train))
+    print("length of test data")
+    print(len(x_features_test))
+    return(x_features_train,x_features_test,x_labels_train,x_labels_test)
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,12))
-plt.title('Store 47 : Transactions')
-plt.xlabel('Date')
-plt.ylabel('Transactions')
-plt.plot(ts[-2*forecast_len:], 'o', label='observed');
-plt.plot(predictions_series, '-o',label='rolling one-step out-of-sample forecast');
-plt.legend(loc='upper right');
+# before starting we should standridze our ampount column
+data["Normalized Amount"] = StandardScaler().fit_transform(data['Amount'].reshape(-1, 1))
+data.drop(["Time","Amount"],axis=1,inplace=True)
+data.head()
 
 
-# The results seem rather good. Below is a histogram of the difference in predictions to see how good a forecast we made. We see that 2/3 of errors are below 200 transactions, which is about a 5% error. Not bad for a frist try and a month long window.
+# ### Logistic Regression with Undersample Data
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,12))
-x=abs(ts[-forecast_len:]-predictions_series)
-seaborn.distplot(x,norm_hist=False,rug=True,kde=False);
+# Now make undersample data with differnt portion
+# here i will take normal trasaction in  0..5 %, 0.66% and 0.75 % proportion of total data now do this for 
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    print()
+    clf=LogisticRegression()
+    model(clf,undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test)
+    print("________________________________________________________________________________________________________")
+    
+# here 1st proportion conatain 50% normal transaction
+#Proportion 2nd contains 66% noraml transaction
+#proportion 3rd contains 75 % normal transaction
 
 
-# # **// Part 3 // Further Analysis** <a class="anchor" id="Part3"></a>
+#  1. As the number of normal transaction is increasing the recall for fraud transcation is decreasing
+#  2. TP = no of fraud transaction which are predicted fraud
+#  3.  TN = no. of normal transaction which are predicted normal
+#  4.  FP =  no of normal transaction which are predicted fraud
+#  5.  FN =no of fraud Transaction which are predicted normal
+
+# In[ ]:
+
+
+#let us train this model using undersample data and test for the whole data test set 
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    data_features_train,data_features_test,data_labels_train,data_labels_test=data_prepration(data) 
+    #the partion for whole data
+    print()
+    clf=LogisticRegression()
+    model(clf,undersample_features_train,data_features_test,undersample_labels_train,data_labels_test)
+    # here training for the undersample data but tatsing for whole data
+    print("_________________________________________________________________________________________")
+
+
+# 1. Here we can see it is following same recall pattern as it  was for under sample data that's sounds good but if we have look at the precision is very less
 # 
-# We'd like to improve our forecast and generalize it for all stores. Note that the forecast was rather long to run due to a lot of non-convergence in the model. We would like to fix that. But before diving in more complex statistical models, we may want to understand a little more the nature of the data we are manipulating and forecasting.
+# 2. So we should built a model which is correct overall
 # 
-# ### ** Two time Series ?**
+# 3. Precision is less means we are predicting other class wrong like as for our third part  there were 953 transaction are predicted fraud it means we and recall is good then it means we are catching fraud transaction very well but we are catching innocent transaction also i.e which are not fraud.
 # 
-# The fact that holidays transactions volume is higher than the rest of the year is giving us a hint that this behavior may be more generalized. Afterall people have more time to shop when they don't work. With this data we have a solid basis to verify this assumption. Let's plot working days and days off with two different colors to see if there is a trend.
-# As you can see below, there is a solid horizontal trend line at ~4700 transactions for days off and at ~3400 transactions for working days, repeated year after year. This could be good news for our model. Indeed, being able to separate 'apples' from 'oranges' will remove a lot of the apparent randomness that is contained in the time series as it stands. We may want to build a proper clustering engine for our days before forecasting and split the time series so as to improve our predictive power.
-
-# In[ ]:
-
-
-# The function takes a store number, an integer for the rolling means window and a bool
-# for whether or not to split the working days and off days
-def plot_store_transactions(store_viz,n=30,split=False):
-    temp=sales.loc[sales.store_nbr==store_viz].set_index('date')
-    plt.figure(figsize=(12,6))
-    if split:
-        ax1=plt.subplot(1,2,1)
-        plt.scatter(temp.loc[~temp.dayoff].index,
-                    temp.loc[~temp.dayoff].transactions,label='working days')
-        plt.scatter(temp.loc[temp.dayoff].index,
-                    temp.loc[temp.dayoff].transactions,label='off days')
-        plt.legend()
-        plt.title('Daily transactions. Store {}, Type {}, Cluster {}'.format(store_viz,
-                                                                        list(stores.loc[stores.store_nbr==store_viz,'type'])[0],
-                                                                        list(stores.loc[stores.store_nbr==store_viz,'cluster'])[0])
-                 )
-        ax2=plt.subplot(1,2,2,sharey=ax1,sharex=ax1)
-        plt.plot(temp.loc[~temp.dayoff,'transactions'].rolling(window=n).mean(),label='working days')
-        plt.plot(temp.loc[temp.dayoff,'transactions'].rolling(window=n).mean(),label='off days')
-        plt.legend()
-        plt.title('Store {}: {} day rolling means'.format(store_viz,n))
-        plt.setp(ax2.get_yticklabels(), visible=False)
-    else:
-        ax1=plt.subplot(1,2,1)
-        plt.scatter(temp.index,temp.transactions)
-        plt.title('Daily transactions. Store {}, Type {}, Cluster {}'.format(store_viz,
-                                                                        list(stores.loc[stores.store_nbr==store_viz,'type'])[0],
-                                                                        list(stores.loc[stores.store_nbr==store_viz,'cluster'])[0])
-                 )
-        ax2=plt.subplot(1,2,2,sharey=ax1)
-        plt.plot(temp.transactions.rolling(window=n).mean())
-        plt.title('Store {}: {} day rolling means'.format(store_viz,n))
-        plt.setp(ax2.get_yticklabels(), visible=False)
-plt.show()
-
-
-# In[ ]:
-
-
-plot_store_transactions(47,30,True)
-
-
-# ### ** Is 'type' a good classifier? **
-# The plot for store #47 did confirm our assumption, but it would be a mistake to assume that it is therefore true for all stores.
-# This is the biggest chain in the country and there are therefore many stores to analyse, 54 exactly in this dataset. Are they all behaving like store #47? The company provided two different classifications of their stores without any indications of what they correspond to: type and cluster. Would they by chance correspond to patterns in the transaction volume time series? 
+# 4. So with recall our precision should be better
 # 
-# Let's plot them grouped by type to see if a pattern emerges or if we ought to seek our own classification. The following function creates a grid of plots for all stores of a given type.
+# 5. if we go by this model then we are going to put 953 innocents in jail with the all criminal who have actually done this
+# 6. Hence we are mainly lacking in the precision how can we increase our precision
+# 7. Don't get confuse with above output showing that the two training data and two test data first one is for undersample data  while another one is for our whole data
 
-# In[ ]:
-
-
-def plot_store_transactions_type(typ):
-    typ_stores=stores.loc[stores.type==typ,'store_nbr']
-    n=len(typ_stores)
-    m=1
-    for x in range(1,6):
-        if (n-1) in range((x-1)**2,x**2):
-            m=x
-    plt.figure(figsize=(15,15))
-    for x in range(n):
-        nbr=typ_stores.iloc[x]
-        ax1 = plt.subplot(m,m,x+1)
-        ax1.scatter(sales.loc[(~sales.dayoff)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(~sales.dayoff)&(sales.store_nbr==nbr),'transactions'])
-        ax1.scatter(sales.loc[(sales.dayoff)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(sales.dayoff)&(sales.store_nbr==nbr),'transactions'])
-        plt.title('Store {}, Type {}, Cluster {}'.format(nbr,
-                                                         list(stores.loc[stores.store_nbr==nbr,'type'])[0],
-                                                         list(stores.loc[stores.store_nbr==nbr,'cluster'])[0])
-             )
-        plt.suptitle(' Type {} stores'.format(typ),fontsize=25)
-    plt.show()
-
-
-# In[ ]:
-
-
-plot_store_transactions_type('A')
-
-
-# It seems that all show a similar pattern to store #47, which is part of this group. This is encouraging. Note some slight difference though: Store #49 shows a distinctive upward trend, while store #51 seems to barely have any difference between working days and off days. Store 52 is brand new and has very few data points.
+# 1.**Try with SVM and then Random Forest in same Manner**
 # 
-# Let us now see type 'B'.
+# 2. from Random forest we can get which features are more important
+
+# *SVM with Undersample data*
 
 # In[ ]:
 
 
-plot_store_transactions_type('B')
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    print()
+    clf= SVC()# here we are just changing classifier
+    model(clf,undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test)
+    print("________________________________________________________________________________________________________")
+    
 
 
-# The stores with a clear difference between working days and off days are the minority here. Note that store #20 and #21 show a surge of volume at opening before stabilizing after a few months. There must have entered a market with a lack of service. Note that store #18 has a 'hole' in the data for about a 4 months late 2016. Probably some renovation.
+# 1. Here recall and precision are approximately equal to Logistic Regression 
 # 
-# Let's check type 'C'.
+# 2. Lets try for whole data
 
 # In[ ]:
 
 
-plot_store_transactions_type('C')
+#let us train this model using undersample data and test for the whole data test set 
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    data_features_train,data_features_test,data_labels_train,data_labels_test=data_prepration(data) 
+    #the partion for whole data
+    print()
+    clf=SVC()
+    model(clf,undersample_features_train,data_features_test,undersample_labels_train,data_labels_test)
+    # here training for the undersample data but tatsing for whole data
+    print("_________________________________________________________________________________________")
 
 
-# Type 'C' is even less consistant as the previous ones. Stores #13, #14 and #19 have the off days split into two distinct groups. Stores #15 and #40 have slightly less transactions on off days than working days. There must be a geographical reason for these behaviors, such as stores situatied in industrial zones. It is something worth investigating later.
-
-# In[ ]:
-
-
-plot_store_transactions_type('D')
-
-
-# These show a mix of behaviors previously seen. Store #1 shows its off days both split and below working days. Store #24 has a 'hole' of 3 months mid 2015 while store #53 has a clear discontinuity in April 2016.
-# The discontinuity was explained by the company, as the consequence of the relief efforts from the population after an earthquate of magnitude 7.8 in the region.
-
-# In[ ]:
-
-
-plot_store_transactions_type('E')
-
-
-# This group is a little more homogenius with common transactions volume. Note that stores #36 and #43 both have discontinuities.
+# 1. A better recall but precision is not improving much 
 # 
-# ## ** Clusters are no better **
+# 2 .so to improve precision we must have to tune the  hyper parameter of these models
 # 
-#   Another classification provided by the company is what they called 'clusters'. The fonction below does the same as previously but grouping by clusters.
-
-# In[ ]:
-
-
-def plot_store_transactions_cluster(clust):
-    clust_stores=stores.loc[stores.cluster==clust,'store_nbr']
-    n=len(clust_stores)
-    m=1
-    for x in range(1,6):
-        if (n-1) in range((x-1)**2,x**2):
-            m=x
-    plt.figure(figsize=(15,15))
-    for x in range(n):
-        nbr=clust_stores.iloc[x]
-        ax1 = plt.subplot(m,m,x+1)
-        ax1.scatter(sales.loc[(~sales.dayoff)&(sales.cluster==clust)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(~sales.dayoff)&(sales.cluster==clust)&(sales.store_nbr==nbr),'transactions'])
-        ax1.scatter(sales.loc[(sales.dayoff)&(sales.cluster==clust)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(sales.dayoff)&(sales.cluster==clust)&(sales.store_nbr==nbr),'transactions'])
-        plt.title('Store {}, Type {}, Cluster {}'.format(nbr,
-                                                         list(stores.loc[stores.store_nbr==nbr,'type'])[0],
-                                                         list(stores.loc[stores.store_nbr==nbr,'cluster'])[0])
-             )
-        plt.suptitle(' Cluster {} stores'.format(clust),fontsize=25)
-    plt.show()
-
-
-#   The gaphs below belong to stores of the cluster #13, which show 4 very different behaviors. Clusters are therefore not a good classification for forcasting models either
-
-# In[ ]:
-
-
-plot_store_transactions_cluster(13)
-
-
-# # **// Part 4 // Building a new classification** <a class="anchor" id="Part4"></a>
+# 3 That I will do in next version 
 # 
-# We saw that there are a lot of different stores in the dataset and their clients motivations to shop are very varied. It is crucial to understand that before diving deeper into statistical analysis. Getting a better classification of the stores so as to adapt the models to them will require some unsupervised learning and we will start with getting clusters with these simple features:
-# - Mean and standard deviation of working day transactions
-# - Mean and standard deviation of holiday transactions
-# - Mean and standard deviation of week day transactions
+# 4 For now lets try with my favorite Random Forest classifier 
+
+# In[ ]:
+
+
+# Random Forest Classifier with undersample data only
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    print()
+    clf= RandomForestClassifier(n_estimators=100)# here we are just changing classifier
+    model(clf,undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test)
+    print("________________________________________________________________________________________________________")
+    
+
+
+# In[ ]:
+
+
+#let us train this model using undersample data and test for the whole data test set 
+for i in range(1,4):
+    print("the undersample data for {} proportion".format(i))
+    print()
+    Undersample_data = undersample(normal_indices,fraud_indices,i)
+    print("------------------------------------------------------------")
+    print()
+    print("the model classification for {} proportion".format(i))
+    print()
+    undersample_features_train,undersample_features_test,undersample_labels_train,undersample_labels_test=data_prepration(Undersample_data)
+    data_features_train,data_features_test,data_labels_train,data_labels_test=data_prepration(data) 
+    #the partion for whole data
+    print()
+    clf=RandomForestClassifier(n_estimators=100)
+    model(clf,undersample_features_train,data_features_test,undersample_labels_train,data_labels_test)
+    # here training for the undersample data but tatsing for whole data
+    print("_________________________________________________________________________________________")
+
+
+# 1. for the third proportion the precision is 0.33 which is better than others
 # 
-# Let us build the table with the data:
+# 2. Lets try to get only import features using  Random Forest Classifier 
+# 
+# 3. After it i will do analysis only for one portion that is 0.5 %
+
+# In[ ]:
+
+
+featimp = pd.Series(clf.feature_importances_,index=data_features_train.columns).sort_values(ascending=False)
+print(featimp) # this is the property of Random Forest classifier that it provide us the importance 
+# of the features use
+
+
+# 1.  we can see this is showing the importance of feature for the making decision 
+# 
+# 2. V14 is having a very good importance compare to other features
+# 
+# 3. Lets use only top 5 (V14,V10,V12,V17,V4) feature to predict using Random forest classifier only for 0.5 % 
+
+# In[ ]:
+
+
+# make a new data with only class and V14
+data1=data[["V14","V10","V12","V17","V4","Class"]]
+data1.head()
+
+
+# In[ ]:
+
+
+Undersample_data1 = undersample(normal_indices,fraud_indices,1)
+#only for 50 % proportion it means normal transaction and fraud transaction are equal so passing 
+Undersample_data1_features_train,Undersample_data1_features_test,Undersample_data1_labels_train,Undersample_data1_labels_test = data_prepration(Undersample_data1)
+
+
+# In[ ]:
+
+
+clf= RandomForestClassifier(n_estimators=100)
+model(clf,Undersample_data1_features_train,Undersample_data1_features_test,Undersample_data1_labels_train,Undersample_data1_labels_test)
+
+
+# ###Over Sampling
+
+#  1. In my previous version I got the 100 recall and 98 % precision by using Random forest with the over sampled data but in real it was due to over fitting because i was taking whole fraud data and was training for that and I was doing the testing on the same data.
+# 
+#  2. Please find link of previous version for more understanding [Link](https://www.kaggle.com/gargmanish/d/dalpozz/creditcardfraud/fraud-detection-100-recall-98-precision/run/1033018)
+# 
+# 3. Thanks to Mr. Dominik Stuerzer for help 
+
+# In[ ]:
+
+
+# now we will divied our data sets into two part and we will train and test and will oversample the train data and predict for test data
+# lets import data again
+data = pd.read_csv("../input/creditcard.csv",header = 0)
+print("length of training data",len(data))
+print("length of normal data",len(data[data["Class"]==0]))
+print("length of fraud  data",len(data[data["Class"]==1]))
+
+
+# In[ ]:
+
+
+data_train_X,data_test_X,data_train_y,data_test_y=data_prepration(data)
+data_train_X.columns
+data_train_y.columns
+
+
+# In[ ]:
+
+
+# ok Now we have a traing data
+data_train_X["Class"]= data_train_y["Class"] # combining class with original data
+data_train = data_train_X.copy() # for naming conevntion
+print("length of training data",len(data_train))
+# Now make data set of normal transction from train data
+normal_data = data_train[data_train["Class"]==0]
+print("length of normal data",len(normal_data))
+fraud_data = data_train[data_train["Class"]==1]
+print("length of fraud data",len(fraud_data))
+
+
+# In[ ]:
+
+
+# Now start oversamoling of training data 
+# means we will duplicate many times the value of fraud data
+for i in range (365): # the number is choosen by myself on basis of nnumber of fraud transaction
+    normal_data= normal_data.append(fraud_data)
+os_data = normal_data.copy() 
+print("length of oversampled data is ",len(os_data))
+print("Number of normal transcation in oversampled data",len(os_data[os_data["Class"]==0]))
+print("No.of fraud transcation",len(os_data[os_data["Class"]==1]))
+print("Proportion of Normal data in oversampled data is ",len(os_data[os_data["Class"]==0])/len(os_data))
+print("Proportion of fraud data in oversampled data is ",len(os_data[os_data["Class"]==1])/len(os_data))
+
+
+#  1. The proportion now becomes the 60 % and 40 % that is good now
+
+# In[ ]:
+
+
+# before applying any model standerdize our data amount 
+os_data["Normalized Amount"] = StandardScaler().fit_transform(os_data['Amount'].reshape(-1, 1))
+os_data.drop(["Time","Amount"],axis=1,inplace=True)
+os_data.head()
+
+
+# In[ ]:
+
+
+# Now use this oversampled data for trainig the model and predict value for the test data that we created before
+# now let us try within the the oversampled data itself
+# for that we need to split our oversampled data into train and test
+# so call our function data Prepration with oversampled data
+os_train_X,os_test_X,os_train_y,os_test_y=data_prepration(os_data)
+clf= RandomForestClassifier(n_estimators=100)
+model(clf,os_train_X,os_test_X,os_train_y,os_test_y)
+
+
+# **Observations**
+# 
+#  1. As it have too many sample of  same fraud data so may be the all which are present in train data are present in test data also so we can say it is over fitting 
+#  2. So lets try with test data that one which we created in starting of oversampling segment no fraud transaction from that data have been repeated here
+#  3. Lets try
+# 
+#  
+
+# In[ ]:
+
+
+# now take all over sampled data as trainging and test it for test data
+os_data_X = os_data.ix[:,os_data.columns != "Class"]
+os_data_y = os_data.ix[:,os_data.columns == "Class"]
+#for that we have to standrdize the normal amount and drop the time from it
+data_test_X["Normalized Amount"] = StandardScaler().fit_transform(data_test_X['Amount'].reshape(-1, 1))
+data_test_X.drop(["Time","Amount"],axis=1,inplace=True)
+data_test_X.head()
+
+
+
+# In[ ]:
+
+
+# now use it for modeling
+clf= RandomForestClassifier(n_estimators=100)
+model(clf,os_data_X,data_test_X,os_data_y,data_test_y)
+
+
+# **Observations**
+# 
+#  1. Now here we can see recall decrease to only 83 % which is not bad  but not good also
+#  2. The precision is 0.93 which is good 
+#  3. from these observation we can say that the oversampling is better than the Under sampling because on Under sampling we were loosing a large amount of data or we can say a good amount of information so why the there precision was very low 
+
+# ###SMOTE
+
+# In[ ]:
+
+
+# Lets Use SMOTE for Sampling
+# As I mentioned it is also a type of oversampling but in this the data is not replicated but they are created 
+#lets start with importing libraries
+from imblearn.over_sampling import SMOTE
+data = pd.read_csv('../input/creditcard.csv')
+
+
+# In[ ]:
+
+
+os = SMOTE(random_state=0) #   We are using SMOTE as the function for oversampling
+# now we can devided our data into training and test data
+# Call our method data prepration on our dataset
+data_train_X,data_test_X,data_train_y,data_test_y=data_prepration(data)
+columns = data_train_X.columns
+
+
+# In[ ]:
+
+
+# now use SMOTE to oversample our train data which have features data_train_X and labels in data_train_y
+os_data_X,os_data_y=os.fit_sample(data_train_X,data_train_y)
+os_data_X = pd.DataFrame(data=os_data_X,columns=columns )
+os_data_y= pd.DataFrame(data=os_data_y,columns=["Class"])
+# we can Check the numbers of our data
+print("length of oversampled data is ",len(os_data_X))
+print("Number of normal transcation in oversampled data",len(os_data_y[os_data_y["Class"]==0]))
+print("No.of fraud transcation",len(os_data_y[os_data_y["Class"]==1]))
+print("Proportion of Normal data in oversampled data is ",len(os_data_y[os_data_y["Class"]==0])/len(os_data_X))
+print("Proportion of fraud data in oversampled data is ",len(os_data_y[os_data_y["Class"]==1])/len(os_data_X))
+
+
+#  1. By using Smote we are getting a 50 - 50 each
+# 
+#  2. No need of checking here in over sampled data itself from previous we know it will be overfitting
+# 
+#  3. let us check with the test data direct
 # 
 
 # In[ ]:
 
 
-#creating a table with means and std of transaction volume per type of day per store
-Means1=sales.groupby(['store_nbr','dayoff']).transactions.agg(['mean','std']).unstack(level=1)
-
-#creating a table with means and std of transaction volume per day of the week per store
-Means2=sales.groupby(['store_nbr','day']).transactions.agg(['mean','std']).unstack(level=1)
-
-# Creating a table  with the daily average of transaction volume per store 
-sales_by_store=sales.groupby(['store_nbr']).transactions.sum()/sales.groupby(['store_nbr']).transactions.count()
-# Creating a new columns with ratio of transactions of the day / daily average
-sales['normalized']=[v/sales_by_store[s] for (s,v) in zip(sales.store_nbr,sales.transactions)]
-
-#creating a table with means and std of normalized transaction volume per type of day per store
-Means1_norm=sales.groupby(['store_nbr','dayoff']).normalized.agg(['mean','std']).unstack(level=1)
-#creating a table with means and std of normalized transaction volume per day of the week per store
-Means2_norm=sales.groupby(['store_nbr','day']).normalized.agg(['mean','std']).unstack(level=1)
-
-
-# Let us plot the new features to see if any clustering appear obvious:
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,16))
-plt.subplot(2,2,1)
-plt.scatter(Means1.iloc[:,0],Means1.iloc[:,1])
-plt.xlabel('Means of working days')
-plt.ylabel('Means of holidays')
-plt.plot([0,5000],[0,5000])
-plt.title('Comparing mean by type of day')
-plt.subplot(2,2,2)
-plt.scatter(Means1.iloc[:,2],Means1.iloc[:,3])
-plt.xlabel('Standard dev. of working days')
-plt.ylabel('Standard dev. of holidays')
-plt.plot([0,1000],[0,1000])
-plt.title('Comparing std by type of day');
-plt.subplot(2,2,3)
-plt.scatter(Means1.iloc[:,0],Means1.iloc[:,2])
-plt.xlabel('Means of working days')
-plt.ylabel('Standard dev. of working days')
-plt.plot([0,5000],[0,500])
-plt.title('Comparing mand and std for working days')
-plt.subplot(2,2,4)
-plt.scatter(Means1.iloc[:,1],Means1.iloc[:,3])
-plt.xlabel('Means of holidays days')
-plt.ylabel('Standard dev. of holidays')
-plt.plot([0,5000],[0,1000]);
-plt.title('Comparing mand and std for holidays');
+# Let us first do our amount normalised and other that we are doing above
+os_data_X["Normalized Amount"] = StandardScaler().fit_transform(os_data_X['Amount'].reshape(-1, 1))
+os_data_X.drop(["Time","Amount"],axis=1,inplace=True)
+data_test_X["Normalized Amount"] = StandardScaler().fit_transform(data_test_X['Amount'].reshape(-1, 1))
+data_test_X.drop(["Time","Amount"],axis=1,inplace=True)
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-seaborn.heatmap(Means2.iloc[:,0:7],cmap='Oranges');
-plt.subplot(1,2,2)
-seaborn.heatmap(Means2.iloc[:,7:14],cmap='Oranges');
+# Now start modeling
+clf= RandomForestClassifier(n_estimators=100)
+# train data using oversampled data and predict for the test data
+model(clf,os_data_X,data_test_X,os_data_y,data_test_y)
 
 
-# The plots don't show any obvious clustering, though the heatmaps seems to have some patterns in them. But dur to difference in average tansactions volume, stores that follow a similar pattern but are of different size may not be similar at all with the raw data. Let's look at the normalized data now:
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,16))
-plt.subplot(2,2,1)
-plt.scatter(Means1_norm.iloc[:,0],Means1_norm.iloc[:,1])
-plt.xlabel('Means of working days')
-plt.ylabel('Means of holidays')
-plt.title('Comparing mean by type of day')
-plt.subplot(2,2,2)
-plt.scatter(Means1_norm.iloc[:,2],Means1_norm.iloc[:,3])
-plt.xlabel('Standard dev. of working days')
-plt.ylabel('Standard dev. of holidays')
-plt.title('Comparing std by type of day');
-plt.subplot(2,2,3)
-plt.scatter(Means1_norm.iloc[:,0],Means1_norm.iloc[:,2])
-plt.xlabel('Means of working days')
-plt.ylabel('Standard dev. of working days')
-plt.title('Comparing mand and std for working days')
-plt.subplot(2,2,4)
-plt.scatter(Means1_norm.iloc[:,1],Means1_norm.iloc[:,3])
-plt.xlabel('Means of holidays days')
-plt.ylabel('Standard dev. of holidays')
-plt.title('Comparing mand and std for holidays');
-
-
-# Note that the fact that the means are linearly correlated should be obvious the slope should correspond to the ratio of days off / working days. It gives us a very simple clustering of the stores, there is the one in the bottom right and the rest. We expect that lonely store to be store #1. Let us check the heatmaps now.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-seaborn.heatmap(Means2_norm.iloc[:,0:7],cmap='Oranges');
-plt.subplot(1,2,2)
-seaborn.heatmap(Means2_norm.iloc[:,7:14],cmap='Oranges');
-
-
-# ### **Hierarchical clustering**
-# Some real patterns appear now, such as the very distinct standard deviation pattern of stores #25 and  #26, as well as the highlighted Saturday shopping frenzy at store 19 and 25. This is a good starting point to train a ML algorithm for clustering.
+# **observation **
 # 
-#   We will run a hierachical clustering machine based on the AgglomerativeClustering algorithm from the sklearn library. But that means we need to decide how many clusters we want to see. Instead of counting by hand the number if patterns we can see in the 54 stores, we can use the ward clustering and dendogram features of the scipy library to get an idea of how many clusters we may want:
-
-# In[ ]:
-
-
-fig=plt.figure(figsize=(15,15))
-ax = fig.add_subplot(1, 1, 1)
-dendrogram(ward(Means2_norm),ax=ax)
-ax.tick_params(axis='x', which='major', labelsize=15)
-ax.tick_params(axis='y', which='major', labelsize=8)
-plt.show()
-
-
-# It seems that 5 clusters would be a good number. Note that the ward clustering is different from the agglomerative clustering, so we don't have to take exactly 5. We decided to pick 6 clusters.
-
-# In[ ]:
-
-
-clustering=AggClust(n_clusters=6)
-cluster=clustering.fit_predict(Means2_norm)
-stores['new_cluster']=cluster
-
-def plot_store_transactions_new_cluster(clust):
-    clust_stores=stores.loc[stores['new_cluster']==clust,'store_nbr']
-    n=len(clust_stores)
-    m=1
-    for x in range(1,10):
-        if (n-1) in range((abs(x-1))**2,x**2):
-            m=x
-    plt.figure(figsize=(15,15))
-    for x in range(n):
-        nbr=clust_stores.iloc[x]
-        ax1 = plt.subplot(m,m,x+1)
-        ax1.scatter(sales.loc[(~sales.dayoff)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(~sales.dayoff)&(sales.store_nbr==nbr),'transactions'])
-        ax1.scatter(sales.loc[(sales.dayoff)&(sales.store_nbr==nbr),'date'].values,
-                sales.loc[(sales.dayoff)&(sales.store_nbr==nbr),'transactions'])
-        plt.title('Store {}, Type {}, Cluster {}'.format(nbr,
-                                                         list(stores.loc[stores.store_nbr==nbr,'type'])[0],
-                                                         list(stores.loc[stores.store_nbr==nbr,'cluster'])[0])
-             )
-    plt.show()
-
-
-# In[ ]:
-
-
-plot_store_transactions_new_cluster(1)
-
-
-# This group is very homogenous. It seems to be stores with very little difference between the days of the week and apart from store #16, with a constant mean. Judging by this group, the clustering seems quite good. Let's check the second cluster.
-
-# In[ ]:
-
-
-plot_store_transactions_new_cluster(2)
-
-
-# This again is a very homogenous cluster, with a Saturdays and Sundays showing very diferent volumes of transactions.
-
-# In[ ]:
-
-
-plot_store_transactions_new_cluster(3)
-
-
-# This group is again very homogenous, with volumes of sales on days off distinctively higher than on working days. You are welcome to explore the remaining 3 groups on your own. Group 4 is a group where there is absolutely no difference between the days of the week and Group 5 contains Store 1 alone, where sales during weekends are way below weekday levels.
-
-# # **// Part 5 // A few more points**<a class="anchor" id="Part5"></a>
-
-# Some other data could help us improve our analysis and predictive models by factoring in some other factors.
-# 
-# ##  ** Geography **
-# 
-#   The stores may be linked in ways that are rendered obvious by seeing their geographical locations. This could also help us understand the grouping provided by the store chain. Let's therefore plot all stores using their location to see if we can find more hints about what we see. Unfortunately the locations are not provided at a granularity below city and states. We will therefore use the city names and **add some noise** to the GPS coordinates so as to separate the icons for visibility.
-#   As it turns out, the data is far from representing all stores owned by the company so we cannot use a simple method as a google search to identify the type of neighborhood/environment the stores are located in.
-# 
-#   To plot the map, we will be using Folium, which is really nice and allows very interactive content.
-
-# In[ ]:
-
-
-store_locations={
- 'Ambato' : [-1.2543408,-78.6228504],
- 'Babahoyo' : [-1.801926,-79.53464589999999],
- 'Cayambe' : [0.025,-77.98916659999998],
- 'Cuenca' : [-2.9001285,-79.0058965],
- 'Daule' : [-1.86218,-79.97766899999999],
- 'El Carmen' : [-0.266667, -79.4333],
- 'Esmeraldas' : [0.9681788999999998,-79.6517202],
- 'Guaranda' : [-1.5904721,-78.9995154],
- 'Guayaquil' : [-2.1709979,-79.92235920000002],
- 'Ibarra' : [0.3391763,-78.12223360000002],
- 'Latacunga' : [-0.7754954,-78.52064999999999],
- 'Libertad' : [-2.2344458,-79.91122430000001],
- 'Loja' : [-4.0078909,-79.21127690000003],
- 'Machala' : [-3.2581112,-79.9553924],
- 'Manta' : [-0.9676533,-80.70891010000003],
- 'Playas' : [-2.6284683,-80.38958860000002],
- 'Puyo' : [-1.4923925,-78.00241340000002],
- 'Quevedo' : [-1.0225124,-79.46040349999998],
- 'Quito' : [-0.1806532,-78.46783820000002],
- 'Riobamba' : [-1.6635508,-78.65464600000001],
- 'Salinas' : [-2.2233633,-80.958462],
- 'Santo Domingo' : [-0.2389045,-79.17742679999998]
-}
-
-# Defining a color dictionary
-col={'A':'red','B':'blue','C':'green','D':'pink','E':'beige',
-     0:'red',1:'blue',2:'green',3:'darkblue',4:'pink',5:'beige'}
-
-#
-def add_city_map(name,typ):
-    folium.Marker(
-         location=list(map(add,store_locations.get(name),[(0.5-rd.random())/20,(0.5-rd.random())/20])),
-         icon=folium.Icon(color=col.get(typ), icon='shopping-cart'),
-    ).add_to(map_Ecuador)
-
-map_Ecuador=folium.Map(location=[-1.233333, -78.516667],zoom_start=7)
-
-# Enabling clustering (also replace map_ecuador by store_cluster in the add_city_map function)
-# from folium.plugins import MarkerCluster
-#store_cluster=MarkerCluster().add_to(map_Ecuador)
-
-[add_city_map(x,y) for x,y in zip(stores.city,stores.type)]
-map_Ecuador
-
-
-# The map does not teach us anything about the 'type' classification and based on what we have seen so far, I am very tempted to drop it altogether. Note that it could be interesting to map the correlations between the stores to see if there is some seasonal component that spreads from the capital out for examples or phenomenons of the same type. In further analysis we may build networks around the stores and see if any interesting information can be extracted from it.
-# 
-# Note that to change the icon to a intuitive one, we checked the documentation for the icon method (see below), and followed the link provided, sending me to the github page of the Leaflet plugin that Folium is built upon. 
-
-# In[ ]:
-
-
-help(folium.Icon)
-
-
-# Let's plot the new clusters to see if we can quickly make georgraphical sense of the classification:
-
-# In[ ]:
-
-
-map_Ecuador=folium.Map(location=[-1.233333, -78.516667],zoom_start=7)
-
-# Enabling clustering (also replace map_ecuador by store_cluster in the add_city_map function)
-# from folium.plugins import MarkerCluster
-#store_cluster=MarkerCluster().add_to(map_Ecuador)
-
-[add_city_map(x,y) for x,y in zip(stores.city,stores.new_cluster)]
-map_Ecuador
-
-
-# ## ** Weather **
-# 
-# Weather could also have a major impact on sales, with people chosing to stay home and delay their purchases during heavy rain or extreme heat/cold. Unfortunately we am currently unable to find free and public weather data for ecuadorian cities.
+#  1. The recall is nearby the previous one done by over sampling 
+#  2. The precision decrease in this case

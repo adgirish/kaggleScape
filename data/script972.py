@@ -1,254 +1,94 @@
 
 # coding: utf-8
 
-# In this notebook, let us build our model using LinearSVC which is best for text classification problems.
-
-# **Objective:**
-
-# Develop algorithms to classify genetic mutations based on clinical evidence (text)
-
 # In[ ]:
 
 
-import numpy as np 
+#Ignore the seaborn warnings.
+import warnings
+warnings.filterwarnings("ignore");
+
+import numpy as np
 import pandas as pd
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# Training Data
-
-# In[ ]:
-
-
-training_variants_df = pd.read_csv("../input/training_variants")
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.stats
 
 
 # In[ ]:
 
 
-training_variants_df.head(5)
+#Import data and see what states it has values for so far.
+df = pd.read_csv('../input/primary_results.csv')
+df.state.unique()
 
 
 # In[ ]:
 
 
-training_text_df = pd.read_csv("../input/training_text",sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
+#Create a new dataframe that holds votes by state and the fraction of total votes(democrat + republican) that a candidate recieved and pare them down to only those that are still in the race as of 2 March.
+
+votesByState = [[candidate, state] for candidate in df.candidate.unique() for state in df.state.unique()]
+for i in votesByState:
+    i.append(df[df.candidate == i[0]].party.unique()[0])
+    i.append(df[(df.candidate == i[0]) & (df.state == i[1])].votes.sum())
+    i.append(i[3]/df[(df.party == i[2]) & (df.state == i[1])].votes.sum())
+    i.append(i[3]/df[df.state == i[1]].votes.sum())
+vbs = pd.DataFrame(votesByState, columns = ['candidate', 'state', 'party', 'votes', 'partyFrac', 'totalFrac'])
+vbs = vbs[vbs.candidate != ' Uncommitted']
+vbs['state'] = vbs['state'].astype('category')
+vbs = vbs[vbs.candidate.isin(['Hillary Clinton', 'Bernie Sanders', 'Donald Trump', 'Ben Carson', 'John Kasich', 'Ted Cruz', 'Marco Rubio'])]
+
+#Add in a column with the order the primaries took place to easier visualize data.
+count = 1
+vbs['stateOrder'] = 0
+for i in vbs.state.unique():
+    vbs['stateOrder'][vbs.state == i] = count 
+    count += 1
 
 
 # In[ ]:
 
 
-training_text_df.head(5)
+#Create a pair-wise list of candidates
+canPairs = []
+canPairsraw = [[i,j] for i in vbs.candidate.unique() for j in vbs.candidate.unique() if i != j]
+for i in canPairsraw:
+    if list(reversed(i)) in canPairs:
+        continue
+    canPairs.append(i)
 
 
 # In[ ]:
 
 
-training_text_df["Text"][0]
+#Calculate the Pearson correlation between each pair and finding the max and min.
+corrVals = []
+for i in canPairs:
+    corrVals.append(['{} vs. {}'.format(i[0], i[1]), (scipy.stats.pearsonr(vbs[vbs.candidate == i[0]].totalFrac, vbs[vbs.candidate == i[1]].totalFrac)[0])**2])
+
+max = ['',.5]
+min = ['',.5]
+for i in corrVals:
+    if max[1] < i[1]:
+        max = i
+    if min[1] > i[1]:
+        min = i
+
+print('Max correlation: {}\nMin correlation: {}'.format(max, min))
+#The higher the correlation, the less effect the candidate has on the other, the lower the correlation the more of an effect.  So, states that voted more for Trump, voted less for Carson.
+
+#I made a mistake and should have been looking at r^2.  The closer to 0 the lower the effect, so that's fixed now.
 
 
 # In[ ]:
 
 
-training_merge_df = training_variants_df.merge(training_text_df,left_on="ID",right_on="ID")
+g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Ted Cruz') | (vbs.candidate == 'Marco Rubio')])
 
 
 # In[ ]:
 
 
-training_merge_df.head(5)
+g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Donald Trump') | (vbs.candidate == 'Ben Carson')])
 
-
-# In[ ]:
-
-
-training_merge_df.columns
-
-
-# Testing Data
-
-# In[ ]:
-
-
-testing_variants_df = pd.read_csv("../input/test_variants")
-
-
-# In[ ]:
-
-
-testing_variants_df.head(5)
-
-
-# In[ ]:
-
-
-testing_text_df = pd.read_csv("../input/test_text", sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-
-
-# In[ ]:
-
-
-testing_text_df.head(5)
-
-
-# In[ ]:
-
-
-testing_merge_df = testing_variants_df.merge(testing_text_df,left_on="ID",right_on="ID")
-
-
-# In[ ]:
-
-
-testing_merge_df.head(5)
-
-
-# In[ ]:
-
-
-training_merge_df["Class"].unique()
-
-
-# Describing both Training and Testing data
-
-# In[ ]:
-
-
-training_merge_df.describe()
-
-
-# In[ ]:
-
-
-testing_merge_df.describe()
-
-
-# Check for missing values in both training and testing data columns
-
-# In[ ]:
-
-
-import missingno as msno
-get_ipython().run_line_magic('matplotlib', 'inline')
-msno.bar(training_merge_df)
-
-
-# In[ ]:
-
-
-msno.bar(testing_merge_df)
-
-
-# Split the training data to train and test for checking the model accuracy
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-
-train ,test = train_test_split(training_merge_df,test_size=0.2) 
-np.random.seed(0)
-train
-
-
-# In[ ]:
-
-
-X_train = train['Text'].values
-X_test = test['Text'].values
-y_train = train['Class'].values
-y_test = test['Class'].values
-
-
-# In[ ]:
-
-
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn import svm
-
-
-# Set pipeline to build a complete text processing model with Vectorizer, Transformer and LinearSVC
-
-# In[ ]:
-
-
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', svm.LinearSVC())
-])
-text_clf = text_clf.fit(X_train,y_train)
-
-
-# Getting 65% accuracy with only LinearSVC. Try different ensemble models to get more accurate model. 
-
-# In[ ]:
-
-
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
-
-
-# Predicting values for test data
-
-# In[ ]:
-
-
-X_test_final = testing_merge_df['Text'].values
-
-
-# In[ ]:
-
-
-predicted_class = text_clf.predict(X_test_final)
-
-
-# In[ ]:
-
-
-testing_merge_df['predicted_class'] = predicted_class
-
-
-# Appended the predicted values to the testing data
-
-# In[ ]:
-
-
-testing_merge_df.head(5)
-
-
-# Onehot encoding to get the predicted values as columns
-
-# In[ ]:
-
-
-onehot = pd.get_dummies(testing_merge_df['predicted_class'])
-testing_merge_df = testing_merge_df.join(onehot)
-
-
-# In[ ]:
-
-
-testing_merge_df.head(5)
-
-
-# Preparing submission data
-
-# In[ ]:
-
-
-submission_df = testing_merge_df[["ID",1,2,3,4,5,6,7,8,9]]
-submission_df.columns = ['ID', 'class1','class2','class3','class4','class5','class6','class7','class8','class9']
-submission_df.head(5)
-
-
-# In[ ]:
-
-
-submission_df.to_csv('submission.csv', index=False)
-
-
-# If you really feel this will help you. Please upvote this and encourage me to write more. 

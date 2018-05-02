@@ -1,272 +1,265 @@
 
 # coding: utf-8
 
-# This is a basic LogisticRegression model trained using the data from https://www.kaggle.com/eoveson/convai-datasets-baseline-models
+# In[ ]:
+
+
+import os, sys, email
+import numpy as np 
+import pandas as pd
+# Plotting
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns; sns.set_style('whitegrid')
+#import plotly
+#plotly.offline.init_notebook_mode()
+#import plotly.graph_objs as go
+import wordcloud
+
+# Network analysis
+import networkx as nx
+# NLP
+from nltk.tokenize.regexp import RegexpTokenizer
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+
+# # 1. Loading and cleaning data
+
+# In[ ]:
+
+
+# Read the data into a DataFrame
+emails_df = pd.read_csv('../input/emails.csv')
+print(emails_df.shape)
+emails_df.head()
+
+
+# In[ ]:
+
+
+# A single message looks like this
+print(emails_df['message'][0])
+
+
+# In[ ]:
+
+
+## Helper functions
+def get_text_from_email(msg):
+    '''To get the content from email objects'''
+    parts = []
+    for part in msg.walk():
+        if part.get_content_type() == 'text/plain':
+            parts.append( part.get_payload() )
+    return ''.join(parts)
+
+def split_email_addresses(line):
+    '''To separate multiple email addresses'''
+    if line:
+        addrs = line.split(',')
+        addrs = frozenset(map(lambda x: x.strip(), addrs))
+    else:
+        addrs = None
+    return addrs
+
+
+# In[ ]:
+
+
+# Parse the emails into a list email objects
+messages = list(map(email.message_from_string, emails_df['message']))
+emails_df.drop('message', axis=1, inplace=True)
+# Get fields from parsed email objects
+keys = messages[0].keys()
+for key in keys:
+    emails_df[key] = [doc[key] for doc in messages]
+# Parse content from emails
+emails_df['content'] = list(map(get_text_from_email, messages))
+# Split multiple email addresses
+emails_df['From'] = emails_df['From'].map(split_email_addresses)
+emails_df['To'] = emails_df['To'].map(split_email_addresses)
+
+# Extract the root of 'file' as 'user'
+emails_df['user'] = emails_df['file'].map(lambda x:x.split('/')[0])
+del messages
+
+emails_df.head()
+
+
+# In[ ]:
+
+
+print('shape of the dataframe:', emails_df.shape)
+# Find number of unique values in each columns
+for col in emails_df.columns:
+    print(col, emails_df[col].nunique())
+
+
+# In[ ]:
+
+
+# Set index and drop columns with two few values
+emails_df = emails_df.set_index('Message-ID')    .drop(['file', 'Mime-Version', 'Content-Type', 'Content-Transfer-Encoding'], axis=1)
+# Parse datetime
+emails_df['Date'] = pd.to_datetime(emails_df['Date'], infer_datetime_format=True)
+emails_df.dtypes
+
+
+# # 2. Exploratory analyses
+# ## When do people send emails?
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.year)['content'].count().plot()
+ax.set_xlabel('Year', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.dayofweek)['content'].count().plot()
+ax.set_xlabel('Day of week', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.hour)['content'].count().plot()
+ax.set_xlabel('Hour', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# ## Who sends most emails?
+
+# In[ ]:
+
+
+# Count words in Subjects and content
+tokenizer = RegexpTokenizer(r'(?u)\b\w\w+\b')
+emails_df['subject_wc'] = emails_df['Subject'].map(lambda x: len(tokenizer.tokenize(x)))
+emails_df['content_wc'] = emails_df['content'].map(lambda x: len(tokenizer.tokenize(x)))
+
+
+# In[ ]:
+
+
+grouped_by_people = emails_df.groupby('user').agg({
+        'content': 'count', 
+        'subject_wc': 'mean',
+        'content_wc': 'mean',
+    })
+grouped_by_people.rename(columns={'content': 'N emails', 
+                                  'subject_wc': 'Subject word count', 
+                                  'content_wc': 'Content word count'}, inplace=True)
+grouped_by_people.sort('N emails', ascending=False).head()
+
+
+# In[ ]:
+
+
+sns.pairplot(grouped_by_people.reset_index(), hue='user')
+
+
+# ## Social network analyses of email senders and recipients
+# ### Let's see who sends the most emails to whom
+# First we'll only look at emails sent to single email address, which may be more important personal communications
+
+# In[ ]:
+
+
+sub_df = emails_df[['From', 'To', 'Date']].dropna()
+print(sub_df.shape)
+# drop emails sending to multiple addresses
+sub_df = sub_df.loc[sub_df['To'].map(len) == 1]
+print(sub_df.shape)
+
+
+# In[ ]:
+
+
+sub_df = sub_df.groupby(['From', 'To']).count().reset_index()
+# Unpack frozensets
+sub_df['From'] = sub_df['From'].map(lambda x: next(iter(x)))
+sub_df['To'] = sub_df['To'].map(lambda x: next(iter(x)))
+# rename column
+sub_df.rename(columns={'Date': 'count'}, inplace=True)
+sub_df.sort('count', ascending=False).head(10)
+
+
+# Apparently some people send a lot of emails to themselves. It maybe very interesting to look at the differences between emails sent to selves and to others.
+
+# In[ ]:
+
+
+# Make a network of email sender and receipients
+G = nx.from_pandas_dataframe(sub_df, 'From', 'To', edge_attr='count', create_using=nx.DiGraph())
+print('Number of nodes: %d, Number of edges: %d' % (G.number_of_nodes(), G.number_of_edges()))
+
+
+# In[ ]:
+
+
+fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12, 8))
+ax1.hist(list(G.in_degree(weight='count').values()), log=True, bins=20)
+ax1.set_xlabel('In-degrees', fontsize=18)
+
+ax2.hist(list(G.out_degree(weight='count').values()), log=True, bins=20)
+ax2.set_xlabel('Out-degrees', fontsize=18)
+
+
+# Looks like scale-free degree distribution
 # 
-# The baseline model in that kernal is tuned a little to get the data for this kernal
-# This kernal scored 0.045 in the LB
+# ---
+# ### Examine connected components in the network
+# 
 
 # In[ ]:
 
 
-# loading libraries
-import pandas as pd, numpy as np
+n_nodes_in_cc = []
+for nodes in nx.connected_components(G.to_undirected()):
+    n_nodes_in_cc.append(len(nodes))
+
+plt.hist(n_nodes_in_cc, bins=20, log=True)
+plt.xlabel('# Nodes in connected components', fontsize=18)
+plt.ylim([.1,1e4])
 
 
-# In[ ]:
-
-
-# fixing seed.!!
-seed = 7
-np.random.seed(seed)
-
-
-# In[ ]:
-
-
-# output of the kernal https://www.kaggle.com/eoveson/convai-datasets-baseline-models with some tunings
-test_new = pd.read_csv('../input/convai-datasets-baseline-models/test_with_convai.csv')
-train_new = pd.read_csv('../input/convai-datasets-baseline-models/train_with_convai.csv')
-
+# ## What do the emails say?
+# 
+# ### In the subjects:
 
 # In[ ]:
 
 
-# features we are interesed on
-feats_to_concat = ['comment_text', 'toxic_level', 'attack', 'aggression']
+from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
+
+subjects = ' '.join(emails_df['Subject'])
+fig, ax = plt.subplots(figsize=(16, 12))
+wc = wordcloud.WordCloud(width=800, 
+                         height=600, 
+                         max_words=200,
+                         stopwords=ENGLISH_STOP_WORDS).generate(subjects)
+ax.imshow(wc)
+ax.axis("off")
 
 
-# In[ ]:
-
-
-# combining test and train
-alldata = pd.concat([train_new[feats_to_concat], test_new[feats_to_concat]], axis=0)
-alldata.comment_text.fillna('unknown', inplace=True)
-
-
-# In[ ]:
-
-
-# loading libraries
-import nltk
-nltk.download('wordnet')
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-from nltk.stem import WordNetLemmatizer
-import re
-
+# ### In the contents:
 
 # In[ ]:
 
 
-# define function for cleaning..!!
-
-def cleanData(text, stemming = False, lemmatize=False):
-    
-    text = text.lower().split()
-    text = " ".join(text)
-    text = re.sub(r"[^A-Za-z0-9^,!.\/'+-=]", " ", text)
-    text = re.sub(r"what's", "what is ", text)
-    text = re.sub(r"\'s", " ", text)
-    text = re.sub(r"\'ve", " have ", text)
-    text = re.sub(r"can't", "cannot ", text)
-    text = re.sub(r"n't", " not ", text)
-    text = re.sub(r"i'm", "i am ", text)
-    text = re.sub(r"\'re", " are ", text)
-    text = re.sub(r"\'d", " would ", text)
-    text = re.sub(r"\'ll", " will ", text)
-    text = re.sub(r",", " ", text)
-    text = re.sub(r"\.", " ", text)
-    text = re.sub(r"!", " ! ", text)
-    text = re.sub(r"\/", " ", text)
-    text = re.sub(r"\^", " ^ ", text)
-    text = re.sub(r"\+", " + ", text)
-    text = re.sub(r"\-", " - ", text)
-    text = re.sub(r"\=", " = ", text)
-    text = re.sub(r"'", " ", text)
-    text = re.sub(r"(\d+)(k)", r"\g<1>000", text)
-    text = re.sub(r":", " : ", text)
-    text = re.sub(r" e g ", " eg ", text)
-    text = re.sub(r" b g ", " bg ", text)
-    text = re.sub(r" u s ", " american ", text)
-    text = re.sub(r"\0s", "0", text)
-    text = re.sub(r" 9 11 ", "911", text)
-    text = re.sub(r"e - mail", "email", text)
-    text = re.sub(r"j k", "jk", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    
-   
-    if stemming:
-        st = PorterStemmer()
-        txt = " ".join([st.stem(w) for w in text.split()])
-        
-    if lemmatize:
-        wordnet_lemmatizer = WordNetLemmatizer()
-        txt = " ".join([wordnet_lemmatizer.lemmatize(w) for w in text.split()])
-
-
-    return text
-
-
-# In[ ]:
-
-
-# cleaning data - stemm and lemm are done later
-alldata['comment_text'] = alldata['comment_text'].map(lambda x: cleanData(x,  stemming = False, lemmatize=False))
-
-
-# In[ ]:
-
-
-# again libraries.!!
-from matplotlib import pyplot as plt
-from nltk.tokenize import wordpunct_tokenize
-from nltk.stem.snowball import EnglishStemmer
-from nltk.stem import WordNetLemmatizer
-from functools import lru_cache
-from tqdm import tqdm as tqdm
-from sklearn.metrics import log_loss
-from sklearn.model_selection import StratifiedKFold
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from scipy import sparse
-
-
-# In[ ]:
-
-
-# set stopwords
-from nltk.corpus import stopwords
-
-eng_stopwords = set(stopwords.words("english"))
-
-
-# In[ ]:
-
-
-# stemming and lemmatizing
-# adapted from the kernal 
-stemmer = EnglishStemmer()
-
-@lru_cache(30000)
-def stem_word(text):
-    return stemmer.stem(text)
-
-
-lemmatizer = WordNetLemmatizer()
-
-@lru_cache(30000)
-def lemmatize_word(text):
-    return lemmatizer.lemmatize(text)
-
-
-def reduce_text(conversion, text):
-    return " ".join(map(conversion, wordpunct_tokenize(text.lower())))
-
-
-def reduce_texts(conversion, texts):
-    return [reduce_text(conversion, str(text))
-            for text in tqdm(texts)]
-
-
-# In[ ]:
-
-
-# lemmatizing and stemming
-alldata['comment_text'] = reduce_texts(stem_word, alldata['comment_text'])
-alldata['comment_text'] = reduce_texts(lemmatize_word, alldata['comment_text'])
-
-
-# In[ ]:
-
-
-# making placeholder for prediction
-col = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-
-only_col = ['toxic']
-
-preds = np.zeros((test_new.shape[0], len(col)))
-
-
-# In[ ]:
-
-
-# TfidfVectorizer for words and chars
-vect_words = TfidfVectorizer(max_features=40000, analyzer='word', ngram_range=(1, 1))
-vect_chars = TfidfVectorizer(max_features=10000, analyzer='char', ngram_range=(1, 3))
-
-
-# In[ ]:
-
-
-# Creating features
-all_words = vect_words.fit_transform(alldata.comment_text)
-all_chars = vect_chars.fit_transform(alldata.comment_text)
-
-
-# In[ ]:
-
-
-# splitting to train and test
-train_words = all_words[:len(train_new)]
-test_words = all_words[len(train_new):]
-
-train_chars = all_chars[:len(train_new)]
-test_chars = all_chars[len(train_new):]
-
-
-# It can be seen from the dataset that the features attack and aggression is very much same. So we will only take one.
-# Here I take attack leaving aggression
-
-# In[ ]:
-
-
-# needed feats.!!
-feats = ['toxic_level', 'attack']
-
-
-# In[ ]:
-
-
-# make sparse matrix with needed data for train and test
-train_feats = sparse.hstack([train_words, train_chars, alldata[feats][:len(train_new)]])
-test_feats = sparse.hstack([test_words, test_chars, alldata[feats][len(train_new):]])
-
-
-# In[ ]:
-
-
-# libraries.!
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import log_loss
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import KFold
-from sklearn.model_selection import cross_val_score
-
-
-# In[ ]:
-
-
-# fit a LogisticRegression model on full train data and make prediction
-for i, j in enumerate(col):
-    print('===Fit '+j)
-    
-    model = LogisticRegression(C=4.0, solver='sag')
-    print('Fitting model')
-    model.fit(train_feats, train_new[j])
-      
-    print('Predicting on test')
-    preds[:,i] = model.predict_proba(test_feats)[:,1]
-
-
-# In[ ]:
-
-
-# make submission..!!
-subm = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-
-submid = pd.DataFrame({'id': subm["id"]})
-submission = pd.concat([submid, pd.DataFrame(preds, columns = col)], axis=1)
-submission.to_csv('feat_lr_2cols.csv', index=False) # 0.045 in the LB
+contents = ' '.join(emails_df.sample(1000)['content'])
+fig, ax = plt.subplots(figsize=(16, 12))
+wc = wordcloud.WordCloud(width=800, 
+                         height=600, 
+                         max_words=200,
+                         stopwords=ENGLISH_STOP_WORDS).generate(contents)
+ax.imshow(wc)
+ax.axis("off")
 

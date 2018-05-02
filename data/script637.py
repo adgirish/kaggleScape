@@ -1,875 +1,562 @@
 
 # coding: utf-8
 
-# **<font size=4>This is my advanced study of the first competition I attended on Kaggle</font>**
-# 
-# 
-# **<font size=2>I believe that everybody is not unfamliar with the Titanic</font>**
-# 
-# 
-# 
-# ![picture](http://www.oscars.org/sites/oscars/files/1083_dpk02718_04_t3d-4k-004.jpg)
-
-# As a data scientist, I think we should all be aware of the ["Black Swam"](https://en.wikipedia.org/wiki/Black_swan_theory)
-# 
-# **Those things that we can hardly predict**
-# 
-# To make this world better, I think we should work hard to make right decisions based on the analysis and prediction, but meanwhile, be aware of the probability of happening the so-called Black Swam.
-# Hope the tragedy like this will never happen again.
-
-# **<font size=5>Now, let's back to the topic</font>**
-# 
-# 
-# **At first, I think this is a great chance to have a thorough look at my foundation of data science skills**
-# 
-# Therefore, first, I want to have my plan of this case here.
-# * Understand Dataset
-# * Data Imputation
-# * Exploratory Data Analysis (EDA)
-# * Features Engineering & Data Munging
-# * Modeling
-# * Validation
-
-# **<font size=5>Understanding</font>**
-# 
-# 
-# **First, input data and modules and take a look at it**
+# This notebook provides detail analysis of the various factors by means of visualisation.
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+#Loading all the necessary libraries
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt #for visualisation
+import seaborn as sns #for visualisation
 get_ipython().run_line_magic('matplotlib', 'inline')
-from string import ascii_letters
-import seaborn as sns
-plt.style.use('ggplot')
 
 
 # In[ ]:
 
 
-train_df = pd.read_csv('../input/train.csv')
-test_df = pd.read_csv('../input/test.csv')
+hospital_data=pd.read_csv("../input/HospInfo.csv")
+hospital_data.head()
 
 
 # In[ ]:
 
 
-train_df.head()
+hospital_data.info()
 
 
-# **<font size=4>To be more precise, we need to understand the meanings of each columns.</font>**
-# 
-# 
-# **Variable Notes**
-# 
-# **pclass**: A proxy for socio-economic status (SES)
-# 1st = Upper
-# 2nd = Middle
-# 3rd = Lower
-# 
-# **age**: Age is fractional if less than 1. If the age is estimated, is it in the form of xx.5
-# 
-# **sibsp**: The dataset defines family relations in this way...
-# 
-# *Sibling* = brother, sister, stepbrother, stepsister
-# 
-# *Spouse* = husband, wife (mistresses and fiancés were ignored)
-# 
-# **parch**: The dataset defines family relations in this way...
-# 
-# *Parent* = mother, father
-# 
-# *Child* = daughter, son, stepdaughter, stepson
-# 
-# Some children travelled only with a nanny, therefore parch=0 for them.
-# 
-# **About PassengerId & Ticket, obviously, PassengerId is just the order number of each row, and I think Ticket is just a random string of each ticket.**
+# We can see that there are few columns which has missing values
 
-# In[ ]:
-
-
-train_df.drop(['PassengerId','Ticket'],axis=1,inplace=True)
-test_df.drop('Ticket',axis=1,inplace=True)
-
-
-# Now, I want to see how many null values in both data
-
-# In[ ]:
-
-
-pd.isnull(train_df).sum()
-
-
-# In[ ]:
-
-
-pd.isnull(test_df).sum()
-
-
-# And have a basic understand of how the data distribute
-
-# In[ ]:
-
-
-train_df.describe()
-
-
-# In[ ]:
-
-
-test_df.describe()
-
-
-# **<font size=5>Data Imputation</font>**
-
-# Here I put training set and testing set together so that I can do preprocess at the same time and after data imputation I copy a set of training set so that I can do EDA with it.
-
-# In[ ]:
-
-
-target = train_df.Survived
-train = train_df.drop('Survived',axis=1)
-test = test_df
-train['is_train'] = 1
-test['is_train'] = 0
-train_test = pd.concat([train,test],axis=0)
-
-
-# **A smart way to impute Age !!!** Refer to : https://www.kaggle.com/ash316/eda-to-prediction-dietanic/notebook
-
-# In[ ]:
-
-
-train_test['Initial']=0
-for i in train_test:
-    train_test['Initial']=train_test.Name.str.extract('([A-Za-z]+)\.')
-pd.crosstab(train_test.Initial,train_test.Sex).T.style.background_gradient(cmap='summer_r')
-
-
-# In[ ]:
-
-
-train_df['Initial']=0
-for i in train_df:
-    train_df['Initial']=train_df.Name.str.extract('([A-Za-z]+)\.')
-pd.crosstab(train_df.Initial,train_df.Sex).T.style.background_gradient(cmap='summer_r')
-
-
-# In[ ]:
-
-
-pd.crosstab(train_df.Initial,train_df.Survived).T.style.background_gradient(cmap='summer_r')
-
-
-# In[ ]:
-
-
-train_test['Initial'].replace(['Capt','Col','Countess','Don','Dona','Dr','Jonkheer','Lady','Major','Master','Mlle','Mme','Ms','Rev','Sir'],
-                            ['Special_male','Other_male','Special','Special_male','Special_female','Other','Special_male','Special','Special_male','Other_male','Special','Special','Special','Other_male','Special'],inplace=True)
-
-
-# Here I look deeper to make sure there might be some special guests with special title
-
-# In[ ]:
-
-
-train_test.groupby('Initial')['Age'].mean()
-
-
-# In[ ]:
-
-
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Miss'),'Age']=22
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Mr'),'Age']=32
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Mrs'),'Age']=37
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Other'),'Age']=44
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Other_male'),'Age']=13
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Special'),'Age']=33
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Special_female'),'Age']=39
-train_test.loc[(train_test.Age.isnull())&(train_test.Initial=='Special_male'),'Age']=49
-
-
-# In[ ]:
-
-
-train_test[np.isnan(train_test['Fare'])]
-
-
-# I tell the missing fare by the PClass.
-
-# In[ ]:
-
-
-train_test.groupby('Pclass')['Fare'].mean()
-
-
-# In[ ]:
-
-
-train_test.loc[(train_test.Fare.isnull()),'Fare']=13.3
-
-
-# In[ ]:
-
-
-train_test.Embarked.mode()
-
-
-# In[ ]:
-
-
-train_test["Embarked"] = train_test["Embarked"].fillna("S")
-
-
-# In[ ]:
-
-
-train_test["Cabin"] = train_test["Cabin"].fillna("No")
-
-
-# Finally, make sure there is no more NA value
-
-# In[ ]:
-
-
-pd.isnull(train_test).sum()
-
-
-# Since I dropped the PassengerId of training set but keep that of testing set for later use, it is fine now.
-
-# In[ ]:
-
-
-df = train_test[train_test.is_train == 1]
+# ### Let us make it more clear by calculating number of missing values in a column
 
-
-# **<font size=5>EDA</font>**
-
-# In[ ]:
-
-
-df.drop(['PassengerId','is_train','Initial'],axis=1,inplace=True)
-
-
-# In[ ]:
-
-
-df['Survived'] = train_df['Survived']
-
-
-# In[ ]:
-
-
-df.describe()
-
-
-# In[ ]:
-
-
-corr = df.corr()
-mask = np.zeros_like(corr, dtype=np.bool)
-mask[np.triu_indices_from(mask)] = True
-f, ax = plt.subplots(figsize=(11, 9))
-cmap = sns.diverging_palette(220, 10, as_cmap=True)
-sns.heatmap(corr, xticklabels=corr.columns.values,yticklabels=corr.columns.values,mask=mask, cmap=cmap, vmax=1, center=0,
-            square=True, linewidths=.5, annot=True, cbar_kws={"shrink": .5})
-
-
-# In[ ]:
-
-
-f,ax=plt.subplots(2,3,figsize=(12,16))
-sns.countplot('Pclass',data=df,ax=ax[0,0])
-ax[0,0].set_title('Pclass distribution')
-sns.countplot('Sex',data=df,ax=ax[0,1])
-ax[0,1].set_title('Sex distribution')
-sns.countplot('Age',data=df,ax=ax[0,2])
-ax[0,2].set_title('Age distribution')
-sns.countplot('SibSp',data=df,ax=ax[1,0])
-ax[1,0].set_title('SibSp distribution')
-sns.countplot('Parch',data=df,ax=ax[1,1])
-ax[1,1].set_title('Parch distribution')
-sns.countplot('Embarked',data=df,ax=ax[1,2])
-ax[1,2].set_title('Embarked distribution')
-
-
-# This is a more thorough look at how data distribute.
-# 
-# Here we can see most of the people are in PClass1 and the proportions of male and female are close.
-# Age are normal distribution.
-
-# **And now, let's dig deeper with whether these people survived or not**
-
 # In[ ]:
-
-
-plt.title("Pclass & Survival Distribution")
-plt.hist([df[df['Survived']==1]['Pclass'],df[df['Survived']==0]['Pclass']],bins=3,label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
-
 
-# In[ ]:
 
+def num_missing(x):
+  return sum(x.isnull())
 
-pd.crosstab(df.Pclass,df.Survived).apply(lambda r: r/r.sum(), axis=1).style.background_gradient(cmap='summer_r')
+#Applying per column:
+print ("Missing values per column:")
+print (hospital_data.apply(num_missing, axis=0) )#axis=0 defines that function is to be applied on each column
 
 
-# About 2 thirds of the people in PClass1 survived and only half of the people in PClass3 survived.
-# I'm considering treating PClass as numbers or dummy variable. But now, I'll just leave it.
+# ### Above we can see that the location has all the values misssing except the 1st row.This column is of no use.Let us drop location column.
 
 # In[ ]:
 
 
-plt.title("Age & Survival Distribution")
-plt.hist([df[df['Survived']==1]['Age'],df[df['Survived']==0]['Age']],bins = 10,label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
+hospital_data.drop('Location',axis=1,inplace='True')
 
 
-# In terms of age, most of the people under 40 survived. And the ratio gets worse by the age gets older.
-# 
-# Let's separate these people into groups based on age.
-
 # In[ ]:
-
 
-df['Age_Range']=pd.qcut(df['Age'],7)
-df.groupby(['Age_Range'])['Survived'].mean().to_frame().style.background_gradient(cmap='summer_r')
 
+hospital_data.shape
 
-# Here we can see that people aged between 28 and 30 are less likely to survive.
-# 
-# Mayber we can separate them into males and females to look deeper.
 
 # In[ ]:
 
 
-sns.factorplot('Age_Range','Survived',hue='Sex',data=df)
+hospital_data.describe()
 
 
-# Obviously, most groups of female are more likely to survive. And boys are more likely to survive than male adults.
-
 # In[ ]:
-
-
-df['Age_Section'] = 0
-df.loc[(df.Age<=6),'Age_Section']=0
-df.loc[(df.Age>6)&(df.Age<=12),'Age_Section']=1
-df.loc[(df.Age>12)&(df.Age<=18),'Age_Section']=2
-df.loc[(df.Age>18)&(df.Age<=30),'Age_Section']=3
-df.loc[(df.Age>30)&(df.Age<=40),'Age_Section']=4
-df.loc[(df.Age>40)&(df.Age<=60),'Age_Section']=5
-df.loc[(df.Age>60),'Age_Section']=6
-
 
-# In[ ]:
 
+hospital_data.columns.tolist()
 
-df.groupby(['Age_Section'])['Survived'].mean().to_frame().style.background_gradient(cmap='summer_r')
 
+# # Checking Ownership of the hospitals
+# Let us check how many hospitals are owned by a particular individual or government and others.
 
 # In[ ]:
 
 
-sns.factorplot('Age_Section','Survived',hue='Sex',data=df)
+unique_hospital_ownership=hospital_data['Hospital Ownership'].unique()
+unique_hospital_ownership
 
 
-# Here we can see those under 6 and females over 60 are significantly likely to survive, espacially those females over 60.
-
 # In[ ]:
 
 
-plt.title("SibSp & Survival Distribution")
-plt.hist([df[df['Survived']==1]['SibSp'],df[df['Survived']==0]['SibSp']],bins=10,range=[0,9],label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
+dummy_data=pd.get_dummies(hospital_data['Hospital Ownership'])
+dummy_data.head()
+#dummy_data.info()
 
 
 # In[ ]:
-
 
-pd.crosstab(df.SibSp,df.Survived).apply(lambda r: r/r.sum(), axis=1).style.background_gradient(cmap='summer_r')
-
-
-# It is special that people with 1 or 2 SibSp are most likely to survived in terms of SibSp.
-# 
-# And those with too many SibSp didn't make it survived.
-
-# In[ ]:
 
+a=dummy_data['Government - Federal'].sum()
+b=dummy_data['Government - Hospital District or Authority'].sum()
+c=dummy_data['Government - Local'].sum()
+d=dummy_data['Government - State'].sum()
+e=dummy_data['Physician'].sum()
+f=dummy_data['Proprietary'].sum()
+g=dummy_data['Tribal'].sum()
+h=dummy_data['Voluntary non-profit - Church'].sum()
+i=dummy_data['Voluntary non-profit - Other'].sum()
+j=dummy_data['Voluntary non-profit - Private'].sum()
+list=[a,b,c,d,e,f,g,h,i,j]
+list
 
-plt.title("Parch & Survival Distribution")
-plt.hist([df[df['Survived']==1]['Parch'],df[df['Survived']==0]['Parch']],bins=7,range=[0,7],label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
 
+# **Here we got the total count of ownership of the hospitals by different groups**
 
 # In[ ]:
 
 
-pd.crosstab(df.Parch,df.Survived).apply(lambda r: r/r.sum(), axis=1).style.background_gradient(cmap='summer_r')
+ax=sns.barplot(y=unique_hospital_ownership,x=list,data=hospital_data)
+ax.set(xlabel='Number of  hospitals', ylabel='Ownership')
 
 
-# It's interesting that except people with Parch more than 4, it seems people with more Parch are more likely to survive.
+# **We can see that most of the hospitals are owned by Physician.Also the hospitals under Church which is non-profit organisation are very few**
 
 # In[ ]:
 
 
-plt.title("Fare & Survival Distribution")
-plt.hist([df[df['Survived']==1]['Fare'],df[df['Survived']==0]['Fare']],bins=10,label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
+a= pd.pivot_table(hospital_data,values=['Hospital overall rating'],index=['Hospital Ownership'],columns=['Hospital Type'],aggfunc='count',margins=False)
 
+plt.figure(figsize=(10,10))
+sns.heatmap(a['Hospital overall rating'],linewidths=.5,annot=True,vmin=0.01,cmap='YlGnBu')
+plt.title('Total rating of the types of hospitals under the ownership of various community')
 
-# In[ ]:
-
-
-df['Fare_Range']=pd.qcut(df['Fare'],12)
-df.groupby(['Fare_Range'])['Survived'].mean().to_frame().style.background_gradient(cmap='summer_r')
 
+# #Categorising Hospitals w.r.t to their ratings
 
-# This is interesting to me as well, since that we can see people with fare price between 7.25 and 7.775 are most likely survived. 
-# 
-# But basically,except that group, it seems the higher the fare the more likely to survive.
-
 # In[ ]:
-
-
-df['NameLen'] = df.Name.apply(lambda x : len(x))
-
 
-# In[ ]:
 
+hospital_data['Hospital overall rating'].unique()
 
-plt.title("Length of name & Survival Distribution")
-plt.hist([df[df['Survived']==1]['NameLen'],df[df['Survived']==0]['NameLen']],bins=10,label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
 
+# **Let us drop those rows where Hospital overall Rating==Not Available**
 
 # In[ ]:
 
 
-df['NameLen_Range']=pd.qcut(df['NameLen'],12)
-df.groupby(['NameLen_Range'])['Survived'].mean().to_frame().style.background_gradient(cmap='summer_r')
+AvailableRating_data=hospital_data.drop(hospital_data[hospital_data['Hospital overall rating']=='Not Available'].index)
+#AvailableRating_data.info()
 
 
-# Though this might sounds weird, people with longer name seem to be more likely to survive.
-# 
-# (Maybe from a rich family)
+# ### Sorting the values in Descending order as per the overall rating of the hospitals
 
 # In[ ]:
 
 
-sns.factorplot('NameLen_Range','Survived',hue='Pclass',data=df)
+sorted_rating=AvailableRating_data.sort_values(['Hospital overall rating'], ascending=False)
+sorted_rating['Hospital overall rating'].head()
+sorted_rating[['Hospital Name','Hospital overall rating']].head()
 
 
 # In[ ]:
 
 
-sns.countplot('NameLen_Range',hue='Survived',data=df)
+Unique_sorted_rating=sorted_rating['Hospital overall rating'].unique()
+Unique_sorted_rating
 
 
-# Basically, except people have name length between 19 and 20 all survived, name length and Pclass have positive correlation with the survival
+# ### Finding all the rows with rating 5,4,3,2,1 and separating them and keeping a count of those rows which belongs to that particular rating category
 
 # In[ ]:
 
 
-df['FamilySize'] = df['SibSp'] + df['Parch']
+rating_with_5=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='5']
+Rating_5=rating_with_5['Provider ID'].count()
+#rating_with_5[['Hospital Name','Hospital overall rating']].head()
+rating_with_4=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='4']
+Rating_4=rating_with_4['Provider ID'].count()
+rating_with_3=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='3']
+Rating_3=rating_with_3['Provider ID'].count()
+rating_with_2=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='2']
+Rating_2=rating_with_2['Provider ID'].count()
+rating_with_1=sorted_rating.loc[sorted_rating['Hospital overall rating'] =='1']
+Rating_1=rating_with_1['Provider ID'].count()
+#Rating_5
+#Rating_4
+#Rating_3
+#Rating_2
+#Rating_1
+list=[Rating_5,Rating_4,Rating_3,Rating_2,Rating_1]
+list
+print(Rating_5,Rating_4,Rating_3,Rating_2,Rating_1)
 
 
 # In[ ]:
-
-
-df.FamilySize.describe()
 
 
-# In[ ]:
+ax=sns.barplot(x=Unique_sorted_rating,y=list,data=hospital_data,palette='pastel')
+ax.set(xlabel='Rating out of 5', ylabel='Number of  hospitals')
 
 
-plt.title("FamilySize & Survival Distribution")
-plt.hist([df[df['Survived']==1]['FamilySize'],df[df['Survived']==0]['FamilySize']],range(0,11),label=['Survived', 'Dead'])
-plt.legend()
-plt.show()
+# **Thus we can see that most of the hospitals are given the rating of 3.Hospitals with very high rating(5) and very low rating(1) are very few.**
 
+# # Which states has maximum number of 5 star rating hospitals?
 
 # In[ ]:
 
 
-pd.crosstab(df.FamilySize,df.Survived).apply(lambda r: r/r.sum(), axis=1).style.background_gradient(cmap='summer_r')
+hospital_data['Hospital Type'].unique()
 
 
-# Except those with more than 4 family members, basically, the bigger the family size the more likely to survive.
+# # Acute care hospitals with 5 star rating.
 
 # In[ ]:
 
 
-sns.countplot('Sex',hue='Survived',data=df)
+State_acute_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Acute Care Hospitals") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
+State_acute_5.head()
+#State_acute_5['State'].unique()
 
 
 # In[ ]:
 
 
-pd.crosstab(df.Sex,df.Survived).apply(lambda r: r/r.sum(), axis=1).style.background_gradient(cmap='summer_r')
+S_A_5=State_acute_5['State'].value_counts()
+index=S_A_5.index
+values=S_A_5.values
+values
 
 
-# Without a doubt, the proportion of women survived are much higher than that of men
-
 # In[ ]:
-
 
-sns.factorplot('Pclass','Survived',hue='Sex',data=df)
 
+dims = (8, 10)
+fig, ax = plt.subplots(figsize=dims)
 
-# It seems that females in PClass 3 are less likely to survive compared with the other females
+ax=sns.barplot(y=index,x=values,palette='GnBu_d')
+ax.set(xlabel='Total number of Acute Care hospitals with 5 rating', ylabel='States')
 
-# In[ ]:
-
-
-sns.factorplot('Fare_Range','Survived',hue='Pclass',data=df)
 
+# **Thus Texas leads with Acute care hospitals with 5 star rating**
 
-# This is pretty straightforward.
-# 
-# Those with higher fare are not more likely to survive.
-# But we can see that those with Pclass 1, must have a fare over 20.5. 
-# And those people in Pclass 1 and fare 52 and 80 rarely survived.
-# Also, there is some people in Pclass 2 with Fare 0. I need to investigate that.
+# # Critical Access Hospitals with 5 star rating
 
 # In[ ]:
 
 
-sns.factorplot('Embarked','Survived',hue='Sex',data=df)
+Critical_access_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Critical Access Hospitals") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
+C_A_5=Critical_access_5['State'].value_counts()
+C_A_5
+index=C_A_5.index
+values=C_A_5.values
+values
 
 
-# In this case, I'll treat Embarked as a dummy variable
-
-# **<font size=5>Features Engineering & Data Munging</font>**
-
 # In[ ]:
 
 
-##train_test['Fare_Range']=pd.qcut(train_test['Fare'],12)
+dims = (8, 2)
+fig, ax = plt.subplots(figsize=dims)
 
-
-# In[ ]:
+ax=sns.barplot(y=index,x=values,palette='YlOrBr')
+ax.set(xlabel='Total number of Critical Care hospitals with 5 rating', ylabel='States')
 
 
-train_test['Mothers'] = 0
-train_test.loc[(train_test.Age>32)&(train_test.Age<34)&(train_test.Sex=='female'),'Mothers']=1
+# **Thus there are only two states with Critical Acess hospitals each with rating as 5**
 
+# # Childrens Hospitals with 1 star rating
 
 # In[ ]:
 
 
-train_test['Lucky_Customers'] = 0
-train_test.loc[(train_test.Fare>20.5)&(train_test.Pclass==3),'Lucky_Customers']=1
+Chidrens_5=hospital_data.loc[(hospital_data["Hospital Type"]=="Childrens") & (hospital_data["Hospital overall rating"]=="5"),["State"]]
+C_5=Chidrens_5['State'].value_counts()
+C_5
+index=C_5.index
+values=C_5.values
+values
+index
 
 
-# In[ ]:
+# **Thus there no hospitals for childrens with 5 star rating**
 
+# # Which states has maximum number of 1 star rating hospitals?
 
-train_test['Unlucky_Customers'] = 0
-train_test.loc[(train_test.Fare>52)&(train_test.Fare<=80)&(train_test.Pclass==2),'Unlucky_Customers']=1
+# # Acute care hospitals with 1 star rating.
 
-
 # In[ ]:
 
 
-train_test['Lucky_Family'] = 0
-train_test.loc[(train_test.Fare>52)&(train_test.Fare<=80)&(train_test.Pclass==2),'Unlucky_Customers']=1
+State_acute_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Acute Care Hospitals") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
+State_acute_1.head()
+#State_acute_1['State'].unique()
+S_A_1=State_acute_1['State'].value_counts()
+index=S_A_1.index
+values=S_A_1.values
+values
 
 
 # In[ ]:
-
 
-train_test['NameLen'] = train_test.Name.apply(lambda x : len(x))
 
+dims = (8, 10)
+fig, ax = plt.subplots(figsize=dims)
 
-# In[ ]:
+ax=sns.barplot(y=index,x=values,palette='cubehelix')
+ax.set(xlabel='Total number of Acute Care hospitals with 1 rating', ylabel='States')
 
 
-train_test['Lucky_Family'] = 0
-train_test.loc[(train_test.NameLen>=19)&(train_test.NameLen<=20)&(train_test.Pclass==1),'Lucky_Family']=1
+# **New york has maximum number of Acute care hospitals with 1 star rating**
 
+# # Critical Access Hospitals with 1 star rating
 
 # In[ ]:
 
 
-train_test['Special_Customers'] = 0
-train_test.loc[(train_test.NameLen>=25)&(train_test.Pclass!=3),'Special_Customers']=1
+Critical_access_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Critical Access Hospitals") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
+C_A_1=Critical_access_1['State'].value_counts()
+C_A_1
+index=C_A_1.index
+values=C_A_1.values
+values
 
 
 # In[ ]:
-
 
-train_test['Age_Section'] = 0
-train_test.loc[(train_test.Age<=6),'Age_Section']=0
-train_test.loc[(train_test.Age>6)&(train_test.Age<=12),'Age_Section']=1
-train_test.loc[(train_test.Age>12)&(train_test.Age<=18),'Age_Section']=2
-train_test.loc[(train_test.Age>18)&(train_test.Age<=30),'Age_Section']=3
-train_test.loc[(train_test.Age>30)&(train_test.Age<=40),'Age_Section']=4
-train_test.loc[(train_test.Age>40)&(train_test.Age<=60),'Age_Section']=5
-train_test.loc[(train_test.Age>60),'Age_Section']=6
 
+dims = (8, 1)
+fig, ax = plt.subplots(figsize=dims)
 
-# In[ ]:
+ax=sns.barplot(y=index,x=values,palette='Spectral')
+ax.set(xlabel='Total number of Critical Acess hospitals with 1 rating', ylabel='States')
 
 
-train_test['Sex'] = train_test['Sex'].map( {'female': 1, 'male': 0} ).astype(int)
+# **Thus there is only one Critical Acess hospital in USA with 1 star rating which is Kentucky.**
 
+# # Chidrens Hospitals with 1 star rating
 
 # In[ ]:
-
 
-train_test['FamilySize'] = train_test['Parch'] + train_test['SibSp']
 
+Chidrens_1=hospital_data.loc[(hospital_data["Hospital Type"]=="Childrens") & (hospital_data["Hospital overall rating"]=="1"),["State"]]
+C_1=Chidrens_1['State'].value_counts()
+C_1
+index=C_1.index
+values=C_1.values
+values
+index
 
-# In[ ]:
 
+# **Thus there no hospitals for childrens with 5 star rating**
 
-train_test['Alone']=0
-train_test.loc[(train_test.FamilySize==0),'Alone']=1
+# ### Checking which hospital types are more common
 
-
 # In[ ]:
 
 
-train_test['Low_Parch']=0
-train_test.loc[(train_test.Parch<=3),'Low_Parch']=1
+unique_hospital_type=hospital_data['Hospital Type'].unique()
+#hospital_data['Hospital Type'].count()
 
 
 # In[ ]:
-
 
-train_test['Low_SibSp']=0
-train_test.loc[(train_test.SibSp<=2),'Low_SibSp']=1
 
+hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Acute Care Hospitals']
+Acute_care=hospital_type['Hospital Type'].count()
 
-# In[ ]:
-
+hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Critical Access Hospitals']
+Critical_Acess=hospital_type['Hospital Type'].count()
 
-#train_test['CabinClass'] = train_test['Cabin'].astype(str).str[0]
+hospital_type=hospital_data.loc[hospital_data['Hospital Type']=='Childrens']
+Childrens=hospital_type['Hospital Type'].count()
+list=[Acute_care,Critical_Acess,Childrens]
+list
 
 
 # In[ ]:
-
-
-#Cabin  = pd.get_dummies(train_test['CabinClass'],prefix='Cabin',drop_first=False)
 
-#train_test = pd.concat([train_test,Cabin],axis=1).drop(['Cabin','CabinClass'],axis=1)
 
+ax=sns.barplot(x=unique_hospital_type,y=list,data=hospital_data,palette='colorblind')
+ax.set(xlabel='Types of hospitals', ylabel='Number of  hospitals')
 
-# In[ ]:
-
-
-##Fare_Range  = pd.get_dummies(train_test['Fare_Range'],prefix='Fare_Range',drop_first=False)
 
-##train_test = pd.concat([train_test,Fare_Range],axis=1).drop('Fare_Range',axis=1)
+# ###Thus there are large number of Acute Care Hospitals followed by Critical Acess Hospitals.Childrens hospitals are very rare.
 
+# # The average hospital rating, by state
 
 # In[ ]:
 
 
-Embarked  = pd.get_dummies(train_test['Embarked'],prefix='Embarked',drop_first=False)
+hospital_data['Hospital overall rating'].unique()
 
-train_test = pd.concat([train_test,Embarked],axis=1).drop('Embarked',axis=1)
 
-
 # In[ ]:
-
-
-Initial  = pd.get_dummies(train_test['Initial'],prefix='Initial',drop_first=False)
 
-train_test = pd.concat([train_test,Initial],axis=1).drop('Initial',axis=1)
 
+clean_hospital_data=hospital_data.drop(hospital_data[hospital_data['Hospital overall rating']=='Not Available'].index)
+#clean_hospital_data['Hospital overall rating'].astype(float)
+clean_hospital_data['Hospital overall rating'].unique()
 
-# In[ ]:
-
-
-train_test.info()
 
+# ### Converting it to float data type for calculation
 
 # In[ ]:
 
 
-train_test = train_test.drop(['Name','FamilySize','Cabin'],axis=1)
+clean_hospital_data['Hospital overall rating']=clean_hospital_data['Hospital overall rating'].astype(float)
 
 
-# **<font size=5>Modeling</font>**
-
 # In[ ]:
-
 
-train = train_test[train_test.is_train == 1].drop(['PassengerId','is_train'],axis=1)
 
-test = train_test[train_test.is_train == 0].drop(['PassengerId','is_train'],axis=1)
+clean_hospital_data['Hospital overall rating'].mean()
+clean_hospital_data['Hospital overall rating'].count()
 
 
 # In[ ]:
-
-
-train['Survived'] = train_df['Survived']
 
 
-# In[ ]:
+Statewise_avarage_rating=clean_hospital_data.groupby('State')['Hospital overall rating'].mean()
+#Statewise_avarage_rating.sort_values(ascending=False)
 
 
-len(train_test)
+# ### Separating index and values
 
-
 # In[ ]:
 
 
-len(train)
+index=Statewise_avarage_rating.sort_values(ascending=False).index
+values=Statewise_avarage_rating.sort_values(ascending=False).values
+#index
+#values
 
 
 # In[ ]:
 
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn import svm
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.svm import LinearSVC
-from sklearn import metrics
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
+a4_dims = (8, 10)
+fig, ax = plt.subplots(figsize=a4_dims)
 
+ax=sns.barplot(y=index,x=values)
+ax.set(xlabel='Average rating of the hospitals', ylabel='State')
 
-# In[ ]:
 
+# **Thus South Dacota has the best average rating of the hospitals.District of columbia has the worst average rating.**
 
-X_train, X_test, Y_train, Y_test=train_test_split(train,train.Survived,test_size=0.2,random_state=3)
+# # Let us check which types of hospitals are more likely to have not submitted proper data
 
+# ###  Which type of hospitals has highest Non-availabilty of Mortality comparison data?
 
 # In[ ]:
 
 
-X_train = X_train.drop('Survived',axis = 1)
-X_test = X_test.drop('Survived',axis = 1)
+Mortality_NotAvailable=hospital_data.loc[hospital_data['Mortality national comparison']=='Not Available']
+Mortality_NotAvailable['Mortality national comparison'].count()
 
 
 # In[ ]:
 
 
-model = LogisticRegression()
-model.fit(X_train, Y_train)
-prediction=model.predict(X_test)
-print('Accuracy for rbf LogisticRegression is ',metrics.accuracy_score(prediction,Y_test))
+Non_available_data=Mortality_NotAvailable.groupby('Hospital Type')['Mortality national comparison'].count()
+#Non_available_data
+Non_available_data.sort_values(ascending=False)
 
 
 # In[ ]:
 
 
-sns.heatmap(confusion_matrix(prediction,Y_test),annot=True,fmt='2.0f')
+index=Non_available_data.sort_values(ascending=False).index
+values=Non_available_data.sort_values(ascending=False).values
+#index
+#values
 
 
 # In[ ]:
 
 
-model = RandomForestClassifier(n_estimators=30)
-model.fit(X_train, Y_train)
-prediction=model.predict(X_test)
-print('Accuracy for rbf RandomForestClassifier is ',metrics.accuracy_score(prediction,Y_test))
+dims = (6, 6)
+fig, ax = plt.subplots(figsize=dims)
 
+ax=sns.barplot(y=values,x=index,palette='PiYG')
+ax.set(xlabel='Hospitals types', ylabel='Count of Mortality data Non-Availabilty') 
 
-# In[ ]:
-
 
-sns.heatmap(confusion_matrix(prediction,Y_test),annot=True,fmt='2.0f')
+# **Thus Critical Acess hospitals has highest Non-availabilty of mortality comparison of the data and chidrens hospitals has minimum.**
 
+# # Which type of hospitals has highest Non-availabilty of Safety of Care data?
 
 # In[ ]:
 
 
-model=svm.SVC(kernel='linear',C=0.1,gamma=0.1)
-model.fit(X_train,Y_train)
-prediction=model.predict(X_test)
-print('Accuracy for linear SVM is',metrics.accuracy_score(prediction,Y_test))
+SafetyOfCare_NotAvailable=hospital_data.loc[hospital_data['Safety of care national comparison']=='Not Available']
+SafetyOfCare_NotAvailable['Safety of care national comparison'].count()
 
 
 # In[ ]:
 
 
-sns.heatmap(confusion_matrix(prediction,Y_test),annot=True,fmt='2.0f')
+SafetyOfCare_NotAvailable=hospital_data.loc[hospital_data['Safety of care national comparison']=='Not Available']
+SafetyOfCare_NotAvailable['Safety of care national comparison'].count()
+Non_available_data=SafetyOfCare_NotAvailable.groupby('Hospital Type')['Safety of care national comparison'].count()
+#Non_available_data
+Non_available_data.sort_values(ascending=False)
+index=Non_available_data.sort_values(ascending=False).index
+values=Non_available_data.sort_values(ascending=False).values
 
 
 # In[ ]:
-
-
-model=KNeighborsClassifier() 
-model.fit(X_train,Y_train)
-prediction=model.predict(X_test)
-print('The accuracy of the KNN is',metrics.accuracy_score(prediction,Y_test))
 
 
-# In[ ]:
+dims = (6, 6)
+fig, ax = plt.subplots(figsize=dims)
 
+ax=sns.barplot(y=values,x=index,palette='BrBG')
+ax.set(xlabel='Hospital Types ', ylabel='Count of Safety of care data Non-Availabilty')
 
-sns.heatmap(confusion_matrix(prediction,Y_test),annot=True,fmt='2.0f')
 
+# # Which type of hospitals has highest Non-availabilty of Readmission national comparison data?
 
 # In[ ]:
 
 
-model=GaussianNB()
-model.fit(X_train,Y_train)
-prediction=model.predict(X_test)
-print('The accuracy of the NaiveBayes is',metrics.accuracy_score(prediction,Y_test))
+Readmission_NotAvailable=hospital_data.loc[hospital_data['Readmission national comparison']=='Not Available']
+Readmission_NotAvailable['Readmission national comparison'].count()
+Non_available_data=Readmission_NotAvailable.groupby('Hospital Type')['Readmission national comparison'].count()
+#Non_available_data
+Non_available_data.sort_values(ascending=False)
+index=Non_available_data.sort_values(ascending=False).index
+values=Non_available_data.sort_values(ascending=False).values
+#index
+#values
 
 
 # In[ ]:
-
-
-sns.heatmap(confusion_matrix(prediction,Y_test),annot=True,fmt='2.0f')
 
 
-# In[ ]:
-
+dims = (6, 7)
+fig, ax = plt.subplots(figsize=dims)
 
-model=LinearSVC()
-model.fit(X_train, Y_train)
-prediction=model.predict(X_test)
-print('The accuracy of the NaiveBayes is',metrics.accuracy_score(prediction,Y_test))
+ax=sns.barplot(y=values,x=index,palette='RdYlGn')
+ax.set(xlabel='Hospital Types ', ylabel='Count of Readmission data Non-Availabilty')
 
 
-# In my opinion, I think since the distribution survived and dead is pretty clear. Therefore, the SVM algorithm can have a good prediction. However, since there are still some exception, the improvement of the prediction would be limited. In my case, the maximum of my SVM model is 78% accuracy. 
-# 
-# About the knowledge of these algorithms, you can refer to this [article](https://towardsdatascience.com/10-machine-learning-algorithms-you-need-to-know-77fb0055fe0).
+# **Similarly there are few more columns which we can take into consideration**
 
 # In[ ]:
-
-
-model=svm.SVC(kernel='linear',C=0.1,gamma=0.1)
-model.fit(X_train, Y_train)
-prediction=model.predict(test)
-test['PassengerId'] = test_df['PassengerId']
-submission = pd.concat([test[['PassengerId']],pd.DataFrame(prediction)],axis=1)
-submission.columns = ['PassengerId', 'Survived']
-submission.to_csv('submission.csv',index=False)
 
 
-# **Refer to :**
-# 
-# https://www.kaggle.com/ash316/eda-to-prediction-dietanic
-# 
-# https://www.kaggle.com/ldfreeman3/a-data-science-framework-to-achieve-99-accuracy
-# 
-# https://www.kaggle.com/startupsci/titanic-data-science-solutions
-# 
-# https://www.kaggle.com/arthurtok/introduction-to-ensembling-stacking-in-python
-# 
-# 
-# Thanks for sharing
+#Still Working
 
-# <font size=5>Upvote if you find this helpful. </font>
-# 
-# <font size=5>If you are still in novice tier, I would appreicate that you fill up all the information and become a competition contributor for me! </font>
-# 
-# <font size=5>Thanks</font>

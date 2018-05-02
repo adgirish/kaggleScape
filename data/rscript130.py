@@ -1,29 +1,50 @@
-# the code is taken from
-# http://matplotlib.org/xkcd/examples/showcase/xkcd.html
+import numpy
+from sklearn.decomposition import PCA
+from sklearn.svm import SVC
 
-from matplotlib import pyplot as plt
-import numpy as np
+COMPONENT_NUM = 35
 
-plt.xkcd()
+print('Read training data...')
+with open('../input/train.csv', 'r') as reader:
+    reader.readline()
+    train_label = []
+    train_data = []
+    for line in reader.readlines():
+        data = list(map(int, line.rstrip().split(',')))
+        train_label.append(data[0])
+        train_data.append(data[1:])
+print('Loaded ' + str(len(train_label)))
 
-fig = plt.figure()
-ax = fig.add_subplot(1, 1, 1)
-ax.spines['right'].set_color('none')
-ax.spines['top'].set_color('none')
-plt.xticks([])
-plt.yticks([])
-ax.set_ylim([-30, 10])
+print('Reduction...')
+train_label = numpy.array(train_label)
+train_data = numpy.array(train_data)
+pca = PCA(n_components=COMPONENT_NUM, whiten=True)
+pca.fit(train_data)
+train_data = pca.transform(train_data)
 
-data = np.ones(100)
-data[70:] -= np.arange(30)
+print('Train SVM...')
+svc = SVC()
+svc.fit(train_data, train_label)
 
-plt.annotate(
-    'THE DAY I REALIZED\nKAGGLE IS FUN',
-    xy=(70, 1), arrowprops=dict(arrowstyle='->'), xytext=(15, -10))
+print('Read testing data...')
+with open('../input/test.csv', 'r') as reader:
+    reader.readline()
+    test_data = []
+    for line in reader.readlines():
+        pixels = list(map(int, line.rstrip().split(',')))
+        test_data.append(pixels)
+print('Loaded ' + str(len(test_data)))
 
-plt.plot(data)
+print('Predicting...')
+test_data = numpy.array(test_data)
+test_data = pca.transform(test_data)
+predict = svc.predict(test_data)
 
-plt.xlabel('time')
-plt.ylabel('my overall health')
+print('Saving...')
+with open('predict.csv', 'w') as writer:
+    writer.write('"ImageId","Label"\n')
+    count = 0
+    for p in predict:
+        count += 1
+        writer.write(str(count) + ',"' + str(p) + '"\n')
 
-plt.savefig('fig.png') # added

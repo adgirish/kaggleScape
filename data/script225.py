@@ -1,94 +1,173 @@
 
 # coding: utf-8
 
+# # Preprocessing code to join all the tables 
+
 # In[ ]:
 
 
-#Ignore the seaborn warnings.
-import warnings
-warnings.filterwarnings("ignore");
+#Credits to https://www.kaggle.com/robikscube/eda-of-women-s-ncaa-bracket-data-in-progress by Robert Mulla
 
-import numpy as np
-import pandas as pd
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
 import seaborn as sns
-import scipy.stats
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('fivethirtyeight')
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# ## Load all the data as pandas Dataframes
+
+# In[ ]:
+
+
+cities = pd.read_csv('../input/WCities.csv')
+gamecities = pd.read_csv('../input/WGameCities.csv')
+tourneycompactresults = pd.read_csv('../input/WNCAATourneyCompactResults.csv')
+tourneyseeds = pd.read_csv('../input/WNCAATourneySeeds.csv')
+tourneyslots = pd.read_csv('../input/WNCAATourneySlots.csv')
+regseasoncompactresults = pd.read_csv('../input/WRegularSeasonCompactResults.csv')
+seasons = pd.read_csv('../input/WSeasons.csv')
+teamspellings = pd.read_csv('../input/WTeamSpellings.csv', engine='python')
+teams = pd.read_csv('../input/WTeams.csv')
 
 
 # In[ ]:
 
 
-#Import data and see what states it has values for so far.
-df = pd.read_csv('../input/primary_results.csv')
-df.state.unique()
+print(tourneycompactresults.shape)
+print(regseasoncompactresults.shape)
 
 
 # In[ ]:
 
 
-#Create a new dataframe that holds votes by state and the fraction of total votes(democrat + republican) that a candidate recieved and pare them down to only those that are still in the race as of 2 March.
+# Convert Tourney Seed to a Number
+tourneyseeds['SeedNumber'] = tourneyseeds['Seed'].apply(lambda x: int(x[-2:]))
 
-votesByState = [[candidate, state] for candidate in df.candidate.unique() for state in df.state.unique()]
-for i in votesByState:
-    i.append(df[df.candidate == i[0]].party.unique()[0])
-    i.append(df[(df.candidate == i[0]) & (df.state == i[1])].votes.sum())
-    i.append(i[3]/df[(df.party == i[2]) & (df.state == i[1])].votes.sum())
-    i.append(i[3]/df[df.state == i[1]].votes.sum())
-vbs = pd.DataFrame(votesByState, columns = ['candidate', 'state', 'party', 'votes', 'partyFrac', 'totalFrac'])
-vbs = vbs[vbs.candidate != ' Uncommitted']
-vbs['state'] = vbs['state'].astype('category')
-vbs = vbs[vbs.candidate.isin(['Hillary Clinton', 'Bernie Sanders', 'Donald Trump', 'Ben Carson', 'John Kasich', 'Ted Cruz', 'Marco Rubio'])]
 
-#Add in a column with the order the primaries took place to easier visualize data.
-count = 1
-vbs['stateOrder'] = 0
-for i in vbs.state.unique():
-    vbs['stateOrder'][vbs.state == i] = count 
-    count += 1
+# **Merge all the tables:**
+
+# In[ ]:
+
+
+gamecities = gamecities.merge(cities,how='left',on='CityID')
+
+tourneycompactresults['WSeed'] = tourneycompactresults[['Season','WTeamID']].merge(tourneyseeds,left_on = ['Season','WTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
+tourneycompactresults['LSeed'] = tourneycompactresults[['Season','LTeamID']].merge(tourneyseeds,left_on = ['Season','LTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
+
+tourneycompactresults = tourneycompactresults.merge(gamecities,how='left',on=['Season','DayNum','WTeamID','LTeamID'])
+
+regseasoncompactresults['WSeed'] = regseasoncompactresults[['Season','WTeamID']].merge(tourneyseeds,left_on = ['Season','WTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
+regseasoncompactresults['LSeed'] = regseasoncompactresults[['Season','LTeamID']].merge(tourneyseeds,left_on = ['Season','LTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
+
+regseasoncompactresults = regseasoncompactresults.merge(gamecities,how='left',on=['Season','DayNum','WTeamID','LTeamID'])
 
 
 # In[ ]:
 
 
-#Create a pair-wise list of candidates
-canPairs = []
-canPairsraw = [[i,j] for i in vbs.candidate.unique() for j in vbs.candidate.unique() if i != j]
-for i in canPairsraw:
-    if list(reversed(i)) in canPairs:
-        continue
-    canPairs.append(i)
+regseasoncompactresults = regseasoncompactresults.merge(seasons,how='left',on='Season')
+tourneycompactresults = tourneycompactresults.merge(seasons,how='left',on='Season')
 
 
 # In[ ]:
 
 
-#Calculate the Pearson correlation between each pair and finding the max and min.
-corrVals = []
-for i in canPairs:
-    corrVals.append(['{} vs. {}'.format(i[0], i[1]), (scipy.stats.pearsonr(vbs[vbs.candidate == i[0]].totalFrac, vbs[vbs.candidate == i[1]].totalFrac)[0])**2])
+regseasoncompactresults['WTeamName'] = regseasoncompactresults[['WTeamID']].merge(teams,how='left',left_on='WTeamID',right_on='TeamID')[['TeamName']]
+regseasoncompactresults['LTeamName'] = regseasoncompactresults[['LTeamID']].merge(teams,how='left',left_on='LTeamID',right_on='TeamID')[['TeamName']]
 
-max = ['',.5]
-min = ['',.5]
-for i in corrVals:
-    if max[1] < i[1]:
-        max = i
-    if min[1] > i[1]:
-        min = i
-
-print('Max correlation: {}\nMin correlation: {}'.format(max, min))
-#The higher the correlation, the less effect the candidate has on the other, the lower the correlation the more of an effect.  So, states that voted more for Trump, voted less for Carson.
-
-#I made a mistake and should have been looking at r^2.  The closer to 0 the lower the effect, so that's fixed now.
+tourneycompactresults['WTeamName'] = tourneycompactresults[['WTeamID']].merge(teams,how='left',left_on='WTeamID',right_on='TeamID')[['TeamName']]
+tourneycompactresults['LTeamName'] = tourneycompactresults[['LTeamID']].merge(teams,how='left',left_on='LTeamID',right_on='TeamID')[['TeamName']]
 
 
 # In[ ]:
 
 
-g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Ted Cruz') | (vbs.candidate == 'Marco Rubio')])
+print(tourneycompactresults.shape)
+print(regseasoncompactresults.shape)
+
+
+# We have merged all the tables now, we can start working on exploring the data without having to worry about joining multiple table.
+# 
+# The data is present in regseasoncompactresults and tourneycompactresults tables.
+
+# In[ ]:
+
+
+fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
+ax1 = sns.countplot(x=tourneycompactresults['WSeed'],ax=ax1)
+ax1.set_title("Seed of Winners - Tourney")
+ax2 = sns.countplot(x=tourneycompactresults['LSeed'],ax=ax2);
+ax2.set_title("Seed of Losers - Tourney")
+
+plt.legend();
 
 
 # In[ ]:
 
 
-g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Donald Trump') | (vbs.candidate == 'Ben Carson')])
+fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
+ax1 = sns.countplot(x=regseasoncompactresults['WSeed'],ax=ax1)
+ax1.set_title("Seed of Winners - Reg Season")
+ax2 = sns.countplot(x=regseasoncompactresults['LSeed'],ax=ax2)
+ax2.set_title("Seed of Losers - Reg Season")
+
+plt.legend();
+
+
+# Based on the visualizations, the top seeds won most of the matches and lost fewer matches relatively. So its safe to assume that this is a key feature for our model both in tourneys and regular seasons.
+
+# In[ ]:
+
+
+fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
+ax1 = sns.countplot(x=regseasoncompactresults['WLoc'],ax=ax1)
+ax1.set_title("Reg Season")
+ax1.set_xlabel('Winning location')
+ax2 = sns.countplot(x=tourneycompactresults['WLoc'],ax=ax2)
+ax2.set_title("Tourneys")
+ax2.set_xlabel('Winning location')
+
+plt.legend();
+
+
+# In[ ]:
+
+
+fig,(ax1,ax2) = plt.subplots(nrows=2, figsize=(12,10))
+a = sns.distplot(tourneycompactresults['WScore'],label='Winning Score',ax=ax1)
+a = sns.distplot(tourneycompactresults['LScore'],ax=a,label='Losing Score')
+a.set_xlabel("Score distribution-Tourney Results")
+
+b = sns.distplot(regseasoncompactresults['WScore'],label='Winning Score',ax=ax2)
+b = sns.distplot(regseasoncompactresults['LScore'],ax=b,label='Losing Score')
+b.set_xlabel("Score distribution-RegSeason Results")
+
+plt.legend();
+
+
+# Based on the distribution, the score tends to be higher in Tourney's than in regular seasons.
+# 
+# Clearly, the score of winners is higher than the score of losers both in tourneys and Regular seasons.
+
+# In[ ]:
+
+
+# Calculate the Average Team Seed
+averageseed = tourneyseeds.groupby(['TeamID']).agg(np.mean).sort_values('SeedNumber')
+averageseed = averageseed.merge(teams, left_index=True, right_on='TeamID') #Add Teamnname
+averageseed.head(20).plot(x='TeamName',
+                          y='SeedNumber',
+                          kind='bar',
+                          figsize=(15,5),
+                         title='Top 20 Average Tournament Seed');
 

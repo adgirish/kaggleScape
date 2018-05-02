@@ -1,240 +1,690 @@
 
 # coding: utf-8
 
-# Upvote ! if you find it useful 
+# # Titanic data: Learning from disaster
 # 
+# **Task**: predict survival of a passage giving his/her ticket class class, name, gender, age, number of siblings / spouses aboard,  number of parents / children aboard, ticket number, cabin number and Port of embarkation
 # 
-# **TUTORIAL for BEGINNERS ON HOW TO SOLVE ALMOST ANY  TEXT CLASSIFICATION PROBLEM USING NAIVE BAYES**
-# **So This is a very basic TUTORIAL, For newcomers. I will be using simple naive bayes along with Count Vectorization to solve this problem**
+# **Notes:**
+#  
+# - Based on the tutorial 
+# - Fix some bugs
+# - Add cross-validation and grid search
+# - Add Validation and Learning curves
 # 
-# So Lets Start.
-# 
-# Lets Understand the hot terms first:
-# 
-# **Naive Bayes Classifier**
-# 
-# **It is a simple classifier based on bayes theorem with full independence between different features.**  I know it passed right from above the head.
-# 
-# Lets find a simple explanation:
-# * So we have a dataset with [text, label] e.g.["This process, however, afforded me no means of..."	,EAP] where EAP represents the author so we have a text and we have to find out which author out of three wrote that text.
-# * Now First of all computer does not understand alphabets or words, so we convert the words into numbers so make computer understand it
-# * For that we simply assign a number for each unique word, e.g.  "to be or not to be" will be assigned numbers like to:1, be:2, or:3, not:4.
-# * Now we can send input to the computer like [1,2,3,4,1,2] 
-# * But naive bayes does not want this it just wants the count of each words.
-# * Naive bayes like the count of "to" or "1" in document1 or row1 and so on
-# * So we give naive bayes input like this [0,1]:2   [0,2]:2   [0,3]:1 and so on. We are giving it the count of each word and each document so zero represents first document.
-# * So we are going to have a big two dimensional matrix with lots of columns and rows equal to the number of documents given
-# 
-# Now lets look at naive bayes again, Naive bayes considers each words as independant and does not value the position of each word: (the postion of word have no role in classifying or training in naive bayes)
-# 
-# Secondly it is based on probability and bayes theorem, I am not going to explain it here as it will take more than necessary space so Chapter 13 of **An Introduction to information retreival by Christopher D manning , Prabhakar Raghavan
-# Hinrich Schütze ** Section 13.2 will explain us the naive bayes in detail
-# 
-# https://nlp.stanford.edu/IR-book/pdf/13bayes.pdf
-# 
-# 
-# Now lets come back to the dataset
-# 
-# 
-# So lets see what we got, we got a training data set with author labels and testing datasets without labels. In this we just take the training data set, Split it by using 70% for training the Naive Bayes classifier and other 30% for testing it.
-# Here is the basic code and easiest one.
-# 
-# 
-# So first of all we import libraries then we load the csv file into a pandas dataframe, or in layman terms, into a python variable so that we can process it.
-# 
-# Then we see a sample of the data using training_data.head().
-# 
-
-# In[1]:
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-#READING INPUT
-training_data = pd.read_csv("../input/train.csv")
-testing_data=pd.read_csv("../input/test.csv")
-training_data.head()
-
-
-# Now by just looking at the top 4 entries, it must be clear that does id have any role in determining who the author is?
-# No. Id is just used as a identifier for text NOT for author. So one thing is clear over here, that id is useless and would not help in any way to our model to learn.
-# 
-# So now we simple omit the id.
-# Similarly to avoid clutterness we map "EAP" to 0 "HPL" to 1 and "MWS" to 2 as it will be more convenient for our classifier. 
-# In other words we are just telling our computer that if classifier predicts 0 for the text then it means that it is preicting "EAP", if 1 then it means that it is predicting "HPL", if 2 then it means that it is predicting 2.
-# 
-# Next we take all the rows under the column named "text" and put it in X ( a variable in python)
-# 
-# Similarly we take all rows under the column named "author_num" and put it in y (a variable in python)
+# Part I : Exploratory Data Analysis
+# -------------------------
 
 # In[ ]:
 
 
-training_data['author_num'] = training_data.author.map({'EAP':0, 'HPL':1, 'MWS':2})
-X = training_data['text']
-y = training_data['author_num']
-print (X.head())
-print (y.head())
+# data analysis and wrangling
+import pandas as pd
+import numpy as np
+import random as rnd
+
+# visualization
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# machine learning
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC, LinearSVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import Perceptron
+from sklearn.linear_model import SGDClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import VotingClassifier
+from sklearn.model_selection import GridSearchCV
+
+#Learning curve
+from sklearn.model_selection import learning_curve
+from sklearn.model_selection import ShuffleSplit
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import validation_curve
 
 
-
-# Now we got the data, we got the text and the corresponing label, Now we need to split the data into training set and testing set.
-# Testing set is the one which we will never show to the computer, we will take it and keep it in a safe and only use it to test the model.
-# 
-# So we are going to split it into 70% for training and 30% for testing.
-
-# In[ ]:
-
-
-per=int(float(0.7)* len(X))
-X_train=X[:per]
-X_test=X[per:]
-y_train=y[:per]
-y_test=y[per:]
-
-
-# Here are some libraries we are going to need
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.naive_bayes import MultinomialNB
-
-
-# **Now comes the most important part.
-# Vectorization**
-# 
-# We see that computers get crazy with text, It only understands numbers, but we have got to classify text. Now what do we do?
-# We do tokenization and vectorization to save the count of each word. Confused right.
-# keep on reading believe me you will get it in the end.
-# Now let say you have got a text like "My name is computer My life". so what exactly does the vectorizer do.??
-# 
-# Lets see,
-# first it breaks it into tokens something like this. 
-# 
-# My
-# 
-# name
-# 
-# is
-# 
-# computer
-# 
-# My
-# 
-# life
-# 
-# Pretty easy right
-# Now it first creates a vocabulary from it
-# e.g
-# My:0
-# computer:1
-# is:2
-# life:3
-# name:4
-# 
-# Still very easy
-# 
-# 
-# 
-# Now we see that we create a sparse matrix out of it,  
-# 
-# 
-# 
-# Which have 1 row and 5 columns are there were 5 unique tokens in our text
-# 
-# 
-# 
-# we see that matrix[0,0] is 2 which specifies that 0 item in dictionary which is My came 2 times and so on.
-# 
+# ## Step 1: Load data
 
 # In[ ]:
 
 
-#toy example
-text=["My name is computer My life"]
-toy = CountVectorizer(lowercase=False, token_pattern=r'\w+|\,')
-toy.fit_transform(text)
-print (toy.vocabulary_)
-matrix=toy.transform(text)
-print (matrix[0,0])
-print (matrix[0,1])
-print (matrix[0,2])
-print (matrix[0,3])
-print (matrix[0,4])
+#-----------------------------------------------------------
+# Step 01: load data using panda
+#-----------------------------------------------------------
+train_df = pd.read_csv('../input/train.csv')  # train set
+test_df  = pd.read_csv('../input/test.csv')   # test  set
+combine  = [train_df, test_df]
 
 
-
-# Exacly like the above toy example we vectorize the text
+# ## Step 2: Acquire and clean data
 
 # In[ ]:
 
 
-vect = CountVectorizer(lowercase=False, token_pattern=r'\w+|\,')
-X_cv=vect.fit_transform(X)
-X_train_cv = vect.transform(X_train)
-X_test_cv = vect.transform(X_test)
-print (X_train_cv.shape)
+#-----------------------------------------------------------
+# Step 02: Acquire and clean data
+#-----------------------------------------------------------
+train_df.head(5)
 
-
-# Here comes the final step
-# We give the data to the clf.fit for training and test it for score.
-# We have not used log score over here for simplicity.
 
 # In[ ]:
 
 
-clf=MultinomialNB()
-clf.fit(X_train_cv, y_train)
-clf.score(X_test_cv, y_test)
+train_df.info()
 
-
-# Now we saw the accuracy on our training data we made for ourself, Now we will let the kaggle test our accuracy. So first of all we will update our vocabulary and transform raw TEST data from kaggle into vectorized form
 
 # In[ ]:
 
 
-X_test=vect.transform(testing_data["text"])
+train_df.describe()
 
-
-
-
-# Now we have successfully vectorized the data given by kaggle Now we fit the whole training data without any split into our Naive Bayes Model
-# Next we give it the testing vectorized data to predict the probabilities
 
 # In[ ]:
 
 
-clf=MultinomialNB()
-clf.fit(X_cv, y)
-predicted_result=clf.predict_proba(X_test)
-predicted_result.shape
+train_df.describe(include=['O'])
 
 
-# We see that we got a result with 8392 rows presenting each text and 3 columns each column representing probability of each author.
-
-# In[ ]:
-
-
-#NOW WE CREATE A RESULT DATA FRAME AND ADD THE COLUMNS NECESSARY TO SUBMIT HERE
-result=pd.DataFrame()
-result["id"]=testing_data["id"]
-result["EAP"]=predicted_result[:,0]
-result["HPL"]=predicted_result[:,1]
-result["MWS"]=predicted_result[:,2]
-result.head()
-
-
-# FINALLY WE SUBMIT THE RESULT TO KAGGLE FOR EVALUATION
+# Training data statistics:
+# 
+#  - 891 training samples
+#  - Age, Cabin, Embarked: incomplete data
+#  - Data type:
+#       - object: Name, Sex, Ticket, Cabin, Embarked
+#       - int64: PassengerId, Survived, Pclass, SibSp, Parch
+#       - float64: Age, Fare
+#  - Survive rate: 0.383838
 
 # In[ ]:
 
 
-result.to_csv("TO_SUBMIT.csv", index=False)
+# remove Features: Ticket, Cabin
+#train_df = train_df.drop(['Ticket', 'Cabin'], axis=1)
+#test_df  = test_df.drop(['Ticket', 'Cabin'], axis=1)
+#combine  = [train_df, test_df]
+for dataset in combine:
+   dataset['Cabin'] = dataset['Cabin'].fillna('U')
+   dataset['Cabin'] = dataset.Cabin.str.extract('([A-Za-z])', expand=False)
+   
+for dataset in combine:
+   dataset['Cabin'] = dataset['Cabin'].map( {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E':0, 
+                                           'F':0, 'G':0, 'T':0, 'U':1} ).astype(int)
+   
+train_df.head()
+   
 
 
-# ****PLEASE UPVOTE IF YOU FIND IT USEFUL****
+# In[ ]:
+
+
+train_df = train_df.drop(['Ticket'], axis=1)
+test_df  = test_df.drop(['Ticket'], axis=1)
+combine  = [train_df, test_df]
+
+
+# survival rate distribtion as a function of Pclass
+train_df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+
+
+# In[ ]:
+
+
+# obtain Title from name (Mr, Mrs, Miss etc)
+for dataset in combine:
+    dataset['Title'] = dataset.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
+
+
+for dataset in combine:
+    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess', 'Dona'],'Royalty')
+    dataset['Title'] = dataset['Title'].replace(['Mme'], 'Mrs')
+    dataset['Title'] = dataset['Title'].replace(['Mlle','Ms'], 'Miss')
+    dataset['Title'] = dataset['Title'].replace(['Capt', 'Col', 'Major','Rev'], 'Officer')
+    dataset['Title'] = dataset['Title'].replace(['Jonkheer', 'Don','Sir'], 'Royalty')
+    dataset.loc[(dataset.Sex == 'male')   & (dataset.Title == 'Dr'),'Title'] = 'Mr'
+    dataset.loc[(dataset.Sex == 'female') & (dataset.Title == 'Dr'),'Title'] = 'Mrs'
+
+#: count survived rate for different titles
+train_df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+
+
+# In[ ]:
+
+
+# Covert 'Title' to numbers (Mr->1, Miss->2 ...)
+title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Royalty":5, "Officer": 6}
+for dataset in combine:
+    dataset['Title'] = dataset['Title'].map(title_mapping)
+    dataset['Title'] = dataset['Title'].fillna(0)
+
+# Remove 'Name' and 'PassengerId' in training data, and 'Name' in testing data
+train_df = train_df.drop(['Name', 'PassengerId'], axis=1)
+test_df = test_df.drop(['Name'], axis=1)
+combine = [train_df, test_df]
+
+# if age < 16, set 'Sex' to Child
+for dataset in combine:
+    dataset.loc[(dataset.Age < 16),'Sex'] = 'Child'
+    
+# Covert 'Sex' to numbers (female:1, male:2)
+for dataset in combine:
+    dataset['Sex'] = dataset['Sex'].map( {'female': 1, 'male': 0, 'Child': 2} ).astype(int)
+
+train_df.head()
+
+
+# In[ ]:
+
+
+# Age distribution for different values of Pclass and gender
+#grid = sns.FacetGrid(train_df, row='Pclass', col='Sex', size=2.2, aspect=1.6)
+#grid.map(plt.hist, 'Age', bins=20)
+#grid.add_legend()
+
+
+# In[ ]:
+
+
+# Guess age values using median values for age across set of Pclass and gender frature combinations
+for dataset in combine:
+    dataset['Age']=dataset.groupby(['Sex', 'Pclass'])['Age'].transform(lambda x: x.fillna(x.mean())).astype(int)
+
+# create Age bands and determine correlations with Survived
+train_df['AgeBand'] = pd.cut(train_df['Age'], 5)
+train_df[['AgeBand', 'Survived']].groupby(['AgeBand'], as_index=False).mean().sort_values(by='AgeBand', ascending=True)
+
+
+# In[ ]:
+
+
+for dataset in combine:
+    dataset.loc[ dataset['Age'] <= 16, 'Age'] = 0
+    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
+    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
+    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
+    dataset.loc[ dataset['Age'] > 64, 'Age'] = 4
+
+train_df = train_df.drop(['AgeBand'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
+
+
+# In[ ]:
+
+
+# Create family size from 'sibsq + parch + 1'
+for dataset in combine:
+    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
+
+train_df[['FamilySize', 'Survived']].groupby(['FamilySize'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+
+#create another feature called IsAlone
+for dataset in combine:
+    dataset['IsAlone'] = 0
+    dataset.loc[(dataset['FamilySize'] == 1), 'IsAlone'] = 1
+    dataset.loc[(dataset['FamilySize'] > 4),  'IsAlone'] = 2
+
+train_df[['IsAlone','Survived']].groupby(['IsAlone'], as_index=False).mean()
+
+#drop Parch, SibSp, and FamilySize features in favor of IsAlone
+train_df = train_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
+test_df = test_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
+
+
+# In[ ]:
+
+
+# Create an artfical feature combinbing PClass and Age.
+for dataset in combine:
+    dataset['Age*Class'] = dataset.Age * dataset.Pclass
+
+train_df.loc[:, ['Age*Class', 'Age', 'Pclass']].head()
+
+
+# In[ ]:
+
+
+# fill the missing values of Embarked feature with the most common occurance
+freq_port = train_df.Embarked.dropna().mode()[0]
+for dataset in combine:
+    dataset['Embarked'] = dataset['Embarked'].fillna(freq_port)
+train_df[['Embarked', 'Survived']].groupby(['Embarked'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+
+for dataset in combine:
+    dataset['Embarked'] = dataset['Embarked'].map( {'S': 0, 'C': 1, 'Q': 2} ).astype(int)
+
+train_df.head()
+
+
+# In[ ]:
+
+
+# fill the missing values of Fare
+test_df['Fare'].fillna(test_df['Fare'].dropna().median(), inplace=True)
+
+# Create FareBand
+train_df['FareBand'] = pd.qcut(train_df['Fare'], 4)
+train_df[['FareBand', 'Survived']].groupby(['FareBand'], as_index=False).mean().sort_values(by='FareBand', ascending=True)
+
+# Convert the Fare feature to ordinal values based on the FareBand
+for dataset in combine:
+    dataset.loc[ dataset['Fare'] <= 7.91, 'Fare'] = 0
+    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
+    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare']   = 2
+    dataset.loc[ dataset['Fare'] > 31, 'Fare'] = 3
+    dataset['Fare'] = dataset['Fare'].astype(int)
+
+train_df = train_df.drop(['FareBand'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
+
+
+# In[ ]:
+
+
+train_df.describe()
+
+
+# In[ ]:
+
+
+#correlation matrix
+f, ax = plt.subplots(figsize=(12, 9))
+sns.heatmap(train_df.corr(), vmax=.8, square=True);
+
+
+# Part II : Learning Model
+# -------------------
+
+# In[ ]:
+
+
+#------------------------------------------------------------------
+# Step 03: Learning model
+#------------------------------------------------------------------
+
+X_data = train_df.drop("Survived", axis=1)          # data: Features
+Y_data = train_df["Survived"]                       # data: Labels
+X_test_kaggle  = test_df.drop("PassengerId", axis=1).copy() # test data (kaggle)
+
+cv = ShuffleSplit(n_splits=100, test_size=0.2, random_state=0)
+
+
+# In[ ]:
+
+
+# grid search
+def grid_search_model(X, Y, model, parameters, cv):
+    CV_model = GridSearchCV(estimator=model, param_grid=parameters, cv=cv)
+    CV_model.fit(X, Y)
+    CV_model.cv_results_
+    print("Best Score:", CV_model.best_score_," / Best parameters:", CV_model.best_params_)
+    
+
+
+# In[ ]:
+
+
+#validation curve
+def validation_curve_model(X, Y, model, param_name, parameters, cv, ylim, log=True):
+
+    train_scores, test_scores = validation_curve(model, X, Y, param_name=param_name, param_range=parameters,cv=cv, scoring="accuracy")
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+
+    plt.figure()
+    plt.title("Validation curve")
+    plt.fill_between(parameters, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(parameters, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
+
+    if log==True:
+        plt.semilogx(parameters, train_scores_mean, 'o-', color="r",label="Training score")
+        plt.semilogx(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+    else:
+        plt.plot(parameters, train_scores_mean, 'o-', color="r",label="Training score")
+        plt.plot(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+
+    #plt.ylim([0.55, 0.9])
+    if ylim is not None:
+        plt.ylim(*ylim)
+
+    plt.ylabel('Score')
+    plt.xlabel('Parameter C')
+    plt.legend(loc="best")
+    
+    return plt
+
+
+# In[ ]:
+
+
+# Learning curve
+def Learning_curve_model(X, Y, model, cv, train_sizes):
+
+    plt.figure()
+    plt.title("Learning curve")
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+
+
+    train_sizes, train_scores, test_scores = learning_curve(model, X, Y, cv=cv, n_jobs=4, train_sizes=train_sizes)
+
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std  = np.std(train_scores, axis=1)
+    test_scores_mean  = np.mean(test_scores, axis=1)
+    test_scores_std   = np.std(test_scores, axis=1)
+    plt.grid()
+    
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",label="Training score")
+    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+                     
+    plt.legend(loc="best")
+    return plt
+
+
+# In[ ]:
+
+
+# lrearning, prediction and printing results
+def predict_model(X, Y, model, Xtest, submit_name):
+    model.fit(X, Y)
+    Y_pred  = model.predict(Xtest)
+    score   = cross_val_score(model, X, Y, cv=cv)
+
+    submission = pd.DataFrame({
+            "PassengerId": test_df["PassengerId"],
+            "Survived": Y_pred
+        })
+    submission.to_csv(submit_name, index=False)
+    
+    return score 
+
+
+# ###  Logistic Regression
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
+
+
+# In[ ]:
+
+
+#grid search: Logistic Regression
+model = LogisticRegression()
+if search_param==1:
+    
+    param_range = np.logspace(-6, 5, 12)
+    param_grid = dict(C=param_range)
+    grid_search_model(X_data, Y_data, model, param_grid, cv)
+
+
+# In[ ]:
+
+
+#Validation Curve: Logistic Regression
+if plot_vc == 1:
+    param_range = np.logspace(-6, 3, 10)
+    param_name="C"
+    ylim=[0.55, 0.9]
+    validation_curve_model(X_data, Y_data, model, "C", param_range, cv, ylim)
+
+
+# In[ ]:
+
+
+#learn curve
+logreg  = LogisticRegression(C=1000)
+
+if plot_lc==1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, logreg, cv, train_size)
+
+
+# In[ ]:
+
+
+# Logistic Regression 
+acc_log = predict_model(X_data, Y_data, logreg, X_test_kaggle, 'submission_Logistic.csv')
+
+
+# ###  Support Vector Machines
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
+
+
+# In[ ]:
+
+
+
+
+#grid search: SVM
+search_param = 0
+if search_param==1:
+    param_range = np.linspace(0.5, 5, 9)
+    param_grid = dict(C=param_range)
+
+    grid_search_model(X_data, Y_data, SVC(), param_grid, cv)
+
+
+# In[ ]:
+
+
+#Validation Curve: SVC
+if plot_vc == 1:
+    param_range = np.linspace(0.1, 10, 10)
+    param_name="C"
+    ylim=[0.78, 0.90]
+    validation_curve_model(X_data, Y_data, SVC(), "C", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+#learn curve: SVC
+svc = SVC(C=1, probability=True)
+
+if plot_lc == 1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, svc, cv, train_size)
+
+
+# In[ ]:
+
+
+# Support Vector Machines
+acc_svc = predict_model(X_data, Y_data, svc, X_test_kaggle, 'submission_SVM.csv')
+
+
+# ### KNN
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
+
+
+# In[ ]:
+
+
+#grid search: KNN
+if search_param==1:
+    param_range = (np.linspace(1, 10, 10)).astype(int)
+    param_grid = dict(n_neighbors=param_range)
+
+    grid_search_model(X_data, Y_data, KNeighborsClassifier(), param_grid, cv)
+
+
+# In[ ]:
+
+
+#Validation Curve: KNN
+if plot_vc==1:
+    param_range = np.linspace(2, 20, 10).astype(int)
+    param_name="n_neighbors"
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, KNeighborsClassifier(), "n_neighbors", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+#learn curve: KNN
+knn = KNeighborsClassifier(n_neighbors = 10)
+
+if plot_lc==1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, knn, cv, train_size)
+
+
+# In[ ]:
+
+
+# KNN
+acc_knn = predict_model(X_data, Y_data, knn, X_test_kaggle, 'submission_KNN.csv')
+
+
+# ###  Naive Bayes
+
+# In[ ]:
+
+
+# Gaussian Naive Bayes
+gaussian = GaussianNB()
+acc_gaussian = predict_model(X_data, Y_data, gaussian, X_test_kaggle, 'submission_Gassian_Naive_Bayes.csv')
+
+
+# ### Perceptron
+
+# In[ ]:
+
+
+# Perceptron
+perceptron = Perceptron()
+acc_perceptron = predict_model(X_data, Y_data, perceptron, X_test_kaggle, 'submission_Perception.csv')
+
+
+# ###  Linear SVC
+
+# In[ ]:
+
+
+# Linear SVC
+linear_svc = LinearSVC()
+acc_linear_svc = predict_model(X_data, Y_data, linear_svc, X_test_kaggle, 'submission_Linear_SVC.csv')
+
+
+# ### Stochastic Gradient Descent
+
+# In[ ]:
+
+
+# Stochastic Gradient Descent
+sgd = SGDClassifier()
+acc_sgd = predict_model(X_data, Y_data, sgd, X_test_kaggle, 'submission_stochastic_Gradient_Descent.csv')
+
+
+# ### Decision Tree
+
+# In[ ]:
+
+
+# Decision Tree
+decision_tree = DecisionTreeClassifier()
+acc_decision_tree = predict_model(X_data, Y_data, decision_tree, X_test_kaggle, 'submission_Decision_Tree.csv')
+
+
+# ### Random Forest
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
+
+
+# In[ ]:
+
+
+#grid search: KNN (This step is very slow)
+#param_range = (np.linspace(10, 110, 10)).astype(int)
+#param_leaf = (np.linspace(1, 2, 2)).astype(int)
+#param_grid = {'n_estimators':param_range, 'min_samples_leaf':param_leaf}
+
+#grid_search_model(X_data, Y_data, RandomForestClassifier(), param_grid, cv)
+
+
+# In[ ]:
+
+
+if plot_vc==1:
+    param_range = np.linspace(10, 110, 10).astype(int)
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, RandomForestClassifier(min_samples_leaf=12), "n_estimators", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+if plot_vc==1:
+    param_range = np.linspace(1, 21, 10).astype(int)
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, RandomForestClassifier(n_estimators=80), "min_samples_leaf", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+# Random Forest
+random_forest = RandomForestClassifier(n_estimators=80, random_state =0, min_samples_leaf = 12)
+acc_random_forest = predict_model(X_data, Y_data, random_forest, X_test_kaggle, 'submission_random_forest.csv')
+
+
+# ### Ensemble votring
+
+# In[ ]:
+
+
+#ensemble votring
+ensemble_voting = VotingClassifier(estimators=[('lg', logreg), ('sv', svc), ('rf', random_forest),('kn',knn)], voting='soft')
+acc_ensemble_voting = predict_model(X_data, Y_data, ensemble_voting, X_test_kaggle, 'submission_ensemble_voting.csv')
+
+
+# In[ ]:
+
+
+models = pd.DataFrame({'Model': ['Support Vector Machines', 'KNN', 'Logistic Regression',
+                                'Random Forest', 'Naive Bayes', 'Perceptron',
+                                'Stochastic Gradient Decent', 'Linear SVC',
+                                'Decision Tree', 'ensemble_voting'],'KFoldScore': [acc_svc.mean(), acc_knn.mean(), acc_log.mean(),
+                                acc_random_forest.mean(), acc_gaussian.mean(), acc_perceptron.mean(),
+                                acc_sgd.mean(), acc_linear_svc.mean(), acc_decision_tree.mean(), acc_ensemble_voting.mean()],
+                                'Std': [acc_svc.std(), acc_knn.std(), acc_log.std(),
+                                acc_random_forest.std(), acc_gaussian.std(), acc_perceptron.std(),
+                                acc_sgd.std(), acc_linear_svc.std(), acc_decision_tree.std(), acc_ensemble_voting.std()]})
+
+models.sort_values(by='KFoldScore', ascending=False)
+

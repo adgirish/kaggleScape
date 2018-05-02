@@ -1,200 +1,276 @@
 
 # coding: utf-8
 
-# In[2]:
+# In[ ]:
 
 
-# Import libraries and set desired options
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-from __future__ import division, print_function
-# Disable Anaconda warnings
-import warnings
-warnings.filterwarnings('ignore')
-get_ipython().run_line_magic('matplotlib', 'inline')
-from matplotlib import pyplot as plt
-import seaborn as sns
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-import pickle
-import numpy as np
-import pandas as pd
-from scipy.sparse import csr_matrix
-from scipy.sparse import hstack
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score
-from sklearn.linear_model import LogisticRegression
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# ##### Approaching the Problem
-# We will be solving the intruder detection problem analyzing his behavior on the Internet. It is a complicated and interesting problem combining the data analysis and behavioral psychology.
+# First we import some datasets of interest
+
+# In[ ]:
+
+
+#the seed information
+df_seeds = pd.read_csv('../input/NCAATourneySeeds.csv')
+
+#tour information
+df_tour = pd.read_csv('../input/NCAATourneyCompactResults.csv')
+
+
+# Now we separate the winners from the losers and organize our dataset
+
+# In[ ]:
+
+
+df_seeds['seed_int'] = df_seeds['Seed'].apply( lambda x : int(x[1:3]) )
+
+df_winseeds = df_seeds.loc[:, ['TeamID', 'Season', 'seed_int']].rename(columns={'TeamID':'WTeamID', 'seed_int':'WSeed'})
+df_lossseeds = df_seeds.loc[:, ['TeamID', 'Season', 'seed_int']].rename(columns={'TeamID':'LTeamID', 'seed_int':'LSeed'})
+df_dummy = pd.merge(left=df_tour, right=df_winseeds, how='left', on=['Season', 'WTeamID'])
+df_concat = pd.merge(left=df_dummy, right=df_lossseeds, on=['Season', 'LTeamID'])
+
+
+# Now we match the detailed results to the merge dataset above
+
+# In[ ]:
+
+
+df_concat['DiffSeed'] = df_concat[['LSeed', 'WSeed']].apply(lambda x : 0 if x[0] == x[1] else 1, axis = 1)
+
+
+# Here we get our submission info
+
+# In[ ]:
+
+
+#prepares sample submission
+df_sample_sub = pd.read_csv('../input/SampleSubmissionStage1.csv')
+
+
+# In[ ]:
+
+
+df_sample_sub['Season'] = df_sample_sub['ID'].apply(lambda x : int(x.split('_')[0]) )
+df_sample_sub['TeamID1'] = df_sample_sub['ID'].apply(lambda x : int(x.split('_')[1]) )
+df_sample_sub['TeamID2'] = df_sample_sub['ID'].apply(lambda x : int(x.split('_')[2]) )
+
+
+# # Training Data Creation
+
+# In[ ]:
+
+
+winners = df_concat.rename( columns = { 'WTeamID' : 'TeamID1', 
+                                                       'LTeamID' : 'TeamID2',
+                                                      'WScore' : 'Team1_Score',
+                                                      'LScore' : 'Team2_Score'}).drop(['WSeed', 'LSeed', 'WLoc'], axis = 1)
+winners['Result'] = 1.0
+
+losers = df_concat.rename( columns = { 'WTeamID' : 'TeamID2', 
+                                                       'LTeamID' : 'TeamID1',
+                                                      'WScore' : 'Team2_Score',
+                                                      'LScore' : 'Team1_Score'}).drop(['WSeed', 'LSeed', 'WLoc'], axis = 1)
+
+losers['Result'] = 0.0
+
+train = pd.concat( [winners, losers], axis = 0).reset_index(drop = True)
+
+train['Score_Ratio'] = train['Team1_Score'] / train['Team2_Score']
+train['Score_Total'] = train['Team1_Score'] + train['Team2_Score']
+train['Score_Pct'] = train['Team1_Score'] / train['Score_Total']
+
+
+# We will only consider years relevant to our test submission
+
+# In[ ]:
+
+
+years = [2014, 2015, 2016, 2017]
+
+
+# Now lets just look at TeamID2, or just the second team info.
+
+# In[ ]:
+
+
+train_test_inner = pd.merge( train.loc[ train['Season'].isin(years), : ].reset_index(drop = True), 
+         df_sample_sub.drop(['ID', 'Pred'], axis = 1), 
+         on = ['Season', 'TeamID1', 'TeamID2'], how = 'inner' )
+
+
+# In[ ]:
+
+
+train_test_inner.head()
+
+
+# From the inner join, we will create data per team id to estimate the parameters we are missing that are independent of the year.  Essentially, we are trying to estimate the average behavior of the team across the year.
+
+# In[ ]:
+
+
+team1d_num_ot = train_test_inner.groupby(['Season', 'TeamID1'])['NumOT'].median().reset_index().set_index('Season').rename(columns = {'NumOT' : 'NumOT1'})
+team2d_num_ot = train_test_inner.groupby(['Season', 'TeamID2'])['NumOT'].median().reset_index().set_index('Season').rename(columns = {'NumOT' : 'NumOT2'})
+
+num_ot = team1d_num_ot.join(team2d_num_ot).reset_index()
+
+#sum the number of ot calls and subtract by one to prevent overcounting
+num_ot['NumOT'] = num_ot[['NumOT1', 'NumOT2']].apply(lambda x : round( x.sum() ), axis = 1 )
+
+num_ot.head()
+
+
+# Here we look at the comparable statistics.  For the TeamID2 column, we would consider the inverse of the ratio, and 1 minus the score attempt percentage.
+
+# In[ ]:
+
+
+def geo_mean( x ):
+    return np.exp( np.mean(np.log(x)) )
+
+def harm_mean( x ):
+    return np.mean( x ** -1.0 ) ** -1.0
+
+team1d_score_spread = train_test_inner.groupby(['Season', 'TeamID1'])[['Score_Ratio', 'Score_Pct']].agg({ 'Score_Ratio': geo_mean, 'Score_Pct' : harm_mean}).reset_index().set_index('Season').rename(columns = {'Score_Ratio' : 'Score_Ratio1', 'Score_Pct' : 'Score_Pct1'})
+team2d_score_spread = train_test_inner.groupby(['Season', 'TeamID2'])[['Score_Ratio', 'Score_Pct']].agg({ 'Score_Ratio': geo_mean, 'Score_Pct' : harm_mean}).reset_index().set_index('Season').rename(columns = {'Score_Ratio' : 'Score_Ratio2', 'Score_Pct' : 'Score_Pct2'})
+
+score_spread = team1d_score_spread.join(team2d_score_spread).reset_index()
+
+#geometric mean of score ratio of team 1 and inverse of team 2
+score_spread['Score_Ratio'] = score_spread[['Score_Ratio1', 'Score_Ratio2']].apply(lambda x : ( x[0] * ( x[1] ** -1.0) ), axis = 1 ) ** 0.5
+
+#harmonic mean of score pct
+score_spread['Score_Pct'] = score_spread[['Score_Pct1', 'Score_Pct2']].apply(lambda x : 0.5*( x[0] ** -1.0 ) + 0.5*( 1.0 - x[1] ) ** -1.0, axis = 1 ) ** -1.0
+
+score_spread.head()
+
+
+# Now lets create a model just solely based on the inner group and predict those probabilities. 
 # 
-# For example: Yandex solves the mailbox intruder detection problem based on the user's behavior patterns. In a nutshell, intruder's behaviour pattern might differ from the owner's one: 
-# - the breaker might not delete emails right after they are read, as the mailbox owner might do
-# - the intruder might mark emails and even move the cursor differently
-# - etc.
-# 
-# So the intruder could be detected and thrown out from the mailbox proposing the owner to be authentificated via SMS-code.
-# This pilot project is described in the Habrahabr article.
-# 
-# Similar things are being developed in Google Analytics and described in scientific researches. You can find more on this topic by searching "Traversal Pattern Mining" and "Sequential Pattern Mining".
-# 
-# In this competition we are going to solve a similar problem: our algorithm is supposed to analyze the sequence of websites consequently visited by a particular person and to predict whether this person is Alice or an intruder (someone else). As a metric we will use [ROC AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic). We will reveal who Alice is at the end of the course.
+# We will get the teams with the missing result.
 
-# ### 1. Data Downloading and Transformation
-# Register on [Kaggle](www.kaggle.com), if you have not done it before.
-# Go to the competition [page](https://inclass.kaggle.com/c/catch-me-if-you-can-intruder-detection-through-webpage-session-tracking2) and download the data.
-# 
-# First, read the training and test sets. Then explore the data and perform a couple of simple exercises:
-
-# In[4]:
+# In[ ]:
 
 
-# Read the training and test data sets
-train_df = pd.read_csv('../input/train_sessions.csv',
-                       index_col='session_id')
-test_df = pd.read_csv('../input/test_sessions.csv',
-                      index_col='session_id')
+X_train = train_test_inner.loc[:, ['Season', 'NumOT', 'Score_Ratio', 'Score_Pct']]
+train_labels = train_test_inner['Result']
 
-# Switch time1, ..., time10 columns to datetime type
-times = ['time%s' % i for i in range(1, 11)]
-train_df[times] = train_df[times].apply(pd.to_datetime)
-test_df[times] = test_df[times].apply(pd.to_datetime)
+train_test_outer = pd.merge( train.loc[ train['Season'].isin(years), : ].reset_index(drop = True), 
+         df_sample_sub.drop(['ID', 'Pred'], axis = 1), 
+         on = ['Season', 'TeamID1', 'TeamID2'], how = 'outer' )
 
-# Sort the data by time
-train_df = train_df.sort_values(by='time1')
+train_test_outer = train_test_outer.loc[ train_test_outer['Result'].isnull(), 
+                                        ['TeamID1', 'TeamID2', 'Season']]
 
-# Look at the first rows of the training set
-train_df.head()
+train_test_missing = pd.merge( pd.merge( score_spread.loc[:, ['TeamID1', 'TeamID2', 'Season', 'Score_Ratio', 'Score_Pct']], 
+                   train_test_outer, on = ['TeamID1', 'TeamID2', 'Season']),
+         num_ot.loc[:, ['TeamID1', 'TeamID2', 'Season', 'NumOT']],
+         on = ['TeamID1', 'TeamID2', 'Season'])
 
 
-# The training data set contains the following features:
-# 
-# - **site1** – id of the first visited website in the session
-# - **time1** – visiting time for the first website in the session
-# - ...
-# - **site10** – id of the tenth visited website in the session
-# - **time10** – visiting time for the tenth website in the session
-# - **target** – target variable, possesses value of 1 for Alice's sessions, and 0 for the other users' sessions
-#     
-# User sessions are chosen in the way they are not longer than half an hour or/and contain more than ten websites. I.e. a session is considered as ended either if a user has visited ten websites or if a session has lasted over thirty minutes.
-# 
-# There are some empty values in the table, it means that some sessions contain less than ten websites. Replace empty values with 0 and change columns types to integer. Also load the websites dictionary and check how it looks like:
+# We scale our data for our logistic regression, and make sure our categorical variables are properly processed.
 
-# In[5]:
+# In[ ]:
 
 
-# Change site1, ..., site10 columns type to integer and fill NA-values with zeros
-sites = ['site%s' % i for i in range(1, 11)]
-train_df[sites] = train_df[sites].fillna(0).astype('int')
-test_df[sites] = test_df[sites].fillna(0).astype('int')
+X_test = train_test_missing.loc[:, ['Season', 'NumOT', 'Score_Ratio', 'Score_Pct']]
 
-# Load websites dictionary
-with open(r"../input/site_dic.pkl", "rb") as input_file:
-    site_dict = pickle.load(input_file)
+n = X_train.shape[0]
 
-# Create dataframe for the dictionary
-sites_dict = pd.DataFrame(list(site_dict.keys()), index=list(site_dict.values()), columns=['site'])
-print(u'Websites total:', sites_dict.shape[0])
-sites_dict.head()
+train_test_merge = pd.concat( [X_train, X_test], axis = 0 ).reset_index(drop = True)
 
+train_test_merge = pd.concat( [pd.get_dummies( train_test_merge['Season'].astype(object) ), 
+            train_test_merge.drop('Season', axis = 1) ], axis = 1 )
 
-# In[6]:
+train_test_merge = pd.concat( [pd.get_dummies( train_test_merge['NumOT'].astype(object) ), 
+            train_test_merge.drop('NumOT', axis = 1) ], axis = 1 )
+
+X_train = train_test_merge.loc[:(n - 1), :].reset_index(drop = True)
+X_test = train_test_merge.loc[n:, :].reset_index(drop = True)
 
 
-# Answer
-print(test_df.shape, train_df.shape)
+# In[ ]:
 
 
-# In[7]:
+x_max = X_train.max()
+x_min = X_train.min()
+
+X_train = ( X_train - x_min ) / ( x_max - x_min + 1e-14)
+X_test = ( X_test - x_min ) / ( x_max - x_min + 1e-14)
 
 
-# Our target variable
-y_train = train_df['target']
-
-# United dataframe of the initial data 
-full_df = pd.concat([train_df.drop('target', axis=1), test_df])
-
-# Index to split the training and test data sets
-idx_split = train_df.shape[0]
+# In[ ]:
 
 
-# For the very basic model, we will use only the visited websites in the session (but we will not take into account timestamp features). The point behind this data selection is: *Alice has her favorite sites, and the more often you see these sites in the session, the higher probability that this is an Alice's session, and vice versa.*
-# 
-# Let us prepare the data, we will take only features `site1, site2, ... , site10` from the whole dataframe. Keep in mind that the missing values are replaced with zero. Here is how the first rows of the dataframe look like:
+from sklearn.linear_model import LogisticRegressionCV
 
-# In[8]:
+log_clf = LogisticRegressionCV(cv = 5)
 
-
-# Dataframe with indices of visited websites in session
-full_sites = full_df[sites]
-full_sites.head()
+log_clf.fit( X_train, train_labels )
 
 
-# Sessions are the sequences of website indices, and data in this representation is inconvenient for linear methods. According to our hypothesis (Alice has favorite websites) we need to transform this dataframe so each website has corresponding feature (column) and its value is equal to number of this website visits in the session. It can be done in two lines:
+# Here we store our probabilities
 
-# In[9]:
-
-
-# sequence of indices
-sites_flatten = full_sites.values.flatten()
-
-# and the matrix we are looking for
-full_sites_sparse = csr_matrix(([1] * sites_flatten.shape[0],
-                                sites_flatten,
-                                range(0, sites_flatten.shape[0]  + 10, 10)))[:, 1:]
+# In[ ]:
 
 
-# ### 3. Training the first model
-# 
-# So, we have an algorithm and data for it. Let us build our first model, using [logistic regression](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html) implementation from ` Sklearn` with default parameters. We will use the first 90% of the data for training (the training data set is sorted by time), and the remaining 10% for validation. Let's write a simple function that returns the quality of the model and then train our first classifier:
-
-# In[10]:
+train_test_inner['Pred1'] = log_clf.predict_proba(X_train)[:,1]
+train_test_missing['Pred1'] = log_clf.predict_proba(X_test)[:,1]
 
 
-def get_auc_lr_valid(X, y, C=1.0, seed=17, ratio = 0.9):
-    # Split the data into the training and validation sets
-    idx = int(round(X.shape[0] * ratio))
-    # Classifier training
-    lr = LogisticRegression(C=C, random_state=seed, n_jobs=-1).fit(X[:idx, :], y[:idx])
-    # Prediction for validation set
-    y_pred = lr.predict_proba(X[idx:, :])[:, 1]
-    # Calculate the quality
-    score = roc_auc_score(y[idx:], y_pred)
-    
-    return score
+# We merge our predictions
+
+# In[ ]:
 
 
-# In[11]:
+sub = pd.merge(df_sample_sub, 
+                         pd.concat( [train_test_missing.loc[:, ['Season', 'TeamID1', 'TeamID2', 'Pred1']],
+                                     train_test_inner.loc[:, ['Season', 'TeamID1', 'TeamID2', 'Pred1']] ],
+                                   axis = 0).reset_index(drop = True),
+                  on = ['Season', 'TeamID1', 'TeamID2'], how = 'outer')
 
 
-get_ipython().run_cell_magic('time', '', '# Select the training set from the united dataframe (where we have the answers)\nX_train = full_sites_sparse[:idx_split, :]\n\n# Calculate metric on the validation set\nprint(get_auc_lr_valid(X_train, y_train))')
+# We get the 'average' probability of success for each team
+
+# In[ ]:
 
 
-# The first model demonstrated the quality  of 0.91952 on the validation set. Let's take it as the first baseline and starting point. To make a prediction on the test data set ** we need to train the model again on the entire training data set ** (until this moment, our model used only part of the data for training), which will increase its generalizing ability:
-
-# In[12]:
-
-
-# Function for writing predictions to a file
-def write_to_submission_file(predicted_labels, out_file,
-                             target='target', index_label="session_id"):
-    predicted_df = pd.DataFrame(predicted_labels,
-                                index = np.arange(1, predicted_labels.shape[0] + 1),
-                                columns=[target])
-    predicted_df.to_csv(out_file, index_label=index_label)
+team1_probs = sub.groupby('TeamID1')['Pred1'].apply(lambda x : (x ** -1.0).mean() ** -1.0 ).fillna(0.5).to_dict()
+team2_probs = sub.groupby('TeamID2')['Pred1'].apply(lambda x : (x ** -1.0).mean() ** -1.0 ).fillna(0.5).to_dict()
 
 
-# In[13]:
+# Any missing value for the prediciton will be imputed with the product of the probabilities calculated above.  We assume these are independent events.
+
+# In[ ]:
 
 
-# Train the model on the whole training data set
-# Use random_state=17 for repeatability
-# Parameter C=1 by default, but here we set it explicitly
-lr = LogisticRegression(C=1.0, random_state=17).fit(X_train, y_train)
+sub['Pred'] = sub[['TeamID1', 'TeamID2','Pred1']].apply(lambda x : team1_probs.get(x[0]) * ( 1 - team2_probs.get(x[1]) ) if np.isnan(x[2]) else x[2], 
+       axis = 1)
 
-# Make a prediction for test data set
-X_test = full_sites_sparse[idx_split:,:]
-y_test = lr.predict_proba(X_test)[:, 1]
 
-# Write it to the file which could be submitted
-write_to_submission_file(y_test, 'baseline_1.csv')
+# In[ ]:
+
+
+sub[['ID', 'Pred']].to_csv('sub.csv', index = False)
+
+
+# In[ ]:
+
+
+sub[['ID', 'Pred']].head(20)
 

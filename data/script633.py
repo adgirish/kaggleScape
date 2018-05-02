@@ -1,411 +1,486 @@
 
 # coding: utf-8
 
-# ##Part 1:  Macro Analysis
-
-# Empirical studies indicate that changes in real estate sector mirrors the wider changes taking place in the economy at any point in time. Most of these studies put emphasis in explaining how macroeconomic variables are responsible for short and long run variations in residential property prices. According to Schmitz and Brett (2001) the economic strength of a place can be demonstrated by its macroeconomic conditions, which includes interest rates, inflation, job security, industrial productivity and stock market stability. In another study in Hong Kong, Ervi (2002), found out that the rate of return in property markets is linked to economic activities while demand for retail space is sensitive to changes in employment and local output. The author also recognizes that macroeconomic variables include unemployment, inflation rates, GDP, interest rates, balances of payments and foreign exchange rates. American economistSimon Kuznets believes real estate development has a close relationship with economicgrowth after analyzing a large amount of data of different countries. В экономической литературе приводят различные классификации факторов, влияющих на развитие рынка недвижимости: внутренние и внешние, макроэкономические и микроэкономические и т. д. В исследовании были отобраны показатели, характеризующие факторы спроса и предложения и, по мнению авторов, потенциально влияющие на удорожание жилой недвижимости: 1) цена на нефть марки Urals; 2) валовой внутренний продукт (ВВП); 3) уровень доходов населения; 4) инфляция; 5) себестоимость строительства; 6) денежная масса; 7) процентная ставка по ипотечным кредитам; 8) количество ипотечных сделок.
+# # Credit card fraud detection
+# 
+# #### This notebook will test different methods on skewed data. The idea is to compare if preprocessing techniques work better when there is an overwhelming majority class that can disrupt the efficiency of our predictive model.
+# 
+# #### You will also be able to see how to apply cross validation for hyperparameter tuning on different classification models. My intention is to create models using:
+# 1. Logistic Regression
+# 2. SVMs
+# 3. Decision trees
+# 4. I also want to have a try at anomaly detection techniques, but I still have to investigate a bit on that, so any advise will be appreciated!
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from numpy.polynomial.chebyshev import *
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np
+
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-pd.options.mode.chained_assignment = None  
-pd.set_option('display.max_columns', 500)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# ##Initialize Data
+# # Loading the dataset
 
 # In[ ]:
 
 
-read_columns= ['timestamp', 'oil_urals', 'gdp_quart_growth', 'cpi', 'usdrub',                 'salary_growth', 'unemployment', 'average_provision_of_build_contract_moscow', 'mortgage_rate',                  'deposits_rate','deposits_growth','rent_price_3room_eco',                 'rent_price_3room_bus']
-train_df = pd.read_csv("../input/train.csv",usecols=['timestamp','price_doc','full_sq'])
-macro_df = pd.read_csv("../input/macro.csv",usecols=read_columns)
+data = pd.read_csv("../input/creditcard.csv")
+data.head()
+
+
+# # Checking the target classes
+
+# In[ ]:
+
+
+count_classes = pd.value_counts(data['Class'], sort = True).sort_index()
+count_classes.plot(kind = 'bar')
+plt.title("Fraud class histogram")
+plt.xlabel("Class")
+plt.ylabel("Frequency")
+
+
+# ### Clearly the data is totally unbalanced!! 
+# 
+# #### This is a clear example where using a typical accuracy score to evaluate our classification algorithm. For example, if we just used a majority class to assign values to all records, we will still be having a high accuracy, BUT WE WOULD BE CLASSIFYING ALL "1" INCORRECTLY!!
+# 
+# #### There are several ways to approach this classification problem taking into consideration this unbalance. 
+# 
+# - Collect more data? Nice strategy but not applicable in this case
+# - Changing the performance metric:
+#     - Use the confusio nmatrix to calculate Precision, Recall
+#     - F1score (weighted average of precision recall)
+#     - Use Kappa - which is a classification accuracy normalized by the imbalance of the classes in the data
+#     - ROC curves - calculates sensitivity/specificity ratio.
+# - Resampling the dataset
+#     - Essentially this is a method that will process the data to have an approximate 50-50 ratio.
+#     - One way to achieve this is by OVER-sampling, which is adding copies of the under-represented class (better when you have little data)
+#     - Another is UNDER-sampling, which deletes instances from the over-represented class (better when he have lot's of data)
+
+# # Approach
+# 
+# 1. We are not going to perform feature engineering in first instance. The dataset has been downgraded in order to contain 30 features (28 anonamised + time + amount). 
+# 2. We will then compare what happens when using resampling and when not using it. We will test this approach using a simple logistic regression classifier.
+# 3. We will evaluate the models by using some of the performance metrics mentioned above.
+# 4. We will repeat the best resampling/not resampling method, by tuning the parameters in the logistic regression classifier.
+# 5. We will finally perform classifications model using other classification algorithms.
+
+# # Setting our input and target variables + resampling.
+# 
+# #### 1. Normalising the amount column. The amount column is not in line with the anonimised features.
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+
+data['normAmount'] = StandardScaler().fit_transform(data['Amount'].reshape(-1, 1))
+data = data.drop(['Time','Amount'],axis=1)
+data.head()
+
+
+# #### 2. Assigning X and Y. No resampling.
+
+# #### 3. Resampling.
+# 
+# - As we mentioned earlier, there are several ways to resample skewed data. Apart from under and over sampling, there is a very popular approach called SMOTE (Synthetic Minority Over-Sampling Technique), which is a combination of oversampling and undersampling, but the oversampling approach is not by replicating minority class but constructing new minority class data instance via an algorithm.
+# 
+# - In this notebook, we will use traditional UNDER-sampling. I will probably try to implement SMOTE in future versions of the code, but for now I will use traditional undersamplig.
+# 
+# - The way we will under sample the dataset will be by creating a 50/50 ratio. This will be done by randomly selecting "x" amount of sample from the majority class, being "x" the total number of records with the minority class.
+
+# In[ ]:
+
+
+X = data.ix[:, data.columns != 'Class']
+y = data.ix[:, data.columns == 'Class']
 
 
 # In[ ]:
 
 
-###### Service Read routines ###
-def condition_train(value, col):
-    vals = (macro_df[macro_df['mo_ye'] == value])
+# Number of data points in the minority class
+number_records_fraud = len(data[data.Class == 1])
+fraud_indices = np.array(data[data.Class == 1].index)
+
+# Picking the indices of the normal classes
+normal_indices = data[data.Class == 0].index
+
+# Out of the indices we picked, randomly select "x" number (number_records_fraud)
+random_normal_indices = np.random.choice(normal_indices, number_records_fraud, replace = False)
+random_normal_indices = np.array(random_normal_indices)
+
+# Appending the 2 indices
+under_sample_indices = np.concatenate([fraud_indices,random_normal_indices])
+
+# Under sample dataset
+under_sample_data = data.iloc[under_sample_indices,:]
+
+X_undersample = under_sample_data.ix[:, under_sample_data.columns != 'Class']
+y_undersample = under_sample_data.ix[:, under_sample_data.columns == 'Class']
+
+# Showing ratio
+print("Percentage of normal transactions: ", len(under_sample_data[under_sample_data.Class == 0])/len(under_sample_data))
+print("Percentage of fraud transactions: ", len(under_sample_data[under_sample_data.Class == 1])/len(under_sample_data))
+print("Total number of transactions in resampled data: ", len(under_sample_data))
+
+
+# # Splitting data into train and test set. Cross validation will be used when calculating accuracies.
+
+# In[ ]:
+
+
+from sklearn.cross_validation import train_test_split
+
+# Whole dataset
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size = 0.3, random_state = 0)
+
+print("Number transactions train dataset: ", len(X_train))
+print("Number transactions test dataset: ", len(X_test))
+print("Total number of transactions: ", len(X_train)+len(X_test))
+
+# Undersampled dataset
+X_train_undersample, X_test_undersample, y_train_undersample, y_test_undersample = train_test_split(X_undersample
+                                                                                                   ,y_undersample
+                                                                                                   ,test_size = 0.3
+                                                                                                   ,random_state = 0)
+print("")
+print("Number transactions train dataset: ", len(X_train_undersample))
+print("Number transactions test dataset: ", len(X_test_undersample))
+print("Total number of transactions: ", len(X_train_undersample)+len(X_test_undersample))
+
+
+# # Logistic regression classifier - Undersampled data
+# 
+# #### We are very interested in the recall score, because that is the metric that will help us try to capture the most fraudulent transactions. If you think how Accuracy, Precision and Recall work for a confusion matrix, recall would be the most interesting:
+# 
+# - Accuracy = (TP+TN)/total
+# - Precision = TP/(TP+FP)
+# - Recall = TP/(TP+FN)
+# 
+# #### As we know, due to the imbalacing of the data, many observations could be predicted as False Negatives, being, that we predict a normal transaction, but it is in fact a fraudulent one. Recall captures this.
+# - Obviously, trying to increase recall, tends to come with a decrease of precision. However, in our case, if we predict that a transaction is fraudulent and turns out not to be, is not a massive problem compared to the opposite. 
+# - We could even apply a cost function when having FN and FP with different weights for each type of error, but let's leave that aside for now.
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_validation import KFold, cross_val_score
+from sklearn.metrics import confusion_matrix,precision_recall_curve,auc,roc_auc_score,roc_curve,recall_score,classification_report 
+
+
+# #### Very ad-hoc function to print K_fold_scores
+
+# In[ ]:
+
+
+def printing_Kfold_scores(x_train_data,y_train_data):
+    fold = KFold(len(y_train_data),5,shuffle=False) 
+
+    # Different C parameters
+    c_param_range = [0.01,0.1,1,10,100]
+
+    results_table = pd.DataFrame(index = range(len(c_param_range),2), columns = ['C_parameter','Mean recall score'])
+    results_table['C_parameter'] = c_param_range
+
+    # the k-fold will give 2 lists: train_indices = indices[0], test_indices = indices[1]
+    j = 0
+    for c_param in c_param_range:
+        print('-------------------------------------------')
+        print('C parameter: ', c_param)
+        print('-------------------------------------------')
+        print('')
+
+        recall_accs = []
+        for iteration, indices in enumerate(fold,start=1):
+
+            # Call the logistic regression model with a certain C parameter
+            lr = LogisticRegression(C = c_param, penalty = 'l1')
+
+            # Use the training data to fit the model. In this case, we use the portion of the fold to train the model
+            # with indices[0]. We then predict on the portion assigned as the 'test cross validation' with indices[1]
+            lr.fit(x_train_data.iloc[indices[0],:],y_train_data.iloc[indices[0],:].values.ravel())
+
+            # Predict values using the test indices in the training data
+            y_pred_undersample = lr.predict(x_train_data.iloc[indices[1],:].values)
+
+            # Calculate the recall score and append it to a list for recall scores representing the current c_parameter
+            recall_acc = recall_score(y_train_data.iloc[indices[1],:].values,y_pred_undersample)
+            recall_accs.append(recall_acc)
+            print('Iteration ', iteration,': recall score = ', recall_acc)
+
+        # The mean value of those recall scores is the metric we want to save and get hold of.
+        results_table.ix[j,'Mean recall score'] = np.mean(recall_accs)
+        j += 1
+        print('')
+        print('Mean recall score ', np.mean(recall_accs))
+        print('')
+
+    best_c = results_table.loc[results_table['Mean recall score'].idxmax()]['C_parameter']
     
-    ret = vals[col].asobject
-  
-    ret = ret[0]
-
-    return ret
-
-def condition_test(value, col):
-    vals = (macro[macro['mo_ye'] == value])
-
-    ret = vals[col].asobject
-
-    ret = ret[0]
-
-    return ret
-
-def condition(value,col):
-    vals = (macro_df[macro_df['timestamp'] == value])
-    ret=vals[col].asobject
-    ret=ret[0]
-
-    return ret
-
-def init_anlz_file():
-
-    anlz_df = train_df
-    for clmn in read_columns:
-        if clmn == 'timestamp':
-            continue
-        anlz_df[clmn] = np.nan
-        anlz_df[clmn] = anlz_df['timestamp'].apply(condition, col=clmn)
-        print(clmn)
-    return anlz_df
-
-### Read Data for macro analysis
-anlz_df=init_anlz_file()
-
-
-# ##Start Analysis
-
-# In[ ]:
-
-
-##------------------------ SERVICE ROUTINES ----------------------------------- ###
-methods=['pearson', 'kendall', 'spearman']
-def plot_grouped_trends(df,feat1,feat2,corr_df):
-   
-    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
-    x=df.index.values
-    ch=chebfit(x,df[feat1].values,7)
-    trendf1=chebval(x,ch)
-    ax[0].plot(x,df[feat1].values,x,trendf1)
-    ax[0].set_ylabel(feat1)
-    ax[0].set_title('Chart '+feat1+' vs trend' )
-    ax[0].set_xlabel('months count')
-    ch2=chebfit(x,df[feat2].values,7)
-    trendf2=chebval(x,ch2)
-    ax[1].plot(x,df[feat2].values,x,trendf2)
-    ax[1].set_ylabel(feat2)
-    ax[1].set_title('Chart '+feat2+' vs trend' )
-    ax[1].set_xlabel('months count')
-    ##### do here two charts density distribition
+    # Finally, we can check which C parameter is the best amongst the chosen.
+    print('*********************************************************************************')
+    print('Best model to choose from cross validation is with C parameter = ', best_c)
+    print('*********************************************************************************')
     
-    ls=[feat2]
-    for method in methods:
-        corr=df[[feat1,feat2]].corr(method=method)
-        ls.append(corr[feat1][1])
-    corr_df.loc[len(corr_df)]=ls
-### ------------------------END SERVICE ROUTINES --------------------------------###
-
-
-# ##Macro-economic factors influence on House pricing in Moscow
-
-# In[ ]:
-
-
-anlz_df['timestamp']=pd.to_datetime(anlz_df['timestamp'])
-anlz_df['mo_ye']=anlz_df['timestamp'].apply(lambda x: x.strftime('%m-%Y'))
-anlz_df['price_per_sqm']=anlz_df['price_doc']/anlz_df['full_sq']
-
-
-macro_columns = ['price_doc','price_per_sqm','full_sq','oil_urals', 'gdp_quart_growth', 'cpi', 'usdrub',                 'salary_growth', 'unemployment', 'average_provision_of_build_contract_moscow', 'mortgage_rate',                  'deposits_rate','deposits_growth','rent_price_3room_eco',                 'rent_price_3room_bus']
-macro_df=pd.DataFrame(anlz_df.groupby('mo_ye')[macro_columns].mean())
-macro_df.reset_index(inplace=True)
-
-
-macro_df['mo_ye']=pd.to_datetime(macro_df['mo_ye'])
-macro_df=macro_df.sort_values(by='mo_ye')
-
-
-macro_df.reset_index(inplace=True)
-macro_df.drop(['index'],axis=1,inplace=True)
-
-
-# ###Show influence of economical factors on housing prices
-
-# In[ ]:
-
-
-corr_df=pd.DataFrame(columns=['feature','pearson', 'kendall', 'spearman'])
-corr=macro_df[macro_columns].corr(method='spearman')
-fig, ax = plt.subplots(figsize=(10,10))         # Sample figsize in inches
-sns.heatmap(corr, annot=True, linewidths=.5, ax=ax)
+    return best_c
 
 
 # In[ ]:
 
 
-for feat in macro_columns:
-    if (feat=='price_doc'):
-        continue
-    plot_grouped_trends(macro_df,'price_doc',feat,corr_df)
+best_c = printing_Kfold_scores(X_train_undersample,y_train_undersample)
 
 
-# ##Correlation Table of price_doc t by methods :'pearson', 'kendall', 'spearman'
+# #### Create a function to plot a fancy confusion matrix
 
 # In[ ]:
 
 
-print(corr_df)
+import itertools
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=0)
+    plt.yticks(tick_marks, classes)
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        #print("Normalized confusion matrix")
+    else:
+        1#print('Confusion matrix, without normalization')
+
+    #print(cm)
+
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
 
 
-# In[ ]:
-
-
-### Choose significant macroeconomical features by their correlation
-sig_macro_columns=['oil_urals', 'gdp_quart_growth', 'cpi', 'usdrub',                 'salary_growth', 'unemployment', 'mortgage_rate',                  'deposits_rate','rent_price_3room_bus']
-
-
-# #Part II-Data Engineenring
-
-# In[ ]:
-
-
-
-# insert in the train data and test the significant macroeconomical features by month-year data
-
-
-train = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
-train['mo_ye']=train['timestamp'].apply(lambda x: x.strftime('%m-%Y'))
-#macro_df['mo_ye']=macro_df['mo_ye'].apply(lambda x: x.strftime('%m-%Y'))
-test_df = pd.read_csv("../input/test.csv",parse_dates=['timestamp'])
-test_df['mo_ye']=test_df['timestamp'].apply(lambda x: x.strftime('%m-%Y'))
-macro=pd.read_csv("../input/macro.csv", parse_dates=['timestamp'])
-macro['mo_ye'] = macro['timestamp'].apply(lambda x: x.strftime('%m-%Y'))
-
-for clmn in sig_macro_columns:
-    train[clmn] = train['mo_ye'].apply(condition_train, col=clmn)
-    test_df[clmn] = test_df['mo_ye'].apply(condition_test, col=clmn)
-  
-train=train.drop(['timestamp'],1) 
-
-  
-                       
-
-
-# In[ ]:
-
-
-#free memory
-del(train_df)
-del(macro_df)
-del(anlz_df)
-
+# ### Predictions on test set and plotting confusion matrix
+# 
+# #### We have been talking about using the recall metric as our proxy of how effective our predictive model is. Even though recall is still the recall we want to calculate, just bear mind in mind that the undersampled data hasn't got a skewness towards a certain class, which doesn't make recall metric as critical. 
 
 # In[ ]:
 
 
-## Initial clean train data
-from sklearn import model_selection, preprocessing
+# Use this C_parameter to build the final model with the whole training dataset and predict the classes in the test
+# dataset
+lr = LogisticRegression(C = best_c, penalty = 'l1')
+lr.fit(X_train_undersample,y_train_undersample.values.ravel())
+y_pred_undersample = lr.predict(X_test_undersample.values)
 
-x_train = train
+# Compute confusion matrix
+cnf_matrix = confusion_matrix(y_test_undersample,y_pred_undersample)
+np.set_printoptions(precision=2)
 
+print("Recall metric in the testing dataset: ", cnf_matrix[1,1]/(cnf_matrix[1,0]+cnf_matrix[1,1]))
 
-##  Encode categirical varaibles exclude 'mo_ye'
-for c in x_train.columns:
-    if c=='mo_ye':
-        continue
-    if x_train[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_train[c].values))
-        x_train[c] = lbl.transform(list(train[c].values))
-x_train['mo_ye']=x_train['mo_ye'].apply(lambda x:  100*pd.to_datetime(x).year+pd.to_datetime(x).month)
-x_train['price_doc']=np.log1p(x_train['price_doc'])
-
-
-# ## Dealing with missed variables
-
-# In[ ]:
-
-
-from sklearn.base import TransformerMixin
-class DataFrameImputer(TransformerMixin):
-    def fit(self, X, y=None):
-        self.fill = pd.Series([X[c].value_counts().index[0]
-        if X[c].dtype == np.dtype('O') else X[c].median() for c in X],
-        index=X.columns)
-        return self
-    def transform(self, X, y=None):
-        return X.fillna(self.fill)
-x_train = DataFrameImputer().fit_transform(x_train)
-
-
-# ##Starting importance variables evaluation
-
-# In[ ]:
-
-
-import operator
-import xgboost as xgb
-target = 'price_doc'
-IDcol = 'id'
-
-predictors = [x for x in x_train.columns if x not in [target, IDcol]]
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 8,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-train_matrix= xgb.DMatrix(x_train[predictors], x_train[target].values, feature_names=x_train[predictors].columns.values)
-model = xgb.train(dict(xgb_params, silent=1), train_matrix, num_boost_round=100)
-# plot the important features #
-importance = model.get_fscore()
-importance = sorted(importance.items(), key=operator.itemgetter(1))
-df = pd.DataFrame(importance, columns=['feature', 'fscore'])
-df['fscore'] =100* df['fscore'] / df['fscore'].max()
-df=df.sort_values(by="fscore",ascending=False)
-df.head(50).plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(10, 10))
-
-plt.title('XGBoost Feature Importance( 50 significant)')
-
-#plt.annotate()
-plt.xlabel('relative importance')
+# Plot non-normalized confusion matrix
+class_names = [0,1]
+plt.figure()
+plot_confusion_matrix(cnf_matrix
+                      , classes=class_names
+                      , title='Confusion matrix')
 plt.show()
 
 
-# ## Check model accuracy according to best parameters
-
-# Best parameters are searched by GridSearchCV on my Laptop
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-params = {
-
-          'n_estimators': 200,
-          'max_depth': 5,
-          'min_child_weight': 100,
-          'subsample': .9,
-          'gamma': 1,
-          'objective': 'reg:linear',
-          'colsample_bytree': .8,
-
-          'nthread':3,
-          'silent':1,
-          'seed':27
-         }
-
-train, test = train_test_split(x_train, test_size = 0.2)
-predictors=df['feature'][df['fscore']>0.5].tolist() ## take predictors which score values more as 1%
-
+# #### So, the model is offering an 93.2% recall accuracy on the generalised unseen data (test set). Not a bad percentage to be the first try. However, recall this is a 93.2% recall accuracy measure on the undersampled test set.
+# 
+# ### Being happy with this result, let's apply the model we fitted and test it on the whole data.
 
 # In[ ]:
 
 
-dtrain = xgb.DMatrix(train[predictors].values,train[target].values)
-dtest = xgb.DMatrix(test[predictors].values,test[target].values)
-alg=xgb.XGBClassifier(**params)
-xgb_param = alg.get_xgb_params()
-cvresult = xgb.cv(xgb_param, dtrain, num_boost_round=alg.get_params()['n_estimators'], nfold=5,  
-                          metrics='rmse', early_stopping_rounds=50, verbose_eval=50)
+# Use this C_parameter to build the final model with the whole training dataset and predict the classes in the test
+# dataset
+lr = LogisticRegression(C = best_c, penalty = 'l1')
+lr.fit(X_train_undersample,y_train_undersample.values.ravel())
+y_pred = lr.predict(X_test.values)
 
-cvresult[['train-rmse-mean', 'test-rmse-mean']].plot()
+# Compute confusion matrix
+cnf_matrix = confusion_matrix(y_test,y_pred)
+np.set_printoptions(precision=2)
 
+print("Recall metric in the testing dataset: ", cnf_matrix[1,1]/(cnf_matrix[1,0]+cnf_matrix[1,1]))
 
-# #Set Model for prediction
-
-# In[ ]:
-
-
-from sklearn.metrics import  mean_squared_error
-watchlist=[(dtrain,'train')]
-num_round=600
-
-#bst = xgb.train(params, dtrain, num_round,verbose_eval=False)
-bst=xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_round)
-preds = bst.predict(dtest)
-
-err=(mean_squared_error(test[target].values, preds))
-print('MSE ={}'.format(err)) # No bad
+# Plot non-normalized confusion matrix
+class_names = [0,1]
+plt.figure()
+plot_confusion_matrix(cnf_matrix
+                      , classes=class_names
+                      , title='Confusion matrix')
+plt.show()
 
 
-# #Part III Data Prediction
+# ### Still a very decent recall accuracy when applying it to a much larger and skewed dataset! 
+# 
+# #### We can start to be happy with how initial approach is working.
 
-# ### Test data preparation
-
-# In[ ]:
-
-
-
-##  Encode categirical varaibles exclude 'mo_ye'
-for c in test_df.columns:
-    if c=='mo_ye':
-        continue
-    if test_df[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(test_df[c].values))
-        test_df[c] = lbl.transform(list(test_df[c].values))
-test_df['mo_ye']=test_df['mo_ye'].apply(lambda x:  100*pd.to_datetime(x).year+pd.to_datetime(x).month)
-
+# ### Plotting ROC curve and Precision-Recall curve.
+# 
+# - I find precision-recall curve much more convenient in this case as our problems relies on the "positive" class being more interesting than the negative class, but as we have calculated the recall precision, I am not going to plot the precision recall curves yet.
+# 
+# - AUC and ROC curve are also interesting to check if the model is also predicting as a whole correctly and not making many errors
 
 # In[ ]:
 
 
-#dealing with missed varaibles
-test_df=test_df.drop(['timestamp'],1) 
-IdClm=test_df['id']
-#test_df = DataFrameImputer().fit_transform(test_df)
+# ROC CURVE
+lr = LogisticRegression(C = best_c, penalty = 'l1')
+y_pred_undersample_score = lr.fit(X_train_undersample,y_train_undersample.values.ravel()).decision_function(X_test_undersample.values)
+
+fpr, tpr, thresholds = roc_curve(y_test_undersample.values.ravel(),y_pred_undersample_score)
+roc_auc = auc(fpr,tpr)
+
+# Plot ROC
+plt.title('Receiver Operating Characteristic')
+plt.plot(fpr, tpr, 'b',label='AUC = %0.2f'% roc_auc)
+plt.legend(loc='lower right')
+plt.plot([0,1],[0,1],'r--')
+plt.xlim([-0.1,1.0])
+plt.ylim([-0.1,1.01])
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+plt.show()
+
+
+# #### An additional comment that would be interesting to do is to initialise multiple undersampled datasets and repeat the process in loop. Remember that, to create an undersample data, we randomly got records from the majority class. Even though this is a valid technique, is doesn't represent the real population, so it would be interesting to repeat the process with different undersample configurations and check if the previous chosen parameters are still the most effective. In the end, the idea is to use a wider random representation of the whole dataset and rely on the averaged best parameters.
+
+# # Logistic regression classifier - Skewed data
+# 
+# #### Having tested our previous approach, I find really interesting to test the same process on the skewed data. Our intuition is that skewness will introduce issues difficult to capture, and therefore, provide a less effective algorithm.
+# - To be fair, taking into account the fact that the train and test datasets are substantially bigger than the undersampled ones, I believe a K-fold cross validation is necessary. I guess that by splitting the data with 60% in training set, 20% cross validation and 20% test should be enough... but let's take the same approach as before (no harm on this, it's just that K-fold is computationally more expensive)
+
+# In[ ]:
+
+
+best_c = printing_Kfold_scores(X_train,y_train)
 
 
 # In[ ]:
 
 
-test_df = DataFrameImputer().fit_transform(test_df)
+# Use this C_parameter to build the final model with the whole training dataset and predict the classes in the test
+# dataset
+lr = LogisticRegression(C = best_c, penalty = 'l1')
+lr.fit(X_train,y_train.values.ravel())
+y_pred_undersample = lr.predict(X_test.values)
 
+# Compute confusion matrix
+cnf_matrix = confusion_matrix(y_test,y_pred_undersample)
+np.set_printoptions(precision=2)
+
+print("Recall metric in the testing dataset: ", cnf_matrix[1,1]/(cnf_matrix[1,0]+cnf_matrix[1,1]))
+
+# Plot non-normalized confusion matrix
+class_names = [0,1]
+plt.figure()
+plot_confusion_matrix(cnf_matrix
+                      , classes=class_names
+                      , title='Confusion matrix')
+plt.show()
+
+
+# # Before continuing... changing classification threshold.
+# 
+# #### We have seen that by undersampling the data, our algorithm does a much better job at detecting fraud. I wanted also to show how can we tweak our final classification by changing the thresold.
+# - Initially, you build the classification model and then you predict unseen data using it.
+# - We previously used the "predict()" method to decided whether a record should belong to "1" or "0". 
+# - There is another method "predict_proba()".
+#     - This method returns the probabilities for each class. The idea is that by changing the threshold to assign a record to class 1, we can control precision and recall.
+#     
+# #### Let's check this using the undersampled data (best C_param = 0.01)
 
 # In[ ]:
 
 
-dtrain = xgb.DMatrix(x_train[predictors].values,x_train[target].values)
-bst=xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_round)
+lr = LogisticRegression(C = 0.01, penalty = 'l1')
+lr.fit(X_train_undersample,y_train_undersample.values.ravel())
+y_pred_undersample_proba = lr.predict_proba(X_test_undersample.values)
 
+thresholds = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+
+plt.figure(figsize=(10,10))
+
+j = 1
+for i in thresholds:
+    y_test_predictions_high_recall = y_pred_undersample_proba[:,1] > i
+    
+    plt.subplot(3,3,j)
+    j += 1
+    
+    # Compute confusion matrix
+    cnf_matrix = confusion_matrix(y_test_undersample,y_test_predictions_high_recall)
+    np.set_printoptions(precision=2)
+
+    print("Recall metric in the testing dataset: ", cnf_matrix[1,1]/(cnf_matrix[1,0]+cnf_matrix[1,1]))
+
+    # Plot non-normalized confusion matrix
+    class_names = [0,1]
+    plot_confusion_matrix(cnf_matrix
+                          , classes=class_names
+                          , title='Threshold >= %s'%i) 
+
+
+# ### The pattern is very clear: the more you lower the required probability to put a certain in the class "1" category, more records will be put in that bucket.
+# #### This implies an increase in recall (we want all the "1"s), but at the same time, a decrease in precision (we misclassify many of the other class).
+# ### Therefore, even though recall is our goal metric (do not miss a fraud transaction), we also want to keep the model being accurate as a whole.
+# - There is an option I think could be quite interesting to tackle this. We could assing cost to misclassifications, but being interested in classifying "1s" correctly, the cost for misclassifying "1s" should be bigger than "0" misclassifications. After that, the algorithm would select the threshold which minimises the total cost. A drawback I see is that we have to manually select the weight of each cost... therefore, I will leave this know as a thought.
+# - Going back to the threshold changing, there is an option which is the Precisio-Recall curve. By visually seeing the performance of the model depending on the threshold we choose, we can investigate a sweet spot where recall is high enough whilst keeping a high precision value.
+# 
+# ### Investigate Precision-Recall curve and area under this curve.
 
 # In[ ]:
 
 
+from itertools import cycle
 
-dtest = xgb.DMatrix(test_df[predictors].values)
-predsr = bst.predict(dtest)
-predsr=np.expm1(predsr)
+lr = LogisticRegression(C = 0.01, penalty = 'l1')
+lr.fit(X_train_undersample,y_train_undersample.values.ravel())
+y_pred_undersample_proba = lr.predict_proba(X_test_undersample.values)
+
+thresholds = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+colors = cycle(['navy', 'turquoise', 'darkorange', 'cornflowerblue', 'teal', 'red', 'yellow', 'green', 'blue','black'])
+
+plt.figure(figsize=(5,5))
+
+j = 1
+for i,color in zip(thresholds,colors):
+    y_test_predictions_prob = y_pred_undersample_proba[:,1] > i
+    
+    precision, recall, thresholds = precision_recall_curve(y_test_undersample,y_test_predictions_prob)
+    
+    # Plot Precision-Recall curve
+    plt.plot(recall, precision, color=color,
+                 label='Threshold: %s'%i)
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.ylim([0.0, 1.05])
+    plt.xlim([0.0, 1.0])
+    plt.title('Precision-Recall example')
+    plt.legend(loc="lower left")
 
 
-# In[ ]:
-
-
-### Submiss output
-
-output=pd.DataFrame(data={'price_doc':predsr},index=test_df['id'].values)
-output.head(10)
-output.to_csv('my_submission6.csv',header=True)
-
-
-# In[ ]:
-
-
-print(output.head())
-
+# # Upcoming updates: 
+# ## testing SVMs
+# ## testing decision trees

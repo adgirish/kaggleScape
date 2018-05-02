@@ -1,578 +1,369 @@
 
 # coding: utf-8
 
-# # Terrorist Activities Around The World
-#  
-# According to a survey, about 218 million people are affected by calamities, natural and man-made, per annum and about 68000 people loose their lives every year. The frequency of natural disasters like earthquakes, volcanoes, etc have remained broadly constant, but the number of terrorist activities have grown over the period.
+# This kernel is very basic model. I hope it will help you.
 # 
-# The aim of this notebook is to explore the terrorist events around the world. Interactive Plots and Animations are used in this notebook, for making the exploration easy and more informative. This is my first try on **Folium**, which is a wrapper over the Leaflet.js API.Some things that we will explore are the trends in terrorism over the year, the terrorism prone areas, etc. Since it is a geographic dataset, you will see a lot of geomaps.
-# 
-# If you like this notebook, **Please Upvote**, as it keeps me motivated in doing better.
-# 
-# **Note: I have only used first 5000 rows for folium maps. The reason is the notebook or script crashes a lot and it kills the kernel due to long execution time.**
-# 
-# **Below is a Simple Tableau Dashboard, do have a look
+# **Please upvote to encourage me to do more.**
 
-# In[ ]:
+# ![](https://78.media.tumblr.com/0a56b418334765ec595a0982fe25aac3/tumblr_ouloa3CUT41wq17fxo3_400.gif)
+
+# In[1]:
 
 
-get_ipython().run_cell_magic('HTML', '', "<div class='tableauPlaceholder' id='viz1512233423027' style='position: relative'><noscript><a href='#'><img alt='Dashboard 1 ' src='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;RD&#47;RDGKRRHB7&#47;1_rss.png' style='border: none' /></a></noscript><object class='tableauViz'  style='display:none;'><param name='host_url' value='https%3A%2F%2Fpublic.tableau.com%2F' /> <param name='embed_code_version' value='3' /> <param name='path' value='shared&#47;RDGKRRHB7' /> <param name='toolbar' value='yes' /><param name='static_image' value='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;RD&#47;RDGKRRHB7&#47;1.png' /> <param name='animate_transition' value='yes' /><param name='display_static_image' value='yes' /><param name='display_spinner' value='yes' /><param name='display_overlay' value='yes' /><param name='display_count' value='yes' /></object></div>                <script type='text/javascript'>                    var divElement = document.getElementById('viz1512233423027');                    var vizElement = divElement.getElementsByTagName('object')[0];                    vizElement.style.width='1020px';vizElement.style.minHeight='687px';vizElement.style.maxHeight='1587px';vizElement.style.height=(divElement.offsetWidth*0.75)+'px';                    var scriptElement = document.createElement('script');                    scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';                    vizElement.parentNode.insertBefore(scriptElement, vizElement);                </script>")
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# **Contents in the Notebook**
-# 
-# - <a href='#Part2'> Terrorism Around The World</a>
-#   - <a href='#Getting Data Ready2'> 1.1 Getting Data Ready</a>
-#   - <a href='#Some Basic Analysis2'> 1.2 Some Basic Analysis</a>
-#   - <a href='#Global Attacks'>1.3 Global Terror Attacks</a>
-#   - <a href='#Region'>1.4 Terrorism By Region</a>
-#   - <a href='#Notorious'>1.5 Most Notorious Groups</a>
-#   - <a href='#India'>1.6 Terror Activities in India</a>
-#   - <a href='#USA'>1.7 Terror Activities in USA</a>
-#   - <a href='#Motive'>1.8 Motive Behind Attacks</a>
-#   - <a href='#Animate'>1.9 World Terrorism Spread(Animation)</a>
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# In[ ]:
-
-
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import seaborn as sns
-import numpy as np
-plt.style.use('fivethirtyeight')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-from mpl_toolkits.basemap import Basemap
-import folium
-import folium.plugins
-from matplotlib import animation,rc
-import io
-import base64
-from IPython.display import HTML, display
-import warnings
-warnings.filterwarnings('ignore')
-from scipy.misc import imread
-import codecs
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
+# Any results you write to the current directory are saved as output.
 
-# # <a id='Part2'>Terrorism Around The World</a>
 
-# ![](https://www.iaspaper.net/wp-content/uploads/2017/08/Terrorism-Word-Cloud.jpg)
+# In[2]:
 
-# The Year 2017 has witnessed about 1045 terror attacks till now, which has claimed 6000+ lives. According to a survey, there is atleast 1 terrorist attack taking place each day somewhere around the world. One such noxious attack took place at Las Vegas on 1st October 2017, claiming 59 lives and injuring 500+ people.
-# 
-# Terrorism implies the use of violence to terrorise a population or government for certain political, religious or ideological purpose. The threat of terrorism has become a worldwide concern with several parts of the world reeling under frequent terrorist strikes. With little concern for human lives, terrorists continue to strike with impunity, leaving a trail of death and destruction, wherever they choose to inflict their blows. 
-# 
-# In this dataset, we will be exploring the terror attacks over the world from 1970-2016, finding the most affected countries, the most notorious groups, their motives,etc.
 
-# ### <a id='Getting Data Ready2'>1.1 Getting Data Ready</a>
+train = pd.read_csv('../input/train.csv')
+train.head()
 
-# In[ ]:
 
+# In[3]:
 
-terror=pd.read_csv('../input/globalterrorismdb_0617dist.csv',encoding='ISO-8859-1')
-terror.rename(columns={'iyear':'Year','imonth':'Month','iday':'Day','country_txt':'Country','region_txt':'Region','attacktype1_txt':'AttackType','target1':'Target','nkill':'Killed','nwound':'Wounded','summary':'Summary','gname':'Group','targtype1_txt':'Target_type','weaptype1_txt':'Weapon_type','motive':'Motive'},inplace=True)
-terror=terror[['Year','Month','Day','Country','Region','city','latitude','longitude','AttackType','Killed','Wounded','Target','Summary','Group','Target_type','Weapon_type','Motive']]
-terror['casualities']=terror['Killed']+terror['Wounded']
-terror.head(3)
 
+train['author'].unique()
 
-# In[ ]:
 
+# **hp lovecraft**
+# ![](data:image/jpeg;base64,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)
 
-terror.isnull().sum()
+# **edgar allan poe**
+# ![](data:image/jpeg;base64,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)
 
+# **Mary Wollstonecraft Shelley**
+# ![](data:image/jpeg;base64,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)
 
-# ### <a id='Some Basic Analysis2'>1.2 Some Basic Analysis</a>
+# In[4]:
 
-# In[ ]:
 
+import seaborn as sns
 
-print('Country with Highest Terrorist Attacks:',terror['Country'].value_counts().index[0])
-print('Regions with Highest Terrorist Attacks:',terror['Region'].value_counts().index[0])
-print('Maximum people killed in an attack are:',terror['Killed'].max(),'that took place in',terror.loc[terror['Killed'].idxmax()].Country)
 
+# In[5]:
 
-# In[ ]:
 
+sns.countplot('author',data = train)
 
-plt.subplots(figsize=(15,6))
-sns.countplot('Year',data=terror,palette='RdYlGn_r',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('Number Of Terrorist Activities Each Year')
-plt.show()
 
+# In[6]:
 
-# Clearly the number of terrorist activities have gone up sharply after 2000.
 
-# In[ ]:
+train['length'] = train.text.str.count(' ')
 
 
-plt.subplots(figsize=(15,6))
-sns.countplot('AttackType',data=terror,palette='inferno',order=terror['AttackType'].value_counts().index)
-plt.xticks(rotation=90)
-plt.title('Attacking Methods by Terrorists')
-plt.show()
+# In[7]:
 
 
-# In[ ]:
+train.head()
 
 
-plt.subplots(figsize=(15,6))
-sns.countplot(terror['Target_type'],palette='inferno',order=terror['Target_type'].value_counts().index)
-plt.xticks(rotation=90)
-plt.title('Favorite Targets')
-plt.show()
+# In[8]:
 
 
-# ### <a id='Global Attacks'>1.3 Global Terror Attacks</a>
+train[train["author"]=="MWS"]["length"].describe()
 
-# In[ ]:
 
+# In[9]:
 
-m3 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c',lat_0=True,lat_1=True)
-lat_100=list(terror[terror['casualities']>=75].latitude)
-long_100=list(terror[terror['casualities']>=75].longitude)
-x_100,y_100=m3(long_100,lat_100)
-m3.plot(x_100, y_100,'go',markersize=5,color = 'r')
-lat_=list(terror[terror['casualities']<75].latitude)
-long_=list(terror[terror['casualities']<75].longitude)
-x_,y_=m3(long_,lat_)
-m3.plot(x_, y_,'go',markersize=2,color = 'b',alpha=0.4)
-m3.drawcoastlines()
-m3.drawcountries()
-m3.fillcontinents(lake_color='aqua')
-m3.drawmapboundary(fill_color='aqua')
-fig=plt.gcf()
-fig.set_size_inches(10,6)
-plt.title('Global Terrorist Attacks')
-plt.legend(loc='lower left',handles=[mpatches.Patch(color='b', label = "< 75 casualities"),
-                    mpatches.Patch(color='red',label='> 75 casualities')])
-plt.show()
 
+train[train["author"]=="HPL"]["length"].describe()
 
-# The above basemap shows the places of attacks. The red circles are those that had more than 75 casualities(wounded+killed). Lets make an interactive map with Folium and get more information for each location.
 
-# In[ ]:
+# In[10]:
 
 
-terror_fol=terror.copy()
-terror_fol.dropna(subset=['latitude','longitude'],inplace=True)
-location_fol=terror_fol[['latitude','longitude']][:5000]
-country_fol=terror_fol['Country'][:5000]
-city_fol=terror_fol['city'][:5000]
-killed_fol=terror_fol['Killed'][:5000]
-wound_fol=terror_fol['Wounded'][:5000]
-def color_point(x):
-    if x>=30:
-        color='red'
-    elif ((x>0 and x<30)):
-        color='blue'
-    else:
-        color='green'
-    return color   
-def point_size(x):
-    if (x>30 and x<100):
-        size=2
-    elif (x>=100 and x<500):
-        size=8
-    elif x>=500:
-        size=16
-    else:
-        size=0.5
-    return size   
-map2 = folium.Map(location=[30,0],tiles='CartoDB dark_matter',zoom_start=2)
-for point in location_fol.index:
-    info='<b>Country: </b>'+str(country_fol[point])+'<br><b>City: </b>: '+str(city_fol[point])+'<br><b>Killed </b>: '+str(killed_fol[point])+'<br><b>Wounded</b> : '+str(wound_fol[point])
-    iframe = folium.IFrame(html=info, width=200, height=200)
-    folium.CircleMarker(list(location_fol.loc[point].values),popup=folium.Popup(iframe),radius=point_size(killed_fol[point]),color=color_point(killed_fol[point])).add_to(map2)
-map2
+train[train["author"]=="EAP"]["length"].describe()
 
 
-# The color and size of each point is according to the number of people killed in the attack. Click on each point to get more information about the attack.
+# In[11]:
 
-# ### <a id='Region'>1.4 Terrorism By Region</a>
 
-# In[ ]:
+train[train['length'] == 860]
 
 
-plt.subplots(figsize=(15,6))
-sns.countplot('Region',data=terror,palette='RdYlGn',edgecolor=sns.color_palette('dark',7),order=terror['Region'].value_counts().index)
-plt.xticks(rotation=90)
-plt.title('Number Of Terrorist Activities By Region')
-plt.show()
+# ![](data:image/jpeg;base64,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)
 
+# In[12]:
 
-# Middle East and North Africa are the most terrorism prone regions followed by South Asia. The Australian Region have experienced very few terrorist events. Collectively we can say that The African and Asian Continent experience the highest terrorist attacks. But why are these regions prone to terrorism? Does this have any relation to the mindset of the people? or any other reason??
 
-# #### Trend in Terrorist Activities
+train.text.values[9215]
 
-# In[ ]:
 
+# In[13]:
 
-terror_region=pd.crosstab(terror.Year,terror.Region)
-terror_region.plot(color=sns.color_palette('Set2',12))
-fig=plt.gcf()
-fig.set_size_inches(18,6)
-plt.show()
 
+sns.boxplot(x = 'author',y = 'length',data = train)
 
-# As seen already, Middle-East,North Africa,South Asia have seen a shoot in the number of terrorist activities over the years.
 
-# #### AttackType vs Region
-
-# In[ ]:
-
-
-pd.crosstab(terror.Region,terror.AttackType).plot.barh(stacked=True,width=1,color=sns.color_palette('RdYlGn',9))
-fig=plt.gcf()
-fig.set_size_inches(12,8)
-plt.show()
-
-
-# Bombing and Armed assaults, as seen above are the most prominent types of Attack irrespective of Regions.
-
-# ### <a id='Country'>1.5 Terrorism By Country</a>
-
-# In[ ]:
-
-
-plt.subplots(figsize=(18,6))
-sns.barplot(terror['Country'].value_counts()[:15].index,terror['Country'].value_counts()[:15].values,palette='inferno')
-plt.title('Top Affected Countries')
-plt.show()
-
-
-# Iraq has witnessed a very large number of terrorist activities followed by Pakistan. One thing to note is the countries with highest attacks, are mostly densely populated countries, thus it will eventually claim many lives. Let's check 
-
-# #### Attacks vs Killed
-
-# In[ ]:
-
-
-coun_terror=terror['Country'].value_counts()[:15].to_frame()
-coun_terror.columns=['Attacks']
-coun_kill=terror.groupby('Country')['Killed'].sum().to_frame()
-coun_terror.merge(coun_kill,left_index=True,right_index=True,how='left').plot.bar(width=0.9)
-fig=plt.gcf()
-fig.set_size_inches(18,6)
-plt.show()
-
-
-# Damn!! Look at the **killed** bar for Iraq. The number of killed is almost 3 folds more than attacks for Iraq. Thus the densely populated theory holds good.
-
-# #### Total Terrorist Activites By Country
-
-# In[ ]:
-
-
-l1=list(['Afghanistan', 'Albania', 'Algeria', 'American Samoa', 'Andorra','Angola', 'Anguilla', 'Antigua and Barbuda', 'Argentina', 'Armenia','Aruba', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas, The',
-'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize','Benin', 'Bermuda', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina',
-'Botswana', 'Brazil', 'British Virgin Islands', 'Brunei','Bulgaria', 'Burkina Faso', 'Burma', 'Burundi', 'Cabo Verde','Cambodia', 'Cameroon', 'Canada', 'Cayman Islands',
-'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia','Comoros', 'Congo, Democratic Republic of the','Congo, Republic of the', 'Cook Islands', 'Costa Rica',"Cote d'Ivoire", 'Croatia', 'Cuba', 'Curacao', 'Cyprus','Czech Republic', 'Denmark', 'Djibouti', 'Dominica','Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador',
-'Equatorial Guinea', 'Eritrea', 'Estonia', 'Ethiopia','Falkland Islands (Islas Malvinas)', 'Faroe Islands', 'Fiji','Finland', 'France', 'French Polynesia', 'Gabon', 'Gambia, The',
-'Georgia', 'Germany', 'Ghana', 'Gibraltar', 'Greece', 'Greenland','Grenada', 'Guam', 'Guatemala', 'Guernsey', 'Guinea-Bissau','Guinea', 'Guyana', 'Haiti', 'Honduras', 'Hong Kong', 'Hungary','Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland','Isle of Man', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jersey','Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Korea, North',
-'Korea, South', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia','Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein',
-'Lithuania', 'Luxembourg', 'Macau', 'Macedonia', 'Madagascar','Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta','Marshall Islands', 'Mauritania', 'Mauritius', 'Mexico','Micronesia, Federated States of', 'Moldova', 'Monaco', 'Mongolia',
-'Montenegro', 'Morocco', 'Mozambique', 'Namibia', 'Nepal','Netherlands', 'New Caledonia', 'New Zealand', 'Nicaragua','Nigeria', 'Niger', 'Niue', 'Northern Mariana Islands', 'Norway',
-'Oman', 'Pakistan', 'Palau', 'Panama', 'Papua New Guinea','Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal','Puerto Rico', 'Qatar', 'Romania', 'Russia', 'Rwanda','Saint Kitts and Nevis', 'Saint Lucia', 'Saint Martin','Saint Pierre and Miquelon', 'Saint Vincent and the Grenadines',
-'Samoa', 'San Marino', 'Sao Tome and Principe', 'Saudi Arabia','Senegal', 'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore','Sint Maarten', 'Slovakia', 'Slovenia', 'Solomon Islands',
-'Somalia', 'South Africa', 'South Sudan', 'Spain', 'Sri Lanka','Sudan', 'Suriname', 'Swaziland', 'Sweden', 'Switzerland', 'Syria','Taiwan', 'Tajikistan', 'Tanzania', 'Thailand', 'Timor-Leste',
-'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey','Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine','United Arab Emirates', 'United Kingdom', 'United States','Uruguay', 'Uzbekistan', 'Vanuatu', 'Venezuela', 'Vietnam',
-'Virgin Islands', 'West Bank', 'Yemen', 'Zambia', 'Zimbabwe']) #Country names
-l2=list(['AFG', 'ALB', 'DZA', 'ASM', 'AND', 'AGO', 'AIA', 'ATG', 'ARG','ARM', 'ABW', 'AUS', 'AUT', 'AZE', 'BHM', 'BHR', 'BGD', 'BRB',
-'BLR', 'BEL', 'BLZ', 'BEN', 'BMU', 'BTN', 'BOL', 'BIH', 'BWA','BRA', 'VGB', 'BRN', 'BGR', 'BFA', 'MMR', 'BDI', 'CPV', 'KHM',
-'CMR', 'CAN', 'CYM', 'CAF', 'TCD', 'CHL', 'CHN', 'COL', 'COM','COD', 'COG', 'COK', 'CRI', 'CIV', 'HRV', 'CUB', 'CUW', 'CYP','CZE', 'DNK', 'DJI', 'DMA', 'DOM', 'ECU', 'EGY', 'SLV', 'GNQ',
-'ERI', 'EST', 'ETH', 'FLK', 'FRO', 'FJI', 'FIN', 'FRA', 'PYF','GAB', 'GMB', 'GEO', 'DEU', 'GHA', 'GIB', 'GRC', 'GRL', 'GRD','GUM', 'GTM', 'GGY', 'GNB', 'GIN', 'GUY', 'HTI', 'HND', 'HKG',
-'HUN', 'ISL', 'IND', 'IDN', 'IRN', 'IRQ', 'IRL', 'IMN', 'ISR','ITA', 'JAM', 'JPN', 'JEY', 'JOR', 'KAZ', 'KEN', 'KIR', 'KOR',
-'PRK', 'KSV', 'KWT', 'KGZ', 'LAO', 'LVA', 'LBN', 'LSO', 'LBR','LBY', 'LIE', 'LTU', 'LUX', 'MAC', 'MKD', 'MDG', 'MWI', 'MYS','MDV', 'MLI', 'MLT', 'MHL', 'MRT', 'MUS', 'MEX', 'FSM', 'MDA',
-'MCO', 'MNG', 'MNE', 'MAR', 'MOZ', 'NAM', 'NPL', 'NLD', 'NCL','NZL', 'NIC', 'NGA', 'NER', 'NIU', 'MNP', 'NOR', 'OMN', 'PAK','PLW', 'PAN', 'PNG', 'PRY', 'PER', 'PHL', 'POL', 'PRT', 'PRI','QAT', 'ROU', 'RUS', 'RWA', 'KNA', 'LCA', 'MAF', 'SPM', 'VCT','WSM', 'SMR', 'STP', 'SAU', 'SEN', 'SRB', 'SYC', 'SLE', 'SGP',
-'SXM', 'SVK', 'SVN', 'SLB', 'SOM', 'ZAF', 'SSD', 'ESP', 'LKA','SDN', 'SUR', 'SWZ', 'SWE', 'CHE', 'SYR', 'TWN', 'TJK', 'TZA',
-'THA', 'TLS', 'TGO', 'TON', 'TTO', 'TUN', 'TUR', 'TKM', 'TUV','UGA', 'UKR', 'ARE', 'GBR', 'USA', 'URY', 'UZB', 'VUT', 'VEN',
-'VNM', 'VGB', 'WBG', 'YEM', 'ZMB', 'ZWE']) #Country Codes
-
-
-
-# ### <a id='Notorious'> 1.5 Most Notorious Groups</a>
-
-# In[ ]:
-
-
-sns.barplot(terror['Group'].value_counts()[1:15].values,terror['Group'].value_counts()[1:15].index,palette=('inferno'))
-plt.xticks(rotation=90)
-fig=plt.gcf()
-fig.set_size_inches(10,8)
-plt.title('Terrorist Groups with Highest Terror Attacks')
-plt.show()
-
-
-# #### Activity of Top Terrorist Groups
-
-# In[ ]:
-
-
-top_groups10=terror[terror['Group'].isin(terror['Group'].value_counts()[1:11].index)]
-pd.crosstab(top_groups10.Year,top_groups10.Group).plot(color=sns.color_palette('Paired',10))
-fig=plt.gcf()
-fig.set_size_inches(18,6)
-plt.show()
-
-
-# The Irish Republican Army(IRA), is the oldest terrorist group started back in the 1960-1970, maybe after the World War 2 due to the mass killing. However, it has probably stopped its activities in the late 90's. Some of the groups that have started lately in 2000's like the ISIL and Taliban, have shown a shoot in the number of attacks in the past years. 
-
-# #### Regions Attacked By Terrorist Groups
-
-# In[ ]:
-
-
-top_groups=terror[terror['Group'].isin(terror['Group'].value_counts()[:14].index)]
-m4 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c',lat_0=True,lat_1=True)
-m4.drawcoastlines()
-m4.drawcountries()
-m4.fillcontinents(lake_color='aqua')
-m4.drawmapboundary(fill_color='aqua')
-fig=plt.gcf()
-fig.set_size_inches(22,10)
-colors=['r','g','b','y','#800000','#ff1100','#8202fa','#20fad9','#ff5733','#fa02c6',"#f99504",'#b3b6b7','#8e44ad','#1a2b3c']
-group=list(top_groups['Group'].unique())
-def group_point(group,color,label):
-    lat_group=list(top_groups[top_groups['Group']==group].latitude)
-    long_group=list(top_groups[top_groups['Group']==group].longitude)
-    x_group,y_group=m4(long_group,lat_group)
-    m4.plot(x_group,y_group,'go',markersize=3,color=j,label=i)
-for i,j in zip(group,colors):
-    group_point(i,j,i)
-legend=plt.legend(loc='lower left',frameon=True,prop={'size':10})
-frame=legend.get_frame()
-frame.set_facecolor('white')
-plt.title('Regional Activities of Terrorist Groups')
-plt.show()
-
-
-# The basemap clearly shows the regions of activity by the groups. ISIL is looks to be the notorious group in Iran and Iraq or broadly Middle-East. Similarly Taliban is concentrated in Afghanistan and Pakistan.
-# 
-# The Unknown markers, are maybe due to be an individual attack due to any resentment or personal grudges or any non-famous groups.
-
-# ### <a id='India'>1.6  Terror Activities in India</a>
-
-# In[ ]:
-
-
-terror_india=terror[terror['Country']=='India']
-terror_india_fol=terror_india.copy()
-terror_india_fol.dropna(subset=['latitude','longitude'],inplace=True)
-location_ind=terror_india_fol[['latitude','longitude']][:5000]
-city_ind=terror_india_fol['city'][:5000]
-killed_ind=terror_india_fol['Killed'][:5000]
-wound_ind=terror_india_fol['Wounded'][:5000]
-target_ind=terror_india_fol['Target_type'][:5000]
-
-map4 = folium.Map(location=[20.59, 78.96],tiles='CartoDB dark_matter',zoom_start=4.5)
-for point in location_ind.index:
-    folium.CircleMarker(list(location_ind.loc[point].values),popup='<b>City: </b>'+str(city_ind[point])+'<br><b>Killed: </b>'+str(killed_ind[point])+                        '<br><b>Injured: </b>'+str(wound_ind[point])+'<br><b>Target: </b>'+str(target_ind[point]),radius=point_size(killed_ind[point]),color=color_point(killed_ind[point]),fill_color=color_point(killed_ind[point])).add_to(map4)
-map4
-
-
-# Click on markers for more information.
-# 
-# #### Most Notorious Groups in India and Favorite Attack Types
-
-# In[ ]:
-
-
-f,ax=plt.subplots(1,2,figsize=(25,12))
-ind_groups=terror_india['Group'].value_counts()[1:11].index
-ind_groups=terror_india[terror_india['Group'].isin(ind_groups)]
-sns.countplot(y='Group',data=ind_groups,ax=ax[0])
-ax[0].set_title('Top Terrorist Groups')
-sns.countplot(y='AttackType',data=terror_india,ax=ax[1])
-ax[1].set_title('Favorite Attack Types')
-plt.subplots_adjust(hspace=0.3,wspace=0.6)
-ax[0].tick_params(labelsize=15)
-ax[1].tick_params(labelsize=15)
-plt.show()
-
-
-# #### How did terrorism spread in India(Animation)
-
-# In[ ]:
-
-
-fig = plt.figure(figsize = (10,8))
-def animate(Year):
-    ax = plt.axes()
-    ax.clear()
-    ax.set_title('Terrorism In India '+'\n'+'Year:' +str(Year))
-    m5 = Basemap(projection='lcc',resolution='l',llcrnrlon=67,llcrnrlat=5,urcrnrlon=99,urcrnrlat=37,lat_0=28,lon_0=77)
-    lat_gif=list(terror_india[terror_india['Year']==Year].latitude)
-    long_gif=list(terror_india[terror_india['Year']==Year].longitude)
-    x_gif,y_gif=m5(long_gif,lat_gif)
-    m5.scatter(x_gif, y_gif,s=[killed+wounded for killed,wounded in zip(terror_india[terror_india['Year']==Year].Killed,terror_india[terror_india['Year']==Year].Wounded)],color = 'r')
-    m5.drawcoastlines()
-    m5.drawcountries()
-    m5.fillcontinents(color='coral',lake_color='aqua', zorder = 1,alpha=0.4)
-    m5.drawmapboundary(fill_color='aqua')
-ani = animation.FuncAnimation(fig,animate,list(terror_india.Year.unique()), interval = 1500)    
-ani.save('animation.gif', writer='imagemagick', fps=1)
-plt.close(1)
-filename = 'animation.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
-
-
-# The size of the marker is relative to the number of people killed + wounded.
-# 
-# The North-eastern and the Northern parts of India are the most terrorism prone areas. Jammu and Kashmir has witnessed highest attacks, and the numbers have gone up substantially since 1980's. The worst attack till date in India is the Mumbai Attack in 2006, which killed more than 200 people.
-
-# ### <a id='USA'> 1.7 Terror Activities in USA</a>
-
-# In[ ]:
-
-
-terror_usa=terror[terror['Country']=='United States']
-terror_usa_fol=terror_usa.copy()
-terror_usa_fol.dropna(subset=['latitude','longitude'],inplace=True)
-location_usa=terror_usa_fol[['latitude','longitude']]
-city_usa=terror_usa_fol['city']
-killed_usa=terror_usa_fol['Killed']
-wound_usa=terror_usa_fol['Wounded']
-target_usa=terror_usa_fol['Target_type']
-
-map5 = folium.Map(location=[39.50, -98.35],tiles='CartoDB dark_matter',zoom_start=3.5)
-for point in location_usa.index:
-    info='<b>City:</b>'+str(city_usa[point])+'<br><b>Killed</b>: '+str(killed_usa[point])+'<br><b>Wounded</b>: '+str(wound_usa[point])+'<br><b>Target</b>: '+str(target_usa[point])
-    iframe = folium.IFrame(html=info, width=200, height=200)
-    folium.CircleMarker(list(location_usa.loc[point].values),popup=folium.Popup(iframe),radius=point_size(killed_usa[point]),color=color_point(killed_usa[point])).add_to(map5)
-
-map5
-
-
-# #### Most Notorious Groups in USA and Favorite Attack Type
-
-# In[ ]:
-
-
-f,ax=plt.subplots(1,2,figsize=(25,12))
-usa_groups=terror_usa['Group'].value_counts()[1:11].index
-usa_groups=terror_usa[terror_usa['Group'].isin(usa_groups)]
-sns.countplot(y='Group',data=usa_groups,ax=ax[0])
-sns.countplot(y='AttackType',data=terror_usa,ax=ax[1])
-plt.subplots_adjust(hspace=0.3,wspace=0.6)
-ax[0].set_title('Top Terrorist Groups')
-ax[1].set_title('Favorite Attack Types')
-ax[0].tick_params(labelsize=15)
-ax[1].tick_params(labelsize=15)
-plt.show()
-
-
-# #### How did Terrorism Spread in USA(Animation)
-
-# In[ ]:
-
-
-fig = plt.figure(figsize = (10,8))
-def animate(Year):
-    ax = plt.axes()
-    ax.clear()
-    ax.set_title('Terrorism In USA '+'\n'+'Year:' +str(Year))
-    m6 = Basemap(llcrnrlon=-119,llcrnrlat=22,urcrnrlon=-64,urcrnrlat=49,
-        projection='lcc',lat_1=33,lat_2=45,lon_0=-95)
-    lat_gif1=list(terror_usa[terror_usa['Year']==Year].latitude)
-    long_gif1=list(terror_usa[terror_usa['Year']==Year].longitude)
-    x_gif1,y_gif1=m6(long_gif1,lat_gif1)
-    m6.scatter(x_gif1, y_gif1,s=[killed+wounded for killed,wounded in zip(terror_usa[terror_usa['Year']==Year].Killed,terror_usa[terror_usa['Year']==Year].Wounded)],color ='r') 
-    m6.drawcoastlines()
-    m6.drawcountries()
-    m6.fillcontinents(color='coral',lake_color='aqua', zorder = 1,alpha=0.4)
-    m6.drawmapboundary(fill_color='aqua')
-ani = animation.FuncAnimation(fig,animate,list(terror_usa.Year.unique()), interval = 1500)    
-ani.save('animation.gif', writer='imagemagick', fps=1)
-plt.close(1)
-filename = 'animation.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
-
-
-# USA doesn't witness many terror attacks as compared to India.There are very few attacks that have claimed a very large number of lives. Also the number of casualities on an average is less as compared to that of India.
-# 
-# It has however witnessed one of the worst terrorist attacks in 2001 in New-York, which killed more than 1500 people.
-
-# ### <a id='Motive'> 1.8 Motive Behind Attacks</a>
-
-# Motive simply means the reason for doing something. Now this reason may be anything, personal grudges, revolt against government, religious sentiments, etc. In this part we will try to analyse what are the main reasons behind the terrorist activities.
-# 
-# For this we will use NLTK for Natural Language Processing. The reason for using NLP is because if we simply take the count of words and make a wordcloud, many useless words like 'the','and,'is', etc will have the highest count as they are very common in english language. Thus using NLTK, we can filter out these words and find other important words.
-
-# In[ ]:
-
-
-kaggle=b'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UUUUAFFFFABRRRQAUUUUAFHWiigDMl8O6HPL5s2jadJIDne9qhP5kVpKqoioihVUYAAwAKWigAooooAK8K/aQ18RaXpPh+NvnnlN3KAeQqgqv4Es3/fNe5u6xxtI7BUUEsxPAA718WfETxa3jTxpe6sAVtuIbZD/AAxL0/PlvqxoA5WiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAJo7l4reeAKhSYDO4ZIIOQR6HqPoTUNd18JvDmieKvGD6ZrxYWzWrNHtm8s+YGQAZ78E8VN8W/AUPgTxNDFYeYdLvIvMtzI24qw4dSe+Dg/RhQB5/RRRQAUUUUAFFFFABRRRQAUUUUAff8ARRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB5x8bvEv/CP/AA7uoIn23Wpt9kj55CkZc/8AfII/4EK+R6KKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAOz+GHhK28aeMBpV1O8EX2WWUOhwwYLhSPXDENjvivTPFPwf8V6z4an1TWNXj1LxHAyrGPMIjFrGjDaOBl2OGyfzySaKKAPAKKKKACiiigAooooAKKKKACiiigD/2Q=='
-
-
-# In[ ]:
+# In[14]:
 
 
 import nltk
-from wordcloud import WordCloud, STOPWORDS
-motive=terror['Motive'].str.lower().str.replace(r'\|', ' ').str.cat(sep=' ')
-words=nltk.tokenize.word_tokenize(motive)
-word_dist = nltk.FreqDist(words)
-stopwords = nltk.corpus.stopwords.words('english')
-f1=open("kaggle.png", "wb")
-f1.write(codecs.decode(kaggle,'base64'))
-f1.close()
-img1 = imread("kaggle.png")
-hcmask1 = img1
-words_except_stop_dist = nltk.FreqDist(w for w in words if w not in stopwords) 
-wordcloud = WordCloud(stopwords=STOPWORDS,background_color='black',mask=hcmask1).generate(" ".join(words_except_stop_dist))
-plt.imshow(wordcloud)
-fig=plt.gcf()
-fig.set_size_inches(10,6)
-plt.axis('off')
-plt.show()
 
 
-# Religious sentiments or religion looks to be the main cause of terrorism. Some of the most dangerous terrorist group names like 'al' for **al-kaeda** looks prominent. Some other words like 'government' and 'anti' also show attacks dur to resentment against the government.
-
-# ### <a id='Animate'>1.9 World Terrorism Spread(Animation)</a>
-
-# In[ ]:
+# In[15]:
 
 
-fig = plt.figure(figsize = (10,6))
-def animate(Year):
-    ax = plt.axes()
-    ax.clear()
-    ax.set_title('Animation Of Terrorist Activities'+'\n'+'Year:' +str(Year))
-    m6 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-    lat6=list(terror[terror['Year']==Year].latitude)
-    long6=list(terror[terror['Year']==Year].longitude)
-    x6,y6=m6(long6,lat6)
-    m6.scatter(x6, y6,s=[(kill+wound)*0.1 for kill,wound in zip(terror[terror['Year']==Year].Killed,terror[terror['Year']==Year].Wounded)],color = 'r')
-    m6.drawcoastlines()
-    m6.drawcountries()
-    m6.fillcontinents(zorder = 1,alpha=0.4)
-    m6.drawmapboundary()
-ani = animation.FuncAnimation(fig,animate,list(terror.Year.unique()), interval = 1500)    
-ani.save('animation.gif', writer='imagemagick', fps=1)
-plt.close(1)
-filename = 'animation.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+print(nltk.word_tokenize(train.text[0]))
 
 
-# The size of the marker is relative to number of casualities(Killed+wounded).
+# In[16]:
+
+
+from sklearn.feature_extraction.text    import CountVectorizer,TfidfVectorizer
+
+
+# In[17]:
+
+
+text = list(train.text.values)
+text
+
+
+# In[18]:
+
+
+tf_vectorizer = CountVectorizer(max_df=0.95, min_df=2,
+                                stop_words='english')
+tf = tf_vectorizer.fit_transform(text)
+
+
+# In[19]:
+
+
+print(tf_vectorizer.get_feature_names()[0:100])
+
+
+# In[20]:
+
+
+train.head()
+
+
+# In[21]:
+
+
+from sklearn.model_selection import train_test_split
+
+train1 ,test1 = train_test_split(train,test_size=0.2) 
+np.random.seed(0)
+train1.head()
+
+
+# In[22]:
+
+
+X_train = train1['text'].values
+X_test = test1['text'].values
+y_train = train1['author'].values
+y_test = test1['author'].values
+
+
+# In[23]:
+
+
+X_train[1],y_train[0]
+
+
+# In[24]:
+
+
+X_test[0],y_test[0]
+
+
+# In[25]:
+
+
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn import svm
+
+
+# **Here i used Countvectorizer only, you can try TfidfVectorizer also.**
+
+# In[26]:
+
+
+text_clf = Pipeline([('vect', CountVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', svm.LinearSVC())
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# In[27]:
+
+
+text_clf = Pipeline([('vect', TfidfVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', svm.LinearSVC())
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# ![try other](https://media1.tenor.com/images/35b9a8d480d756f6d31d2d59d56abb4a/tenor.gif?itemid=5139192)
 # 
-# It is visible that the Middle-East and Southern-Asia are the regions with highest terrorist activites, not only in numbers, but also in casualities. It is spreading largely across the globe but in the past few years, India, Pakistan and Afghanistan have witnessed an increase in such number of activities.
+# **Try with different classifier**
 
-# Lastly I would like to thank all of you for having a look at this notebook.
+# In[28]:
+
+
+from sklearn.ensemble import RandomForestClassifier,ExtraTreesClassifier
+import xgboost as xgb
+import lightgbm as lgbm
+from sklearn.naive_bayes import MultinomialNB
+
+
+# In[29]:
+
+
+rfc = RandomForestClassifier()
+etrc = ExtraTreesClassifier()
+xgbc = xgb.XGBClassifier()
+lgbmc = lgbm.LGBMClassifier()
+mnb = MultinomialNB()
+
+
+# In[30]:
+
+
+text_clf = Pipeline([('vect', CountVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', rfc)
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# In[31]:
+
+
+text_clf = Pipeline([('vect', CountVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', xgbc)
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# In[32]:
+
+
+text_clf = Pipeline([('vect', CountVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', lgbmc)
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# In[33]:
+
+
+text_clf = Pipeline([('vect', CountVectorizer()),
+                     ('tfidf', TfidfTransformer()),
+                     ('clf', mnb)
+                    ])
+text_clf = text_clf.fit(X_train,y_train)
+y_test_predicted = text_clf.predict(X_test)
+np.mean(y_test_predicted == y_test)
+
+
+# **Here i'm trying to apply LSA and extraxt the top words of author EAP**
+
+# In[34]:
+
+
+train.head()
+
+
+# In[35]:
+
+
+text = list(train[train['author']=='EAP'].text.values)
+
+
+# In[36]:
+
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+vectorizer = TfidfVectorizer(lowercase=True,stop_words='english')
+
+
+# In[37]:
+
+
+X =vectorizer.fit_transform(text)
+
+
+# In[38]:
+
+
+from sklearn.decomposition import TruncatedSVD
+lsa = TruncatedSVD(n_components=3,n_iter=500)
+
+
+# In[39]:
+
+
+lsa.fit(X)
+
+
+# In[40]:
+
+
+terms = vectorizer.get_feature_names()
+
+
+# In[41]:
+
+
+for i,comp in enumerate(lsa.components_):
+    termsInComp = zip(terms,comp)
+    sortedterms = sorted(termsInComp, key=lambda x: x[1],reverse=True)[:10]
+    print("Concept %d:" % i)
+    for term in sortedterms:
+        print(term[0])
+    print(" ")
+
+
+# Further :
+# * tune the parameters of the model to get high accuracy
+# * clean the data further if needed like removing common words and stop words
+# * ensemble models
+# * data visulazation
+# * if needed feature engineering 
+# and many things to do ....
 # 
-# If you liked it or learnt something from it, **PLEASE UPVOTE**, as it will keep me motivated for doing better.
+# 
+
+# ![please](https://media.giphy.com/media/cyoN6pC6kek2A/giphy.gif)
+
+# **More to come...**
+# 
+# **Please upvote to encourage me.**
+# 
+# **Thank you :)** 

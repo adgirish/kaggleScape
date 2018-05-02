@@ -1,120 +1,154 @@
-import itertools
 
+''' 
+Author: Danijel Kivaranovic 
+Title: Neural network (Keras) with sparse data
+'''
+
+## import libraries
 import numpy as np
+np.random.seed(123)
+
 import pandas as pd
+import subprocess
+from scipy.sparse import csr_matrix, hstack
+from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import StandardScaler
+from sklearn.cross_validation import KFold
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation
+from keras.layers.advanced_activations import PReLU
 
-from matplotlib import pyplot as plt
-import seaborn as sns
+## Batch generators ##################################################################################################################################
 
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import normalize
-from sklearn.decomposition import PCA
+def batch_generator(X, y, batch_size, shuffle):
+    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
+    number_of_batches = np.ceil(X.shape[0]/batch_size)
+    counter = 0
+    sample_index = np.arange(X.shape[0])
+    if shuffle:
+        np.random.shuffle(sample_index)
+    while True:
+        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
+        X_batch = X[batch_index,:].toarray()
+        y_batch = y[batch_index]
+        counter += 1
+        yield X_batch, y_batch
+        if (counter == number_of_batches):
+            if shuffle:
+                np.random.shuffle(sample_index)
+            counter = 0
+
+def batch_generatorp(X, batch_size, shuffle):
+    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
+    counter = 0
+    sample_index = np.arange(X.shape[0])
+    while True:
+        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
+        X_batch = X[batch_index, :].toarray()
+        counter += 1
+        yield X_batch
+        if (counter == number_of_batches):
+            counter = 0
+
+########################################################################################################################################################
+
+## read data
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+
+## set test loss to NaN
+test['loss'] = np.nan
+
+## response and IDs
+y = train['loss'].values
+id_train = train['id'].values
+id_test = test['id'].values
+
+## stack train test
+ntrain = train.shape[0]
+tr_te = pd.concat((train, test), axis = 0)
+
+## Preprocessing and transforming to sparse data
+sparse_data = []
+
+f_cat = [f for f in tr_te.columns if 'cat' in f]
+for f in f_cat:
+    dummy = pd.get_dummies(tr_te[f].astype('category'))
+    tmp = csr_matrix(dummy)
+    sparse_data.append(tmp)
+
+f_num = [f for f in tr_te.columns if 'cont' in f]
+scaler = StandardScaler()
+tmp = csr_matrix(scaler.fit_transform(tr_te[f_num]))
+sparse_data.append(tmp)
+
+del(tr_te, train, test)
+
+## sparse train and test data
+xtr_te = hstack(sparse_data, format = 'csr')
+xtrain = xtr_te[:ntrain, :]
+xtest = xtr_te[ntrain:, :]
+
+print('Dim train', xtrain.shape)
+print('Dim test', xtest.shape)
+
+del(xtr_te, sparse_data, tmp)
+
+## neural net
+def nn_model():
+    model = Sequential()
+    model.add(Dense(400, input_dim = xtrain.shape[1], init = 'he_normal'))
+    model.add(PReLU())
+    model.add(Dropout(0.4))
+    model.add(Dense(200, init = 'he_normal'))
+    model.add(PReLU())
+    model.add(Dropout(0.2))
+    model.add(Dense(1, init = 'he_normal'))
+    model.compile(loss = 'mae', optimizer = 'adadelta')
+    return(model)
+
+## cv-folds
+nfolds = 5
+folds = KFold(len(y), n_folds = nfolds, shuffle = True, random_state = 111)
+
+## train models
+i = 0
+nbags = 5
+nepochs = 55
+pred_oob = np.zeros(xtrain.shape[0])
+pred_test = np.zeros(xtest.shape[0])
+
+for (inTr, inTe) in folds:
+    xtr = xtrain[inTr]
+    ytr = y[inTr]
+    xte = xtrain[inTe]
+    yte = y[inTe]
+    pred = np.zeros(xte.shape[0])
+    for j in range(nbags):
+        model = nn_model()
+        fit = model.fit_generator(generator = batch_generator(xtr, ytr, 128, True),
+                                  nb_epoch = nepochs,
+                                  samples_per_epoch = xtr.shape[0],
+                                  verbose = 0)
+        pred += model.predict_generator(generator = batch_generatorp(xte, 800, False), val_samples = xte.shape[0])[:,0]
+        pred_test += model.predict_generator(generator = batch_generatorp(xtest, 800, False), val_samples = xtest.shape[0])[:,0]
+    pred /= nbags
+    pred_oob[inTe] = pred
+    score = mean_absolute_error(yte, pred)
+    i += 1
+    print('Fold ', i, '- MAE:', score)
+
+print('Total - MAE:', mean_absolute_error(y, pred_oob))
+
+## train predictions
+df = pd.DataFrame({'id': id_train, 'loss': pred_oob})
+df.to_csv('preds_oob.csv', index = False)
+
+## test predictions
+pred_test /= (nfolds*nbags)
+df = pd.DataFrame({'id': id_test, 'loss': pred_test})
+df.to_csv('submission_keras.csv', index = False)
 
 
-def principal_component_analysis(x_train):
-
-    """
-    Principal Component Analysis (PCA) identifies the combination
-    of attributes (principal components, or directions in the feature space)
-    that account for the most variance in the data.
-
-    Let's calculate the 2 first principal components of the training data,
-    and then create a scatter plot visualizing the training data examples
-    projected on the calculated components.
-    """
-
-    # Extract the variable to be predicted
-    y_train = x_train["TARGET"]
-    x_train = x_train.drop(labels="TARGET", axis=1)
-    classes = np.sort(np.unique(y_train))
-    labels = ["Satisfied customer", "Unsatisfied customer"]
-
-    # Normalize each feature to unit norm (vector length)
-    x_train_normalized = normalize(x_train, axis=0)
-    
-    # Run PCA
-    pca = PCA(n_components=2)
-    x_train_projected = pca.fit_transform(x_train_normalized)
-
-    # Visualize
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(1, 1, 1)
-    colors = [(0.0, 0.63, 0.69), 'black']
-    markers = ["o", "D"]
-    for class_ix, marker, color, label in zip(
-            classes, markers, colors, labels):
-        ax.scatter(x_train_projected[np.where(y_train == class_ix), 0],
-                   x_train_projected[np.where(y_train == class_ix), 1],
-                   marker=marker, color=color, edgecolor='whitesmoke',
-                   linewidth='1', alpha=0.9, label=label)
-        ax.legend(loc='best')
-    plt.title(
-        "Scatter plot of the training data examples projected on the "
-        "2 first principal components")
-    plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[0] * 100.0))
-    plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[1] * 100.0))
-    plt.show()
-
-    plt.savefig("pca.pdf", format='pdf')
-    plt.savefig("pca.png", format='png')
 
 
-def remove_feat_constants(data_frame):
-    # Remove feature vectors containing one unique value,
-    # because such features do not have predictive value.
-    print("")
-    print("Deleting zero variance features...")
-    # Let's get the zero variance features by fitting VarianceThreshold
-    # selector to the data, but let's not transform the data with
-    # the selector because it will also transform our Pandas data frame into
-    # NumPy array and we would like to keep the Pandas data frame. Therefore,
-    # let's delete the zero variance features manually.
-    n_features_originally = data_frame.shape[1]
-    selector = VarianceThreshold()
-    selector.fit(data_frame)
-    # Get the indices of zero variance feats
-    feat_ix_keep = selector.get_support(indices=True)
-    orig_feat_ix = np.arange(data_frame.columns.size)
-    feat_ix_delete = np.delete(orig_feat_ix, feat_ix_keep)
-    # Delete zero variance feats from the original pandas data frame
-    data_frame = data_frame.drop(labels=data_frame.columns[feat_ix_delete],
-                                 axis=1)
-    # Print info
-    n_features_deleted = feat_ix_delete.size
-    print("  - Deleted %s / %s features (~= %.1f %%)" % (
-        n_features_deleted, n_features_originally,
-        100.0 * (np.float(n_features_deleted) / n_features_originally)))
-    return data_frame
-
-
-def remove_feat_identicals(data_frame):
-    # Find feature vectors having the same values in the same order and
-    # remove all but one of those redundant features.
-    print("")
-    print("Deleting identical features...")
-    n_features_originally = data_frame.shape[1]
-    # Find the names of identical features by going through all the
-    # combinations of features (each pair is compared only once).
-    feat_names_delete = []
-    for feat_1, feat_2 in itertools.combinations(
-            iterable=data_frame.columns, r=2):
-        if np.array_equal(data_frame[feat_1], data_frame[feat_2]):
-            feat_names_delete.append(feat_2)
-    feat_names_delete = np.unique(feat_names_delete)
-    # Delete the identical features
-    data_frame = data_frame.drop(labels=feat_names_delete, axis=1)
-    n_features_deleted = len(feat_names_delete)
-    print("  - Deleted %s / %s features (~= %.1f %%)" % (
-        n_features_deleted, n_features_originally,
-        100.0 * (np.float(n_features_deleted) / n_features_originally)))
-    return data_frame
-
-
-if __name__ == "__main__":
-    x_train = pd.read_csv(filepath_or_buffer="../input/train.csv",
-                          index_col=0, sep=',')
-    x_train = remove_feat_constants(x_train)
-    x_train = remove_feat_identicals(x_train)
-    principal_component_analysis(x_train)

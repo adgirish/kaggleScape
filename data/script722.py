@@ -1,325 +1,344 @@
 
 # coding: utf-8
 
-# # About the dataset
-# 
-# Context
-# Our world population is expected to grow from 7.3 billion today to 9.7 billion in the year 2050. Finding solutions for feeding the growing world population has become a hot topic for food and agriculture organizations, entrepreneurs and philanthropists. These solutions range from changing the way we grow our food to changing the way we eat. To make things harder, the world's climate is changing and it is both affecting and affected by the way we grow our food – agriculture. This dataset provides an insight on our worldwide food production - focusing on a comparison between food produced for human consumption and feed produced for animals.
-# 
-# Content
-# The Food and Agriculture Organization of the United Nations provides free access to food and agriculture data for over 245 countries and territories, from the year 1961 to the most recent update (depends on the dataset). One dataset from the FAO's database is the Food Balance Sheets. It presents a comprehensive picture of the pattern of a country's food supply during a specified reference period, the last time an update was loaded to the FAO database was in 2013. The food balance sheet shows for each food item the sources of supply and its utilization. This chunk of the dataset is focused on two utilizations of each food item available:
-# 
-# Food - refers to the total amount of the food item available as human food during the reference period.
-# Feed - refers to the quantity of the food item available for feeding to the livestock and poultry during the reference period.
-# Dataset's attributes:
-# 
-# Area code - Country name abbreviation
-# Area - County name
-# Item - Food item
-# Element - Food or Feed
-# Latitude - geographic coordinate that specifies the north–south position of a point on the Earth's surface
-# Longitude - geographic coordinate that specifies the east-west position of a point on the Earth's surface
-# Production per year - Amount of food item produced in 1000 tonnes
-# 
-# This is a simple exploratory notebook that heavily expolits pandas and seaborn
+# We will do analysis of some basic information about this dataset. It will help in building our model/features. 
 
 # In[ ]:
 
 
-# Importing libraries
-import numpy as np
-import pandas as pd
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn import model_selection, preprocessing
+import xgboost as xgb
+color = sns.color_palette()
+
 get_ipython().run_line_magic('matplotlib', 'inline')
-# importing data
-df = pd.read_csv("../input/FAO.csv",  encoding = "ISO-8859-1")
-pd.options.mode.chained_assignment = None
 
+pd.options.mode.chained_assignment = None  # default='warn'
+pd.set_option('display.max_columns', 500)
 
-# Let's see what the data looks like...
 
 # In[ ]:
 
 
-df.head()
+# Read train file
+train_df = pd.read_csv("../input/train.csv")
 
-
-# # Plot for annual produce of different countries with quantity in y-axis and years in x-axis
 
 # In[ ]:
 
 
-area_list = list(df['Area'].unique())
-year_list = list(df.iloc[:,10:].columns)
+train_df.head()
 
-plt.figure(figsize=(24,12))
-for ar in area_list:
-    yearly_produce = []
-    for yr in year_list:
-        yearly_produce.append(df[yr][df['Area'] == ar].sum())
-    plt.plot(yearly_produce, label=ar)
-plt.xticks(np.arange(53), tuple(year_list), rotation=60)
-plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, ncol=8, mode="expand", borderaxespad=0.)
+
+# In[ ]:
+
+
+#Let's compute the number of missing values in each column
+train_df.isnull().sum(axis=0).reset_index()
+
+
+# In[ ]:
+
+
+# Let's have a look at test dataset
+test_df = pd.read_csv("../input/test.csv")
+test_df.shape
+
+
+# It can be observed that test data have fewer columns. It does not contain dropoff datetime and obviously the target variable (trip_duration) :). 
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,6))
+plt.scatter(range(train_df.shape[0]), np.sort(train_df.trip_duration.values))
+plt.xlabel('index', fontsize=12)
+plt.ylabel('trip duration', fontsize=12)
 plt.show()
 
 
-# Clearly, India, USA and China stand out here. So, these are the countries with most food and feed production.
-# 
-# Now, let's have a close look at their food and feed data
-# 
-# # Food and feed plot for the whole dataset
-
 # In[ ]:
 
 
-sns.factorplot("Element", data=df, kind="count")
-
-
-# So, there is a huge difference in food and feed production. Now, we have obvious assumptions about the following plots after looking at this huge difference.
-# 
-# # Food and feed plot for the largest producers(India, USA, China)
-
-# In[ ]:
-
-
-sns.factorplot("Area", data=df[(df['Area'] == "India") | (df['Area'] == "China, mainland") | (df['Area'] == "United States of America")], kind="count", hue="Element", size=8, aspect=.8)
-
-
-# Though, there is a huge difference between feed and food production, these countries' total production and their ranks depend on feed production.
-
-# 
-# 
-# Now, we create a dataframe with countries as index and their annual produce as columns from 1961 to 2013.
-
-# In[ ]:
-
-
-new_df_dict = {}
-for ar in area_list:
-    yearly_produce = []
-    for yr in year_list:
-        yearly_produce.append(df[yr][df['Area']==ar].sum())
-    new_df_dict[ar] = yearly_produce
-new_df = pd.DataFrame(new_df_dict)
-
-new_df.head()
-
-
-# Now, this is not perfect so we transpose this dataframe and add column names.
-
-# In[ ]:
-
-
-new_df = pd.DataFrame.transpose(new_df)
-new_df.columns = year_list
-
-new_df.head()
-
-
-# Perfect! Now, we will do some feature engineering.
-# 
-# # First, a new column which indicates mean produce of each state over the given years. Second, a ranking column which ranks countries on the basis of mean produce.
-
-# In[ ]:
-
-
-mean_produce = []
-for i in range(174):
-    mean_produce.append(new_df.iloc[i,:].values.mean())
-new_df['Mean_Produce'] = mean_produce
-
-new_df['Rank'] = new_df['Mean_Produce'].rank(ascending=False)
-
-new_df.head()
-
-
-# Now, we create another dataframe with items and their total production each year from 1961 to 2013
-
-# In[ ]:
-
-
-item_list = list(df['Item'].unique())
-
-item_df = pd.DataFrame()
-item_df['Item_Name'] = item_list
-
-for yr in year_list:
-    item_produce = []
-    for it in item_list:
-        item_produce.append(df[yr][df['Item']==it].sum())
-    item_df[yr] = item_produce
-
-
-# In[ ]:
-
-
-item_df.head()
-
-
-# # Some more feature engineering
-# 
-# This time, we will use the new features to get some good conclusions.
-# 
-# # 1. Total amount of item produced from 1961 to 2013
-# # 2. Providing a rank to the items to know the most produced item
-
-# In[ ]:
-
-
-sum_col = []
-for i in range(115):
-    sum_col.append(item_df.iloc[i,1:].values.sum())
-item_df['Sum'] = sum_col
-item_df['Production_Rank'] = item_df['Sum'].rank(ascending=False)
-
-item_df.head()
-
-
-# # Now, we find the most produced food items in the last half-century
-
-# In[ ]:
-
-
-item_df['Item_Name'][item_df['Production_Rank'] < 11.0].sort_values()
-
-
-# So, cereals, fruits and maize are the most produced items in the last 50 years
-# 
-# # Food and feed plot for most produced items 
-
-# In[ ]:
-
-
-sns.factorplot("Item", data=df[(df['Item']=='Wheat and products') | (df['Item']=='Rice (Milled Equivalent)') | (df['Item']=='Maize and products') | (df['Item']=='Potatoes and products') | (df['Item']=='Vegetables, Other') | (df['Item']=='Milk - Excluding Butter') | (df['Item']=='Cereals - Excluding Beer') | (df['Item']=='Starchy Roots') | (df['Item']=='Vegetables') | (df['Item']=='Fruits - Excluding Wine')], kind="count", hue="Element", size=20, aspect=.8)
-
-
-# # Now, we plot a heatmap of correlation of produce in difference years
-
-# In[ ]:
-
-
-year_df = df.iloc[:,10:]
-fig, ax = plt.subplots(figsize=(16,10))
-sns.heatmap(year_df.corr(), ax=ax)
-
-
-# So, we gather that a given year's production is more similar to its immediate previous and immediate following years.
-
-# In[ ]:
-
-
-f, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, sharex='col', sharey='row', figsize=(10,10))
-ax1.set(xlabel='Y1968', ylabel='Y1961')
-ax2.set(xlabel='Y1968', ylabel='Y1963')
-ax3.set(xlabel='Y1968', ylabel='Y1986')
-ax4.set(xlabel='Y1968', ylabel='Y2013')
-sns.jointplot(x="Y1968", y="Y1961", data=df, kind="reg", ax=ax1)
-sns.jointplot(x="Y1968", y="Y1963", data=df, kind="reg", ax=ax2)
-sns.jointplot(x="Y1968", y="Y1986", data=df, kind="reg", ax=ax3)
-sns.jointplot(x="Y1968", y="Y2013", data=df, kind="reg", ax=ax4)
-plt.close(2)
-plt.close(3)
-plt.close(4)
-plt.close(5)
-plt.savefig('joint.png')
-
-
-# # Heatmap of production of food items over years
-# 
-# This will detect the items whose production has drastically increased over the years
-
-# In[ ]:
-
-
-new_item_df = item_df.drop(["Item_Name","Sum","Production_Rank"], axis = 1)
-fig, ax = plt.subplots(figsize=(12,24))
-sns.heatmap(new_item_df,ax=ax)
-ax.set_yticklabels(item_df.Item_Name.values[::-1])
+# in train dataset some trip duration are very high (I consider them outliers and remove them before replotting it)
+q = train_df.trip_duration.quantile(0.99)
+train_df = train_df[train_df.trip_duration < q]
+plt.figure(figsize=(8,6))
+plt.scatter(range(train_df.shape[0]), np.sort(train_df.trip_duration.values))
+plt.xlabel('index', fontsize=12)
+plt.ylabel('trip duration', fontsize=12)
 plt.show()
 
 
-# There is considerable growth in production of Palmkernel oil, Meat/Aquatic animals, ricebran oil, cottonseed, seafood, offals, roots, poultry meat, mutton, bear, cocoa, coffee and soyabean oil.
-# There has been exceptional growth in production of onions, cream, sugar crops, treenuts, butter/ghee and to some extent starchy roots.
-
-# Now, we look at clustering.
-
-# # What is clustering?
-# Cluster analysis or clustering is the task of grouping a set of objects in such a way that objects in the same group (called a cluster) are more similar (in some sense) to each other than to those in other groups (clusters). It is a main task of exploratory data mining, and a common technique for statistical data analysis, used in many fields, including machine learning, pattern recognition, image analysis, information retrieval, bioinformatics, data compression, and computer graphics.
-
-# # Today, we will form clusters to classify countries based on productivity scale
-
-# For this, we will use k-means clustering algorithm.
-# # K-means clustering
-# (Source [Wikipedia](https://en.wikipedia.org/wiki/K-means_clustering#Standard_algorithm) )
-# ![http://gdurl.com/5BbP](http://gdurl.com/5BbP)
-
-# This is the data we will use.
+# Now it looks better. We can perform some additional analysis on it
 
 # In[ ]:
 
 
-new_df.head()
-
-
-# In[ ]:
-
-
-X = new_df.iloc[:,:-2].values
-
-X = pd.DataFrame(X)
-X = X.convert_objects(convert_numeric=True)
-X.columns = year_list
-
-
-# # Elbow method to select number of clusters
-# This method looks at the percentage of variance explained as a function of the number of clusters: One should choose a number of clusters so that adding another cluster doesn't give much better modeling of the data. More precisely, if one plots the percentage of variance explained by the clusters against the number of clusters, the first clusters will add much information (explain a lot of variance), but at some point the marginal gain will drop, giving an angle in the graph. The number of clusters is chosen at this point, hence the "elbow criterion". This "elbow" cannot always be unambiguously identified. Percentage of variance explained is the ratio of the between-group variance to the total variance, also known as an F-test. A slight variation of this method plots the curvature of the within group variance.
-# # Basically, number of clusters = the x-axis value of the point that is the corner of the "elbow"(the plot looks often looks like an elbow)
-
-# In[ ]:
-
-
-from sklearn.cluster import KMeans
-wcss = []
-for i in range(1,11):
-    kmeans = KMeans(n_clusters=i,init='k-means++',max_iter=300,n_init=10,random_state=0)
-    kmeans.fit(X)
-    wcss.append(kmeans.inertia_)
-plt.plot(range(1,11),wcss)
-plt.title('The Elbow Method')
-plt.xlabel('Number of clusters')
-plt.ylabel('WCSS')
+plt.figure(figsize=(12,8))
+sns.distplot(train_df.trip_duration.values, bins=50, kde=True)
+plt.xlabel('trip_duration', fontsize=12)
 plt.show()
 
 
-# As the elbow corner coincides with x=2, we will have to form **2 clusters**. Personally, I would have liked to select 3 to 4 clusters. But trust me, only selecting 2 clusters can lead to best results.
-# Now, we apply k-means algorithm.
+# It looks like a right skewed distribution. One can apply logarithm to make it normally distributed. 
 
 # In[ ]:
 
 
-kmeans = KMeans(n_clusters=2,init='k-means++',max_iter=300,n_init=10,random_state=0) 
-y_kmeans = kmeans.fit_predict(X)
-
-X = X.as_matrix(columns=None)
-
-
-# Now, let's visualize the results.
-
-# In[ ]:
-
-
-plt.scatter(X[y_kmeans == 0, 0], X[y_kmeans == 0,1],s=100,c='red',label='Others')
-plt.scatter(X[y_kmeans == 1, 0], X[y_kmeans == 1,1],s=100,c='blue',label='China(mainland),USA,India')
-plt.scatter(kmeans.cluster_centers_[:,0],kmeans.cluster_centers_[:,1],s=300,c='yellow',label='Centroids')
-plt.title('Clusters of countries by Productivity')
-plt.legend()
+plt.figure(figsize=(12,8))
+sns.distplot(np.log(train_df.trip_duration.values), bins=50, kde=True)
+plt.xlabel('trip_duration', fontsize=12)
 plt.show()
 
 
-# So, the blue cluster represents China(Mainland), USA and India while the red cluster represents all the other countries.
-# This result was highly probable. Just take a look at the plot of cell 3 above. See how China, USA and India stand out. That has been observed here in clustering too.
-# 
-# You should try this algorithm for 3 or 4 clusters. Looking at the distribution, you will realise why 2 clusters is the best choice for the given data
+# Just another way to visualize in Maps..
 
-# This is not the end! More is yet to come.
+# In[ ]:
+
+
+from mpl_toolkits.basemap import Basemap
+from matplotlib import cm
+west, south, east, north = -74.05, 40.70, -74.00, 40.75
+
+samples = train_df.sample(n=10000)
+fig = plt.figure(figsize=(12,12))
+ax = fig.add_subplot(111)
+m = Basemap(projection='merc', llcrnrlat=south, urcrnrlat=north,
+            llcrnrlon=west, urcrnrlon=east, lat_ts=south, resolution='i')
+x, y = m(samples['pickup_longitude'].values, samples['pickup_latitude'].values)
+m.hexbin(x, y, gridsize=1000,
+         bins='log', cmap=cm.YlOrRd_r);
+
+
+# Lets fix some latitudes and longitudes ..
+
+# But, what about the possible coordiantes that point to the water? Let's plot the southwest area of the city.
+
+# In[ ]:
+
+
+pickup_x = train_df.pickup_longitude.values
+pickup_y = train_df.pickup_latitude.values
+dropoff_x = train_df.dropoff_longitude.values
+dropoff_y = train_df.dropoff_latitude.values
+
+sns.set_style('white')
+
+fig, ax = plt.subplots(figsize=(11, 12))
+
+ax.scatter(pickup_x, pickup_y, s=5, color='blue', alpha=0.5)
+ax.scatter(dropoff_x, dropoff_y, s=5, color='red', alpha=0.5)
+
+ax.set_xlim([-74.05, -74.00])
+ax.set_ylim([40.70, 40.75])
+
+ax.set_title('coordinates')
+
+sns.set_style('darkgrid')
+
+
+# So we can see that there are lot of points which represent water. We can fix this by correcting latitudes and longitudes...
+
+# In[ ]:
+
+
+def fix_location(data):
+    data.pickup_latitude = ((data.pickup_latitude >= 40.459518) & (data.pickup_latitude <= 41.175342))
+    data.pickup_longitude = ((data.pickup_longitude >= -74.361107) & (data.pickup_longitude <= -71.903083))
+    data.dropoff_latitude = ((data.dropoff_latitude >= 40.459518) & (data.dropoff_latitude <= 41.175342))
+    data.dropoff_longitude = ((data.dropoff_longitude >= -74.361107) & (data.dropoff_longitude <= -71.903083))
+    return(data)
+train_df=fix_location(train_df)
+test_df=fix_location(test_df)
+
+
+# Let's compute the distance using the pick_up, drop langitude lattitude information and analyse it's relation with trip duration
+
+# In[ ]:
+
+
+def haversine_np(lon1, lat1, lon2, lat2):
+    """
+    Calculate the great circle distance between two points
+    on the earth (specified in decimal degrees)
+
+    All args must be of equal length.    
+
+    """
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+
+    c = 2 * np.arcsin(np.sqrt(a))
+    km = 6367 * c
+    return km
+
+
+# In[ ]:
+
+
+train_df['radial_distance'] = haversine_np(train_df.pickup_longitude, train_df.pickup_latitude,
+                                           train_df.dropoff_longitude, train_df.dropoff_latitude)
+test_df['radial_distance'] = haversine_np(test_df.pickup_longitude, test_df.pickup_latitude,
+                                           train_df.dropoff_longitude, train_df.dropoff_latitude)
+
+
+# It takes large amount of time to get a best fitting plot between radial distance and trip duration, so I am taking first 10000 examples and ploting it
+
+# In[ ]:
+
+
+sns.regplot(train_df.trip_duration[0:10000], train_df.radial_distance[0:10000])
+
+
+# In[ ]:
+
+
+# Let's compute pickup hour for each ride
+train_df['pickup_datetime'] = pd.to_datetime(train_df['pickup_datetime'])
+train_df['pickup_hour'] = train_df.pickup_datetime.dt.hour
+train_df['day_week'] = train_df.pickup_datetime.dt.weekday
+# Get pick up hour for test data as well
+test_df['pickup_datetime'] = pd.to_datetime(test_df['pickup_datetime'])
+test_df['pickup_hour'] = test_df.pickup_datetime.dt.hour
+test_df['day_week'] = test_df.pickup_datetime.dt.weekday
+
+
+# Now lets derive some more directional features and also speed which will add to our model...
+
+# In[ ]:
+
+
+#Lets compute some more features :
+
+def engineer_features(data):
+
+    data['Direction_NS'] = (data.pickup_latitude>data.dropoff_latitude)*1+1
+    indices = data[(data.pickup_latitude == data.dropoff_latitude) & (data.pickup_latitude!=0)].index
+    data.loc[indices,'Direction_NS'] = 0
+
+    # create direction variable Direction_EW. 
+    # This is 2 if taxi moving from east to west, 1 in the opposite direction and 0 otherwise
+    data['Direction_EW'] = (data.pickup_longitude>data.dropoff_longitude)*1+1
+    indices = data[(data.pickup_longitude == data.dropoff_longitude) & (data.pickup_longitude!=0)].index
+    data.loc[indices,'Direction_EW'] = 0
+    
+    # create variable for Speed
+    #print("deriving Speed. Make sure to check for possible NaNs and Inf vals...")
+    #data['Speed_mph'] = data.radial_distance/(data.trip_duration/60)
+    
+    # replace all NaNs values and values >240mph by a values sampled from a random distribution of 
+    # mean 12.9 and  standard deviation 6.8mph. These values were extracted from the distribution
+    #indices_oi = data[(data.Speed_mph.isnull()) | (data.Speed_mph>240)].index
+    #data.loc[indices_oi,'Speed_mph'] = np.abs(np.random.normal(loc=12.9,scale=6.8,size=len(indices_oi)))
+    print("Feature engineering done! :-)")
+    return(data)
+
+train_df=engineer_features(train_df)
+
+
+# In[ ]:
+
+
+for f in train_df.columns:
+    if train_df[f].dtype=='object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(train_df[f].values)) 
+        train_df[f] = lbl.transform(list(train_df[f].values))
+        
+train_y = train_df.trip_duration.values
+train_X = train_df.drop(["id", "dropoff_datetime", "pickup_datetime", "trip_duration"], axis=1)
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 8,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+dtrain = xgb.DMatrix(train_X, train_y, feature_names=train_X.columns.values)
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=100)
+
+# plot the important features #
+fig, ax = plt.subplots(figsize=(12,18))
+xgb.plot_importance(model, max_num_features=50, height=0.8, ax=ax)
+plt.show()
+
+
+# ### Visualize distribution of pick up hour
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+sns.countplot(x="pickup_hour", data=train_df)
+plt.ylabel('Count', fontsize=12)
+plt.xlabel('pick up hour', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# The distribution shows the car demand with pick up hour time. After mid night less number's of trips are taken. Now let us see how the trip duration changes with respect to trip time.
+
+# In[ ]:
+
+
+grouped_df = train_df.groupby('pickup_hour')['trip_duration'].aggregate(np.median).reset_index()
+plt.figure(figsize=(12,8))
+sns.pointplot(grouped_df.pickup_hour.values, grouped_df.trip_duration.values, alpha=0.8, color=color[3])
+plt.ylabel('median trip duration', fontsize=12)
+plt.xlabel('pick up hour', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# In[ ]:
+
+
+# Group by day
+grouped_df = train_df.groupby('day_week')['trip_duration'].aggregate(np.median).reset_index()
+plt.figure(figsize=(12,8))
+sns.pointplot(grouped_df.day_week.values, grouped_df.trip_duration.values, alpha=0.8, color=color[3])
+plt.ylabel('trip duration median', fontsize=12)
+plt.xlabel('week day', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# In[ ]:
+
+
+# Number of trips per day of week
+plt.figure(figsize=(12,8))
+sns.countplot(x="day_week", data=train_df)
+plt.ylabel('Count', fontsize=12)
+plt.xlabel('Week day (0 - Monday)', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# In[ ]:
+
+
+from bokeh.plotting import output_notebook, figure, show
+from bokeh.models import HoverTool, BoxSelectTool
+
+output_notebook()
+
+TOOLS = [BoxSelectTool(), HoverTool()]
+
+p = figure(plot_width=600, plot_height=400, title='A test scatter plot with hover labels', tools=TOOLS)
+
+p.circle([1, 2, 3, 4, 5], [2, 5, 8, 2, 7], size=10)
+
+show(p)
+

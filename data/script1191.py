@@ -1,160 +1,214 @@
 
 # coding: utf-8
 
-# Food that tastes good, makes me fat. I don't want to get fat(ter). So even though a steady diet of Taco Bell is tempting, probably won't help me accomplish my 'be less fat' goal.
+# I found kagglegym_emulation to be very helpfull (https://www.kaggle.com/slothouber/two-sigma-financial-modeling/kagglegym-emulation). What this script does is validating it against the actual kagglegym. I used some snippets from this script https://www.kaggle.com/sankhamukherjee/two-sigma-financial-modeling/prediction-model-elastic-net. 
 # 
-# So as an alternative to Taco Bell, I want to find low calorie recipes that 1) taste good & 2) have relatively high amounts of protein.
-# 
-# Most people would just search for healthy recipes, but it's more fun to use a data set like this.
-# 
-# Disclaimer: As it will become painfully clear, I'm definitely not a nutritionist. Please forgive the use of low calorie as an (incorrect) proxy for 'healthy' and any other nutrition-based errors.
+# Vote up if you find it meaningful :)
 
 # In[ ]:
 
 
 import pandas as pd
 import numpy as np
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.style.use('fivethirtyeight')
-
-
-# In[ ]:
-
-
-#load data
-df1 = pd.read_csv('../input/epi_r.csv')
+from sklearn.metrics import r2_score
+from sklearn.linear_model import ElasticNetCV
+import kagglegym
+import math
 
 
 # In[ ]:
 
 
-#quick look at data
-df1.head(2)
+# kagglegym_emulation code
+def r_score(y_true, y_pred):
+    r2 = r2_score(y_true, y_pred)
+    r = np.sign(r2) * np.sqrt(np.abs(r2))
+    return max(-1, r)
 
 
-# 680 is a lot of columns, looks like a majority are ingredient types. Let's assume that I don't care about ingredients, only basic nutritional info & quick/simple metrics
+class Observation(object):
+    def __init__(self, train, target, features):
+        self.train = train
+        self.target = target
+        self.features = features
+
+
+class Environment(object):
+    def __init__(self):
+        with pd.HDFStore("../input/train.h5", "r") as hfdata:
+            self.timestamp = 0
+            fullset = hfdata.get("train")
+            self.unique_timestamp = fullset["timestamp"].unique()
+            # Get a list of unique timestamps
+            # use the first half for training and
+            # the second half for the test set
+            n = len(self.unique_timestamp)
+            i = int(n/2)
+            timesplit = self.unique_timestamp[i]
+            self.n = n
+            self.unique_idx = i
+            self.train = fullset[fullset.timestamp < timesplit]
+            self.test = fullset[fullset.timestamp >= timesplit]
+
+            # Needed to compute final score
+            self.full = self.test.loc[:, ['timestamp', 'y']]
+            self.full['y_hat'] = 0.0
+            self.temp_test_y = None
+
+    def reset(self):
+        timesplit = self.unique_timestamp[self.unique_idx]
+
+        self.unique_idx = int(self.n / 2)
+        self.unique_idx += 1
+        subset = self.test[self.test.timestamp == timesplit]
+
+        # reset index to conform to how kagglegym works
+        target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
+        self.temp_test_y = target['y']
+
+        target.loc[:, 'y'] = 0.0  # set the prediction column to zero
+
+        # changed bounds to 0:110 from 1:111 to mimic the behavior
+        # of api for feature
+        features = subset.iloc[:, :110].reset_index(drop=True)
+
+        observation = Observation(self.train, target, features)
+        return observation
+
+    def step(self, target):
+        timesplit = self.unique_timestamp[self.unique_idx-1]
+        # Since full and target have a different index we need
+        # to do a _values trick here to get the assignment working
+        y_hat = target.loc[:, ['y']]
+        self.full.loc[self.full.timestamp == timesplit, ['y_hat']] = y_hat._values
+
+        if self.unique_idx == self.n:
+            done = True
+            observation = None
+            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
+            score = r_score(self.full['y'], self.full['y_hat'])
+            info = {'public_score': score}
+        else:
+            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
+            done = False
+            info = {}
+            timesplit = self.unique_timestamp[self.unique_idx]
+            self.unique_idx += 1
+            subset = self.test[self.test.timestamp == timesplit]
+
+            # reset index to conform to how kagglegym works
+            target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
+            self.temp_test_y = target['y']
+
+            # set the prediction column to zero
+            target.loc[:, 'y'] = 0
+
+            # column bound change on the subset
+            # reset index to conform to how kagglegym works
+            features = subset.iloc[:, 0:110].reset_index(drop=True)
+
+            observation = Observation(self.train, target, features)
+
+        return observation, reward, done, info
+
+    def __str__(self):
+        return "Environment()"
+
+
+def make():
+    return Environment()
+
 
 # In[ ]:
 
 
-#narrowing dataset & looking at summary stats
-recipes = df1.iloc[:,:10]
-recipes.drop(['#cakeweek','#wasteless'], axis=1, inplace=True)
+# predictive model wrapper, also see https://www.kaggle.com/sankhamukherjee/two-sigma-financial-modeling/prediction-model-elastic-net
+class fitModel():
+    def __init__(self, model, train, columns):
 
-recipes.describe()
+        # first save the model ...
+        self.model   = model
+        self.columns = columns
+        
+        # Get the X, and y values, 
+        y = np.array(train.y)
+        
+        X = train[columns]
+        self.xMeans = X.mean(axis=0) # Remember to save this value
+        self.xStd   = X.std(axis=0)  # Remember to save this value
 
-
-# Few observations
-# * Lots of 4.375 ratings, could be issue with data, let's assume there isn't a problem.
-# * Definitely need to pull outliers from 'calories' column (should handle the high values for 'protein' - 'sodium'
-# * Will need to fill missing values
-
-# In[ ]:
-
-
-#checking nan values in each column
-for i in recipes.columns:
-    print(i, sum(recipes[i].isnull()))
-
-
-# In[ ]:
-
-
-#filling nan values with pseudo-average & removing outliers ---- may not be best method, alternative is to drop nan rows
-cal_clean = recipes.loc[recipes['calories'].notnull()]
-
-q1  = cal_clean['calories'].quantile(.25)
-q3  = cal_clean['calories'].quantile(.75)
-iqr = q3 - q1
-
-for i in recipes.columns[1:6]:
-    recipes[i].fillna(cal_clean.loc[(cal_clean['calories'] > q1) & (recipes['calories'] < q3)][i].mean(), inplace=True)
+        X = np.array(X.fillna( self.xMeans ))
+        X = (X - np.array(self.xMeans))/np.array(self.xStd)
+        
+        # fit the model
+        self.model.fit(X, y)
+        
+        return
     
-recipes = recipes.loc[(recipes['calories'] > q1-(iqr*3)) & (recipes['calories'] < q3+(iqr*3))]
+    def predict(self, features):
+        X = features[self.columns]
+        X = np.array(X.fillna( self.xMeans ))
+        X = (X - np.array(self.xMeans))/np.array(self.xStd)
+
+        return self.model.predict(X)
 
 
 # In[ ]:
 
 
-#check summary stats after cleaning data
-recipes.describe()
-
-
-# After cleaning up the data & removing outliers; this looks much better
-
-# In[ ]:
-
-
-#plotting health metrics against recipe rating
-dict_plt = {0:'calories',1:'protein',2:'fat',3:'sodium'}
-
-sns.set(font_scale=.7)
-
-fig, ax = plt.subplots(1,4, figsize=(10,3))
-
-for i in range(4):
-    sns.barplot(x='rating',y=dict_plt[i], data=recipes, ax=ax[i], errwidth=1)
-    ax[i].set_title('rating by {}'.format(dict_plt[i]), size=15)
-    ax[i].set_ylabel('')
-
-
-# Who would have guessed? Higher rated recipes have more calories & more fat! This genious discovery has uncovered the source of all obesity problems, people like 'bad' food! Again this was discovered by me & not a previously known, obvious fact.
-# 
-# Interestingly, the 5-star ratings see a decrease in both. Maybe I can find a few recipes that taste good without getting fat(ter). I'm looking for recipes with low calorie count but with decent amount of protein.
-# 
-# 
-# Note: Totally realize that low calorie doesn't mean healthy, just using the 2,000 - 2,500 daily calorie intake rule as a proxy for 'healthy.'
-
-# In[ ]:
-
-
-five_star = recipes.loc[recipes['rating'] == 5]
-
-print('We have {:,} 5-star recipes to choose from'.format(len(recipes.loc[recipes['rating'] == 5])))
+def list_match(list_a, list_b):
+    for i, j in zip(list_a, list_b):
+        if i != j:
+            return False
+    return True
 
 
 # In[ ]:
 
 
-a = pd.qcut(five_star['calories'], [0,.33,.66,1], labels=['low cal','med cal', 'high cal']).rename('cal_bin')
+# Validaiton of kagglegym_emulation
+env = kagglegym.make()
+env_test = make()
 
-five_star = five_star.join(a)
+# Check observations
+observation = env.reset()
+observation_test = env_test.reset()
+assert list_match(observation.train.id.values, observation_test.train.id.values)    
+    
+elastic_net = ElasticNetCV()
+columns = ['technical_30', 'technical_20', 'fundamental_11', 'technical_19']
+model = fitModel(elastic_net, observation.train.copy(), columns)
+model_test = fitModel(elastic_net, observation_test.train.copy(), columns)
+
+while True:
+        
+    prediction       = model.predict(observation.features.copy())
+    prediction_test  = model_test.predict(observation_test.features.copy())
+    
+    assert list_match(prediction, prediction_test)
+  
+    
+    target           = observation.target
+    target_test      = observation_test.target
+    target['y'] = prediction
+    target_test['y'] = prediction_test
+        
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print(timestamp)
+    
+    observation, reward, done, info = env.step(target)
+    observation_test, reward_test, done_test, info_test = env_test.step(target)
+    
+
+    assert done == done_test
+    assert math.isclose(reward, reward_test, abs_tol=5e-05)
+    
+
+    if done: 
+        assert math.isclose(info['public_score'],info_test['public_score'],  abs_tol=1e-07)
+        print('Info:',info['public_score'],'Info-test:',info_test['public_score'])
+        break
 
 
-# In[ ]:
-
-
-low_cal = five_star.loc[five_star['cal_bin'] == 'low cal']
-
-plt.scatter(x='calories', y='protein', s=low_cal['fat']*5, data=low_cal)
-
-plt.xlabel('Calories')
-plt.ylabel('Protein')
-plt.axhspan(ymin=20, ymax=25, xmin=.48, xmax=.6, alpha=.2, color='r')
-plt.axhspan(ymin=27, ymax=34, xmin=.7, xmax=.9, alpha=.4, color='r')
-
-
-# In[ ]:
-
-
-#light red box from chart above
-low_cal.loc[(low_cal['protein'] > 20) & (low_cal['calories'] < 160)]
-
-
-# In[ ]:
-
-
-#dark red box from chart above
-low_cal.loc[low_cal['protein'] > 27]
-
-
-# With the two tables above, I've found some alternatives to Taco Bell. Reading through, not all are options (i.e Turkey Stock) but there are some options.
-# 
-# Now I have a list of recipes that I can look up the recipes on http://www.epicurious.com/recipes-menus 
-# 
-# And if all of these options fail, Taco Bell is only a 5-minute drive away.
-# 
-# Note: Going through this data, it's clear that there are some abnormalities. Like duplicate entries (Giblet or Turkey Stock) or abnormally high values (sodium in Roast Turkey). Instead of trying to prune/clean further, I'll just trust the 'eye-test' when looking at actual recipes.
+# **VALIDATED SUCCESSFULLY !!!**

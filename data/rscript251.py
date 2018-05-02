@@ -1,68 +1,40 @@
-import pandas as pd
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+# Original code is taken from this kernell: https://www.kaggle.com/meli19/ensemble-public-submissions
+# I've just changed the weights a little bit.
+
+# submission_1 https://www.kaggle.com/aharless/exclude-same-wk-res-from-nitin-s-surpriseme2-w-nn
+# submission_2 https://www.kaggle.com/meli19/surprise-me-h2o-automl-version-ver5-lb-0-479
+# submission_3 https://www.kaggle.com/nitinsurya/surprise-me-2-neural-networks-keras
+# submission_4 https://www.kaggle.com/tejasrinivas/surprise-me-4-lb-0-479
+
+# PLEASE think about the overfitting problem !!! take your own risk of using this kernel.
 
 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import os
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+sub1 = pd.read_csv('../input/pubsubrrvf/submission_1.csv')
+sub2 = pd.read_csv('../input/pubsubrrvf/submission_2.csv')
+sub3 = pd.read_csv('../input/pubsubrrvf/submission_3.csv')
+sub4 = pd.read_csv('../input/pubsubrrvf/submission_4.csv')
 
 
-
-#########################
-### use https://www.kaggle.com/chabir/bnp-paribas-cardif-claims-management/extratreesclassifier-score-0-45-v5/run/178143
-### to get about .4548
-#################
-
+sub8 = pd.DataFrame()
+sub8['id'] = sub1['id']
+# original values sub8['visitors'] = 0.4*sub1['visitors']+0.3*sub2['visitors']+0.2*sub3['visitors']+0.1*sub4['visitors']
+sub8['visitors'] = 0.25*sub1['visitors']+0.3*sub2['visitors']+0.25*sub3['visitors']+0.2*sub4['visitors']
 
 
-
-
-
-
-
-import numpy as np
-import csv
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn import ensemble
-
-
-print('Load data...')
-train = pd.read_csv("../input/train.csv")
-target = train['target'].values
-train = train[['v3','v10','v12','v14','v21','v22','v24','v30','v31','v34','v38','v40','v47','v50','v52','v56','v62','v66','v71','v72','v74','v75','v79','v91','v107','v110','v112','v113','v114','v125','v129']]
-test = pd.read_csv("../input/test.csv")
-id_test = test['ID'].values
-test = test[['v3','v10','v12','v14','v21','v22','v24','v30','v31','v34','v38','v40','v47','v50','v52','v56','v62','v66','v71','v72','v74','v75','v79','v91','v107','v110','v112','v113','v114','v125','v129']]
-
-
-
-
-print('Clearing...')
-for (train_name, train_series), (test_name, test_series) in zip(train.iteritems(),test.iteritems()):
-    if train_series.dtype == 'O':
-        #for objects: factorize
-        train[train_name], tmp_indexer = pd.factorize(train[train_name])
-        test[test_name] = tmp_indexer.get_indexer(test[test_name])
-        #but now we have -1 values (NaN)
-    else:
-        #for int or float: fill NaN
-        tmp_len = len(train[train_series.isnull()])
-        if tmp_len>0:
-            #print "mean", train_series.mean()
-            train.loc[train_series.isnull(), train_name] = -999 
-        #and Test
-        tmp_len = len(test[test_series.isnull()])
-        if tmp_len>0:
-            test.loc[test_series.isnull(), test_name] = -999
-
-X_train = train
-X_test = test
-print('Training...')
-extc = ExtraTreesClassifier(n_estimators=1200,max_features= 30,criterion= 'entropy',min_samples_split= 2,
-                            max_depth= 30, min_samples_leaf= 2, n_jobs = -1)    
-
-extc.fit(X_train,target) 
-
-print('Predict...')
-y_pred = extc.predict_proba(X_test)
-#print y_pred
-
-pd.DataFrame({"ID": id_test, "PredictedProb": y_pred[:,1]}).to_csv('extra_trees.csv',index=False)
+sub8.to_csv('SubmissonK.csv',index=False)

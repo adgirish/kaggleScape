@@ -1,466 +1,473 @@
 
 # coding: utf-8
 
-# # Data visualization kernel
-# 
-# Here is a new image-based competition hosted by a french e-commerce company *Cdiscount*. 
-# 
-# Dataset announced features: 
-# - Almost 9 million products: half of the current catalogue
-# - More than 15 million images at 180x180 resolution
-# - More than 5000 categories: yes this is quite an extreme multi-class classification!
-# 
-# **Let's explore this in details**
-# 
-# ## Content
-# 
-# - First images in train and test datasets
-# - Random item access
-# - Explore categories
-# 
-# 
-# PS. Thanks to [this](https://www.kaggle.com/inversion/processing-bson-files) and [this](https://www.kaggle.com/bguberfain/just-showing-a-few-images) very helpful kernels !
-# 
+# **Poetry Generator (RNN Markov)**
 
-# In[ ]:
+# This scipt uses Recurrent Neural Networks and Markov Chains in order to generate new verses in the style of the poems that it is given as input.  The Markovify functions (Markov Chains) are used to build new sentences (based off of word1=>word2 probabilities), while the Keras.LSTM functions (Recurrent Neural Networks) are used to predict the properties of the next line of the poem (e.g. # syllables, rhyme scheme) such that an appropriate new sentence can be selected (from the setences that were generated with Markovify).  This approach is described in the following publications ([Link #1](http://www.emnlp2015.org/proceedings/EMNLP/pdf/EMNLP221.pdf), [Link #2](https://arxiv.org/pdf/1612.03205.pdf)) and many of the functions were adapted from the following script ([Link #3](https://github.com/robbiebarrat/rapping-neural-network/blob/master/model.py)).  Currently this approach does a better job at making sentences that rhyme as opposed to making sentences that are logical and as such it is best used to generate nonsensical rap lyrics similar to this verse by hip-hop artist Riff Raff:
+# > Spandex (spandex), I pull up with a lamb text --
+# > Too strudel, toaster strudel, ballin' on you poodles --
+# > Swish! Two cougars, 40 plus, clutching Rugers --
+# > Got 'em running over Jerome Bettis, Versace lettuce --
+# > No dieting, Gucci eyelids, I go to sleep, snobby pilots --
+# 
+# Here we will generate new poems using the vocabulary and rhyme structure of both Notorious B.I.G. and Lil Wayne.
+
+# Here are the first 1000 characters from the collection of poems by Notorious B.I.G.
+
+# In[1]:
 
 
+artist_file = '../input/notorious-big.txt'
+with open(artist_file) as f: # The with keyword automatically closes the file when you are done
+    print (f.read(1000))
+
+
+# Here are the first 1000 characters from the collection of poems by Lil Wayne
+
+# In[2]:
+
+
+artist_file = '../input/Lil_Wayne.txt'
+with open(artist_file) as f: # The with keyword automatically closes the file when you are done
+    print (f.read(1000))
+
+
+# Plot word frequencies for .txt files
+
+# In[3]:
+
+
+import numpy as np
+from matplotlib import pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+def plotWordFrequency(input):
+    f = open(artist_file,'r')
+    words = [x for y in [l.split() for l in f.readlines()] for x in y]
+    data = sorted([(w, words.count(w)) for w in set(words)], key = lambda x:x[1], reverse=True)[:40] 
+    most_words = [x[0] for x in data]
+    times_used = [int(x[1]) for x in data]
+    plt.figure(figsize=(20,10))
+    plt.bar(x=sorted(most_words), height=times_used, color = 'grey', edgecolor = 'black',  width=.5)
+    plt.xticks(rotation=45, fontsize=18)
+    plt.yticks(rotation=0, fontsize=18)
+    plt.xlabel('Most Common Words:', fontsize=18)
+    plt.ylabel('Number of Occurences:', fontsize=18)
+    plt.title('Most Commonly Used Words: %s' % (artist_file), fontsize=24)
+    plt.show()
+
+
+# In[4]:
+
+
+artist_file = '../input/notorious-big.txt'
+plotWordFrequency(artist_file)
+
+
+# In[5]:
+
+
+artist_file = '../input/Lil_Wayne.txt'
+plotWordFrequency(artist_file)
+
+
+# Here we use Recurrent Neural Networks and Markov chains to generate new lyrics in the style of the input text.
+# The Markovify functions (Markov Chains) are used to build new sentences (based off of word1=>word2 probabilities), while the Keras.LSTM functions (Recurrent Neural Networks) are used to predict the properties of the next line of the poem (e.g. # syllables, rhyme scheme), such that an appropriate new sentence can be selected (from the setences that were generated with Markovify).
+
+# In[6]:
+
+
+import pronouncing
+import markovify
+import re
+import random
+import numpy as np
 import os
-import sys
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import bson
-import cv2
-import matplotlib.pyplot as plt
+import keras
+from keras.models import Sequential
+from keras.layers import LSTM 
+from keras.layers.core import Dense
 
 
-# In[ ]:
+# Recurrent Neural Network (https://keras.io/layers/recurrent/#lstm)
+
+# In[7]:
 
 
-INPUT_PATH = os.path.join('..', 'input')
-CATEGORY_NAMES_DF = pd.read_csv(os.path.join(INPUT_PATH, 'category_names.csv'))
-TRAIN_DB = bson.decode_file_iter(open(os.path.join(INPUT_PATH, 'train.bson'), 'rb'))
-TEST_DB = bson.decode_file_iter(open(os.path.join(INPUT_PATH, 'test.bson'), 'rb'))
+def create_network(depth):
+	model = Sequential()
+	model.add(LSTM(4, input_shape=(2, 2), return_sequences=True))
+	for i in range(depth):
+		model.add(LSTM(8, return_sequences=True))
+	model.add(LSTM(2, return_sequences=True))
+	model.summary()
+	model.compile(optimizer='rmsprop',
+              loss='mse')
+	if artist + ".rap" in os.listdir(".") and train_mode == False:
+		model.load_weights(str(artist + ".rap"))
+		print("loading saved network: " + str(artist) + ".rap") 
+	return model
 
 
-# ## First images in train and test datasets
+# Markov Chain (https://github.com/jsvine/markovify)
 
-# As it is said in data description page,  `TRAIN_DB` contains a list of 7,069,896 dictionaries, one per product. 
-# Each dictionary contains :
-# - product id (key: _id)
-# - the category id of the product (key: category_id), 
-# - 1-4 images, stored in a list (key: imgs).     
+# In[8]:
+
+
+def markov(text_file):
+    ######
+	read = open(text_file, "r", encoding='utf-8').read()
+	text_model = markovify.NewlineText(read)
+	return text_model
+
+
+# Determine number of syllables in line
+
+# In[9]:
+
+
+def syllables(line):
+	count = 0
+	for word in line.split(" "):
+		vowels = 'aeiouy'
+# 		word = word.lower().strip("!@#$%^&*()_+-={}[];:,.<>/?")
+		word = word.lower().strip(".:;?!")
+		if word[0] in vowels:
+			count +=1
+		for index in range(1,len(word)):
+			if word[index] in vowels and word[index-1] not in vowels:
+				count +=1
+		if word.endswith('e'):
+			count -= 1
+		if word.endswith('le'):
+			count+=1
+		if count == 0:
+			count +=1
+	return count / maxsyllables
+
+
+# Make index of words that rhyme with your word
+
+# In[10]:
+
+
+def rhymeindex(lyrics):
+	if str(artist) + ".rhymes" in os.listdir(".") and train_mode == False:
+		print ("loading saved rhymes from " + str(artist) + ".rhymes")
+		return open(str(artist) + ".rhymes", "r",encoding='utf-8').read().split("\n")
+	else:
+		rhyme_master_list = []
+		print ("Building list of rhymes:")
+		for i in lyrics:
+			word = re.sub(r"\W+", '', i.split(" ")[-1]).lower()
+			rhymeslist = pronouncing.rhymes(word)
+			rhymeslistends = []      
+			for i in rhymeslist:
+				rhymeslistends.append(i[-2:])
+			try:
+				rhymescheme = max(set(rhymeslistends), key=rhymeslistends.count)
+			except Exception:
+				rhymescheme = word[-2:]
+			rhyme_master_list.append(rhymescheme)
+		rhyme_master_list = list(set(rhyme_master_list))
+		reverselist = [x[::-1] for x in rhyme_master_list]
+		reverselist = sorted(reverselist)
+		rhymelist = [x[::-1] for x in reverselist]
+		print("List of Sorted 2-Letter Rhyme Ends:")
+		print(rhymelist)
+		f = open(str(artist) + ".rhymes", "w", encoding='utf-8')
+		f.write("\n".join(rhymelist))
+		f.close()
+		return rhymelist
+
+
+# Make index of rhymes that you use
+
+# In[11]:
+
+
+def rhyme(line, rhyme_list):
+	word = re.sub(r"\W+", '', line.split(" ")[-1]).lower()
+	rhymeslist = pronouncing.rhymes(word)
+	rhymeslistends = []
+	for i in rhymeslist:
+		rhymeslistends.append(i[-2:])
+	try:
+		rhymescheme = max(set(rhymeslistends), key=rhymeslistends.count)
+	except Exception:
+		rhymescheme = word[-2:]
+	try:
+		float_rhyme = rhyme_list.index(rhymescheme)
+		float_rhyme = float_rhyme / float(len(rhyme_list))
+		return float_rhyme
+	except Exception:
+		float_rhyme = None
+		return float_rhyme
+
+
+# Separate each line of the input txt
+
+# In[12]:
+
+
+def split_lyrics_file(text_file):
+	text = open(text_file, encoding='utf-8').read()
+	text = text.split("\n")
+	while "" in text:
+		text.remove("")
+	return text
+
+
+# Generate lyrics
+
+# In[13]:
+
+
+def generate_lyrics(text_model, text_file):
+	bars = []
+	last_words = []
+	lyriclength = len(open(text_file,encoding='utf-8').read().split("\n"))
+	count = 0
+	markov_model = markov(text_file)
+	
+	while len(bars) < lyriclength / 9 and count < lyriclength * 2:
+		bar = markov_model.make_sentence(max_overlap_ratio = .49, tries=100)
+		if type(bar) != type(None) and syllables(bar) < 1:
+			def get_last_word(bar):
+				last_word = bar.split(" ")[-1]
+				if last_word[-1] in "!.?,":
+					last_word = last_word[:-1]
+				return last_word
+			last_word = get_last_word(bar)
+			if bar not in bars and last_words.count(last_word) < 3:
+				bars.append(bar)
+				last_words.append(last_word)
+				count += 1
+	return bars
+
+
+# Build dataset
+
+# In[14]:
+
+
+def build_dataset(lines, rhyme_list):
+	dataset = []
+	line_list = []
+	for line in lines:
+		line_list = [line, syllables(line), rhyme(line, rhyme_list)]
+		dataset.append(line_list)
+	x_data = []
+	y_data = []
+	for i in range(len(dataset) - 3):
+		line1 = dataset[i    ][1:]
+		line2 = dataset[i + 1][1:]
+		line3 = dataset[i + 2][1:]
+		line4 = dataset[i + 3][1:]
+		x = [line1[0], line1[1], line2[0], line2[1]]
+		x = np.array(x)
+		x = x.reshape(2,2)
+		x_data.append(x)
+		y = [line3[0], line3[1], line4[0], line4[1]]
+		y = np.array(y)
+		y = y.reshape(2,2)
+		y_data.append(y)
+	x_data = np.array(x_data)
+	y_data = np.array(y_data)
+	return x_data, y_data
+
+
+# Compose verse
+
+# In[15]:
+
+
+def compose_rap(lines, rhyme_list, lyrics_file, model):
+	rap_vectors = []
+	human_lyrics = split_lyrics_file(lyrics_file)
+	initial_index = random.choice(range(len(human_lyrics) - 1))
+	initial_lines = human_lyrics[initial_index:initial_index + 2]
+	starting_input = []
+	for line in initial_lines:
+		starting_input.append([syllables(line), rhyme(line, rhyme_list)])
+	starting_vectors = model.predict(np.array([starting_input]).flatten().reshape(1, 2, 2))
+	rap_vectors.append(starting_vectors)
+	for i in range(100):
+		rap_vectors.append(model.predict(np.array([rap_vectors[-1]]).flatten().reshape(1, 2, 2)))
+	return rap_vectors
+
+
+# Compose verse (part 2)
+
+# In[16]:
+
+
+def vectors_into_song(vectors, generated_lyrics, rhyme_list):
+	print ("\n\n")	
+	print ("Writing verse:")
+	print ("\n\n")
+	def last_word_compare(rap, line2):
+		penalty = 0 
+		for line1 in rap:
+			word1 = line1.split(" ")[-1]
+			word2 = line2.split(" ")[-1]
+			while word1[-1] in "?!,. ":
+				word1 = word1[:-1]
+			while word2[-1] in "?!,. ":
+				word2 = word2[:-1]
+			if word1 == word2:
+				penalty += 0.2
+		return penalty
+	def calculate_score(vector_half, syllables, rhyme, penalty):
+		desired_syllables = vector_half[0]
+		desired_rhyme = vector_half[1]
+		desired_syllables = desired_syllables * maxsyllables
+		desired_rhyme = desired_rhyme * len(rhyme_list)
+		score = 1.0 - abs(float(desired_syllables) - float(syllables)) + abs(float(desired_rhyme) - float(rhyme)) - penalty
+		return score
+	dataset = []
+	for line in generated_lyrics:
+		line_list = [line, syllables(line), rhyme(line, rhyme_list)]
+		dataset.append(line_list)
+	rap = []
+	vector_halves = []
+	for vector in vectors:
+		vector_halves.append(list(vector[0][0])) 
+		vector_halves.append(list(vector[0][1]))
+	for vector in vector_halves:
+		scorelist = []
+		for item in dataset:
+			line = item[0]
+			if len(rap) != 0:
+				penalty = last_word_compare(rap, line)
+			else:
+				penalty = 0
+			total_score = calculate_score(vector, item[1], item[2], penalty)
+			score_entry = [line, total_score]
+			scorelist.append(score_entry)
+		fixed_score_list = [0]
+		for score in scorelist:
+			fixed_score_list.append(float(score[1]))
+		max_score = max(fixed_score_list)
+		for item in scorelist:
+			if item[1] == max_score:
+				rap.append(item[0])
+				print (str(item[0]))
+				for i in dataset:
+					if item[0] == i[0]:
+						dataset.remove(i)
+						break
+				break     
+	return rap
+
+
+# Traning function
+
+# In[17]:
+
+
+def train(x_data, y_data, model):
+	model.fit(np.array(x_data), np.array(y_data),
+			  batch_size=2,
+			  epochs=5,
+			  verbose=1)
+	model.save_weights(artist + ".rap")
+
+
+# Train and run the model
+
+# In[18]:
+
+
+def main(depth, train_mode):
+	model = create_network(depth)
+	text_model = markov(text_file)
+	if train_mode == True:
+		bars = split_lyrics_file(text_file)
+	if train_mode == False:
+		bars = generate_lyrics(text_model, text_file)
+	rhyme_list = rhymeindex(bars)
+	if train_mode == True:
+		x_data, y_data = build_dataset(bars, rhyme_list)
+		train(x_data, y_data, model)
+	if train_mode == False:
+		vectors = compose_rap(bars, rhyme_list, text_file, model)
+		rap = vectors_into_song(vectors, bars, rhyme_list)
+		f = open(rap_file, "w", encoding='utf-8')
+		for bar in rap:
+			f.write(bar)
+			f.write("\n")
+
+
+# Some important parameters to keep in mind are as follows: (1) maxsyllables: max # of syllables per line; (2) max_overlap_ratio: how different the output should be from the original input; (3) tries: how many times to try to build a line that satisifies some parameter; (4) epochs: how many times for the NN to pass over the data.
 # 
-# Let's look at the first item:
+# To reduce computational complexity, maximize (1) and (2) and minimize (3) and (4).  
+# Computational time will increase dramatically when (1) is less than 8 and when (2) is less than 0.5
 
-# In[ ]:
+# In[19]:
 
 
-for item in TRAIN_DB:
-    break
-print(type(item), list(item.keys()))
-print(item['_id'], len(item['imgs']), item['category_id'],)
+depth = 4 
+maxsyllables = 8
+artist = "artist"
+rap_file = "temporary_poem.txt"
 
 
-# In[ ]:
+# Write new lyrics in the style of Notorious B.I.G..
 
+# In[20]:
 
-def decode(data):
-    arr = np.asarray(bytearray(data), dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB) 
 
-import io
-from PIL import Image
+maxsyllables = 8
+text_file = "../input/notorious-big.txt"
+train_mode = True        
+main(depth, train_mode)
+train_mode = False
+main(depth, train_mode)
 
-def decode_pil(data):
-    return Image.open(io.BytesIO(data))
 
-for img_dict in item['imgs']:
-    img = decode(img_dict['picture'])
-    plt.figure()
-    plt.imshow(img)
+# Write new lyrics in the style of Lil Wayne
 
+# In[21]:
 
-# Table `CATEGORY_NAMES_DF` shows the hierarchy of product classification. 
-# - category_id has 3 category tags of different levels
-# 
-# Using `category_id` field we can associate image to 3 levels of category tags, labels. Thus, previous image is characterized as 
 
-# In[ ]:
+text_file = "../input/Lil_Wayne.txt"
+maxsyllables = 8
+train_mode = True        
+main(depth, train_mode)
+train_mode = False
+main(depth, train_mode)
 
 
-level_tags = CATEGORY_NAMES_DF.columns[1:]
-CATEGORY_NAMES_DF[CATEGORY_NAMES_DF['category_id'] == item['category_id']][level_tags]
+# Write new lyrics in the combined style of Notorious B.I.G. and Lil Wayne.
 
+# In[22]:
 
-# Let's see some more images :
 
-# In[ ]:
+filenames = ['../input/Lil_Wayne.txt', '../input/notorious-big.txt']
+with open('combined.txt', 'w') as outfile:
+    for fname in filenames:
+        with open(fname) as infile:
+            for line in infile:
+                outfile.write(line)
 
 
-# Method to compose a single image from 1 - 4 images
-def decode_images(item_imgs):
-    nx = 2 if len(item_imgs) > 1 else 1
-    ny = 2 if len(item_imgs) > 2 else 1
-    composed_img = np.zeros((ny * 180, nx * 180, 3), dtype=np.uint8)
-    for i, img_dict in enumerate(item_imgs):
-        img = decode(img_dict['picture'])
-        h, w, _ = img.shape        
-        xstart = (i % nx) * 180
-        xend = xstart + w
-        ystart = (i // nx) * 180
-        yend = ystart + h
-        composed_img[ystart:yend, xstart:xend] = img
-    return composed_img
+# In[23]:
 
 
-# In[ ]:
-
-
-max_counter = 15
-counter = 0
-n = 4
-for item in TRAIN_DB:    
-    if counter % n == 0:
-        plt.figure(figsize=(14, 6))
-    
-    mask = CATEGORY_NAMES_DF['category_id'] == item['category_id']    
-    plt.subplot(1, n, counter % n + 1)
-    cat_levels = CATEGORY_NAMES_DF[mask][level_tags].values.tolist()[0]
-    cat_levels = [c[:25] for c in cat_levels]
-    title = str(item['category_id']) + '\n'
-    title += '\n'.join(cat_levels)
-    plt.title(title)
-    plt.imshow(decode_images(item['imgs']))
-    plt.axis('off')
-    
-    counter += 1
-    if counter == max_counter:
-        break
+#artist_file = '../input/combined.txt'
+artist_file = 'combined.txt'
+plotWordFrequency(artist_file)
 
 
-# So, in train dataset we have products indexed by `_id`, belong to a `category_id` and described by 1-4 images.
-# 
-# Now, let's quickly take a look to test products:
+# In[24]:
 
-# In[ ]:
 
+maxsyllables = 8
+text_file = "combined.txt"
+train_mode = True        
+main(depth, train_mode)
+train_mode = False
+main(depth, train_mode)
 
-for item in TEST_DB:
-    break
-print(type(item), list(item.keys()))
-print(item['_id'], len(item['imgs']))
 
-
-# In[ ]:
-
-
-max_counter = 15
-counter = 0
-n = 4
-for item in TEST_DB:    
-    if counter % n == 0:
-        plt.figure(figsize=(14, 6))
-    
-    plt.subplot(1, n, counter % n + 1)
-    title = str(item['_id'])
-    plt.title(title)
-    plt.imshow(decode_images(item['imgs']))
-    plt.axis('off')
-    
-    counter += 1
-    if counter == max_counter:
-        break
-
-
-# ## Random item access
-
-# Let's make a random access to products by maping each product byte offset and length. 
-# 
-# Following code creates a dictionary with key indexing item `_id` and values `(offset, length)`. It takes around 3 mins to execute.
-
-# In[ ]:
-
-
-import struct
-from tqdm import tqdm_notebook
-
-num_dicts = 7069896 # according to data page
-length_size = 4
-IDS_MAPPING = {}
-
-with open(os.path.join(INPUT_PATH, 'train.bson'), 'rb') as f, tqdm_notebook(total=num_dicts) as bar:
-    item_data = []
-    offset = 0
-    while True:        
-        bar.update()
-        f.seek(offset)
-        
-        item_length_bytes = f.read(length_size)     
-        if len(item_length_bytes) == 0:
-            break                
-        # Decode item length:
-        length = struct.unpack("<i", item_length_bytes)[0]
-        
-        f.seek(offset)
-        item_data = f.read(length)
-        assert len(item_data) == length, "%i vs %i" % (len(item_data), length)
-        
-        # Check if we can decode
-        item = bson.BSON.decode(item_data)
-        
-        IDS_MAPPING[item['_id']] = (offset, length)        
-        offset += length            
-            
-def get_item(item_id):
-    assert item_id in IDS_MAPPING
-    with open(os.path.join(INPUT_PATH, 'train.bson'), 'rb') as f:
-        offset, length = IDS_MAPPING[item_id]
-        f.seek(offset)
-        item_data = f.read(length)
-        return bson.BSON.decode(item_data)
-
-
-# Display for example a item with `_id=1234`  
-
-# In[ ]:
-
-
-item = get_item(1234)
-
-mask = CATEGORY_NAMES_DF['category_id'] == item['category_id']    
-cat_levels = CATEGORY_NAMES_DF[mask][level_tags].values.tolist()[0]
-cat_levels = [c[:25] for c in cat_levels]
-title = str(item['category_id']) + '\n'
-title += '\n'.join(cat_levels)
-plt.title(title)
-plt.imshow(decode_images(item['imgs']))
-_ = plt.axis('off')
-
-
-# ## Explore categories
-# 
-# Let's inspect categories and their relationship to images. We have 
-# - 5270 unique categories
-# - 49 unique level 1 categories
-# - 483 unique level 2 categories
-# - 5263 unique level 3 categories
-# 
-
-# In[ ]:
-
-
-print("Unique categories: ", len(CATEGORY_NAMES_DF['category_id'].unique()))
-print("Unique level 1 categories: ", len(CATEGORY_NAMES_DF['category_level1'].unique()))
-print("Unique level 2 categories: ", len(CATEGORY_NAMES_DF['category_level2'].unique()))
-print("Unique level 3 categories: ", len(CATEGORY_NAMES_DF['category_level3'].unique()))
-
-
-# So as it was asked in comments (by @microland) we can observe that there are items with different 'category_id' but the same 'category_level3':
-
-# In[ ]:
-
-
-gb = CATEGORY_NAMES_DF.groupby('category_level3')
-cnt = gb.count()
-cnt[cnt['category_id'] > 1]
-
-
-# In[ ]:
-
-
-gb.get_group(cnt[cnt['category_id'] > 1].index.values[0])
-
-
-# In[ ]:
-
-
-import seaborn as sns
-
-
-# Here is the histogram of level 1 categories
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,12))
-_ = sns.countplot(y=CATEGORY_NAMES_DF['category_level1'])
-
-
-# Level 2 and 3 categories are distributed as follows:
-
-# In[ ]:
-
-
-cat_level2_counts = CATEGORY_NAMES_DF.groupby('category_level2')['category_level2'].count()
-print(cat_level2_counts.describe())
-print("Level 2 the most frequent category: ", cat_level2_counts.argmax())
-
-
-# In[ ]:
-
-
-cat_level3_counts = CATEGORY_NAMES_DF.groupby('category_level3')['category_level3'].count()
-print(cat_level3_counts.describe())
-print("Level 3 the most frequent category: ", cat_level3_counts.argmax())
-
-
-# Now, let's create training data table `_id`, `category_id`:
-
-# In[ ]:
-
-
-from tqdm import tqdm_notebook
-
-num_dicts = 7069896 # according to data page
-prod_to_category = [None] * num_dicts
-
-with tqdm_notebook(total=num_dicts) as bar:        
-    TRAIN_DB = bson.decode_file_iter(open(os.path.join(INPUT_PATH, 'train.bson'), 'rb'))
-
-    for i, item in enumerate(TRAIN_DB):
-        bar.update()
-        prod_to_category[i] = (item['_id'], item['category_id'])
-
-
-# In[ ]:
-
-
-TRAIN_CATEGORIES_DF = pd.DataFrame(prod_to_category, columns=['_id', 'category_id'])
-TRAIN_CATEGORIES_DF.head()
-
-
-# We have in training datasets : 
-# - 5270 unique categories in 7069896 entries
-# - 1 most frequent category (found 79640 times) : MUSIQUE (en.: music)
-# - 31 less frequent categories (found 12 times) : PUERICULTURE (en.: childcare),  APICULTURE (en.: beekeeping), SPORT/BASEBALL/BLOUSON DE BASEBALL - VESTE DE BASEBALL, ...
-
-# In[ ]:
-
-
-print("Unique categories: %i in %i entries" % (len(TRAIN_CATEGORIES_DF['category_id'].unique()), len(TRAIN_CATEGORIES_DF)))
-
-
-# In[ ]:
-
-
-train_categories_gb = TRAIN_CATEGORIES_DF.groupby('category_id')
-train_categories_count = train_categories_gb['category_id'].count()
-print(train_categories_count.describe())
-
-
-# In[ ]:
-
-
-most_freq_cats = train_categories_count[train_categories_count == train_categories_count.max()]
-less_freq_cats = train_categories_count[train_categories_count == train_categories_count.min()]
-
-print("Most frequent category: ", CATEGORY_NAMES_DF[CATEGORY_NAMES_DF['category_id'].isin(most_freq_cats.index)].values)
-print("Less frequent category: ", CATEGORY_NAMES_DF[CATEGORY_NAMES_DF['category_id'].isin(less_freq_cats.index)].values)
-
-
-# Let's display some of these most frequent category items ('MUSIQUE' 'CD' 'CD POP ROCK - CD ROCK INDE')
-
-# In[ ]:
-
-
-most_freq_cat = most_freq_cats.index[0]
-
-plt.figure(figsize=(16, 4))
-mask = CATEGORY_NAMES_DF['category_id'] == most_freq_cat    
-cat_levels = CATEGORY_NAMES_DF[mask][level_tags].values.tolist()[0]
-title = str(most_freq_cat) + '\n'
-title += '\n'.join(cat_levels)
-plt.suptitle(title)
-
-most_freq_cat_ids = train_categories_gb.get_group(most_freq_cat)['_id']
-max_counter = 50
-counter = 0
-n = 10
-for item_id in most_freq_cat_ids.values[:max_counter]:    
-    if counter > 0 and counter % n == 0:
-        plt.figure(figsize=(14, 6))
-    
-    item = get_item(item_id)
-    
-    mask = CATEGORY_NAMES_DF['category_id'] == item['category_id']    
-    plt.subplot(1, n, counter % n + 1)
-    plt.imshow(decode_images(item['imgs']))
-    plt.axis('off')
-    
-    counter += 1
-    if counter == max_counter:
-        break
-
-
-# Let's display some of these 31 less frequent categories:
-
-# In[ ]:
-
-
-for less_freq_cat in less_freq_cats.index:
-    less_freq_cat_ids = train_categories_gb.get_group(less_freq_cat)['_id']
-    counter = 0
-    n = 12
-    
-    plt.figure(figsize=(16, 4))
-    mask = CATEGORY_NAMES_DF['category_id'] == less_freq_cat    
-    cat_levels = CATEGORY_NAMES_DF[mask][level_tags].values.tolist()[0]
-    title = str(less_freq_cat) + '\n'
-    title += '\n'.join(cat_levels)
-    plt.suptitle(title)
-
-    for item_id in less_freq_cat_ids.values:    
-        if counter > 0 and counter % n == 0:
-            plt.figure(figsize=(16, 4))
-
-        item = get_item(item_id)
-
-        mask = CATEGORY_NAMES_DF['category_id'] == item['category_id']    
-        plt.subplot(1, n, counter % n + 1)
-        plt.imshow(decode_images(item['imgs']))
-        plt.axis('off')
-
-        counter += 1        
-
-
-# Here is a plot of sorted category counts 
-
-# In[ ]:
-
-
-sorted_train_categories_count = sorted(train_categories_count.values)
-index_8000 = np.where(np.array(sorted_train_categories_count) > 8000)[0][0]
-
-plt.figure(figsize=(12, 6))
-plt.title("Sorted category counts")
-_ = plt.plot(sorted_train_categories_count, '*-')
-
-plt.figure(figsize=(12, 6))
-plt.subplot(121)
-plt.title("Sorted category counts < %i" % index_8000)
-_ = plt.plot(sorted_train_categories_count[:index_8000], '*-')
-
-plt.subplot(122)
-plt.title("Sorted category counts > %i" % index_8000)
-_ = plt.plot(sorted_train_categories_count[index_8000:], '*-')
-
-
-# The goal of the competition is to predict `category_id` by image. We need to predict a number, e.g. `1000010653` by an image. 
-# 
-
-# ## Category_count vs Image_count
-# 
-# We can display a relationship between numbers of categories that are presented by an amount of images: i.e. 10 categories are presented in the training dataset by 100 images. See [this](https://datascience.stackexchange.com/questions/11777/what-is-the-distribution-of-categories-in-imagenet-training-set-ilsvrc2012) for more details. 
-
-# In[ ]:
-
-
-plt.figure(figsize=(12, 6))
-plt.title('Category_count vs Image_count')
-bin_size = 25
-plt.hist(train_categories_count, bins=range(0, int(1e4), bin_size))
-plt.xlabel('Amount of available images')
-_ = plt.ylabel('Number of classes')
-
+# To Do: (1) Add More Pre-Processing Steps; (2) Increase Size of Individual Lyric Files;

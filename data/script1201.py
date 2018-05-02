@@ -1,537 +1,273 @@
 
 # coding: utf-8
 
-# # Machine Learning to predict share prices in the Oil & Gas Industry
+# # Using FastText models (not vectors) for robust embeddings
+# 
+# I'd like to explain my approach of using pretrained FastText models as input to Keras Neural Networks. FastText is a word embedding not unlike Word2Vec or GloVe, but the cool thing is that each word vector is based on sub-word character n-grams. That means that even for previously unseen words (e.g. due to typos), the model can make an educated guess towards its meaning. To find out more about FastText, check out both their [Github](https://github.com/facebookresearch/fastText/) and [website](https://fasttext.cc/).
+# 
+# To do this, we won't be using the classic Keras embedding layer and instead hand-craft the embedding for each example. As a result, we need to  write more code and invest some time into preprocessing, but that is easily justified by the results.
+# 
+# **Disclaimer: Loading the FastText model will take some serious memory! I recommend having at least 60 GB of RAM. EC2's p2.xlarge instance should have no problems with this, but you can always [add some swap](https://stackoverflow.com/questions/17173972/how-do-you-add-swap-to-an-ec2-instance) for good measure. I also added a section below to build a training generator for this.**
 
-# In a nutshell, this is a quick introduction **to understand the potential of data science and machine learning used in the oil industry**. I have chosen to work with the stock price of a few oil companies (or oil service company) and the oil price dataset as an example. Just to be clear, the intention is *not* to provide an analysis of the current situation in the oil industry. The main objectives here are to show the potential and **give you the tools to create your own view** of the markets and apply it to other problems or even industries.
+# ## Preparations: Getting FastText and the model
 # 
-# In the low price world, reducing costs, saving time and improving safety are crucial outcomes that can be benefited from using machine learning in oil and gas operations. Find below a quick list with a few of the applications of data analysis and machine learning in the Oil & Gas upstream industry:
+# First, build FastText from sources as described [here](https://github.com/facebookresearch/fastText#requirements). Don't worry, there's nothing crazy you have to do and it will finish in less than a minute. Next, install the Python package in your virtualenv following [these instructions](https://github.com/facebookresearch/fastText/tree/master/python).
 # 
-# * Optimization of valve settings in smart wells to maximize NPV.
-# * Machine Learning based rock type classification
-# * Big data analysis on wells downtime.
-# * Data-driven production monitoring.
-# * Identifications of patterns using multiple variables during exploration phase.
-# * Reservoir modelling and history matching using the power of pattern recognition.
-# * Drilling rig automation.
-# * Additional opportunities where gather large volumes of information in real-time or by using multiple analogs.
-# * Deep learning to improve the efficiency and safety of hydraulic fracturing.
-# * Provide more intelligence at the wellhead.
-# * Integrated asset modeling optimization using machine-learning based proxy models.
-# 
-# I have tailored a quick exercise on how to use artificial intelligence using oil price and share price of a few companies. The notebook will focus on loading data and doing some illustrative data visualisations along the way. I will then use linear regression, cluster analysis and Random Forest to create a model predicting the share price in the short term.
-# 
-# I have been using data analysis and machine learning in different tasks in my current and previous jobs as a Reservoir Engineer. **Excel is the most common tool** for any type of analysis in the industry. However, it is certainly limited to basic data analysis, manipulation and to construct predictive models. We understand this conservative industry is sometimes a bit reluctant or delayed implementing modern analysis and predictive workflows to drive decisions. Also, due to the lack of investment in "lower for longer" oil prices and not many young engineers joining us, we are behind in the race implementing these techniques.
-# 
-# Firstly, lets start with what the list of tools required. The modern world of data science offers multiple ways of analyzing and predicting patterns. **Python is the programming language used for this exercise**. I personally use it under the umbrella of the **Anaconda distribution**. I will also be hoping to learn a lot from this exercise, so feedback is very welcome.
-# 
-# The main libraries that we will use are:
-# 
-# * *Numpy*: Library for multidimensional arrays with high level mathematical functions to operate them
-# * *Pandas*: Works on top of Numpy, offer a great way of manipulate and analyse data.
-# * *Matblotlib*: Plotting and visualization.
-# * *Seaborn*: Works on top of matplotlib to provide a high level interface for attractive plotting and visualization.
-# * *Scikit Learn*: Libraries for Machine Learning. In this exercise we will use the following: Linear Regression, Random Forest Regression and K-means
-# 
-# For the purposes of this interactive quick guide, I will use these sets of data:
-# 
-# * Oil price dataset from the U.S Energy Information administration.
-# * Share price dataset from Yahoo Finance in a daily frequency from the following companies:
-# 
-# > Shell (RDSB.L)
-# 
-# > BP (BP.L)
-# 
-# > Cairn Energy (CNE.L)
-# 
-# > Premier Oil (PMO.L)
-# 
-# > Statoil (STL.OL)
-# 
-# > TOTAL (FP.PA)
-# 
-# > ENGIE (ENGI.PA)
-# 
-# > Schlumberger (SLB.PA)
-# 
-# > REPSOL (REP.MC)
-# 
-# There are three parts that my workflow will cover:
-# 
-# 1. Loading data and introduction to feature engineering
-# 
-# 2. Data Analysis
-# 
-# 3. Machine Learning and Prediction!
-# 
-# I will skip sections of the code below to keep the article in a reasonable size. If you want to see the entire code with explanations, I have created the following notebook.
-# 
-# ## Lets start coding!
-# 
+# For the model, I use the one pretrained on English Wikipedia. I'd love to have one trained on Twitter or similar, since it might be more internet-slangy, but I haven't found any yet and don't feel like pretraining one myself. Download the model [here](https://github.com/facebookresearch/fastText/blob/master/pretrained-vectors.md). Make sure you get the bin, not just the vec (text) file. I'll assume you placed it (or a symlink to it) into your code directory and named it `ft_model.bin`.
 
-# ## 1.- Loading data
-
-# The oil primary dataset includes an excel spreadsheet with oil price and date in a daily frequency. The stock data comes in the shape of a csv file with also daily frequency. 
+# ## Preparations: Exploring the model
 # 
-# We wil load the data, read and transform it into a master dataframe. 
+# Let's explore the model! Go to your FastText directory and run `./fasttext nn <path_to_ft_model>`. Now you can enter some terms and see the nearest neighbors to this word in the embedding space. Here are some examples:
+# 
+# ```
+# Query word? queen
+# —queen 0.719091
+# ‘queen 0.692849
+# #queen 0.656498
+# queena 0.650313
+# king 0.64931
+# queen`s 0.63954
+# king/queen 0.634855
+# s/queen 0.627386
+# princess 0.623889
+# queeny 0.620919
+# ```
+# 
+# Ok that looks pretty ugly. I suppose Facebook was not very exact in their cleaning of the input data. But some sensible suggestions are there: `king` and `princess`! Let's try a typo that is unlikely to have appeared in the original data:
+# 
+# ```
+# Query word? dimensionnallity
+# dimension, 0.722278
+# dimensionality 0.708645
+# dimensionful 0.698573
+# codimension 0.689754
+# codimensions 0.67555
+# twodimensional 0.674745
+# dimension 0.67258
+# \,kdimensional 0.668848
+# ‘dimensions 0.665725
+# two–dimensional 0.665109
+# ```
+# 
+# Sweet! Even though it has never seen that word, it recognizes it to be related with "dimensionality". Let's try some something mean:
+# 
+# ```
+# Query word? dumb
+# stupid 0.746051
+# dumber 0.732965
+# clueless 0.662594
+# idiotic 0.64993
+# silly 0.632314
+# stupidstitious 0.628875
+# stupidly 0.622968
+# moronic 0.621633
+# ignorant 0.620475
+# stupider 0.617377
+# ```
+# 
+# Nice! Even though this was trained on Wikipedia, we're getting at least some basic insults. I'll leave it to you to explore the really hateful words. They all seem to be there ;)
+# 
+# **Note:** Keep in mind that exploring the nearest neighbors is a very superficial approach to understanding the model! The embedding space has 300 dimensions, and we boil them down to a single distance metric. We can't be sure in which dimensions these words are related to each other, but we can trust in the model to have learnt something sensible.
+# 
+# **Pro tip:** Our data should be cleaned and normalized in a similar way as Facebook did before they trained this model. We can query the model to get some insights into what they did, e.g.
+# 
+# ```
+# Query word? 1
+# insel 0.483141
+# inseln 0.401125
+# ...
+# Query word? one
+# two 0.692744
+# three 0.676568
+# ...
+# ```
+# 
+# This tells us they converted all numbers to their text equivalent, and so should we!
 
-# In[2]:
+# ## Loading and cleaning the data
+# 
+# We define a method `normalize` to clean and prepare a single string. We will use it later to prepare our string data. Also, we load the data as we're used to:
+
+# In[ ]:
 
 
-# Start loading libraries
-
-import matplotlib.pyplot as plt
+import re
 import numpy as np
 import pandas as pd
-import seaborn as sns
-import warnings; warnings.simplefilter('ignore')
-get_ipython().run_line_magic('matplotlib', 'inline')
+from fastText import load_model
+
+window_length = 200 # The amount of words we look at per example. Experiment with this.
+
+def normalize(s):
+    """
+    Given a text, cleans and normalizes it. Feel free to add your own stuff.
+    """
+    s = s.lower()
+    # Replace ips
+    s = re.sub(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', ' _ip_ ', s)
+    # Isolate punctuation
+    s = re.sub(r'([\'\"\.\(\)\!\?\-\\\/\,])', r' \1 ', s)
+    # Remove some special characters
+    s = re.sub(r'([\;\:\|•«\n])', ' ', s)
+    # Replace numbers and symbols with language
+    s = s.replace('&', ' and ')
+    s = s.replace('@', ' at ')
+    s = s.replace('0', ' zero ')
+    s = s.replace('1', ' one ')
+    s = s.replace('2', ' two ')
+    s = s.replace('3', ' three ')
+    s = s.replace('4', ' four ')
+    s = s.replace('5', ' five ')
+    s = s.replace('6', ' six ')
+    s = s.replace('7', ' seven ')
+    s = s.replace('8', ' eight ')
+    s = s.replace('9', ' nine ')
+    return s
+
+print('\nLoading data')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+train['comment_text'] = train['comment_text'].fillna('_empty_')
+test['comment_text'] = test['comment_text'].fillna('_empty_')
 
 
-# In[3]:
+# Ok next, let's load the FastText model and define methods that convert text to a sequence of vectors. Note that I'm just considering the last n words of each text. You could play with this, too.
+
+# In[ ]:
 
 
-# Read oil price and transform data
+classes = [
+    'toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate'
+]
 
-xls_file=pd.ExcelFile("../input/RBRTEd.xls") # Read Excel
-brent=xls_file.parse("Data 1") # Read sheet Data 1
-brent.columns=brent.iloc[1] # set row 1 as column name
-brent=brent.ix[2:] # remove first 2 rows
-brent["Date"]=brent["Date"].astype('datetime64[ns]') # Convert column to date format
-brent.columns=["date","oil_price"]
-brent.head()
+print('\nLoading FT model')
+ft_model = load_model('ft_model.bin')
+n_features = ft_model.get_dimension()
 
-
-# In[4]:
-
-
-brent.info()
-
-
-# Now we have just loaded, transformed and checked our oil data. Whats left? read and transform the share price data before starting analysis. I will skip showing the code of this section to focus right to the point. 
-
-# In[5]:
-
-
-# Loop to read all share price files and transform data
-shares=["RDSB.L","BP.L","CNE.L","PMO.L","STL.OL","FP.PA","REP.MC","ENGI.PA","SLB.PA"]
-
-all_data=pd.DataFrame() # here we will store all the data from all shares and oil price in a master dataframe
-for index in range(len(shares)):
-    stock=pd.DataFrame()
-
-# 1.- Read files
-    stock=pd.read_csv("../input/"+shares[index]+".csv")     
-# 2.- Transform data
-    stock=stock[["Date","Close"]]       
-    stock["Date"]=stock["Date"].astype('datetime64[ns]')
-    stock.columns=["date","share_price"]
-    test=pd.DataFrame(brent) # VLOOKUP equivalent in Python to merge 2 sets of data
-    output=stock.merge(test,on="date",how="left")
-    stock["oil_price"]=output["oil_price"]
-    stock['share_price']=pd.to_numeric(stock['share_price'], errors='coerce').dropna(0)
-    stock['oil_price']=pd.to_numeric(stock['oil_price'], errors='coerce').dropna(0)
-    stock["year"]=pd.to_datetime(stock["date"]).dt.year # Create a column with the year to filter later
-    stock["name"]=shares[index]
-    stock = stock.dropna() # get rid of all the NAN rows.
-# 3.- Feature Engineering. Create new column with scaled share price from 0 to 1.
-#     This will help us comparing companies later on.
-    from sklearn.preprocessing import MinMaxScaler
-    scaler=MinMaxScaler()
-    stock["share_price_scaled"]=scaler.fit_transform(stock["share_price"].to_frame())
-# 4.- Append data to a master dataframe
-    all_data=all_data.append(stock) #append data to one matrix
+def text_to_vector(text):
+    """
+    Given a string, normalizes it, then splits it into words and finally converts
+    it to a sequence of word vectors.
+    """
+    text = normalize(text)
+    words = text.split()
+    window = words[-window_length:]
     
-all_data.head()
+    x = np.zeros((window_length, n_features))
+
+    for i, word in enumerate(window):
+        x[i, :] = ft_model.get_word_vector(word).astype('float32')
+
+    return x
+
+def df_to_data(df):
+    """
+    Convert a given dataframe to a dataset of inputs for the NN.
+    """
+    x = np.zeros((len(df), window_length, n_features), dtype='float32')
+
+    for i, comment in enumerate(df['comment_text'].values):
+        x[i, :] = text_to_vector(comment)
+
+    return x
 
 
-# ## 2.- Data Analysis
-
-# To explore the universe, we will start with some practical recipes to make sense of our data. This analysis contains a few of the tools with the purpose of exploring different visualisations that can be useful in a Machine Learning problem. It is not going to be a detailed analysis and I am not going to bring additional features like key events or other metrics to try to explain the patterns in the plots. Again, **the idea is to show you a glimpse of the potential of data analysis with python**.
+# To convert an input dataframe to an input vector, just call `df_to_data`. This will result in the shape `(n_examples, window_length, n_features)`. Here, for each row we would have 200 words a 300 features each.
 # 
-# Here is an outline of the main charts that we will make:
+# **EDIT/NOTE:** This will probably not fit into your memory, so don't bother executing it :) Instead, read my generator guide below.
+
+# In[ ]:
+
+
+x_train = df_to_data(train)
+y_train = train[classes].values
+
+x_test = df_to_data(test)
+y_test = test[classes].values
+
+
+# And now you should be good to go! Train this as usual. You don't need an `EmbeddingLayer`, but you need to pass `input_shape=(window_length, n_features)` to the first layer in your NN.
 # 
-# 2.1.- Simple line plot oil price
+# I'm still in the process of experimenting, but I already achieved a single-model LB score of `0.9842` with something very simple. Bagging multiple of these models got me into the top 100 easily. Good luck!
+
+# ### PS: Using a generator so you don't have to keep the whole damn thing in memory
+# As @liujilong pointed out, not even the p2.xlarge machine with 64 GB can hold both the training and test set for window sizes longer than ~100 words. It seems I underestimated how much memory this monster model eats! Also, locally I had long [added swap space](https://stackoverflow.com/questions/17173972/how-do-you-add-swap-to-an-ec2-instance) and switched to generators so I wouldn't have to keep the whole thing memory. Let me show you how to implement the generator part. This is also useful to add some randomization later on.
 # 
-# 2.2.- Pairplot on BP share price from years 2000 to 2017 using a color gradient for different years
+# The idea is that instead of converting the whole training set to one large array, we can write a function that just spits out one batch of data at a time, infinitely. Keras can automaticaly spin up a separate thread for this method (note though that "threads" in Python are ridiculous and do not give any speedup whatsoever). This means that we have to write some more code and training will be slightly slower, but we need only a fraction of the memory and we can add some cool randomization to each batch later on (see ideas section below).
 # 
-# 2.3.- Pairplot on BP share price using last five years
+# We can keep all the code from above. This generator method works only for training data, not for validation data, so you will need to split by hand. Let's do that now:
+
+# In[ ]:
+
+
+# Split the dataset:
+split_index = round(len(train) * 0.9)
+shuffled_train = train.sample(frac=1)
+df_train = shuffled_train.iloc[:split_index]
+df_val = shuffled_train.iloc[split_index:]
+
+# Convert validation set to fixed array
+x_val = df_to_data(df_val)
+y_val = df_val[classes].values
+
+def data_generator(df, batch_size):
+    """
+    Given a raw dataframe, generates infinite batches of FastText vectors.
+    """
+    batch_i = 0 # Counter inside the current batch vector
+    batch_x = None # The current batch's x data
+    batch_y = None # The current batch's y data
+    
+    while True: # Loop forever
+        df = df.sample(frac=1) # Shuffle df each epoch
+        
+        for i, row in df.iterrows():
+            comment = row['comment_text']
+            
+            if batch_x is None:
+                batch_x = np.zeros((batch_size, window_length, n_features), dtype='float32')
+                batch_y = np.zeros((batch_size, len(classes)), dtype='float32')
+                
+            batch_x[batch_i] = text_to_vector(comment)
+            batch_y[batch_i] = row[classes].values
+            batch_i += 1
+
+            if batch_i == batch_size:
+                # Ready to yield the batch
+                yield batch_x, batch_y
+                batch_x = None
+                batch_y = None
+                batch_i = 0
+
+
+# Alright, now we can use this generator to train the network. To make sure that one epoch has approxamitely the same number of examples as are in the training set, we need to set the `steps_per_epoch` to the number of batches we expect to cover the whole dataset. Here's the code:
+
+# In[ ]:
+
+
+model = build_model()  # TODO: Implement
+
+batch_size = 128
+training_steps_per_epoch = round(len(df_train) / batch_size)
+training_generator = data_generator(df_train, batch_size)
+
+# Ready to start training:
+model.fit_generator(
+    training_generator,
+    steps_per_epoch=training_steps_per_epoch,
+    batch_size=batch_size,
+    validation_data=(x_val, y_val),
+    ...
+)
+
+
+# And there you go, this should work on p2.xlarge even for long window lengths!
+
+# ### More stuff to try:
+# Some suggestions. I've tried most of these and found them helpful:
 # 
-# 2.4.- Violin plot of the oil price
-# 
-# 2.5.- Violin plot of the share price of several oil&gas companies
-# 
-# 2.6.- Jointplot comparison of Premier Oil and Statoil
-# 
-# 2.7.- Plot of oil price vs share price of different companies using different templates
-# 
-
-# ### 2.1 Simple line plot oil price
-
-# In[6]:
-
-
-brent[['date','oil_price']].set_index('date').plot(color="green", linewidth=1.0)  
-
-
-# To begin with a more advanced data analysis, we will create a **pairplot using seaborn** to analyse BP share price. 
-
-# ### 2.2.- Pairplot on BP share price from years 2000 to 2017 using a color gradient for different years
-
-# In[7]:
-
-
-#==============================================================================
-# Pairplot using master data table (all_data) with a filter on BP share price
-#==============================================================================
-palette=sns.cubehelix_palette(18, start=2, rot=0, dark=0, light=.95, reverse=False)
-sns.pairplot(all_data[all_data['name']=="BP.L"].drop(["share_price_scaled"],axis=1),
-             hue="year",palette=palette,size=4,markers="o",
-             plot_kws=dict(s=50, edgecolor="b", linewidth=0))
-
-
-# The **pairplot shows all the pairwise relationships in a dataset and the univariate distribution** of the data for each variable. It gives us a reasonable idea about variable relationships. I have also built a palette with a gradient color with increasing darkness with time. Have a look at the combination of oil price vs BP share price in the top-center plot.  
-# 
-# Firstly, see how it evolves doing a zigzag with both time and oil price. Then see where we are in 2017... **looks like unexplored terrain!** Notice also the differences in distribution simetries comparing the oil price and share prices. Bear in mind this is just a basic analysis on an oil company, with a specific characteristics like size, different events during the last 17 years. Later on we will compare different companies.
-# 
-# Now that we have taken care of making a plot for BP, you can try to do it for the rest of the companies or comparing different types of data.
-# 
-# There is much more information that can be extracted from this plot, but we will stop here and keep going to next step. Lets try to filter in the last five years where we are covering a large spectrum in the oil price and see if we see more. 
-
-# ### 2.3.- Pairplot on BP share price using last five years
-
-# In[8]:
-
-
-#==============================================================================
-# Pairplot on less data 2013 to 2017 using Royal Dutch Shell (LON) stock price
-#==============================================================================
-
-# Just for the last 5 years
-all_data13=all_data[all_data["year"]>2012]
-palette=sns.cubehelix_palette(5, start=2, rot=0, dark=0, light=.95, reverse=False)
-sns.pairplot(all_data13[all_data13['name']=="RDSB.L"].drop(["share_price_scaled"],axis=1),
-             hue="year",palette=palette,size=4,markers="o",
-             plot_kws=dict(s=50, edgecolor="b", linewidth=0))
-
-
-# Ah hah, here we see a bit more. In the last five years the distribution tells us that the oil price have been mostly **swinging in between 30 to 60 usd/bbl and 100 to 120 usd/bbl**. Between 60 and 100 usd/bbl not much data... Also we see a positive with high confidence correlation for years 2016/17 of share price and oil price. Notice, the year when everything changed for this company was 2014, we will see later if that's the case for other companies. In 2014, there is a change in pattern correlations and high variability of data. That was the **boundary between the two worlds**, two market behaviors, a change in regime irrespective of the independent events of the company. Several interpretations can be obtained from this plot. I will not plot this for all the other companies.
-# 
-# ## What's next? 
-# 
-# To have a bit of a feeling on how sensitive is the stock of each company to the oil price we will build a few violin plots. This is basically a box plot with the probability density data.
-
-# ### 2.4.- Violin plot of the oil price
-
-# In[9]:
-
-
-#==============================================================================
-# Violin Plot Oil price on last 5 years
-#==============================================================================
-
-sns.set_style("whitegrid")
-palette=sns.cubehelix_palette(5, start=2.8, rot=0, dark=0.2, light=0.8, reverse=False)
-
-sns.violinplot(x="year", y="oil_price", data=all_data13[all_data13['name']=="RDSB.L"],
-               inner="quart", palette=palette, trim=True)
-
-
-# ### 2.5.- Violin plot of the share price of several Oil and Gas companies
-
-# In[10]:
-
-
-#==============================================================================
-# Violin Plot Oil price on last 5 years
-#==============================================================================
-
-sns.factorplot(x="year", y="share_price_scaled", col='name', col_wrap=3,kind="violin",
-               split=True, data=all_data13,inner="quart", palette=palette, trim=True,size=4,aspect=1.2)
-sns.despine(left=True)
-
-
-# Just a quick note on the large range of the oil price during 2014, however the variability in the stock price range and distribution for different companies was different. A few companies were more sensitive than others. Notice that all the stock prices are scaled between 0 and 1 using its max/min values in the last 20 years approx. **That may cause missleading interpretations**. This is just an exercise to do a bit of data analysis using the shape and patterns as a third dimension. 
-# 
-# The next plot is an attempt to **draw two variables with bivariate and univariate graphs**. Just a different way of visualizing data using a jointplot. The example is with Premier Oil share price.
-
-# ### 2.6.- Jointplot comparison of Premier Oil and Statoil
-
-# In[11]:
-
-
-#==============================================================================
-# joint plot using 5 years for Premier Oil
-#==============================================================================
-
-sns.jointplot("oil_price", "share_price",data=all_data13[all_data13['name']=="PMO.L"],kind="kde",
-              hue="year",size=6,ratio=2,color="red").plot_joint(sns.kdeplot, zorder=0, n_levels=20)
-
-
-# In[12]:
-
-
-#==============================================================================
-# joint plot using 5 years for Statoil
-#==============================================================================
-
-sns.jointplot("oil_price", "share_price",data=all_data13[all_data13['name']=="STL.OL"],kind="kde",
-              hue="year",size=6,ratio=2,color="blue").plot_joint(sns.kdeplot, zorder=0, n_levels=20)
-
-
-# Notice the difference in share price distribution for the two companies and the shape of the density chart. 
-
-# ### 2.7.- Plot of oil price vs share price of different companies using different templates
-
-# The next analysis will do a grid of charts for all companies to check if we see any patterns.
-
-# In[13]:
-
-
-#==============================================================================
-# lmplot using using 5 years for all companies
-#==============================================================================
-
-sns.lmplot(x="oil_price", y="share_price_scaled", col="name",ci=None, col_wrap=3, 
-           data=all_data13, order=1,line_kws={'color': 'blue'},scatter_kws={'color': 'grey'}).set(ylim=(0, 1))
-
-
-# We dont really see that much on that chart. Lets add different colors for each year and see if correlations are telling us anything.
-
-# In[14]:
-
-
-palette=sns.cubehelix_palette(5, start=2, rot=0, dark=0, light=.95, reverse=False)
-sns.lmplot(x="oil_price", y="share_price_scaled",hue="year", col="name",ci=None, 
-           col_wrap=3, data=all_data13, order=1,palette=palette,size=4).set(ylim=(0, 1))
-
-
-# Interestingly, there are a few patterns that can be easily identified visually in some companies. Is it may be related to company attributes? Some others we can see had different trends for similar range of oil prices but different years. That could be related to the exploration premium a few years back or may other events/facts. I will leave you do the detailed interpretation. In any way, I am sure some of  you will find this chart quite hypnotic.
-
-# ## 3.- Machine Learning and Prediction
-
-# Essentially machine learning is the **application of artificial intelligence to learn** and improve experience without being explicitly programmed. Usually machine learning algorithms can be categorized as **supervised or unsupervised**.
-# 
-# * **Supervised learning** is where you have a few input variables and an output variable. Basically the algorithm is used to "learn" the mapping function from the input to the output. The goal is to minimize the error of the mapping function so when you have new input data you can predict the output variables. Most of the problems in machine learning use supervised learning. As you can imagine, the applications of this algorithms are endless. 
-# 
-#    - Another subclassification of supervised learning problems can be grouped in a classification problem, when the output is a category (i.e. "buy" or "sell") or regression where the output is a real value (i.e. "how much money?" or "speed of car".
-# 
-# * **Unsupervised learning** is where you have only input data and no corresponding output variables. Basically the algorithm is used to model the structure or distribution in the data. A common unsupervised learning problem is clustering, to discover groupings of data or find patterns (i.e. groups of people by purchasing behavior).
-# 
-# Here is an outline of the machine learning problems that we will solve:
-# 
-#     3.1.- Cluster analysis on Shell data
-#     3.2.- Linear regression on Royal Dutch Shell share price vs oil price
-#     3.3.- Random Forest on Royal Dutch Shell share price vs oil price
-# 
-# A potential application of this algorithms would be to evaluate the relative value of the share compared to the oil price. Thus, it can give you an indication if the share is *overpriced* or *undervalued*. However, the objective of this exercise is to provide the tools to unlock the potential of Machine Learning in the oil industry. 
-
-# ### 3.1.- Cluster analysis on Shell data
-
-# In the following example we will divide the data from *Royal Dutch Shell* into **6 groups using cluster analysis**. Clustering is the task of grouping a set of objects in such a way that objects in the same group are more similar to each other than to those in other groups. If you want to understand a bit more about clustering, see references.
-
-# In[15]:
-
-
-#==============================================================================
-# Unsupervised Learning - Cluster analysis on Shell data
-#==============================================================================
-from sklearn.cluster import KMeans
-
-shell=pd.DataFrame()
-shell=all_data13[all_data13['name']=="RDSB.L"]
-# We need to scale also oil price, so clustering is not influenced by the relative size of one axis.
-shell["oil_price_scaled"]=scaler.fit_transform(shell["oil_price"].to_frame())
-shell["cluster"] = KMeans(n_clusters=6, random_state=1).fit_predict(shell[["share_price_scaled","oil_price_scaled"]])
-
-# The 954 most common RGB monitor colors https://xkcd.com/color/rgb/
-colors = ["baby blue", "amber", "scarlet", "grey","milk chocolate", "windows blue"]
-palette=sns.xkcd_palette(colors)
-
-sns.lmplot(x="oil_price", y="share_price_scaled",ci=None,palette=palette, hue="cluster",fit_reg=0 ,data=shell)
-
-
-# There are many application of practical problems using cluster analysis. In this example we are just using it for data visualization and grouping. 
-
-# ### 3.2.- Linear regression on Royal Dutch Shell share price vs oil price
-
-# Next we will construct a simple linear regression model using supervised learning. The objective is to evaluate the **prediction of data from the last 100 days using data trained from years 2016/17** (excluding test data). Train data is the data used to construct the model and test data is the data we are trying to predict.
-
-# In[16]:
-
-
-#==============================================================================
-# Supervised learning linear regression
-#==============================================================================
-
-from sklearn import linear_model
-
-# 1.- Data preparation
-shell15=pd.DataFrame()
-shell15=all_data13[(all_data13['name']=="RDSB.L") & (all_data13['year']>2015 )] # Extract data from years 2016/17
-shell15=shell15[["share_price","oil_price"]].reset_index()
-
-# Just using 1 variable for linear regression. To try with more variables use randomforest
-# Split the data into training/testing sets
-train = shell15[:-100]
-test = shell15[-100:]
-
-x_train=train["oil_price"].to_frame() #converts the pandas Series to numpy.ndarray
-y_train=train['share_price'].to_frame()
-x_test=test["oil_price"].to_frame() #converts the pandas Series to numpy.ndarray
-y_test=test['share_price'].to_frame()
-
-# 2.- Create linear regression object
-regr = linear_model.LinearRegression()
-
-# 3.- Train the model using the training sets
-regr.fit(x_train,y_train)
-
-# The coefficients
-print("Coefficients: ",  float(regr.coef_))
-# The mean squared error
-print("Mean squared error: %.2f"
-      % np.mean((regr.predict(x_train) - y_train) ** 2))
-
-
-# In[17]:
-
-
-# Plot outputs using matplotlib
-plt_train=plt.scatter(x_train, y_train,  color='grey')
-plt_test=plt.scatter(x_test, y_test,  color='green')
-plt.plot(x_train, regr.predict(x_train), color='black', linewidth=3)
-plt.plot(x_test,regr.predict(x_test),  color='black', linewidth=3)
-plt.xlabel("oil_price")
-plt.ylabel("share_price")
-plt.legend((plt_train, plt_test),("train data", "test data"))
-plt.show()
-
-
-# In the chart above you can see an approximation of how **Linear Regression** is fit and trying to predict results from test data. It looks like the prediction data is quite off for lower oil prices. The mean square error of this predictive method is 23210.67. Lets see how a more sofisticated method does on this topic. We are going to work using random forest algorithm.
-
-# ### 3.3.- Random Forest on Royal Dutch Shell share price vs oil price
-
-# **Random forest** is an ensemble tool which takes a subset of observations and a subset of variables to build a decision trees. It builds multiple such decision tree and amalgamate them together to get a more accurate and stable prediction.
-# 
-# Random forest algorithm **accepts more than one variable** in the input data to predict the output. It runs very efficiently on large databases, its very accurate, can handle many input variables, it has effective methods for estimating missing data and many more advantages. **The main disadvantage is overfitting** for some tasks or some sets of data. That leads with innacurate predictions. It is also biased in favor of categorical attributes(if used) with more levels. In anycase we are gonna give it a go.
-# 
-# In top of the oil price, we are going to use other variables to predict the share price of Shell. These are going to be the prices of Premier Oil, Cairn Energy, TOTAL and ENGIE. I know this doesn't make much sense, but we just want to see how to construct a model of this type. It will allow us to see the impact of each one on the final prediction.
-
-# In[18]:
-
-
-from sklearn.ensemble import RandomForestRegressor
-# 1.- Data Preparation
-shell15=pd.DataFrame()
-shell15=all_data13[(all_data13['name']=="RDSB.L") & (all_data13['year']>2015 )]
-shell15=shell15[["share_price","oil_price"]].reset_index()
-
-# Load share price of other variables
-shell15['PMO.L']=all_data13[(all_data13['name']=="PMO.L")][-373:].reset_index()['share_price']
-shell15['CNE.L']=all_data13[(all_data13['name']=="CNE.L")][-373:].reset_index()['share_price']
-shell15['FP.PA']=all_data13[(all_data13['name']=="FP.PA")][-373:].reset_index()['share_price']
-shell15['ENGI.PA']=all_data13[(all_data13['name']=="ENGI.PA")][-373:].reset_index()['share_price']
-
-train = shell15[:-100]
-test = shell15[-100:]
-
-x_train=train[["oil_price","PMO.L","CNE.L","FP.PA","ENGI.PA"]]
-y_train=train['share_price']
-
-x_test=test[["oil_price","PMO.L","CNE.L","FP.PA","ENGI.PA"]] 
-y_test=test['share_price'].to_frame()
-
-
-# 2.- Create Randomforest object usinig a max depth=5
-regressor = RandomForestRegressor(n_estimators=200, max_depth=5 )
-
-# 3.- Train data
-clf=regressor.fit(x_train, y_train)
-
-# 4.- Predict!
-y_pred=regressor.predict(x_test)
-y_pred=pd.DataFrame(y_pred)
-
-
-# In[19]:
-
-
-# We are going to have a look at how fitted data looks like:
-
-plt_train=plt.scatter(x_train["oil_price"],y_train,   color='grey')
-plt_pred=plt.scatter(shell15["oil_price"], regressor.predict(shell15[["oil_price","PMO.L","CNE.L","FP.PA","ENGI.PA"]]),  color='black')
-
-plt.xlabel("oil_price")
-plt.ylabel("share_price")
-plt.legend((plt_train,plt_pred),("train data","prediction"))
-plt.show()
-
-
-# The model looks really good just predicting the training data. Probably with quite a bit of **overfitting**. There are many parameters to tune, but a key one is max depth. This will provide the depth of the trees. The higher the number the more overfitting you will have, depending on the type of data. We will have a look now to how this model predicts or test data.
-
-# In[20]:
-
-
-plt_train=plt.scatter(x_train["oil_price"],y_train,   color='grey')
-plt_test=plt.scatter(x_test["oil_price"],y_test,   color='green')
-plt_pred=plt.scatter(x_test["oil_price"], y_pred,  color='black')
-
-plt.xlabel("oil_price")
-plt.ylabel("share_price")
-plt.legend((plt_train, plt_test,plt_pred),("train data", "test data","prediction"))
-plt.show()
-
-
-# In[21]:
-
-
-# The mean squared error
-print("Mean squared error: %.2f"
-      % np.mean((regressor.predict(x_train) - y_train) ** 2))
-
-
-# The prediction on the test data looks much better now, still somehow innacurate for lower oil price environment. If you see the mean squared error, we manage to reduce the error from 23210 to 2709. That is **10 times lower than using linear regression**. 
-# 
-# It is always worth to give it a check to the importance of each parameter:
-
-# In[22]:
-
-
-importances=regressor.feature_importances_
-
-indices=list(x_train)
-print("Feature ranking:")
-
-for f in range(x_train.shape[1]):
-    print("Feature %s (%f)" % (indices[f], importances[f]))
-
-f, (ax1) = plt.subplots(1, 1, figsize=(8, 6), sharex=True)
-sns.barplot(indices, importances, palette="BrBG", ax=ax1)
-ax1.set_ylabel("Importance")
-
-
-# It's interesting to see how the importance of the share price of TOTAL is higher than the oil price. This is mostly because they are similar size companies that behave in a similar way.
-# 
-# Just as a summary, you have now the tools to start your own little project or even to understand how this works. Through this article, I hope I have helped you to start thinking more on how you can unlock the value of machine learning in your area.
-# 
-# 
-# Javier Bravo
-# 
-# 
-
-# # References:
-# 
-# **Notebook with full code**: https://www.kaggle.com/javierbravo/a-tour-of-the-oil-industry/
-# 
-# **Oil price dataset downloaded from the U.S Energy Information administration.** ( https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx?n=PET&s=rbrte&f=D)
-# 
-# **Share Prices To download the dataset I use Yahoo finance**. The following link is an example to download Royal Dutch Shell share price dataset: https://uk.finance.yahoo.com/quote/RDSB.L/history?period1=946684800&period2=1499122800&interval=1d&filter=history&frequency=1d
-# 
-# **Pandas**: https://pandas.pydata.org/pandas-docs/stable/10min.html
-# 
-# **Seaborn**: https://seaborn.pydata.org/
-# 
-# **Scikit Learn**: http://scikit-learn.org/stable/
-# 
-# **Cluster analysis** - Basic concepts and algorithms https://www-users.cs.umn.edu/~kumar/dmbook/ch8.pdf
+# * Add random but common typos to strings before converting to FT vectors. That way, the model can learn in which way typos affect the embeddings. Use the training generator so you can adjust this over time.
+# * Add more string preprocessing to our `normalize` function
+# * Randomize the windows instead of using the end (great that we already have a generator!)
+# * Use FastText's sentence vector feature to summarize parts of the text outside the window
+# * Add other features ontop of the FT ones, e.g. capitalization etc.

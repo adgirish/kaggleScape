@@ -1,249 +1,272 @@
-######################################80#######################################################################
-## Logistic Regression using Stochastic Gradient Descent with adapted learning rate ##
-## Currently regularization is not used
-## Leaderboard score = 0.77355
-## Takes 2-3 minutes to run on my laptop
-#modified by kartik mehta
-## https://www.kaggle.com/kartikmehtaiitd
+# -*- coding: utf-8 -*-
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-# Giving due credit 
-#classic tinrtgu's code
-# https://www.kaggle.com/c/avazu-ctr-prediction/forums/t/10927/beat-the-benchmark-with-less-than-1mb-of-memory
-#modified by rcarson available as FTRL starter on kaggle code 
-#https://www.kaggle.com/jiweiliu/springleaf-marketing-response/ftrl-starter-code
-#############################################################################################################
-
-
-from datetime import datetime
-from csv import DictReader
-from math import exp, log, sqrt
-from random import random
-import pickle
+import numpy as np
+np.random.seed(2016)
+import os
+import glob
+import cv2
+import datetime
+import time
+from sklearn.cross_validation import KFold
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.optimizers import Adam
+from keras.optimizers import SGD
+from keras.callbacks import EarlyStopping
+from keras.utils import np_utils
+from sklearn.metrics import log_loss
 
 
-##############################################################################
-# parameters #################################################################
-##############################################################################
-
-# A, paths
-train='../input/train.csv'
-test='../input/test.csv'
-submission = 'sgd_subm.csv'  # path of to be outputted submission file
-
-# B, model
-alpha = .005  	# learning rate
-beta = 1		
-L1 = 0.     	# L1 regularization, larger value means more regularized
-L2 = 0.     	# L2 regularization, larger value means more regularized
-
-# C, feature/hash trick
-D = 2 ** 24             # number of weights to use
-interaction = False     # whether to enable poly2 feature interactions
-
-# D, training/validation
-epoch = 1       # learn training data for N passes
-holdafter = None   # data after date N (exclusive) are used as validation
-holdout = 100  # use every N training instance for holdout validation
+def get_im_cv2(path, img_rows, img_cols):
+    img = cv2.imread(path, 0)
+    resized = cv2.resize(img, (img_cols, img_rows), cv2.INTER_LINEAR)
+    return resized
 
 
-##############################################################################
-# class, function, generator definitions #####################################
-##############################################################################
+def load_train(img_rows, img_cols):
+    X_train = []
+    X_train_id = []
+    mask_train = []
+    start_time = time.time()
 
-class gradient_descent(object):
+    print('Read train images')
+    files = glob.glob("../input/train/*[0-9].tif")
+    for fl in files:
+        flbase = os.path.basename(fl)
+        img = get_im_cv2(fl, img_rows, img_cols)
+        X_train.append(img)
+        X_train_id.append(flbase[:-4])
+        mask_path = "../input/train/" + flbase[:-4] + "_mask.tif"
+        mask = get_im_cv2(mask_path, img_rows, img_cols)
+        mask_train.append(mask)
 
-    def __init__(self, alpha, beta, L1, L2, D, interaction):
-        # parameters
-        self.alpha = alpha
-        self.beta = beta
-        self.L1 = L1
-        self.L2 = L2
-
-        # feature related parameters
-        self.D = D
-        self.interaction = interaction
-
-        # model
-        # G: squared sum of past gradients
-        # w: weights
-        self.w = [0.] * D  
-        self.G = [0.] * D 
-
-    def _indices(self, x):
-        ''' A helper generator that yields the indices in x
-
-            The purpose of this generator is to make the following
-            code a bit cleaner when doing feature interaction.
-        '''
-
-        # first yield index of the bias term
-        yield 0
-
-        # then yield the normal indices
-        for index in x:
-            yield index
-
-        # now yield interactions (if applicable)
-        if self.interaction:
-            D = self.D
-            L = len(x)
-
-            x = sorted(x)
-            for i in xrange(L):
-                for j in xrange(i+1, L):
-                    # one-hot encode interactions with hash trick
-                    yield abs(hash(str(x[i]) + '_' + str(x[j]))) % D
-
-    def predict(self, x):
-        ''' Get probability estimation on x
-
-            INPUT:
-                x: features
-
-            OUTPUT:
-                probability of p(y = 1 | x; w)
-        '''
-
-        # model
-        w = self.w	
-
-        # wTx is the inner product of w and x
-        wTx = 0.
-        for i in self._indices(x):
-            wTx += w[i]
-
-        # bounded sigmoid function, this is the probability estimation
-        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
-
-    def update(self, x, p, y):
-        ''' Update model using x, p, y
-
-            INPUT:
-                x: feature, a list of indices
-                p: click probability prediction of our model
-                y: answer
-
-            MODIFIES:
-                self.G: increase by squared gradient
-                self.w: weights
-        '''
-        # parameters
-        alpha = self.alpha
-        L1 = self.L1
-        L2 = self.L2
-
-        # model
-        w = self.w
-        G = self.G
-
-        # gradient under logloss
-        g = p - y
-        # update z and n
-        for i in self._indices(x):
-            G[i] += g*g
-#            w[i] -= alpha*1/sqrt(n[i]) * (g) ## Learning rate reducing as 1/sqrt(n_i) : ALso gives good performance but below code gives better results
-            w[i] -= alpha/(beta+sqrt(G[i])) * (g) ## Learning rate reducing as alpha/(beta + sqrt of sum of g_i)
-
-        self.w = w
-        self.G = G
-
-def logloss(p, y):
-    ''' FUNCTION: Bounded logloss
-
-        INPUT:
-            p: our prediction
-            y: real answer
-
-        OUTPUT:
-            logarithmic loss of p given y
-    '''
-
-    p = max(min(p, 1. - 10e-15), 10e-15)
-    return -log(p) if y == 1. else -log(1. - p)
+    print('Read train data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return X_train, mask_train, X_train_id
 
 
-def data(path, D):
-    ''' GENERATOR: Apply hash-trick to the original csv row
-                   and for simplicity, we one-hot-encode everything
+def load_test(img_rows, img_cols):
+    print('Read test images')
+    files = glob.glob("../input/test/*[0-9].tif")
+    X_test = []
+    X_test_id = []
+    total = 0
+    start_time = time.time()
+    for fl in files:
+        flbase = os.path.basename(fl)
+        img = get_im_cv2(fl, img_rows, img_cols)
+        X_test.append(img)
+        X_test_id.append(flbase[:-4])
+        total += 1
 
-        INPUT:
-            path: path to training or testing file
-            D: the max index that we can hash to
-
-        YIELDS:
-            ID: id of the instance, mainly useless
-            x: a list of hashed and one-hot-encoded 'indices'
-               we only need the index since all values are either 0 or 1
-            y: y = 1 if we have a click, else we have y = 0
-    '''
-
-    for t, row in enumerate(DictReader(open(path), delimiter=',')):
-      
-        try:
-            ID=row['ID']
-            del row['ID']
-        except:
-            pass
-        # process clicks
-        y = 0.
-        target='target'#'IsClick' 
-        if target in row:
-            if row[target] == '1':
-                y = 1.
-            del row[target]
-
-        # extract date
-
-        # turn hour really into hour, it was originally YYMMDDHH
-
-        # build x
-        x = []
-        for key in row:
-            value = row[key]
-
-            # one-hot encode everything with hash trick
-            index = abs(hash(key + '_' + value)) % D
-            x.append(index)
-
-        yield ID,  x, y
+    print('Read test data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return X_test, X_test_id
 
 
-##############################################################################
-# start training #############################################################
-##############################################################################
+def rle_encode(img, order='F'):
+    bytes = img.reshape(img.shape[0] * img.shape[1], order=order)
+    runs = []
+    r = 0
+    pos = 1
+    for c in bytes:
+        if c == 0:
+            if r != 0:
+                runs.append((pos, r))
+                pos += r
+                r = 0
+            pos += 1
+        else:
+            r += 1
 
-start = datetime.now()
+    if r != 0:
+        runs.append((pos, r))
+        pos += r
 
-# initialize ourselves a learner
-learner = gradient_descent(alpha, beta, L1, L2, D, interaction)
+    z = ''
+    for rr in runs:
+        z += str(rr[0]) + ' ' + str(rr[1]) + ' '
+    return z[:-1]
 
-# start training
-print('Training Learning started; total 150k training samples')
-for e in range(epoch):
-    loss = 0.
-    count = 0
-    for t,  x, y in data(train, D):  # data is a generator
 
-        p = learner.predict(x)
-        loss += logloss(p, y)
-        learner.update(x, p, y)
-        count+=1
-        if count%15000==0:
-            print('%s\tencountered: %d\tcurrent logloss: %f' % (datetime.now(), count, loss/count))
+def find_best_mask():
+    files = glob.glob(os.path.join("..", "input", "train", "*_mask.tif"))
+    overall_mask = cv2.imread(files[0], cv2.IMREAD_GRAYSCALE)
+    overall_mask.fill(0)
+    overall_mask = overall_mask.astype(np.float32)
 
-#import pickle
-#pickle.dump(learner,open('sgd_adapted_learning.p','w'))
+    for fl in files:
+        mask = cv2.imread(fl, cv2.IMREAD_GRAYSCALE)
+        overall_mask += mask
+    overall_mask /= 255
+    max_value = overall_mask.max()
+    koeff = 0.5
+    overall_mask[overall_mask < koeff * max_value] = 0
+    overall_mask[overall_mask >= koeff * max_value] = 255
+    overall_mask = overall_mask.astype(np.uint8)
+    return overall_mask
 
-##############################################################################
-# start testing, and build Kaggle's submission file ##########################
-##############################################################################
-count=0
-print('Testing started; total 150k test samples')
-with open(submission, 'w') as outfile:
-    outfile.write('ID,target\n')
-    for  ID, x, y in data(test, D):
-        count+=1
-        if count%15000==0:
-            print('%s\tencountered: %d' % (datetime.now(), count))
-        p = learner.predict(x)
-        outfile.write('%s,%s\n' % (ID, str(p)))
+
+def create_submission(predictions, test_id, info):
+    sub_file = os.path.join('submission_' + info + '_' + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")) + '.csv')
+    subm = open(sub_file, "w")
+    mask = find_best_mask()
+    encode = rle_encode(mask)
+    subm.write("img,pixels\n")
+    for i in range(len(test_id)):
+        subm.write(str(test_id[i]) + ',')
+        if predictions[i][1] > 0.5:
+            subm.write(encode)
+        subm.write('\n')
+    subm.close()
+
+
+def get_empty_mask_state(mask):
+    out = []
+    for i in range(len(mask)):
+        if mask[i].sum() == 0:
+            out.append(0)
+        else:
+            out.append(1)
+    return np.array(out)
+
+
+def read_and_normalize_train_data(img_rows, img_cols):
+    train_data, train_target, train_id = load_train(img_rows, img_cols)
+    train_data = np.array(train_data, dtype=np.uint8)
+    train_target = np.array(train_target, dtype=np.uint8)
+    train_data = train_data.reshape(train_data.shape[0], 1, img_rows, img_cols)
+    # Convert to 0 or 1
+    train_target = get_empty_mask_state(train_target)
+    train_target = np_utils.to_categorical(train_target, 2)
+    train_data = train_data.astype('float32')
+    train_data /= 255
+    print('Train shape:', train_data.shape)
+    print(train_data.shape[0], 'train samples')
+    return train_data, train_target, train_id
+
+
+def read_and_normalize_test_data(img_rows, img_cols):
+    test_data, test_id = load_test(img_rows, img_cols)
+    test_data = np.array(test_data, dtype=np.uint8)
+    test_data = test_data.reshape(test_data.shape[0], 1, img_rows, img_cols)
+    test_data = test_data.astype('float32')
+    test_data /= 255
+    print('Test shape:', test_data.shape)
+    print(test_data.shape[0], 'test samples')
+    return test_data, test_id
+
+
+def merge_several_folds_mean(data, nfolds):
+    a = np.array(data[0])
+    for i in range(1, nfolds):
+        a += np.array(data[i])
+    a /= nfolds
+    return a.tolist()
+
+
+def create_model(img_rows, img_cols):
+    model = Sequential()
+    model.add(Convolution2D(4, 3, 3, border_mode='same', init='he_normal',
+                            input_shape=(1, img_rows, img_cols)))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.15))
+
+    model.add(Convolution2D(8, 3, 3, border_mode='same', init='he_normal'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.15))
+
+    model.add(Flatten())
+    model.add(Dense(2))
+    model.add(Activation('softmax'))
+
+    sgd = SGD(lr=1e-3, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(optimizer=sgd, loss='categorical_crossentropy')
+    return model
+
+
+def get_validation_predictions(train_data, predictions_valid):
+    pv = []
+    for i in range(len(train_data)):
+        pv.append(predictions_valid[i])
+    return pv
+
+
+def getPredScorePercent(train_target, train_id, predictions_valid):
+    perc = 0
+    for i in range(len(train_target)):
+        pred = 1
+        if predictions_valid[i][0] > 0.5:
+            pred = 0
+        real = 1
+        if train_target[i][0] > 0.5:
+            real = 0
+        if real == pred:
+            perc += 1
+    perc /= len(train_target)
+    return perc
+
+
+def run_cross_validation(nfolds=10):
+    img_rows, img_cols = 32, 32
+    batch_size = 32
+    nb_epoch = 50
+    random_state = 51
+
+    train_data, train_target, train_id = read_and_normalize_train_data(img_rows, img_cols)
+    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols)
+
+    yfull_train = dict()
+    yfull_test = []
+    kf = KFold(len(train_data), n_folds=nfolds, shuffle=True, random_state=random_state)
+    num_fold = 0
+    sum_score = 0
+    for train_index, test_index in kf:
+        model = create_model(img_rows, img_cols)
+        X_train, X_valid = train_data[train_index], train_data[test_index]
+        Y_train, Y_valid = train_target[train_index], train_target[test_index]
+
+        num_fold += 1
+        print('Start KFold number {} from {}'.format(num_fold, nfolds))
+        print('Split train: ', len(X_train), len(Y_train))
+        print('Split valid: ', len(X_valid), len(Y_valid))
+
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=2, verbose=0),
+        ]
+        model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch,
+              shuffle=True, verbose=2, validation_data=(X_valid, Y_valid),
+              callbacks=callbacks)
+
+        predictions_valid = model.predict(X_valid, batch_size=batch_size, verbose=1)
+        score = log_loss(Y_valid, predictions_valid)
+        print('Score log_loss: ', score)
+
+        # Store valid predictions
+        for i in range(len(test_index)):
+            yfull_train[test_index[i]] = predictions_valid[i]
+
+        # Store test predictions
+        test_prediction = model.predict(test_data, batch_size=batch_size, verbose=2)
+        yfull_test.append(test_prediction)
+
+    predictions_valid = get_validation_predictions(train_data, yfull_train)
+    score = log_loss(train_target, predictions_valid)
+    print("Log_loss train independent avg: ", score)
+
+    print('Final log_loss: {}, rows: {} cols: {} nfolds: {} epoch: {}'.format(score, img_rows, img_cols, nfolds, nb_epoch))
+    perc = getPredScorePercent(train_target, train_id, predictions_valid)
+    print('Percent success: {}'.format(perc))
+
+    info_string = 'loss_' + str(score) \
+                    + '_r_' + str(img_rows) \
+                    + '_c_' + str(img_cols) \
+                    + '_folds_' + str(nfolds) \
+                    + '_ep_' + str(nb_epoch)
+
+    test_res = merge_several_folds_mean(yfull_test, nfolds)
+    create_submission(test_res, test_id, info_string)
+
+
+if __name__ == '__main__':
+    run_cross_validation(10)

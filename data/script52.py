@@ -1,63 +1,112 @@
 
 # coding: utf-8
 
-# # Where to Start
-# **This best starting point for most users is [Kaggle Learn](https://www.kaggle.com/learn)**.  This list was created before Kaggle Learn was launched, but **[this](https://www.kaggle.com/learn)** is the best and most up-to-date resource about learning data science on Kaggle.
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+print(check_output(["ls", "../input/porto-seguros-safe-driver-noisy-features"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# This notebook displays the results of a search for noisy features. This search has been carried out using Light GBM in RandomForest mode (to avoid the hassle of *how many rounds fo I need to run ?* )
 # 
-# # Python Based
+# The file noisy_feature_check_results.csv contains the average importances of each feature and their corresponding *shadows* over 30 runs. Standard deviation of the importances is also available.
 # 
-# ### Learn Machine Learning: Intro
-# | Name  | Description
-# |:----- |:-----|
-# | [How Models Work](https://www.kaggle.com/dansbecker/how-models-work)  |  The first step if you are new to machine learning
-# | [Starting Your ML Project](https://www.kaggle.com/dansbecker/starting-your-ml-project) | Loading data, and setting up your computing environment for your hands-on project
-# | [Selecting and Filtering Data in Pandas](https://www.kaggle.com/dansbecker/selecting-and-filtering-in-pandas) | Getting your data ready for modeling
-# | [Running Your First Model](https://www.kaggle.com/dansbecker/your-first-scikit-learn-model) | Building your first model. Hurray!
-# | [Model Validation](https://www.kaggle.com/dansbecker/model-validation) | Measuring the performance of your model. This opens up the possibilities for trying and comparing alternative models
-# | [Underfitting, Overfitting and Model Optimization](https://www.kaggle.com/dansbecker/underfitting-overfitting-and-model-optimization) | Fine-tune your model for better performance.
-# | [Random Forests](https://www.kaggle.com/dansbecker/random-forests) | Using a more sophisticated machine learning algorithm.
-# | [Submitting To A Competition](https://www.kaggle.com/dansbecker/submitting-from-a-kernel) | Take pride in what you've built, and start tracking your ongoing progress through a Kaggle Competition.
+# Shadows are simply shuffled copies of real features. Comparing features to their shadows is an easy way to assess their genuine forecasting power. This is extensively used in Boruta packages (python and R)
 # 
+# For information, Python Boruta packages has selected the following features (the rest is considered noise !!!):
+# - ps_ind_01
+# - ps_ind_03
+# - ps_ind_05_cat
+# - ps_ind_07_bin
+# - ps_ind_15
+# - ps_ind_16_bin
+# - ps_reg_01
+# - ps_reg_02
+# - ps_reg_03
+# - ps_car_01_cat
+# - ps_car_03_cat
+# - ps_car_07_cat
+# - ps_car_12
+# - ps_car_13
+# - ps_car_14
+# - ps_car_15
 # 
-# ### Learn Machine Learning: Intermediate
-# | Name  | Description
-# |:----- |:-----|
-# | [Handling Missing Values](https://www.kaggle.com/dansbecker/handling-missing-values)  |  Learn multiple approaches for dealing with missing data fields
-# | [Using Categorical Data](https://www.kaggle.com/dansbecker/using-categorical-data-with-one-hot-encoding) | Handle this important but challenging data type
-# | [Gradient Boosting with XGBoost](https://www.kaggle.com/dansbecker/learning-to-use-xgboost/) | The most important technique for building high-performance models on conventional data (the type that fits in tables or data frames.
-# | [Partial Dependence Plots](https://www.kaggle.com/dansbecker/partial-dependence-plots/) | Extract insights from your models. Insights many didn't even realize were possible.
-# | [Scikit-Learn Pipelines](https://www.kaggle.com/dansbecker/pipelines/) | Make your machine learning code cleaner and more professional
-# | [Cross-Validation](https://www.kaggle.com/dansbecker/cross-validation) |Improve how you compare and choose models and data preprocessing
-# | [Data Leakage](https://www.kaggle.com/dansbecker/data-leakage/) | Identify and avoid one of the most common and costly mistakes in machine learning.
+# The classifier used for the task is a LGBMClassifier with the following parameters:
+# * boosting_type="rf",
+# * num_leaves=1024,
+# * max_depth=6,
+# * n_estimators=500,
+# * subsample=.623,
+# * colsample_bytree=.5
 # 
-# ### Other
-# | Name  | Approx Length (Minutes) | Pre-Reqs | Description
-# |:----- |:-----:|:----- |:----- |:-----|
-# | [A Whirlwind Tour of Python](https://www.kaggle.com/sohier/whirlwind-tour-of-python-index) | Flexible | | An introduction to the Python language. From excellent book by Jake VanderPlas |
-# | [Learn Machine Learning](https://www.kaggle.com/dansbecker/learn-machine-learning) | | **The best starting point for learning machine learning**
-# | [Merging Multiple Datasets](https://www.kaggle.com/crawford/python-merge-tutorial) |  30 | Basic knowledge of Pandas | A critical skill for real-world data science 
-# | [Pandas Groupby Command](https://www.kaggle.com/crawford/python-groupby-tutorial) |  30 | See statistics for different subgroups in data. Also key to combining different types of data.
-# | [Regular Expressions](https://www.kaggle.com/sohier/introduction-to-regular-expressions) | 30 | | A powerful tool for working with text data
-# | [Basic Network Analysis](https://www.kaggle.com/crailtap/basic-network-analysis-tutorial) | 60 | Linear Algebra |  Unique branch of data science with applications to social networks, transportation and more.
-# | [Starting Kit for PyTorch Deep Learning](https://www.kaggle.com/mratsim/starting-kit-for-pytorch-deep-learning) | 45 | Intro to Data Science | Computer vision (convolutional networks) with PyTorch
-# | [Getting Started with TensorFlow](https://www.kaggle.com/fuzzyfroghunter/getting-started-with-tensorflow) | 45 | Intro to Data Science | Computer vision (convolutional networks) with TensorFlow
+# Now let's review some results
+
+# In[ ]:
+
+
+results = pd.read_csv("../input/porto-seguros-safe-driver-noisy-features/noisy_feature_check_results.csv")
+
+
+# Show the best scoring features
+
+# In[ ]:
+
+
+results.sort_values(by="importance_mean", ascending=False, inplace=True)
+results.dropna(axis=0, inplace=True)
+results.head(10)
+
+
+# In[ ]:
+
+
+good_to_go = []
+doubt = []
+suspicious = []
+rejected = []
+for feature in results.feature.unique():
+    sha_mean, sha_dev = results.loc[(results["feature"] == feature) 
+                                    & (results["process"] == "Shadow"), ["importance_mean", "importance_std"]].values[0]
+    id_mean, id_dev = results.loc[(results["feature"] == feature) 
+                                    & (results["process"] == "Identity"), ["importance_mean", "importance_std"]].values[0]
+    if sha_mean >= id_mean:
+        rejected.append((feature, id_mean, sha_mean))
+    elif sha_mean + sha_dev >= id_mean:
+        suspicious.append((feature, id_mean, sha_mean))
+    elif sha_mean + sha_dev >= id_mean - id_dev:
+        doubt.append((feature, id_mean, sha_mean))
+    else:
+        good_to_go.append((feature, id_mean, sha_mean))
+
+print("Good features (%d)" % len(good_to_go))
+for f, score, sha in good_to_go:
+    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
+print("Doubts (%d)" % len(doubt))
+for f, score, sha in doubt:
+    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
+print("Suspicious features (%d)" % len(suspicious))
+for f, score, sha in suspicious:
+    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
+print("Rejected features (%d)" % len(rejected))
+for f, score, sha in rejected:
+    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
+        
+
+
+# Features kept by Boruta are also kept by my feature selection process.
 # 
-# ---
-# 
-# # R Based
-# | Name  | Approx Length (Minutes) | Pre-Reqs | Description
-# |:----- |:-----:|:----- |:----- |:-----|
-# | [Getting staRted in R: First Steps](https://www.kaggle.com/rtatman/getting-started-in-r-first-steps/) | 120 | Minimal programming experience |  Intro to the language, loading data, basic manipulation and graphing
-# | [Reading JSON data](https://www.kaggle.com/rtatman/reading-json-data-into-r) | 15 | Getting StaRted in R |  The first step when your data comes in .json files
-# | [Joyplots](https://www.kaggle.com/rtatman/joyplots-tutorial-with-insect-data) | 20 | Getting StaRted in R |  Make some very cool looking graphs
-# | [Tidy TitaRnic](https://www.kaggle.com/headsortails/tidy-titarnic/notebook) | 30 | Getting StaRted in R | Introduction to the important Tidyverse set of R libraries
-# | [Word Tokenization](https://www.kaggle.com/rtatman/tokenization-tutorial) | 20 | Getting StaRted in R |  A first step towards working with text
-# | [Getting N-Grams](https://www.kaggle.com/rtatman/tutorial-getting-n-grams) | 30 | Word Tokenization |  Use word groupings for better natural language processing
-# | [Sentiment Analysis](https://www.kaggle.com/rtatman/tutorial-sentiment-analysis-in-r/) | 60 | Word Tokenization | Analyze the positive or negative sentiments in text. A key application in natural language processing.
-# 
-# 
-# *Notes*
-# - *Many lessons include hands-on coding exercises. Lengths include time to complete exercises at average pace*.
-# - *Prior knowledge can replace listed pre-reqs*
-# 
-# **Want a different approach to learning that jumps in with guided exercises?  Work through the [5-day Challenge](https://www.kaggle.com/rtatman/the-5-day-data-challenge/)**
+# I you find this note useful please upvote.

@@ -1,397 +1,299 @@
 
 # coding: utf-8
 
-# # GPU EDA
-# 
-# **_2017-09-24_**
-# 
-# * [1.0 Introduction](#introduction)
-#     * [1.1 Import packages](#import-packages)
-#     * [1.2 Import data](#import-data)
-#     * [1.3 Preprocessing and feature engineering](#preprocessing)
-# * [2.0 Release dates](#release-dates)
-# * [3.0 Resolution and 4k support](#resolution)
-# * [4.0 Manufacturers](#manufacturers)
-# * [5.0 Metrics by year](#metrics)
-#     * [5.1 Core speed](#core-speed)
-#     * [5.2 Memory](#memory)
-#     * [5.3 Memory speed and bandwidth](#memory-speed)
-#     * [5.4 Max power](#max-power)
-#     * [5.5 Number of texture mapping units (TMU)](#tmu)
-#     * [5.6 Texture Rate](#texture-rate)
-#     * [5.7 Pixel Rate](#pixel-rate)
-#     * [5.8 Process](#process)
-#     * [5.9 Price](#price)
-# * [6.0 Price/performance ratios](#ratios)
-# * [7.0 GTX 1080](#gtx)
-# * [8.0 Conclusion](#conclusion)
-
-# ## 1.0 Introduction <a class="anchor" id="introduction"></a>
-# Comprehensive analysis of GPU models over time, by price, max resolution, and various performance metrics. Please upvote if you like it, this notebook took time to compose. Any feedback a is also appreciated.
-
-# ### 1.1 Import packages <a class="anchor" id="import-packages"></a>
-
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import pylab
+import seaborn as sns
 
 
-# ### 1.2 Import data <a class="anchor" id="import-data"></a>
-
-# In[ ]:
-
-
-df = pd.read_csv('../input/All_GPUs.csv')
-
-
-# ### 1.3 Preprocessing and feature engineering <a class="anchor" id="preprocessing"></a>
-
-# In[ ]:
-
-
-#Convert release dates to useable format
-df['Release_Date']=df['Release_Date'].str[1:-1]
-df=df[df['Release_Date'].str.len()==11]
-df['Release_Date']=pd.to_datetime(df['Release_Date'], format='%d-%b-%Y')
+plt.style.use('fivethirtyeight')
+get_ipython().run_line_magic('matplotlib', 'inline')
+pylab.rcParams['figure.figsize'] = (10.0, 8.0)
 
 
 # In[ ]:
 
 
-#Convert memory bandwidths to GB/s
-s=df['Memory_Bandwidth']
-s[(s.notnull()==True)&(s.str.contains('MB'))]=s[(s.notnull()==True)&(s.str.contains('MB'))].str[:-6].astype(int)/1000
-s[(s.notnull()==True)&(s.str.contains('GB'))]=s[(s.notnull()==True)&(s.str.contains('GB'))].str[:-6].astype(float)
-df['Memory_Bandwidth']=s
-
-
-# In[ ]:
-
-
-#Drop units from core_speed
-df.Core_Speed=df.Core_Speed.str[:-4]
-df.Core_Speed=df.Core_Speed.replace('',np.NaN)
-
-# Create year/month/quarter features from release_date
-df['Release_Price']=df['Release_Price'].str[1:].astype(float)
-df['Release_Year']=df['Release_Date'].dt.year
-df['Release_Quarter']=df['Release_Date'].dt.quarter
-df['Release_Month']=df['Release_Date'].dt.month
-
-
-# Brief look at the first few rows of the dataset:
-
-# In[ ]:
-
-
+df = pd.read_csv("../input/multipleChoiceResponses.csv", encoding="ISO-8859-1")
 df.head()
 
 
-# ## 2.0 Release dates<a class="anchor" id="release-dates"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Release_Month'].groupby(df['Release_Month']).count().plot(kind='bar')
-plt.title('Resolution counts')
-plt.xlabel('Release Month')
-plt.ylabel('Count of GPU releases')
-plt.show()
-
-
-# The modal month for releasing GPU models is June. December and July are low frequency release months.
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Release_Year'].groupby(df['Release_Year']).count().plot(kind='bar')
-plt.title('Count of model releases')
-plt.xlabel('Release Year')
-plt.ylabel('GPU model releases')
-plt.show()
-
-
-# The modal year for number of models of GPU released was 2012. Remember this doesn't mean quantity of sales, only number of models released in a year. Anecdotally more GPUs have been sold in recent years with fewer models to choose from.
+# > # Exploratory Analysis
 # 
-# ## 3.0 Resolution and 4K Support<a class="anchor" id="resolution"></a>
-
-# In[ ]:
-
-
-res=['1920 x 1080', '1600 x 900','1366 x 768','2560 x 1440','2560 x 1600', '1024 x 768', '3840 x 2160']
-plt.figure(figsize=(13,6))
-for i in res:
-        df[df['Best_Resolution']==i]['Best_Resolution'].groupby(df['Release_Year']).count().plot(kind='line')
-plt.title('Resolution counts')
-plt.xlabel('Release Year')
-plt.ylabel('Count of GPU releases')
-plt.legend(res)
-plt.show()
-
-
-# 1024 x 768 best resolution was most popular from 2002  until 2008 when 1366 x 768 took over. No new GPUs came out with a highest resolution capacity of 1024 x 768 after 2014. 4k support (3840 x 2160) was first introduced in 2013 and increased dramatically in 2017 as it replaced 2560x1600 as the highest resolution capacity.
 # 
-# ## 4.0 Manufacturers<a class="anchor" id="manufacturers"></a>
+
+# # 1. Gender
+
+# ## Missing Values
 
 # In[ ]:
 
 
-plt.figure(figsize=(12, 12))
-df['Manufacturer'].value_counts().plot(kind='pie')
+len(df[pd.isnull(df.GenderSelect)])
 
 
-# Nvidia dominates in terms of number of models released
-
-# In[ ]:
-
-
-manufacturers=df['Manufacturer'].unique()
-plt.figure(figsize=(13, 6))
-for i in manufacturers:
-      df[df['Manufacturer']==i]['Manufacturer'].groupby(df['Release_Year']).count().plot(kind='line')
-plt.title('Manufacturer counts by release year')
-plt.xlabel('Release Year')
-plt.ylabel('Count of GPU releases')
-plt.legend(manufacturers)
-plt.show()
-
-
-# Nvidia/AMD war in terms of models released (could be interpreted as market share) was close until around 2013 when Nvidia started to nudge ahead. Intel have fallen off in the last couple of years. AMD took a serious drop in 2016 but have released many GPUs in the first part of 2017. 
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-sns.kdeplot(df[df['Release_Year']==2012]['Release_Price'])
-sns.kdeplot(df[df['Release_Year']==2013]['Release_Price'])
-sns.kdeplot(df[df['Release_Year']==2014]['Release_Price'])
-sns.kdeplot(df[df['Release_Year']==2015]['Release_Price'])
-sns.kdeplot(df[df['Release_Year']==2016]['Release_Price'])
-plt.title('Price distributions by year')
-plt.xlabel('Price')
-plt.legend(['2012','2013','2014','2015','2016'])
-plt.xlim(-100,1500)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-sns.kdeplot(df[(df['Manufacturer']=='Nvidia')&(df['Release_Price']<2000)]['Release_Price'])
-#excluding expensive GPU from Nvidia, see section 5.9
-sns.kdeplot(df[df['Manufacturer']=='AMD']['Release_Price'])
-sns.kdeplot(df[df['Manufacturer']=='ATI']['Release_Price'])
-plt.title('Price distributions by manufacturer')
-plt.xlabel('Price')
-plt.legend(['Nvidia','AMD','ATI'])
-
-
-# Nvidia have a wider distribution than other manufacturers and have strong market share above 400 dollars. Nvidia is known for high quality, high end GPUs. AMD tends to cover the 50-300 dollar budget. ATI have a very specific niche in the market at approx 250 dollars.
+# ## Distribution of Respondents by Gender across all countries
 # 
-# ## 5.0 Performance by year<a class="anchor" id="performance"></a>
-# ### 5.1 Core speed  <a class="anchor" id="core-speed"></a>
+# The proportion of males is markedly higher than that of females while the representation of other genders is very miniscule.
 
 # In[ ]:
 
 
-plt.figure(figsize=(13, 6))
-df['Core_Speed'].fillna(0).astype(int).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Core_Speed'].fillna(0).astype(int).groupby(df['Release_Year']).max().plot(kind='line')
-plt.title('Core speed in MHz by release year')
-plt.xlabel('Release year')
-plt.ylabel('Core speed MHz')
-plt.legend(['Mean','Max'])
-plt.xlim(2004,2016)
-plt.show()
+plot = df[df.GenderSelect.isnull() == False].groupby(df.GenderSelect).GenderSelect.count().plot.bar()
+plot = plt.title("Number of Respondents by Gender")
 
+
+# ## Which Country has the highest ratio of Female/Male Respondents
 
 # In[ ]:
 
 
-print(df.ix[df['Core_Speed'].fillna(0).astype(int).idxmax()][['Name','Core_Speed']])
-
-
-# The most performant card in this dataset in terms of core speed is the GeForce GTX 1080 Asus ROG Strix Gaming OC 8GB, at 1784 MHz.
-# 
-# ### 5.2 Memory  <a class="anchor" id="memory"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Memory'].str[:-3].fillna(0).astype(int).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Memory'].str[:-3].fillna(0).astype(int).groupby(df['Release_Year']).median().plot(kind='line')
-plt.title('Memory in MB by release year')
-plt.xlabel('Release year')
-plt.ylabel('Memory MB')
-plt.legend(['Mean','Median'])
-plt.show()
-
-
-# ### 5.3 Memory speed and bandwidth  <a class="anchor" id="memory-speed"></a>
-
-# In[ ]:
-
-
-fig, ax1=plt.subplots(figsize=(13,6))
-ax = df['Memory_Bandwidth'].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(kind='line', zorder=9999); 
-df['Memory_Speed'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(ax=ax, kind='line',secondary_y=True)
-ax.set_ylabel('Memory Speed MHz', fontsize=10);
-
-plt.title('Mean memory bandwidth and speed by release year')
-plt.xlabel('Release year')
-plt.ylabel('Memory bandwidth GB/sec')
-plt.show()
-
-
-# ### 5.4 Max power <a class="anchor" id="max-power"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Max_Power'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Max_Power'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).median().plot(kind='line')
-plt.title('Maximum power capacity of GPU in Watts by release year')
-plt.xlabel('Release year')
-plt.ylabel('Max power Watts')
-plt.legend(['Mean','Median'])
-plt.show()
-
-
-# ### 5.5 Number of texture mapping units<a class="anchor" id="tmu"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['TMUs'].groupby(df['Release_Year']).mean().plot(kind='line')
-df['TMUs'].groupby(df['Release_Year']).max().plot(kind='line')
-plt.title('TMU value by release year')
-plt.legend(['Mean','Max'])
-plt.xlabel('Release year')
-plt.ylabel('TMU value')
-plt.xlim(2001,)
-plt.show()
-
-
-# ### 5.6 Texture Rate<a class="anchor" id="texture-rate"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Texture_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Texture_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).median().plot(kind='line')
-plt.title('Texture rate by release year')
-plt.legend(['Mean','Median'])
-plt.xlabel('Release year')
-plt.ylabel('Texture rate GTexel/s')
-plt.xlim(2001,)
-plt.show()
-
-
-# ### 5.7 Pixel Rate<a class="anchor" id="pixel-rate"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).median().plot(kind='line')
-df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).max().plot(kind='line')
-
-plt.title('Pixel rate by release year')
-plt.legend(['Mean','Median','Max'])
-plt.xlabel('Release year')
-plt.ylabel('Texture rate')
-plt.xlim(2001,)
-plt.show()
-
-
-# ### 5.8 Process<a class="anchor" id="process"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Process'].str[:-2].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
-df['Process'].str[:-2].astype(float).groupby(df['Release_Year']).min().plot(kind='line')
-plt.title('Process by release year')
-plt.legend(['Mean','Min'])
-plt.xlabel('Release year')
-plt.ylabel('Process Nm')
-plt.xlim(2001,)
-plt.show()
-
-
-# ### 5.9 Price<a class="anchor" id="price"></a>
-
-# In[ ]:
-
-
-plt.figure(figsize=(13, 6))
-df['Release_Price'].groupby(df['Release_Year']).mean().plot(kind='line')
-df['Release_Price'].groupby(df['Release_Year']).median().plot(kind='line')
-plt.title('Price by release year')
-plt.legend(['Mean','Median'])
-plt.xlabel('Release year')
-plt.ylabel('Price $')
-plt.xlim(2006,)
-plt.show()
+filtered_df = df[(df.GenderSelect.isnull() == False) & (df.Country.isnull() == False)]
 
 
 # In[ ]:
 
 
-print(df.ix[df['Release_Price'].fillna(0).astype(int).idxmax()][['Name','Release_Price','Release_Year']])
+def getFemaleMaleRatio(df):
+    counts_by_gender = df.groupby('GenderSelect').GenderSelect.count()
+    return counts_by_gender[0]/counts_by_gender[1]
 
-
-# The most expensive card in the dataset is the Quadro Plex 7000, at $15k. This was one of the first GPUs with 4k support.
-# 
-# ## 6.0 Price/performance ratios<a class="anchor" id="ratios"></a>
 
 # In[ ]:
 
 
-plt.figure(figsize=(13, 6))
-df['Ratio_Rate']=df['Release_Price']/(df['Texture_Rate'].str[:-9].fillna(0).astype(int))
-df['Ratio_Speed']=df['Release_Price']/(df['Memory_Speed'].str[:-5].fillna(0).astype(int))
-df['Ratio_BW']=df['Release_Price']/(df['Memory_Bandwidth'].fillna(0).astype(int))
-df['Ratio_Memory']=df['Release_Price']/(df['Memory'].str[:-3].fillna(0).astype(int))
-
-df['Ratio_Memory'].groupby(df['Release_Year']).median().plot(kind='line')
-df['Ratio_BW'].groupby(df['Release_Year']).median().plot(kind='line')
-df['Ratio_Speed'].groupby(df['Release_Year']).median().plot(kind='line')
-df['Ratio_Rate'].groupby(df['Release_Year']).median().plot(kind='line')
-plt.title('Price/performance ratio')
-plt.legend(['Texture_Rate','Memory_Speed','Memory_Bandwidth','Memory'])
-plt.xlabel('Release year')
-plt.ylabel('Price to metric ratio')
-plt.xlim(2005,)
-plt.show()
+group_by_country = filtered_df.groupby(df.Country)
+ratios = group_by_country.apply(getFemaleMaleRatio)
+print("Maximum Female/Male Ratio: ", ratios.idxmax(), ratios.max())
+print("Minimum Female/Male Ratio: ", ratios.idxmin(), ratios.min())
 
 
-# As we saw in section 5, the performance metrics have increased over time but the price has remained generally stable. This means price/performance ratios decrease over time and that you essentially get more performance for less money.
-# 
-# ## 7.0 GTX 1080<a class="anchor" id="gtx"></a>
+# ##  Distribution of Ages of Males and Females
+# The shape of the distributions of ages for both male and female are very similar although the size differs markedly. There also seem to be no women datscientists in the 60+ age bracket, while there are quite a few men in that bracket
 
 # In[ ]:
 
 
-print(len(df[df.Name.str.contains('GTX 1080')]['Name']))
+fig, ax = plt.subplots()
+df[df.GenderSelect == 'Male'].Age.plot.hist(bins=100, ax=ax, alpha=0.5)
+df[df.GenderSelect == 'Female'].Age.plot.hist(bins=100, ax=ax, alpha=0.8)
+legend = ax.legend(['Male', 'Female'])
+plot = plt.title("Age distribution for Male and Female Data Scientists")
 
 
-# There are 76 model variations of the Nvidia GTX 1080.
-# 
-# ## 8.0 Conclusion<a class="anchor" id="conclusion"></a>
-# 
-# This EDA has shown the strong increase in GPU performance over recent years, but median prices stay approximately constant at ~250$, even despite inflation. Some metrics such as memory seem to be exponentially increasing. Price/performance ratios show that higher performance has generally gotten cheaper in the last few years and continues to decrease.
-# 
-# It seems the maximum values in 2017 for performance metrics are less than previous years. One reason for this could perhaps be the move to research grade GPUs and TPUs for very high performance which aren't included in this dataset e.g. Tesla K80, P100. An update to the dataset over time to include these for analysis would be interesting.
+# ## Distribution of Ages of Men and Women above 60
+# It might be interesting to see why there are so few women respondents above the age of 60
+
+# In[ ]:
+
+
+fig, ax = plt.subplots()
+df[(df.GenderSelect == 'Male') & (df.Age > 60)].Age.plot.hist(ax=ax, alpha=0.5)
+df[(df.GenderSelect == 'Female') & (df.Age > 60)].Age.plot.hist(ax=ax, alpha=0.8)
+legend = ax.legend(['Male', 'Female'])
+plot = plt.title("Age Distribution for Male and Female Data Scientists above 60 years of age")
+
+
+# ## Distribution of Ages of Male & Female Students
+# - Again, the shapes of the distributions are similar for males and females
+# - However, there are no female students above the age of 38, although there are male students as old as 50 years of age 
+
+# In[ ]:
+
+
+fig, ax = plt.subplots()
+df[(df.GenderSelect == 'Male') & (df.StudentStatus == 'Yes')].Age.plot.hist(bins=30, ax=ax, alpha=0.5)
+df[(df.GenderSelect == 'Female') & (df.StudentStatus == 'Yes')].Age.plot.hist(bins=30, ax=ax, alpha=0.8)
+legend = ax.legend(['Male', 'Female'])
+plot = plt.title("Age Distribution for Male and Female Student Respondents")
+
+
+# ## Relationship between Employment Status and Gender
+# - It may not make sense to look at the absolute numbers of people here as we already know that the number of male respondents is much higher than the number of other gender respondents. 
+
+# In[ ]:
+
+
+counts_by_gender = df.groupby([df.GenderSelect, df.EmploymentStatus]).size().reset_index(name="Total")
+
+
+# In[ ]:
+
+
+n_male = len(df[df.GenderSelect == "Male"])
+n_female = len(df[df.GenderSelect == "Female"])
+n_diff_identity = len(df[df.GenderSelect == "A different identity"])
+n_other = len(df[df.GenderSelect == "Non-binary, genderqueer, or gender non-conforming"])
+print(n_male, n_female, n_diff_identity, n_other)
+
+
+# In[ ]:
+
+
+counts_by_gender_plot = counts_by_gender.pivot("GenderSelect", "EmploymentStatus", "Total")
+ax = sns.heatmap(counts_by_gender_plot, linewidths=.5, cmap="Blues")
+plot = plt.title("Heatmap of Absolute number of people across Gender & Employment Status")
+
+
+# ## Relative number of People (within their gender group) across Different Employment Statuses
+# - Note: The proportions here are calculated across each gender(each row)
+# - It seems like the major proportion of people(looks like around 60%) across all genders are Employed full-time. 
+# - Their is a *slightly* higher proportion of Women who are in the "Currently Employed and Looking for Work" bracket as compared to other Gender groups
+# - Reference: https://stackoverflow.com/questions/23377108/pandas-percentage-of-total-with-groupby
+
+# In[ ]:
+
+
+relative_counts = df.groupby([df.GenderSelect, df.EmploymentStatus]).size().groupby(level=0).apply(lambda x:
+                                                 100 * x / float(x.sum())).reset_index(name="percentage")
+
+
+# In[ ]:
+
+
+relative_counts_by_gender_plot = relative_counts.pivot("GenderSelect", "EmploymentStatus", "percentage")
+ax = sns.heatmap(relative_counts_by_gender_plot, linewidths=.5, cmap="Blues")
+plot = plt.title("Heatmap of Relative number of people across Gender who are in each Employment Category")
+
+
+# ## What Kind of Jobs are most common amongst men and women data scientists?
+# - Since there are significantly more men in this sample it is expected that there will be a higher number of men in all the fields as compared to other genders
+# - It would be interesting to see if there are relatively more women/men in a particular field - Do women or men like to identify more with specific job titles?
+
+# In[ ]:
+
+
+jobs_by_gender = df[["GenderSelect", "CurrentJobTitleSelect"]].groupby([df.CurrentJobTitleSelect, df.GenderSelect]).size().reset_index(name="number")
+
+
+# In[ ]:
+
+
+from matplotlib import pyplot
+
+chart = sns.factorplot(x='CurrentJobTitleSelect', y='number', hue='GenderSelect', data=jobs_by_gender, kind='bar', size=15, aspect=2, legend=False)
+for ax in plt.gcf().axes:
+    ax.set_xlabel("Job Title", fontsize=35)
+    ax.set_ylabel("Count", fontsize=35)
+
+for ax in chart.axes.flatten(): 
+    ax.set_xticklabels(ax.get_xticklabels(),rotation=90, fontsize=25) 
+    ax.set_yticklabels(ax.get_yticklabels(),rotation=0, fontsize=25) 
+
+plot = plt.legend(loc='upper left',  prop={'size': 20})
+plot = plt.title("Number of people with Different Job Titles by Gender", fontsize=30)
+
+
+# ## What is the relative proportion of people with each job title by gender?
+# - The highest proportion of females with any job title reported is "Researcher" while the lowest proportion is "Software Developer/Software Engineer". 
+# - The highest proportion of Other Gender people with any job title is "Operations Research Practitioner"
+
+# In[ ]:
+
+
+relative_jobs_by_gender = df[["GenderSelect", "CurrentJobTitleSelect"]].groupby([df.CurrentJobTitleSelect, df.GenderSelect]).size().groupby(level=0).apply(lambda x:
+                                                 100 * x / float(x.sum())).reset_index(name="percentage")
+
+
+# In[ ]:
+
+
+values = relative_jobs_by_gender.groupby([relative_jobs_by_gender.CurrentJobTitleSelect, relative_jobs_by_gender.GenderSelect]).percentage.sum().unstack()
+values = values[['Male', 'Female', 'A different identity', 'Non-binary, genderqueer, or gender non-conforming']]
+values = values.sort_values(by=values.columns[0], axis=0)
+
+
+# In[ ]:
+
+
+plot = values.plot.bar(stacked=True)
+plot = plt.title("Relative Number of people from each gender within a job title")
+
+
+# ## Income analysis by Gender
+
+# ### Cleaning
+# - Remove commas if present and convert compensation amount to a float
+# - If compensation is negative, convert it to a positive value
+# - Multiply by the conversion rate to get the value in USD
+# - If not a valid string after removing commas, return Nan
+
+# In[ ]:
+
+
+conversion_rates = pd.read_csv("../input/conversionRates.csv")
+conversion_rates = conversion_rates.set_index("originCountry").T
+
+
+# In[ ]:
+
+
+def getConversionRate(currency):
+    """
+        Returns conversion rate for the given currency to USD
+        If the currency is not in the conversion table assumes it is USD
+        and returns 1
+    """
+    if currency not in conversion_rates.columns:
+        return 1
+    return conversion_rates[currency].exchangeRate
+
+
+# In[ ]:
+
+
+def processCompensation(row):
+    compensation = row["CompensationAmount"]
+    if type(compensation) == type("str"):
+        try:
+            result = float(compensation.replace(",", ""))
+            
+            if result < 0:
+                result =  -result
+            row["CompensationAmount"] = result * getConversionRate(row["CompensationCurrency"])
+        except Exception as e:
+            row["CompensationAmount"] = np.nan
+    return row
+
+
+# In[ ]:
+
+
+df.CompensationAmount = df.apply(processCompensation, axis=1).CompensationAmount
+
+
+# ### Distribution 
+# - Data above the first percentile and below the ninety-ninth percentile is considered
+# - The distribution of salary for males and females in various income brackets shows that for both males and females, the number of people holding very high salary jobs reduces as the compensation amount increases
+
+# In[ ]:
+
+
+ninetyninth_percentile = df.CompensationAmount.quantile(0.99)
+first_percentile = df.CompensationAmount.quantile(.01)
+df.CompensationAmount = df[((df.CompensationAmount < ninetyninth_percentile) & (df.CompensationAmount > first_percentile))].CompensationAmount
+df[df.GenderSelect == "Male"].CompensationAmount.plot.hist(bins=10, alpha=0.5)
+df[df.GenderSelect == "Female"].CompensationAmount.plot.hist(bins=10, alpha=0.8)
+
+
+# ### Median salary per age for males and females
+# - For each age group, the median salary for both males and females is calculated
+# - For many of the ages, the median salary for women is larger than that for men.
+# - Need to dig into this a little more and see if this is accurate or a misrepresentation of the data: other factors like country maybe playing a role here.
+# - Will also bin the data into age groups to see any possible relationship based on the age group rather than the exact age value
+
+# In[ ]:
+
+
+fig, ax = plt.subplots()
+df[(df.GenderSelect == 'Male') & (df.CompensationAmount.isnull() == False ) & (df.CompensationAmount != 0.0)].groupby([df.Age]).CompensationAmount.median().plot.bar( ax=ax, alpha=0.5)
+df[(df.GenderSelect == 'Female') & (df.CompensationAmount.isnull() == False) & ((df.CompensationAmount != 0.0))].groupby([df.Age]).CompensationAmount.median().plot.bar(ax=ax, alpha=0.3, color="red")
+
+legend = ax.legend(['Male', 'Female'])
+plot = plt.title("Median Compensation distribution for Male and Female Data Scientists by Age")
+

@@ -1,673 +1,611 @@
 
 # coding: utf-8
 
-# # Quora Question-pair classification
-# 
-# This competition is about modelling whether a pair of questions on Quora is asking the same question. For this problem we have about **400.000** training examples. Each row consists of two sentences and a binary label that indicates to us whether the two questions were the same or not.
-# 
-# Inspired by this nice [kernel](https://www.kaggle.com/arthurtok/d/mcdonalds/nutrition-facts/super-sized-we-macdonald-s-nutritional-metrics) from [Anisotropic](https://www.kaggle.com/arthurtok) I've added a few interactive 2D and 3D scatter plots.
-# To get an insight into how the duplicates evolve over the number of words in the questions, I've added a plotly animation that encodes number of words and word share similarity in a scatter plot.
-# 
-# **We will be looking in detail at:**
-# 
-# * question pair TF-IDF encodings
-# * basic feature engineering and their embeddings in lower dimensional spaces
-# * parallel coordinates visualization
-# * model selection and evaluation + sample submission.
-# 
-# If you like this kernel, please upvote it :D, thanks!
-# 
-# 
-# ----------
-# 
-# 
-# Added a final section for cross-validated model selection and evaluation. We will look at standard binary classification metrics, like ROC and PR curves and their AUCs. The best (linear) model that we found then generates a submission.
+# This is a beginner's guide for using Keras MLP approach to build simple data analyis model. <br/>
+# It's also my first kernal written on Kaggle... haha<br/>
+# So if you have any comments or questions for me, feel free to leave a message~
+
+# # Outline of practicing machine learning<br/>
+# ## 1. Data observation <br/>
+# ## 2. Data pre-processing <br/>
+# ## 3. Model designing and training <br/>
+# ## 4. Model accuracy test <br/>
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
 from subprocess import check_output
+print(check_output(["ls", "../input/kag_risk_factors_cervical_cancer.csv"]).decode("utf8"))
 
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_style('darkgrid')
+import numpy as np
+from scipy.stats import norm
+from sklearn.preprocessing import StandardScaler
+from scipy import stats
+import warnings
+warnings.filterwarnings('ignore')
 get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-df = pd.read_csv("../input/train.csv").fillna("")
-df.head() 
 
 
-# So we have six columns in total one of which is the label.
+# # 1. Data observation
+
+# Here our observation means to see the type and structure of the data or whether there are missing values . If we want to purely let machine learn by itself, then we should not look too deeply into the data in case the bias made by human intelligence.
+
+# Let's import the data
 
 # In[ ]:
 
 
-df.info()
+df_full = pd.read_csv('../input/kag_risk_factors_cervical_cancer.csv')
 
 
 # In[ ]:
 
 
-df.shape
-
-
-# We have a fairly balanced dataset here.
-
-# In[ ]:
-
-
-df.groupby("is_duplicate")['id'].count().plot.bar()
-
-
-# # Feature construction
-# 
-# We will now construct a basic set of features that we will later use to embed our samples with.
-# 
-# The first we will be looking at is rather standard TF-IDF encoding for each of the questions. In order to limit the computational complexity and storage requirements we will only encode the top terms across all documents with TF-IDF and also look at a subsample of the data.
-
-# In[ ]:
-
-
-dfs = df[0:2500]
-dfs.groupby("is_duplicate")['id'].count().plot.bar()
-
-
-# The subsample still has a very similar label distribution, ok to continue like that, without taking a deeper look how to achieve better sampling than just taking the first rows of the dataset.
-# 
-# Create a dataframe where the top 50% of rows have only question 1 and the bottom 50% have only question 2, same ordering per halve as in the original dataframe.
-
-# In[ ]:
-
-
-dfq1, dfq2 = dfs[['qid1', 'question1']], dfs[['qid2', 'question2']]
-dfq1.columns = ['qid1', 'question']
-dfq2.columns = ['qid2', 'question']
-
-# merge two two dfs, there are two nans for question
-dfqa = pd.concat((dfq1, dfq2), axis=0).fillna("")
-nrows_for_q1 = dfqa.shape[0]/2
-dfqa.shape
-
-
-# Transform questions by TF-IDF.
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer, HashingVectorizer
-mq1 = TfidfVectorizer(max_features = 256).fit_transform(dfqa['question'].values)
-mq1
-
-
-# Since we are looking at pairs of data, we will be taking the difference of all question one and question two pairs with this. This will result in a matrix that again has the same number of rows as the subsampled data and one vector that describes the relationship between the two questions.
-
-# In[ ]:
-
-
-diff_encodings = np.abs(mq1[::2] - mq1[1::2])
-diff_encodings
-
-
-# # 3D t-SNE embedding
-# 
-# We will use t-SNE to embed the TF-IDF vectors in three dimensions and create an interactive scatter plot with them.
-
-# In[ ]:
-
-
-from sklearn.manifold import TSNE
-tsne = TSNE(
-    n_components=3,
-    init='random', # pca
-    random_state=101,
-    method='barnes_hut',
-    n_iter=200,
-    verbose=2,
-    angle=0.5
-).fit_transform(diff_encodings.toarray())
+df_full
 
 
 # In[ ]:
 
 
-trace1 = go.Scatter3d(
-    x=tsne[:,0],
-    y=tsne[:,1],
-    z=tsne[:,2],
-    mode='markers',
-    marker=dict(
-        sizemode='diameter',
-        color = dfs['is_duplicate'].values,
-        colorscale = 'Portland',
-        colorbar = dict(title = 'duplicate'),
-        line=dict(color='rgb(255, 255, 255)'),
-        opacity=0.75
-    )
-)
-
-data=[trace1]
-layout=dict(height=800, width=800, title='test')
-fig=dict(data=data, layout=layout)
-py.iplot(fig, filename='3DBubble')
+df_full.info()
 
 
-# That three dimensional embedding looks nice, but is not telling us much about the structure of the space that we created. There seem to be no clusters of either class present, so let's go on to the next section.
-
-# ## Feature EDA
-# 
-# Let us now construct a few features
-# 
-# * character length of questions 1 and 2
-# * number of words in question 1 and 2
-# * normalized word share count.
-# 
-# We can then have a look at how well each of these separate the two classes.
+# It seems there are some missing values named as '?', and made the whole column become an object. 
+# To do further computation, we have to replace '?' with NaN and turn the object type to numeric type.
 
 # In[ ]:
 
 
-df['q1len'] = df['question1'].str.len()
-df['q2len'] = df['question2'].str.len()
-
-df['q1_n_words'] = df['question1'].apply(lambda row: len(row.split(" ")))
-df['q2_n_words'] = df['question2'].apply(lambda row: len(row.split(" ")))
-
-def normalized_word_share(row):
-    w1 = set(map(lambda word: word.lower().strip(), row['question1'].split(" ")))
-    w2 = set(map(lambda word: word.lower().strip(), row['question2'].split(" ")))    
-    return 1.0 * len(w1 & w2)/(len(w1) + len(w2))
-
-
-df['word_share'] = df.apply(normalized_word_share, axis=1)
-
-df.head()
-
-
-# The distributions for normalized word share have some overlap on the far right hand side, meaning there are quite a lot of questions with high word similarity but are both duplicates and non-duplicates.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12, 8))
-plt.subplot(1,2,1)
-sns.violinplot(x = 'is_duplicate', y = 'word_share', data = df[0:50000])
-plt.subplot(1,2,2)
-sns.distplot(df[df['is_duplicate'] == 1.0]['word_share'][0:10000], color = 'green')
-sns.distplot(df[df['is_duplicate'] == 0.0]['word_share'][0:10000], color = 'red')
-
-
-# Scatter plot of question pair character lengths where color indicates duplicates and the size the word share coefficient we've calculated earlier.
-
-# In[ ]:
-
-
-df_subsampled = df[0:2000]
-
-trace = go.Scatter(
-    y = df_subsampled['q2len'].values,
-    x = df_subsampled['q1len'].values,
-    mode='markers',
-    marker=dict(
-        size= df_subsampled['word_share'].values * 60,
-        color = df_subsampled['is_duplicate'].values,
-        colorscale='Portland',
-        showscale=True,
-        opacity=0.5,
-        colorbar = dict(title = 'duplicate')
-    ),
-    text = np.round(df_subsampled['word_share'].values, decimals=2)
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Scatter plot of character lengths of question one and two',
-    hovermode= 'closest',
-        xaxis=dict(
-        showgrid=False,
-        zeroline=False,
-        showline=False
-    ),
-    yaxis=dict(
-        title= 'Question 2 length',
-        ticklen= 5,
-        gridwidth= 2,
-        showgrid=False,
-        zeroline=False,
-        showline=False,
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatterWords')
-
-
-# # Animation over average number of words
-# 
-# For that we will calculate the average number of words in both questions for each row.
-# 
-# In the end we want to have a scatter plot, just like the one above, but giving us one more dimension, in that case the average number of words in both questions. That will allow us to see the dependence on that variable. We also expect that as the number of words is increased, the character lengths of Q1 and Q2 will increase.
-
-# In[ ]:
-
-
-from IPython.display import display, HTML
-
-df_subsampled['q_n_words_avg'] = np.round((df_subsampled['q1_n_words'] + df_subsampled['q2_n_words'])/2.0).astype(int)
-print(df_subsampled['q_n_words_avg'].max())
-df_subsampled = df_subsampled[df_subsampled['q_n_words_avg'] < 20]
-df_subsampled.head()
+df_fullna = df_full.replace('?', np.nan)
 
 
 # In[ ]:
 
 
-word_lens = sorted(list(df_subsampled['q_n_words_avg'].unique()))
-# make figure
-figure = {
-    'data': [],
-    'layout': {
-        'title': 'Scatter plot of char lenghts of Q1 and Q2 (size ~ word share similarity)',
-    },
-    'frames': []#,
-    #'config': {'scrollzoom': True}
-}
+df_fullna.isnull().sum() #check NaN counts in different columns
 
-# fill in most of layout
-figure['layout']['xaxis'] = {'range': [0, 200], 'title': 'Q1 length'}
-figure['layout']['yaxis'] = {
-    'range': [0, 200],
-    'title': 'Q2 length'#,
-    #'type': 'log'
-}
-figure['layout']['hovermode'] = 'closest'
 
-figure['layout']['updatemenus'] = [
-    {
-        'buttons': [
-            {
-                'args': [None, {'frame': {'duration': 300, 'redraw': False},
-                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
-                'label': 'Play',
-                'method': 'animate'
-            },
-            {
-                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
-                'transition': {'duration': 0}}],
-                'label': 'Pause',
-                'method': 'animate'
-            }
-        ],
-        'direction': 'left',
-        'pad': {'r': 10, 't': 87},
-        'showactive': False,
-        'type': 'buttons',
-        'x': 0.1,
-        'xanchor': 'right',
-        'y': 0,
-        'yanchor': 'top'
-    }
-]
+# # 2. Data-preprocessing
 
-sliders_dict = {
-    'active': 0,
-    'yanchor': 'top',
-    'xanchor': 'left',
-    'currentvalue': {
-        'font': {'size': 20},
-        'prefix': 'Avg. number of words in both questions:',
-        'visible': True,
-        'xanchor': 'right'
-    },
-    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
-    'pad': {'b': 10, 't': 50},
-    'len': 0.9,
-    'x': 0.1,
-    'y': 0,
-    'steps': []
-}
+# In[ ]:
 
-# make data
-word_len = word_lens[0]
-dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
-data_dict = {
-    'x': list(dff['q1len']),
-    'y': list(dff['q2len']),
-    'mode': 'markers',
-    'text': list(dff['is_duplicate']),
-    'marker': {
-        'sizemode': 'area',
-        #'sizeref': 200000,
-        'colorscale': 'Portland',
-        'size': dff['word_share'].values * 120,
-        'color': dff['is_duplicate'].values,
-        'colorbar': dict(title = 'duplicate')
-    },
-    'name': 'some name'
-}
-figure['data'].append(data_dict)
 
-# make frames
-for word_len in word_lens:
-    frame = {'data': [], 'name': str(word_len)}
-    dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
+df = df_fullna  #making temporary save
 
-    data_dict = {
-        'x': list(dff['q1len']),
-        'y': list(dff['q2len']),
-        'mode': 'markers',
-        'text': list(dff['is_duplicate']),
-        'marker': {
-            'sizemode': 'area',
-            #'sizeref': 200000,
-            'size': dff['word_share'].values * 120,
-            'colorscale': 'Portland',
-            'color': dff['is_duplicate'].values,
-            'colorbar': dict(title = 'duplicate')
-        },
-        'name': 'some name'
-    }
-    frame['data'].append(data_dict)
 
-    figure['frames'].append(frame)
-    slider_step = {'args': [
-        [word_len],
-        {
-            'frame': {'duration': 300, 'redraw': False},
-            'mode': 'immediate',
-            'transition': {'duration': 300}
-        }
-     ],
-     'label': word_len,
-     'method': 'animate'}
-    sliders_dict['steps'].append(slider_step)
+# In[ ]:
 
+
+df = df.convert_objects(convert_numeric=True) #turn data into numeric type for computation
+
+
+# In[ ]:
+
+
+df.info() # Now it's all numeric type, and we are ready for computation and fill NaN.
+
+
+# Now It's time to fill all the NaN values. <br/>
+# For continuous variable, we fill the median value.  (THX for the suggestion in comment)<br/>
+# For categorical variable, we fill 1.
+
+# In[ ]:
+
+
+# for continuous variable
+df['Number of sexual partners'] = df['Number of sexual partners'].fillna(df['Number of sexual partners'].median())
+df['First sexual intercourse'] = df['First sexual intercourse'].fillna(df['First sexual intercourse'].median())
+df['Num of pregnancies'] = df['Num of pregnancies'].fillna(df['Num of pregnancies'].median())
+df['Smokes'] = df['Smokes'].fillna(1)
+df['Smokes (years)'] = df['Smokes (years)'].fillna(df['Smokes (years)'].median())
+df['Smokes (packs/year)'] = df['Smokes (packs/year)'].fillna(df['Smokes (packs/year)'].median())
+df['Hormonal Contraceptives'] = df['Hormonal Contraceptives'].fillna(1)
+df['Hormonal Contraceptives (years)'] = df['Hormonal Contraceptives (years)'].fillna(df['Hormonal Contraceptives (years)'].median())
+df['IUD'] = df['IUD'].fillna(0) # Under suggestion
+df['IUD (years)'] = df['IUD (years)'].fillna(0) #Under suggestion
+df['STDs'] = df['STDs'].fillna(1)
+df['STDs (number)'] = df['STDs (number)'].fillna(df['STDs (number)'].median())
+df['STDs:condylomatosis'] = df['STDs:condylomatosis'].fillna(df['STDs:condylomatosis'].median())
+df['STDs:cervical condylomatosis'] = df['STDs:cervical condylomatosis'].fillna(df['STDs:cervical condylomatosis'].median())
+df['STDs:vaginal condylomatosis'] = df['STDs:vaginal condylomatosis'].fillna(df['STDs:vaginal condylomatosis'].median())
+df['STDs:vulvo-perineal condylomatosis'] = df['STDs:vulvo-perineal condylomatosis'].fillna(df['STDs:vulvo-perineal condylomatosis'].median())
+df['STDs:syphilis'] = df['STDs:syphilis'].fillna(df['STDs:syphilis'].median())
+df['STDs:pelvic inflammatory disease'] = df['STDs:pelvic inflammatory disease'].fillna(df['STDs:pelvic inflammatory disease'].median())
+df['STDs:genital herpes'] = df['STDs:genital herpes'].fillna(df['STDs:genital herpes'].median())
+df['STDs:molluscum contagiosum'] = df['STDs:molluscum contagiosum'].fillna(df['STDs:molluscum contagiosum'].median())
+df['STDs:AIDS'] = df['STDs:AIDS'].fillna(df['STDs:AIDS'].median())
+df['STDs:HIV'] = df['STDs:HIV'].fillna(df['STDs:HIV'].median())
+df['STDs:Hepatitis B'] = df['STDs:Hepatitis B'].fillna(df['STDs:Hepatitis B'].median())
+df['STDs:HPV'] = df['STDs:HPV'].fillna(df['STDs:HPV'].median())
+df['STDs: Time since first diagnosis'] = df['STDs: Time since first diagnosis'].fillna(df['STDs: Time since first diagnosis'].median())
+df['STDs: Time since last diagnosis'] = df['STDs: Time since last diagnosis'].fillna(df['STDs: Time since last diagnosis'].median())
+
+
+# In[ ]:
+
+
+# for categorical variable
+df = pd.get_dummies(data=df, columns=['Smokes','Hormonal Contraceptives','IUD','STDs',
+                                      'Dx:Cancer','Dx:CIN','Dx:HPV','Dx','Hinselmann','Citology','Schiller'])
+
+
+# In[ ]:
+
+
+df.isnull().sum() #No null left~
+
+
+# In[ ]:
+
+
+df 
+
+
+# Now, we have full data 'df' for computation.<br/>
+# We are ready for spliting data into train/test set, defining features and labels, and normalization.
+
+# In[ ]:
+
+
+df_data = df #making temporary save
+
+
+# ## Quick check for value range (especially when doing regression)
+
+# In[ ]:
+
+
+df.describe()
+
+
+# In[ ]:
+
+
+fig, (ax1,ax2,ax3,ax4,ax5,ax6,ax7) = plt.subplots(7,1,figsize=(20,40))
+sns.countplot(x='Age', data=df, ax=ax1)
+sns.countplot(x='Number of sexual partners', data=df, ax=ax2)
+sns.countplot(x='Num of pregnancies', data=df, ax=ax3)
+sns.countplot(x='Smokes (years)', data=df, ax=ax4)
+sns.countplot(x='Hormonal Contraceptives (years)', data=df, ax=ax5)
+sns.countplot(x='IUD (years)', data=df, ax=ax6)
+sns.countplot(x='STDs (number)', data=df, ax=ax7)
+
+
+# ## Shuffle the data, and split them into train set and test set.
+
+# In[ ]:
+
+
+#Shuffle
+np.random.seed(42)
+df_data_shuffle = df_data.iloc[np.random.permutation(len(df_data))]
+
+df_train = df_data_shuffle.iloc[1:686, :]
+df_test = df_data_shuffle.iloc[686: , :]
+
+
+# ## Defining features and labels
+
+# In[ ]:
+
+
+#分類feature/label
+df_train_feature = df_train[['Age', 'Number of sexual partners', 'First sexual intercourse',
+       'Num of pregnancies', 'Smokes (years)', 'Smokes (packs/year)',
+       'Hormonal Contraceptives (years)', 'IUD (years)', 'STDs (number)',
+       'STDs:condylomatosis', 'STDs:cervical condylomatosis',
+       'STDs:vaginal condylomatosis', 'STDs:vulvo-perineal condylomatosis',
+       'STDs:syphilis', 'STDs:pelvic inflammatory disease',
+       'STDs:genital herpes', 'STDs:molluscum contagiosum', 'STDs:AIDS',
+       'STDs:HIV', 'STDs:Hepatitis B', 'STDs:HPV', 'STDs: Number of diagnosis',
+       'STDs: Time since first diagnosis', 'STDs: Time since last diagnosis', 
+       'Smokes_0.0', 'Smokes_1.0',
+       'Hormonal Contraceptives_0.0', 'Hormonal Contraceptives_1.0', 'IUD_0.0',
+       'IUD_1.0', 'STDs_0.0', 'STDs_1.0', 'Dx:Cancer_0', 'Dx:Cancer_1',
+       'Dx:CIN_0', 'Dx:CIN_1', 'Dx:HPV_0', 'Dx:HPV_1', 'Dx_0', 'Dx_1',
+       'Hinselmann_0', 'Hinselmann_1', 'Citology_0', 'Citology_1','Schiller_0','Schiller_1']]
+
+train_label = np.array(df_train['Biopsy'])
+
+df_test_feature = df_test[['Age', 'Number of sexual partners', 'First sexual intercourse',
+       'Num of pregnancies', 'Smokes (years)', 'Smokes (packs/year)',
+       'Hormonal Contraceptives (years)', 'IUD (years)', 'STDs (number)',
+       'STDs:condylomatosis', 'STDs:cervical condylomatosis',
+       'STDs:vaginal condylomatosis', 'STDs:vulvo-perineal condylomatosis',
+       'STDs:syphilis', 'STDs:pelvic inflammatory disease',
+       'STDs:genital herpes', 'STDs:molluscum contagiosum', 'STDs:AIDS',
+       'STDs:HIV', 'STDs:Hepatitis B', 'STDs:HPV', 'STDs: Number of diagnosis',
+       'STDs: Time since first diagnosis', 'STDs: Time since last diagnosis', 
+       'Smokes_0.0', 'Smokes_1.0',
+       'Hormonal Contraceptives_0.0', 'Hormonal Contraceptives_1.0', 'IUD_0.0',
+       'IUD_1.0', 'STDs_0.0', 'STDs_1.0', 'Dx:Cancer_0', 'Dx:Cancer_1',
+       'Dx:CIN_0', 'Dx:CIN_1', 'Dx:HPV_0', 'Dx:HPV_1', 'Dx_0', 'Dx_1',
+       'Hinselmann_0', 'Hinselmann_1', 'Citology_0', 'Citology_1','Schiller_0','Schiller_1']]
+
+test_label = np.array(df_test['Biopsy'])
+
+
+# ## Data normalization
+
+# In[ ]:
+
+
+#Normalization
+from sklearn import preprocessing
+minmax_scale = preprocessing.MinMaxScaler(feature_range=(0, 1))
+train_feature = minmax_scale.fit_transform(df_train_feature)
+test_feature = minmax_scale.fit_transform(df_test_feature)
+
+
+# In[ ]:
+
+
+#Make sure if it's the shape what we want!
+print(train_feature[0])
+print(train_label[0])
+print(test_feature[0])
+print(test_label[0])
+
+
+# In[ ]:
+
+
+train_feature.shape
+
+
+# Now, we are ready to run keras model.
+
+# # 3. (Keras) Model designing/training/visualization
+
+# ### A very simple, quick and effective MLP approach to solve binary classification problem
+
+# In[ ]:
+
+
+import matplotlib.pyplot as plt
+def show_train_history(train_history,train,validation):
+    plt.plot(train_history.history[train])
+    plt.plot(train_history.history[validation])
+    plt.title('Train History')
+    plt.ylabel(train)
+    plt.xlabel('Epoch')
+    plt.legend(['train', 'validation'], loc='best')
+    plt.show()
+
+
+######################### Model designing
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import Dropout
+
+model = Sequential() 
+
+#Input layer
+model.add(Dense(units=500, 
+                input_dim=46, 
+                kernel_initializer='uniform', 
+                activation='relu'))
+model.add(Dropout(0.5))
+
+#Hidden layer 1
+model.add(Dense(units=200,  
+                kernel_initializer='uniform', 
+                activation='relu'))
+model.add(Dropout(0.5))
+
+#Output layer
+model.add(Dense(units=1,
+                kernel_initializer='uniform', 
+                activation='sigmoid'))
+
+print(model.summary()) #for showing the structure and parameters
+
+# Defining how to measure performance
+model.compile(loss='binary_crossentropy',   
+              optimizer='adam', metrics=['accuracy'])
+
+# Train the model
+# Verbose=2, showing loss and accuracy change timely
+train_history = model.fit(x=train_feature, y=train_label,  
+                          validation_split=0.2, epochs=20, 
+                          batch_size=200, verbose=2) 
+
+#visualize the loss and accuracy after each epoch
+show_train_history(train_history,'acc','val_acc')
+show_train_history(train_history,'loss','val_loss')
+
+#For saving weights
+#model.save_weights("Savemodels/Cervical_ca(Kaggles)_MLP.h5")
+#print('model saved to disk')
+
+
+#  The model should run very fast because the data was really small.
+
+# PS. The reason I don't want to train this model too many times is because the training set and validation set loss seems to deviate, which is a sign of overfitting.
+
+# # 4. Model prediction accuracy
+
+# ## In test data
+
+# In[ ]:
+
+
+scores = model.evaluate(test_feature, test_label)
+print('\n')
+print('accuracy=',scores[1])
+
+
+# In[ ]:
+
+
+# Answer sheet
+prediction = model.predict_classes(test_feature)
+
+
+# In[ ]:
+
+
+# Create a dataframe for prediction and correct answer
+df_ans = pd.DataFrame({'Biopsy' :test_label})
+df_ans['Prediction'] = prediction
+
+
+# In[ ]:
+
+
+df_ans
+
+
+# See what's going wrong
+
+# In[ ]:
+
+
+df_ans[ df_ans['Biopsy'] != df_ans['Prediction'] ]
+
+
+# In[ ]:
+
+
+df_ans['Prediction'].value_counts()
+
+
+# In[ ]:
+
+
+df_ans['Biopsy'].value_counts()
+
+
+# ## Confusion matrix
+
+# Make confusion matrix to evaluate the performance of the prediction model.
+
+# In[ ]:
+
+
+cols = ['Biopsy_1','Biopsy_0']  #Gold standard
+rows = ['Prediction_1','Prediction_0'] #diagnostic tool (our prediction)
+
+B1P1 = len(df_ans[(df_ans['Prediction'] == df_ans['Biopsy']) & (df_ans['Biopsy'] == 1)])
+B1P0 = len(df_ans[(df_ans['Prediction'] != df_ans['Biopsy']) & (df_ans['Biopsy'] == 1)])
+B0P1 = len(df_ans[(df_ans['Prediction'] != df_ans['Biopsy']) & (df_ans['Biopsy'] == 0)])
+B0P0 = len(df_ans[(df_ans['Prediction'] == df_ans['Biopsy']) & (df_ans['Biopsy'] == 0)])
+
+conf = np.array([[B1P1,B0P1],[B1P0,B0P0]])
+df_cm = pd.DataFrame(conf, columns = [i for i in cols], index = [i for i in rows])
+
+f, ax= plt.subplots(figsize = (5, 5))
+sns.heatmap(df_cm, annot=True, ax=ax) 
+ax.xaxis.set_ticks_position('top') #Making x label be on top is common in textbooks.
+
+print('total test case number: ', np.sum(conf))
+
+
+# ### Calculating sensitivity, specificity, false_positive_rate and false_negative_rate
+
+# In[ ]:
+
+
+def model_efficacy(conf):
+    total_num = np.sum(conf)
+    sen = conf[0][0]/(conf[0][0]+conf[1][0])
+    spe = conf[1][1]/(conf[1][0]+conf[1][1])
+    false_positive_rate = conf[0][1]/(conf[0][1]+conf[1][1])
+    false_negative_rate = conf[1][0]/(conf[0][0]+conf[1][0])
     
-figure['layout']['sliders'] = [sliders_dict]
+    print('total_num: ',total_num)
+    print('G1P1: ',conf[0][0]) #G = gold standard; P = prediction
+    print('G0P1: ',conf[0][1])
+    print('G1P0: ',conf[1][0])
+    print('G0P0: ',conf[1][1])
+    print('##########################')
+    print('sensitivity: ',sen)
+    print('specificity: ',spe)
+    print('false_positive_rate: ',false_positive_rate)
+    print('false_negative_rate: ',false_negative_rate)
+    
+    return total_num, sen, spe, false_positive_rate, false_negative_rate
 
-py.iplot(figure)
+model_efficacy(conf)
+    
 
 
-# What is interesting about that, is that as the number of words increases, the distribution of character lengths of the first and second question becomes less and less spherical.
+# You can also do the same analysis with train data. Try it~
 
-# # Embedding with engineered features
-# 
-# We will now revisit the t-SNE embedding with the manually engineered features.
-# 
-# For that we use the number of words in both questions, character lengths and their word share coefficient. t-SNE is sensitive to scaling of different dimensions and we want all of the dimensions to contribute equally to the distance measure that t-SNE is trying to preserve.
+# # Appendix: Dealing with original data (Human learning)
+
+# ## Let's see some categorical variable property
+
+# ### Age
 
 # In[ ]:
 
 
-from sklearn.preprocessing import MinMaxScaler
-
-df_subsampled = df[0:3000]
-X = MinMaxScaler().fit_transform(df_subsampled[['q1_n_words', 'q1len', 'q2_n_words', 'q2len', 'word_share']])
-y = df_subsampled['is_duplicate'].values
-
-
-# In[ ]:
-
-
-tsne = TSNE(
-    n_components=3,
-    init='random', # pca
-    random_state=101,
-    method='barnes_hut',
-    n_iter=200,
-    verbose=2,
-    angle=0.5
-).fit_transform(X)
+import seaborn as sns
+sns.jointplot(x='Age', y='Biopsy', data=df, alpha=0.1) 
+#By adding alpha, we can see the density of the scattered spots clearly.
 
 
 # In[ ]:
 
 
-trace1 = go.Scatter3d(
-    x=tsne[:,0],
-    y=tsne[:,1],
-    z=tsne[:,2],
-    mode='markers',
-    marker=dict(
-        sizemode='diameter',
-        color = y,
-        colorscale = 'Portland',
-        colorbar = dict(title = 'duplicate'),
-        line=dict(color='rgb(255, 255, 255)'),
-        opacity=0.75
-    )
-)
+fig, (ax1,ax2,ax3) = plt.subplots(3,1,figsize=(15,12))
+sns.countplot(x='Age', data=df, ax=ax1)
+sns.countplot(x='Biopsy', data=df, ax=ax2)
+sns.barplot(x='Age', y='Biopsy', data=df, ax=ax3)
 
-data=[trace1]
-layout=dict(height=800, width=800, title='3d embedding with engineered features')
-fig=dict(data=data, layout=layout)
-py.iplot(fig, filename='3DBubble')
+#Stratified
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Age',shade= True)
+facet.set(xlim=(0, df['Age'].max()))
+facet.add_legend()
 
 
-# The embedding of the engineered features has much more structure than the previous one where we were only computing differences of TF-IDF encodings.
-# 
-# In the cluster of the negatives we have few positives whereas in the cluster of positives we have a lot more negatives. That matches our observation from the boxplot of word share coefficient above, where we could see that the negative class has a lot of overlap with the positive class for high word share coefficients.
-
-# # Parallel Coordinates
-# 
-# We now want to get another perspective on high dimensional data, such as the TF-IDF encoded questions. For that purpose I'll encode the concatenated questions into a set of N dimensions, s.t. each row in the dataframe then has one N dimensional vector associated to it.
-# With this we can then have a look at how these coordinates (or TF-IDF dimensions) vary by label.
-# 
-# There are many EDA methods to visualize high dimensional data, I'll show parallel coordinates here.
-# 
-# To make a nice looking plot, I've chosen N to be quite small, much smaller actually than you would encode it in a machine learning algorithm.
+# ### Number of sexual partners
 
 # In[ ]:
 
 
-from pandas.tools.plotting import parallel_coordinates
-
-df_subsampled = df[0:500]
-
-N = 64
-
-#encoded = HashingVectorizer(n_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
-encoded = TfidfVectorizer(max_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
-# generate columns in the dataframe for each of the 32 dimensions
-cols = ['hashed_'+str(i) for i in range(encoded.shape[1])]
-for idx, col in enumerate(cols):
-    df_subsampled[col] = encoded[:,idx].toarray()
-
-plt.figure(figsize=(12,8))
-kws = {
-    'linewidth': 0.5,
-    'alpha': 0.7
-}
-parallel_coordinates(
-    df_subsampled[cols + ['is_duplicate']],
-    'is_duplicate',
-    axvlines=False, colormap=plt.get_cmap('plasma'),
-    **kws
-)
-#plt.grid(False)
-plt.xticks([])
-plt.xlabel("encoded question dimensions")
-plt.ylabel("value of dimension")
-
-
-# In the parallel coordinates we can see that there are some dimensions that have high TF-IDF features values for duplicates and others high values for non-duplicates.
-
-# # Question character length correlations by duplication label
-# 
-# The pairplot of character length of both questions by duplication label is showing us that, duplicated questions seem to have a somewhat similar amount of characters in them.
-# 
-# Also we can see something quite intuitive, that there is rather strong correlation in the number of words and the number of characters in a question.
-
-# In[ ]:
-
-
-n = 10000
-sns.pairplot(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'is_duplicate']][0:n], hue='is_duplicate')
-
-
-# # Model starter
-# 
-# Train a model with the basic feature we've constructed so far.
-# 
-# For that we will use Logisitic regression, for which we will do a quick parameter search with CV, plot ROC and PR curve on the holdout set and finally generate a submission.
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_curve, auc, roc_curve
-from sklearn.model_selection import GridSearchCV, train_test_split
-from sklearn.preprocessing import MinMaxScaler
-
-scaler = MinMaxScaler().fit(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-
-X = scaler.transform(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-y = df['is_duplicate']
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-
-X_train.shape, X_test.shape, y_train.shape, y_test.shape
-
-
-# Run cross-validation with a few hyper parameters.
-
-# In[ ]:
-
-
-clf = LogisticRegression()
-grid = {
-    'C': [1e-6, 1e-3, 1e0],
-    'penalty': ['l1', 'l2']
-}
-cv = GridSearchCV(clf, grid, scoring='neg_log_loss', n_jobs=-1, verbose=1)
-cv.fit(X_train, y_train)
-
-
-# Print validation results. Here we see that the strongly regularized model has much worse negative log loss than the other two models, regardless of which regularizer we've used.
-
-# In[ ]:
-
-
-for i in range(1, len(cv.cv_results_['params'])+1):
-    rank = cv.cv_results_['rank_test_score'][i-1]
-    s = cv.cv_results_['mean_test_score'][i-1]
-    sd = cv.cv_results_['std_test_score'][i-1]
-    params = cv.cv_results_['params'][i-1]
-    print("{0}. Mean validation neg log loss: {1:.3f} (std: {2:.3f}) - {3}".format(
-        rank,
-        s,
-        sd,
-        params
-    ))
+import seaborn as sns
+sns.jointplot(x='Number of sexual partners', y='Biopsy', data=df, alpha=0.1) 
+#By adding alpha, we can see the density of the scattered spots clearly.
 
 
 # In[ ]:
 
 
-print(cv.best_params_)
-print(cv.best_estimator_.coef_)
+fig, (ax1,ax2) = plt.subplots(2,1,figsize=(15,8))
+sns.countplot(x='Number of sexual partners', data=df, ax=ax1)
+sns.barplot(x='Number of sexual partners', y='Biopsy', data=df, ax=ax2) #categorical to categorical
+
+#continuous to categorical
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Number of sexual partners',shade= True)
+facet.set(xlim=(0, df['Number of sexual partners'].max()))
+facet.add_legend()
 
 
-# ### ROC
-# 
-# Receiver operator characteristic, used very commonly to assess the quality of models for binary classification.
-# 
-# We will look at at three different classifiers here, a strongly regularized one and two with weaker regularization. The heavily regularized model has parameters very close to zero and is actually worse than if we would pick the labels for our holdout samples randomly.
+# The people having more than 10 sexual partners got biopsy(-)...hmm...
 
-# In[ ]:
-
-
-colors = ['r', 'g', 'b', 'y', 'k', 'c', 'm', 'brown', 'r']
-lw = 1
-Cs = [1e-6, 1e-4, 1e0]
-
-plt.figure(figsize=(12,8))
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('ROC Curve for different classifiers')
-
-plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-
-labels = []
-for idx, C in enumerate(Cs):
-    clf = LogisticRegression(C = C)
-    clf.fit(X_train, y_train)
-    print("C: {}, parameters {} and intercept {}".format(C, clf.coef_, clf.intercept_))
-    fpr, tpr, _ = roc_curve(y_test, clf.predict_proba(X_test)[:,1])
-    roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, lw=lw, color=colors[idx])
-    labels.append("C: {}, AUC = {}".format(C, np.round(roc_auc, 4)))
-
-plt.legend(['random AUC = 0.5'] + labels)
-
-
-# # Precision-Recall Curve
-# 
-# Also used very commonly, but more often in cases where we have class-imbalance. We can see here, that there are a few positive samples that we can identify quite reliably. On in the medium and high recall regions we see that there are also positives samples that are harder to separate from the negatives.
+# ### Num of pregnancies
 
 # In[ ]:
 
 
-pr, re, _ = precision_recall_curve(y_test, cv.best_estimator_.predict_proba(X_test)[:,1])
-plt.figure(figsize=(12,8))
-plt.plot(re, pr)
-plt.title('PR Curve (AUC {})'.format(auc(re, pr)))
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-
-
-# # Prepare submission
-# 
-# Here we read the test data and apply the same transformations that we've used for the training data. We also need to scale the computed features again.
-
-# In[ ]:
-
-
-dftest = pd.read_csv("../input/test.csv").fillna("")
-
-dftest['q1len'] = dftest['question1'].str.len()
-dftest['q2len'] = dftest['question2'].str.len()
-
-dftest['q1_n_words'] = dftest['question1'].apply(lambda row: len(row.split(" ")))
-dftest['q2_n_words'] = dftest['question2'].apply(lambda row: len(row.split(" ")))
-
-dftest['word_share'] = dftest.apply(normalized_word_share, axis=1)
-
-dftest.head()
-
-
-# We use the best estimator found by cross-validation and retrain it, using the best hyper parameters, on the whole training set.
-
-# In[ ]:
-
-
-retrained = cv.best_estimator_.fit(X, y)
-
-X_submission = scaler.transform(dftest[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-
-y_submission = retrained.predict_proba(X_submission)[:,1]
-
-submission = pd.DataFrame({'test_id': dftest['test_id'], 'is_duplicate': y_submission})
-submission.head()
+import seaborn as sns
+sns.jointplot(x='Num of pregnancies', y='Biopsy', data=df, alpha=0.1) 
 
 
 # In[ ]:
 
 
-sns.distplot(submission.is_duplicate[0:2000])
+sns.factorplot('Num of pregnancies','Biopsy',data=df, size=5, aspect=3)
 
 
 # In[ ]:
 
 
-submission.to_csv("submission.csv", index=False)
+#continuous to categorical
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Num of pregnancies',shade= True)
+facet.set(xlim=(0, df['Num of pregnancies'].max()))
+facet.add_legend()
 
 
-# Most likely this submission will not score very good, we've only used a small set of features and didn't really dive into feature engineering that much. :)
+# ### Cytology
+
+# In[ ]:
+
+
+import seaborn as sns
+sns.jointplot(x='Citology_1', y='Biopsy', data=df, alpha=0.1) 
+# Hard do see anything...
+
+
+# In[ ]:
+
+
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(15,5))
+sns.countplot(x='Citology_1', data=df, ax=axis1)
+sns.countplot(x='Biopsy', data=df, ax=axis2)
+sns.barplot(x='Citology_1', y='Biopsy', data=df, ax=axis3)  #categorical to categorical
+
+
+# ### Schiller
+
+# In[ ]:
+
+
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(15,5))
+sns.countplot(x='Schiller_1', data=df, ax=axis1)
+sns.countplot(x='Biopsy', data=df, ax=axis2)
+sns.barplot(x='Schiller_1', y='Biopsy', data=df, ax=axis3) #categorical to categorical
+
+
+# ## See the correlation between the elements (df) 
+
+# Fastest way to get contour of the data
+
+# In[ ]:
+
+
+corrmat = df.corr()
+f, ax = plt.subplots(figsize=(12, 9))
+sns.heatmap(corrmat, vmax=1, square=True, cmap='rainbow')
+
+
+# In[ ]:
+
+
+df['STDs:cervical condylomatosis'].value_counts()
+
+
+# In[ ]:
+
+
+df['STDs:AIDS'].value_counts()
+
+
+# The correlation was actually quite low.
+
+# ## List the heatmap of top correlation
+
+# In[ ]:
+
+
+k = 15 #number of variables for heatmap
+cols = corrmat.nlargest(k, 'Biopsy')['Biopsy'].index
+cm = np.corrcoef(df[cols].values.T)
+
+plt.figure(figsize=(9,9)) #可以調整大小
+
+sns.set(font_scale=1.25)
+hm = sns.heatmap(cm, cbar=True, annot=True, square=True, fmt='.2f', annot_kws={'size': 10},
+                 yticklabels = cols.values, xticklabels = cols.values)
+plt.show()
+
+
+# ## Conclusion: <br/>
+
+# It seems that 'Schiller_1', 'Hinselmann_1' and 'cytology_1' had the highest correlation with biopsy(+). <br/>
+# The result matched the common sense of the medical knowldege: High specificity diagnositic tool would have low false positive error. 

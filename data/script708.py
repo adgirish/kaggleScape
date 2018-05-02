@@ -1,246 +1,168 @@
 
 # coding: utf-8
 
-# We'll take the ideas introduced in Rachael Tatman's [Beginner Tutorial: Python](https://www.kaggle.com/rtatman/beginner-s-tutorial-python), scale them up into a complete machine learning pipeline, and add some basic feature engineering.
+# ## Introduction ##
+# The Kaggle Leaderboard is a special kind of place. It does not resemble a real-life situation, but you are based on only one metric: the Log Loss. This means that where we would normally care about for example speed or the size of our models, we don't now. If you have the right models, the tricks in this notebook will help you improve your score a little bit more (hopefully).
+
+# ## Log Loss ##
+# There is a really good notebook going more into detail on log loss. You can find it [here][1]. The thing we have to take away from this notebook is that when we're more certain about a class and we're wrong, we're punished harder than linear. Just like the Dutch tax laws.
 # 
-# First, we need to make quite a few  imports. It's a long list but everything important is a component of either [pandas](http://pandas.pydata.org/pandas-docs/stable/) for data manipulation, [spaCy](https://spacy.io/docs/usage/lightning-tour) for text processing, or [scikit-learn](http://scikit-learn.org/stable/) for machine learning. I'll assume you have general familiarity with both pandas and scikit-learn.
+# 
+#   [1]: https://www.kaggle.com/grfiv4/log-loss-depicted-1
+
+# ## Trick 1: Clipping ##
+# Clipping is a simple operation on our predictions where we set a maximum and a minimum certainty. This avoids really hard punishment in case we're wrong. This means while your model gets better, the less clipping will help you improve your score. For example in the earlier stages of this competition, a clip of 0.90 improved our score from 0.94380 to 0.91815.
 
 # In[ ]:
 
 
 import pandas as pd
-import spacy
+import os
 
-from multiprocessing import cpu_count
-from sklearn.base import TransformerMixin
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn import metrics
-from sklearn.model_selection import StratifiedKFold
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
-from spacy import attrs
-from spacy.symbols import VERB, NOUN, ADV, ADJ
+clip = 0.90
+classes = 8
 
+def clip_csv(csv_file, clip, classes):
+    # Read the submission file
+    df = pd.read_csv(csv_file, index_col=0)
 
-# Next we'll declare important constants, per the python style guide, [PEP8](https://www.python.org/dev/peps/pep-0008). This isn't strictly necessary, but makes for cleaner code.
-
-# In[ ]:
-
-
-TEXT_COLUMN = 'text'
-Y_COLUMN = 'author'
-
-
-# We're going to run a couple of different models with different sets of features, so it's worth taking a moment to set up our model evaluation process as its own function.
-# 
-# For evaulation, we need to do several things:
-# 1. Split the input dataframe into the a feature dataframe and a label dataframe (X and Y).
-# - Conduct  feature engineering.
-# - Train the model.
-# - Perform cross validation.
-# - Report the relevant score. In this case, we'll use log loss to match the competition's evaluation.
-# 
-# Integrating [Scikit-learn pipelines](http://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html) into our evaluation makes this straightforward to repeat with different models and features.
-
-# In[ ]:
-
-
-def test_pipeline(df, nlp_pipeline, pipeline_name=''):
-    y = df[Y_COLUMN].copy()
-    X = pd.Series(df[TEXT_COLUMN])
-    # If you've done EDA, you may have noticed that the author classes aren't quite balanced.
-    # We'll use stratified splits just to be on the safe side.
-    rskf = StratifiedKFold(n_splits=5, random_state=1)
-    losses = []
-    for train_index, test_index in rskf.split(X, y):
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
-        nlp_pipeline.fit(X_train, y_train)
-        losses.append(metrics.log_loss(y_test, nlp_pipeline.predict_proba(X_test)))
-    print(f'{pipeline_name} kfolds log losses: {str([str(round(x, 3)) for x in sorted(losses)])}')
-    print(f'{pipeline_name} mean log loss: {round(pd.np.mean(losses), 3)}')
-
-
-# We're ready to load the data and run our first model. We'll start with the exact same model,
-# a naive bayes classifer on unigram probabilities, as in Rachael's tutorial. Using sklearn instead of implementing everything ourselves will make this both easier to code up and faster to run.
-# 
-# The `Id` column doesn't actually help us (or if it does, isn't really in the spirit of an NLP competition), so we'll skip over it.
-
-# In[ ]:
-
-
-train_df = pd.read_csv("../input/train.csv", usecols=[TEXT_COLUMN, Y_COLUMN])
-
-
-# In[ ]:
-
-
-unigram_pipe = Pipeline([
-    ('cv', CountVectorizer()),
-    ('mnb', MultinomialNB())
-                        ])
-test_pipeline(train_df, unigram_pipe, "Unigrams only")
-
-
-# Since we want to turn this into a nice clean pipeline, we'll do all of our feature engineering using custom transformers.  This first transformer takes the unigram pipeline that we built above and returns the predicted probabilities as features. We could use the raw CountVectorizer output and let our final model deal with the unigram features directly, but that would create two issues:
-# 
-# - CountVectorizer returns [a sparse format](https://docs.scipy.org/doc/scipy-0.19.1/reference/generated/scipy.sparse.csr_matrix.html) that is a pain to integrate with the rest of our pipeline. 
-# - Using CountVectorizer and MultinomialNB allows us to skip converting the word counts to probabilities, and to skip ensuring that probabilities are never exactly zero. See the `alpha` parameter in the [MultinomialNB documentation?](http://scikit-learn.org/stable/modules/generated/sklearn.naive_bayes.MultinomialNB.html#sklearn.naive_bayes.MultinomialNB) As long as we use the default input of one, the model will peform this task (a [Laplace transform](https://en.wikipedia.org/wiki/Additive_smoothing)) for us.
-
-# In[ ]:
-
-
-class UnigramPredictions(TransformerMixin):
-    def __init__(self):
-        self.unigram_mnb = Pipeline([('text', CountVectorizer()), ('mnb', MultinomialNB())])
-
-    def fit(self, x, y=None):
-        # Every custom transformer requires a fit method. In this case, we want to train
-        # the naive bayes model.
-        self.unigram_mnb.fit(x, y)
-        return self
+    # Clip the values
+    df = df.clip(lower=(1.0 - clip)/float(classes - 1), upper=clip)
     
-    def add_unigram_predictions(self, text_series):
-        # Resetting the index ensures the indexes equal the row numbers.
-        # This guarantees nothing will be misaligned when we merge the dataframes further down.
-        df = pd.DataFrame(text_series.reset_index(drop=True))
-        # Make unigram predicted probabilities and label them with the prediction class, aka 
-        # the author.
-        unigram_predictions = pd.DataFrame(
-            self.unigram_mnb.predict_proba(text_series),
-            columns=['naive_bayes_pred_' + x for x in self.unigram_mnb.classes_]
-                                           )
-        # We only need 2 out of 3 columns, as the last is always one minus the 
-        # sum of the other two. In some cases, that colinearity can actually be problematic.
-        del unigram_predictions[unigram_predictions.columns[0]]
-        df = df.merge(unigram_predictions, left_index=True, right_index=True)
-        return df
+    # Normalize the values to 1
+    df = df.div(df.sum(axis=1), axis=0)
 
-    def transform(self, text_series):
-        # Every custom transformer also requires a transform method. This time we just want to 
-        # provide the unigram predictions.
-        return self.add_unigram_predictions(text_series)
+    # Save the new clipped values
+    df.to_csv('clip.csv')
+    print(df.head(10))
+    
+# Of course you are going to use your own submission here
+clip_csv('../input/sample_submission_stg1.csv', clip, classes)
 
 
-# It's time to start adding new features with spaCy. We'll flag the main parts of speech used in each sentence, average word length, and overall sentence length.
+# ## Trick 2: Blending ##
+# When you have different models or different model configurations, then it could be that some models are experts at recognizing all kinds of tuna, while others are better at distinguishing fish vs no fish. Good specialist models are only very certain in their own area. In this case it helps to let them work together to a solution. A way of combining the outputs of multiple models or model settings is blending. It's a very simple procedure where all predictions are added to each other for each image, class pair and then divided by the number of models.
 # 
-# The single slowest step of working with spaCy is often loading the model in the first place, so we'll ensure this step is only done once. By default, spaCy will tag each word, build a dependency model, and perform entity recognition. We only need the part of speech tags, so we'll restrict the pipeline accordingly. In tests on my local machine, this sped up the parse by 5-10x.
+# Blending can for example be used for test augmentation: all test image are augmented with several operations (flipping, rotation, zooming etc.). When you augment each image a couple of times, you can use them as separate submission files, which can be combined using blending afterwards. This approach improved our score from 0.89893 to 0.86401 for this competition.
+# 
+# An other simple alternative for blending is majority voting, where every model is allowed to make one prediction per image.
 
 # In[ ]:
 
 
-NLP = spacy.load('en', disable=['parser', 'ner'])
+import numpy as np
+import pandas as pd
 
+def blend_csv(csv_paths):
+    if len(csv_paths) < 2:
+        print("Blending takes two or more csv files!")
+        return
+    
+    # Read the first file
+    df_blend = pd.read_csv(csv_paths[0], index_col=0)
+    
+    # Loop over all files and add them
+    for csv_file in csv_paths[1:]:
+        df = pd.read_csv(csv_file, index_col=0)
+        df_blend = df_blend.add(df)
+        
+    # Divide by the number of files
+    df_blend = df_blend.div(len(csv_paths))
+
+    # Save the blend file
+    df_blend.to_csv('blend.csv')
+    print(df_blend.head(10))
+
+# Obviously replace this with two or more of your files
+blend_csv(['../input/sample_submission_stg1.csv', '../input/sample_submission_stg1.csv'])
+
+
+# # Trick 3: Pseudo-Labeling
+# This is an technique where test images are used during training. The labels are provide by the predictions of the model. One of the first thoughts that come to mind is: *"WhaAT the HECK!?? How can this even work!?"*.  There is a theorem why this could work. Until we know if it's true, applying Pseudo-Labeling is it's at least worth trying.
+# 
+# Quick summary of the explanation given in the paper below: In semi-supervised learning the goal is to make a clear separation between the classes. The decision boundary should be in low-density regions. This way the model generalizes better. The network should use similar activations for the same class.
+# 
+# When you want to read more, [here][1] is a paper on the subject.
+# 
+#   [1]: http://deeplearning.net/wp-content/uploads/2013/03/pseudo_label_final.pdf
+
+# ## Keras example
+# Below is an example of Pseudo-Labling using Keras. The code is cherry-picked from the code from a lesson from fast.ai. The source files are [this][1] and [this][2] one.
+# 
+# You can play with the amount of test data you add to the batches. In the example below we choose to take about one third of non-training data, being 1/16th validation data and 1/4th test data. 
+# 
+#   [1]: https://github.com/fastai/courses/blob/master/deeplearning1/nbs/utils.py
+#   [2]: https://github.com/fastai/courses/blob/master/deeplearning1/nbs/lesson7.ipynb
 
 # In[ ]:
 
 
-class PartOfSpeechFeatures(TransformerMixin):
-    def __init__(self):
-        self.NLP = NLP
-        # Store the number of cpus available for when we do multithreading later on
-        self.num_cores = cpu_count()
+# Create a MixIterator object
+# This class is a simple method to create batches from several other batch generators
+class MixIterator(object):
+    def __init__(self, iters):
+        self.iters = iters
+        self.multi = type(iters) is list
+        if self.multi:
+            self.N = sum([it[0].N for it in self.iters])
+        else:
+            self.N = sum([it.N for it in self.iters])
 
-    def part_of_speechiness(self, pos_counts, part_of_speech):
-        if eval(part_of_speech) in pos_counts:
-            return pos_counts[eval(part_of_speech).numerator]
-        return 0
+    def reset(self):
+        for it in self.iters: it.reset()
 
-    def add_pos_features(self, df):
-        text_series = df[TEXT_COLUMN]
-        """
-        Parse each sentence with part of speech tags. 
-        Using spaCy's pipe method gives us multi-threading 'for free'. 
-        This is important as this is by far the single slowest step in the pipeline.
-        If you want to test this for yourself, you can use:
-            from time import time 
-            start_time = time()
-            (some code)
-            print(f'Code took {time() - start_time} seconds')
-        For faster functions the timeit module would be standard... but that's
-        meant for situations where you can wait for the function to be called 1,000 times.
-        """
-        df['doc'] = [i for i in self.NLP.pipe(text_series.values, n_threads=self.num_cores)]
-        df['pos_counts'] = df['doc'].apply(lambda x: x.count_by(attrs.POS))
-        # We get a very minor speed boost here by using pandas built in string methods
-        # instead of df['doc'].apply(len). String processing is generally slow in python,
-        # use the pandas string methods directly where possible.
-        df['sentence_length'] = df['doc'].str.len()
-        # This next step generates the fraction of each sentence that is composed of a 
-        # specific part of speech.
-        # There's admittedly some voodoo in this step. Math can be more highly optimized in python
-        # than string processing, so spaCy really stores the parts of speech as numbers. If you
-        # try >>> VERB in the console you'll get 98 as the result.
-        # The monkey business with eval() here allows us to generate several named columns
-        # without specifying in advance that {'VERB': 98}.
-        for part_of_speech in ['NOUN', 'VERB', 'ADJ', 'ADV']:
-            df[f'{part_of_speech.lower()}iness'] = df['pos_counts'].apply(
-                lambda x: self.part_of_speechiness(x, part_of_speech))
-            df[f'{part_of_speech.lower()}iness'] /= df['sentence_length']
-        df['avg_word_length'] = (df['doc'].apply(
-            lambda x: sum([len(word) for word in x])) / df['sentence_length'])
-        return df
-
-    def fit(self, x, y=None):
-        # since this transformer doesn't train a model, we don't actually need to do anything here.
+    def __iter__(self):
         return self
 
-    def transform(self, df):
-        return self.add_pos_features(df.copy())
+    def next(self, *args, **kwargs):
+        if self.multi:
+            nexts = [[next(it) for it in o] for o in self.iters]
+            n0 = np.concatenate([n[0] for n in nexts])
+            n1 = np.concatenate([n[1] for n in nexts])
+            return (n0, n1)
+        else:
+            nexts = [next(it) for it in self.iters]
+            n0 = np.concatenate([n[0] for n in nexts])
+            n1 = np.concatenate([n[1] for n in nexts])
+        return (n0, n1)
 
-
-# Finally, sklearn models generally don't accept strings as inputs, so we'll need to drop all string columns. This includes the original
-# 'text' column that we read from the csv!
 
 # In[ ]:
 
 
-class DropStringColumns(TransformerMixin):
-    # You may have noticed something odd about this class: there's no __init__!
-    # It's actually inherited from TransformerMixin, so it doesn't need to be declared again.
-    def fit(self, x, y=None):
-        return self
+# Example usage in Keras
+# [replace by your own code]
+model = Sequential()
+model.add(Conv2D(32, kernel_size=(3, 3),
+                 activation='relu',
+                 input_shape=input_shape))
+model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+model.add(Flatten())
+model.add(Dense(128, activation='relu'))
+model.add(Dropout(0.5))
+model.add(Dense(num_classes, activation='softmax'))
 
-    def transform(self, df):
-        for col, dtype in zip(df.columns, df.dtypes):
-            if dtype == object:
-                del df[col]
-        return df
+model.compile(loss=keras.losses.categorical_crossentropy, optimizer=keras.optimizers.Adam(lr=0.001), metrics=['accuracy'])
 
+model.fit(x_train, y_train,
+          batch_size=batch_size,
+          epochs=epochs,
+          verbose=1,
+validation_data=(x_test, y_test))
 
-# If you want to experiment with different combinations of features, try writing your own transformers and adding them to the pipeline.
-# 
-# If you're running this at home, expect this next step to take ~30 seconds or so as we're retraining the model several times during the cross validation.
+batch_size = 8
+# [/replace by your own code]
 
-# In[ ]:
+predictions = model.predict(x_test, batch_size=batch_size)
 
+gen = ImageDataGenerator()
 
-logit_all_features_pipe = Pipeline([
-        ('uni', UnigramPredictions()),
-        ('nlp', PartOfSpeechFeatures()),
-        ('clean', DropStringColumns()), 
-        ('clf', LogisticRegression())
-                                     ])
-test_pipeline(train_df, logit_all_features_pipe)
+train_batches = gen.flow(x_train, y_train, batch_size=44)
+val_batches = gen.flow(x_val, y_val, batch_size=4)
+test_batches = gen.flow(x_test, predictions, batch_size=16)
 
+mi = MixIterator([train_batches, test_batches, val_batches])
+model.fit_generator(mi, mi.N, nb_epoch=8, validation_data=(x_val, y_val))
 
-# This pipeline is better... but only just barely. I'll leave it as an exercise for you to add better features and more powerful models. However, if we did want to submit this, we'd just feed `logit_all_features_pipe` into the `generate_submission_df` function.
-
-# In[ ]:
-
-
-def generate_submission_df(trained_prediction_pipeline, test_df):
-    predictions = pd.DataFrame(
-        trained_prediction_pipeline.predict_proba(test_df.text),
-        columns=trained_prediction_pipeline.classes_
-                               )
-    predictions['id'] = test_df['id']
-    predictions.to_csv("submission.csv", index=False)
-    return predictions
-
-
-# Exercises:
-# 1. Update the `PartOfSpeechFeatures` transformer to record all parts of speech, not just the original four.
-# - Can you generate a useful feature with spaCy's dependency parser? Fair warning,I haven't tried yet so the answer may well be no!
-# - More challenging: Kevin Schiroo figured out that [sentences for MWS are missing exclamation marks](https://www.kaggle.com/c/spooky-author-identification/discussion/42135). A simple regex based on capital letters like `re.sub(r'\b (?=[A-Z])', '! ', sentence)` would insert too many exclamation points by treating names as ends of sentences. Can you use spaCy's entity recognition model to clean those up?

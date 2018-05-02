@@ -1,226 +1,156 @@
 
 # coding: utf-8
 
-# # Summary:#
-# 
-#    This notebook uses elementary math methods to detect linear recurrence sequences.  Machine learning methods are *not* used here. 
-#     
-#    Among the 113,849 sequenes in the test set, we found more than 5000 of them satify recurrence relations of order 2,3 or 4. For those sequences, we computed the recurrence relations and predict the next terms. Moreover, we found recurrence relations that are not described in the OEIS. 
-# 
-# ## Linear Recurrence Relations ##
-# 
-# (Remark: This notebook only considers homogeneous linear recurrence relations with constant coefficients. Nonlinear or non-homogeneous relations are not investigated here.)
-# 
-# ### 2nd order recurrence relation ###   
-# A second order recurrence relation is of the form:  $$ a_{n+2} = c_{0}a_{n}+ c_{1}a_{n+1}, $$
-# where the coefficients $c_{0}$ and $c_{1}$ are constant.
-# 
-# For example, the Fibonacci sequence $a_{n+2}= a_{n}+a_{n+1}$ is a second order recurrence sequence with coefficients $(1,1)$.
-# 
-# ### 3rd order recurrence relation ###   
-# A second order recurrence relation is of the form:  $$ a_{n+3} = c_{0}a_{n}+ c_{1}a_{n+1}+c_{2}a_{n+2}, $$
-# where the coefficients $c_{0},c_{1},c_{2}$ are constant.
-# 
-# 
-# ## Detect Recurrence Relations ##
-# 
-# Given a sequence $a_{n}$, let's say we want to verify whether it's given by a 3rd order recurrence relation. In other words, we check if it's possible to find constants $c_{0},c_{1},c_{2}$ so that $$a_{n+3} = c_{0}a_{n}+ c_{1}a_{n+1}+c_{2}a_{n+2}$$ is satified. To find possible $c_{0},c_{1},c_{2}$, since there are 3 unknowns, we need at least 3 equations. Let's set the equations using $a_{3},a_{4},a_{5}$ as follows:
-# 
-# $$ a_{3} = c_{0}a_{0}+ c_{1}a_{1}+c_{2}a_{2} $$
-# $$ a_{4} = c_{0}a_{1}+ c_{1}a_{2}+c_{2}a_{3} $$
-# $$ a_{5} = c_{0}a_{2}+ c_{1}a_{3}+c_{2}a_{4}. $$
-# 
-# Writting these equations in matrix form, we obtain
-# 
-# $$\begin{bmatrix}
-# a_{0} & a_{1} & a_{2} \\ 
-# a_{1} & a_{2} & a_{3} \\
-# a_{2} & a_{3} & a_{4}
-# \end{bmatrix}
-# \begin{bmatrix}
-# c_{0} \\ 
-# c_{1}\\
-# c_{2}
-# \end{bmatrix}=
-# \begin{bmatrix}
-# a_{3} \\ 
-# a_{4}\\
-# a_{5}
-# \end{bmatrix},
-# $$ 
-# then we solve for $(c_{0},c_{1},c_{2})$. Once the coefficients $(c_{0},c_{1},c_{2})$ are found, we check whether the next terms $a_{6},a_{7},\cdots$ satisfy the recurrence relation.
-# 
+# Hello everyone! In this kernel is represented 1 dimensional convolutional neural network. The idea is simple, without tuning of model's hyperparameters. The submission file is provided.
+
+# Feature binarization and scaling created by our team
 
 # In[ ]:
 
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+SEED = 42
+np.random.seed(SEED)
+
+from sklearn.preprocessing import StandardScaler, LabelBinarizer
+
+#binarization of features
+class FeatureBinarizatorAndScaler:
+    """ This class needed for scales and factorize features
+    """
+    NUMERICAL_FEATURES = list()
+    CATEGORICAL_FEATURES = list()
+    BIN_FEATURES = list()
+    binarizers = dict()
+    scalers = dict()
+
+    def __init__(self, numerical=list(), categorical=list(), binfeatures = list(), binarizers=dict(), scalers=dict()):
+        self.NUMERICAL_FEATURES = numerical
+        self.CATEGORICAL_FEATURES = categorical
+        self.BIN_FEATURES = binfeatures
+        self.binarizers = binarizers
+        self.scalers = scalers
+
+    def fit(self, train_set):
+        for feature in train_set.columns:
+
+            if feature.split('_')[-1] == 'cat':
+                self.CATEGORICAL_FEATURES.append(feature)
+            elif feature.split('_')[-1] != 'bin':
+                self.NUMERICAL_FEATURES.append(feature)
+            else:
+                self.BIN_FEATURES.append(feature)
+        for feature in self.NUMERICAL_FEATURES:
+            scaler = StandardScaler()
+            self.scalers[feature] = scaler.fit(np.float64(train_set[feature]).reshape((len(train_set[feature]), 1)))
+        for feature in self.CATEGORICAL_FEATURES:
+            binarizer = LabelBinarizer()
+            self.binarizers[feature] = binarizer.fit(train_set[feature])
+
+    def transform(self, data):
+        binarizedAndScaledFeatures = np.empty((0, 0))
+        for feature in self.NUMERICAL_FEATURES:
+            if feature == self.NUMERICAL_FEATURES[0]:
+                binarizedAndScaledFeatures = self.scalers[feature].transform(np.float64(data[feature]).reshape(
+                    (len(data[feature]), 1)))
+            else:
+                binarizedAndScaledFeatures = np.concatenate((
+                    binarizedAndScaledFeatures,
+                    self.scalers[feature].transform(np.float64(data[feature]).reshape((len(data[feature]),
+                                                                                       1)))), axis=1)
+        for feature in self.CATEGORICAL_FEATURES:
+
+            binarizedAndScaledFeatures = np.concatenate((binarizedAndScaledFeatures,
+                                                         self.binarizers[feature].transform(data[feature])), axis=1)
+
+        for feature in self.BIN_FEATURES:
+            binarizedAndScaledFeatures = np.concatenate((binarizedAndScaledFeatures, np.array(data[feature]).reshape((len(data[feature]),
+                                                                                       1))), axis=1)
+
+        print(binarizedAndScaledFeatures.shape )
+
+        return binarizedAndScaledFeatures
+
+
+# Convolutional Neural Network implementation
+
+# In[ ]:
+
+
+
+from keras.models import Sequential
+from keras.layers import Dense, Flatten, Convolution1D, Dropout
+from keras.optimizers import SGD
+from keras.initializers import random_uniform
 
 import pandas as pd
-import numpy as np
 
-testfile='../input/test.csv'
-data = open(testfile).readlines()
+X_train = pd.read_csv('../input/train.csv')
+y_train = X_train['target']
+X_test = pd.read_csv('../input/test.csv')
+test_id = X_test['id']
+X_test = X_test.drop(['id'], axis=1)
+X_train = X_train.drop(['id', 'target'], axis = 1)
+y_train1 = abs(-1+y_train)
+y_train = pd.concat([y_train, y_train1], axis=1)
+binarizerandscaler = FeatureBinarizatorAndScaler()
+binarizerandscaler.fit(X_train)
+X_train = binarizerandscaler.transform(X_train)
+X_test = binarizerandscaler.transform(X_test)
+y_train = y_train.as_matrix()
 
-sequences={}   #(key, value) = (id , sequence)
-for i in range(1,len(data)): 
-    line=data[i]
-    line =line.replace('"','')
-    line = line[:-1].split(',')
-    id = int(line[0])
-    sequence=[int(x) for x in line[1:]];
-    sequences[id]=sequence
+
+X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+#hyperparameters
+input_dimension = 226
+learning_rate = 0.0025
+momentum = 0.85
+hidden_initializer = random_uniform(seed=SEED)
+dropout_rate = 0.2
+
+
+# create model
+model = Sequential()
+model.add(Convolution1D(nb_filter=32, filter_length=3, input_shape=X_train.shape[1:3], activation='relu'))
+model.add(Convolution1D(nb_filter=16, filter_length=1, activation='relu'))
+model.add(Flatten())
+model.add(Dropout(dropout_rate))
+model.add(Dense(128, input_dim=input_dimension, kernel_initializer=hidden_initializer, activation='relu'))
+model.add(Dropout(dropout_rate))
+model.add(Dense(64, kernel_initializer=hidden_initializer, activation='relu'))
+model.add(Dense(2, kernel_initializer=hidden_initializer, activation='softmax'))
+
+sgd = SGD(lr=learning_rate, momentum=momentum)
+model.compile(loss='binary_crossentropy', optimizer=sgd, metrics=['acc'])
+model.fit(X_train, y_train, epochs=5, batch_size=128)
+predictions = model.predict_proba(X_test)
+
+ans = pd.DataFrame(predictions)
+ans = ans[0]
 
 
 # In[ ]:
 
 
-def checkRecurrence(seq, order= 2, minlength = 7):
-    """
-    :type seq: List[int]
-    :type order: int
-    :type minlength: int 
-    :rtype: List[int]
-    
-    Check whether the input sequence is a recurrence sequence with given order.
-    If it is, return the coefficients for the recurrenec relation.
-    If not, return None.
-    """     
-    if len(seq)< max((2*order+1), minlength):
-        return None
-    
-    ################ Set up the system of equations 
-    A,b = [], []
-    for i in range(order):
-        A.append(seq[i:i+order])
-        b.append(seq[i+order])
-    A,b =np.array(A), np.array(b)
-    try: 
-        if np.linalg.det(A)==0:
-            return None
-    except TypeError:
-        return None
-   
-    #############  Solve for the coefficients (c0, c1, c2, ...)
-    coeffs = np.linalg.inv(A).dot(b)  
-    
-    ############  Check if the next terms satisfy recurrence relation
-    for i in range(2*order, len(seq)):
-        predict = np.sum(coeffs*np.array(seq[i-order:i]))
-        if abs(predict-seq[i])>10**(-2):
-            return None
-    
-    return list(coeffs)
-
-
-def predictNextTerm(seq, coeffs):
-    """
-    :type seq: List[int]
-    :type coeffs: List[int]
-    :rtype: int
-    
-    Given a sequence and coefficienes, compute the next term for the sequence.
-    """
-    
-    order = len(coeffs)
-    predict = np.sum(coeffs*np.array(seq[-order:]))
-    return int(round(predict))
-
-
-# ## Example: ##
-# * Given a sequence [1,5,11,21,39,73,139,269,527].
-# * We verify if it's 3rd order recurrence sequence and find the coefficients (2,-5,4).
-# * We then predict the next term using the last 3 terms and the relation $a_{n+3} = 2a_{n}-5a_{n+1}+4a_{n+2}$. 
-
-# In[ ]:
-
-
-seq = [1,5,11,21,39,73,139,269,527]
-print (checkRecurrence(seq,3))
-print (predictNextTerm(seq, [2,-5,4]))
-
-
-# # Find 2nd order sequeneces in the test set #
-
-# In[ ]:
-
-
-order2Seq={}   #(key, value) = (sequence id, [prediction, coefficients])
-for id in sequences:  
-    seq = sequences[id]
-    coeff = checkRecurrence(seq,2)
-    if coeff!=None:
-        predict = predictNextTerm(seq, coeff)
-        order2Seq[id]=(predict,coeff)
-
-print ("We found %d sequences\n" %len(order2Seq))
-
-print  ("Some examples\n")
-print ("ID,  Prediction,  Coefficients")
-for key in sorted(order2Seq)[0:5]:
-    value = order2Seq[key]
-    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
-
-
-# # Find 3rd order sequeneces in the test set #
-
-# In[ ]:
-
-
-order3Seq={}
-for id in sequences:
-    if id in order2Seq:
-        continue
-    seq = sequences[id]
-    coeff = checkRecurrence(seq,3)
-    if coeff!=None:
-        predict = predictNextTerm(seq, coeff)
-        order3Seq[id]=(predict,coeff)
-
-print ("We found %d sequences\n" %len(order3Seq))
-
-print  ("Some examples\n")
-print ("ID,  Prediction,  Coefficients")
-for key in sorted(order3Seq)[0:5]:
-    value = order3Seq[key]
-    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
-
-
-# # Find 4th order sequeneces in the test set #
-
-# In[ ]:
-
-
-order4Seq={}
-for id in sequences:  
-    if id in order2Seq or id in order3Seq:
-        continue
-    seq = sequences[id]
-    coeff = checkRecurrence(seq,4)
-    if coeff!=None:
-        predict = predictNextTerm(seq, coeff)
-        order4Seq[id]=(predict,coeff)
-
-print ("We found %d sequences \n" %len(order4Seq))
-print  ("Some examples\n")
-print ("ID,  Prediction,  Coefficients")
-for key in sorted(order4Seq)[4:5]:
-    value = order4Seq[key]
-    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
-
-print (sequences[239][0:17])
-
-
-# ## Recurrence relations not included in OEIS ##
-# In the previous cells,
-#     * We find that Sequence 239 is a 4th order sequence and predict the next term as 5662052980.
-#     * We check OEIS https://oeis.org/A000773, which confirms the prediction is correct.
-#     * We observe that this recurrence relation is not described in OEIS. (There are more such sequences.)
-
-# In[ ]:
-
-
-print("Conclusion:")
-print("Number of sequences in the test set:", len(sequences))
-print("Number of 2nd order sequences:", len(order2Seq))
-print("Number of 3rd order sequences:", len(order3Seq))
-print("Number of 4th order sequences:", len(order4Seq))
+# Create submission file
+sub = pd.DataFrame()
+sub['id'] = test_id
+sub['target'] = ans
+sub.to_csv('submission.csv', float_format='%.6f', index=False)
 

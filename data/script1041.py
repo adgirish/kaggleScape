@@ -1,1161 +1,1700 @@
 
 # coding: utf-8
 
+# ![](https://static.wixstatic.com/media/80a58d_adc900710a474cd091d5dae9649734f9~mv2.png/v1/fill/w_812,h_353,al_c,lg_1/80a58d_adc900710a474cd091d5dae9649734f9~mv2.png)
+
+# # More To Come. Stay Tuned. !!
+# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
+# 
+# **This notebook will always be a work in progress.** Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. **If you like it or it helps you , you can upvote and/or leave a comment :).**
+
+# - <a href='#intro'>1. Introduction</a>  
+# - <a href='#rtd'>2. Retrieving the Data</a>
+#      - <a href='#ll'>2.1 Load libraries</a>
+#      - <a href='#rrtd'>2.2 Read the Data</a>
+# - <a href='#god'>3. Glimpse of Data</a>
+#      - <a href='#oot'>3.1 Overview of tables</a>
+#      - <a href='#sootd'>3.2 Statistical overview of the Data</a>
+# - <a href='#dp'>4. Data preparation</a>
+#      - <a href='#cfmd'> 4.1 Check for missing data</a>
+# - <a href='#de'>5. Data Exploration</a>
+#      - <a href='#ppan'>5.1 Project proposal is Approved or not ?</a>
+#      - <a href='#d'>5.2 Distribution</a>
+#          - <a href='#doss'>5.2.a Distribution of School states</a>
+#          - <a href='#dpgc'>5.2.b Distribution of project_grade_category (school grade levels (PreK-2, 3-5, 6-8, and 9-12))</a>
+#          - <a href='#dcotp'>5.2.c Distribution of category of the project</a>
+#          - <a href='#dnppast'>5.2.d Distribution of number of previously posted applications by the submitting teacher</a>
+#          - <a href='#dsotp'>5.2.e Distribution of subcategory of the project</a>
+#          - <a href='#dopt'>5.2.f Distribution of Project titles</a>
+#          - <a href='#doporr'>5.2.g Distribution of price of resource requested</a>
+#          - <a href='#doqorr'>5.2.h Distribution of quantity of resource requested</a>
+#          - <a href='#tpd'>5.2.i Teacher prefix Distribution</a>
+#      - <a href='#trnfp'>5.3 Top resources needed for the project</a> 
+#      - <a href='#wcrr'>5.4 Word Cloud of resources requested</a>
+#      - <a href='#vpppan'>5.5 Various popularities in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#psstpan'>5.5.a Popular School states in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#ptptppa'>5.5.b Popular Teacher Prefix in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#psgltpp'>5.5.c Popular school grade levels in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#pcoptppa'>5.5.d Popular category of the project in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#psotpppan'>5.5.e Popular subcategory of the project in terms of project acceptance rate and project rejection rate</a>
+#          - <a href='#ppttpan'>5.5.f Popular project titles in terms of project acceptance rate and project rejection rate</a>
+#      - <a href='#ppuss'>5.6 Project Proposals by US States</a>
+#      - <a href='#ppmaruss'>5.7 Project Proposals Mean Acceptance Rate by US States</a>
+#      - <a href='#cmhmtd'>5.8 Correlation Matrix and HeatMap of training data</a>
+#          - <a href='#tppiaic'>5.8.a Teacher_prefix and project_is_approved Intervals Correlation</a>
+#          - <a href='#tnppppaic'>5.8.b Teacher_number_of_previously_posted_projects and project_is_approved Intervals Correlation</a>
+#          - <a href='#cmaht'>5.8.c Correlation Matrix and Heatmap of training data</a>
+#      - <a href='#psta'>5.9 Project Submission Time Analysis</a>
+#          - <a href='#psma'>5.9.a Project Submission Month Analysis</a>
+#          - <a href='#pswa'>5.9.b Project Submission Weekday Analysis</a>
+#          - <a href='#psda'>5.9.c Project Submission Date Analysis</a>
+#          - <a href='#psha'>5.9.d Project Submission Hour Analysis</a>
+#      - <a href='#tkips1'>5.10 Top Keywords in project_essay_1</a>
+#      - <a href='#tkipe2'>5.11 Top Keywords in project_essay_2</a>
+#      - <a href='#tkinprs'>5.12 Top Keywords in project_resource_summary</a>
+#      - <a href='#qvp'>5.13 Quantity V.S. Price</a>
+#      - <a href='#gapc'>5.14 Gender Analysis</a>
+#      - <a href='#mwdppes'>5.15 Month wise distribution of number of projects proposal submitted in each state</a>
+#      - <a href='#prfrd'>5.16 Price requested for resources distribution</a> [I commented the code becuase of excessive rendering time but i wrote the results]
+#          - <a href='#prfrbds'>5.16.a Price requested for resources distribution by different states</a>
+#          - <a href='#prfrbtp'>5.16.b Price requested for resources distribution by Teacher prefixes</a>
+#          - <a href='#prfrddga'>5.16.c Price requested for resources distribution by different Genders</a>
+#          - <a href='#prfrddpgc'>5.16.d Price requested for resources distribution by different project_grade_category</a>
+#      - <a href='#ca'>5.17 CA(California)</a>
+#          - <a href='#potpic'>5.17.a Popularities of Teacher prefixes in California</a>
+#          - <a href='#posglic'>5.17.b Popularities of school grade levels in California</a>
+#          - <a href='#tptic'>5.17.c Top project titles in California</a>
+#          - <a href='#topstic'>5.17.d Trend of project submission time in California</a>
+#      - <a href='#TX'>5.18 TX(Texas)</a>
+#          - <a href='#potpit'>5.18.a Popularities of Teacher prefixes in Texas</a>
+#          - <a href='#posglit'>5.18.b Popularities of school grade levels in Texas</a>
+#          - <a href='#tptit'>5.18.c Top project titles in Texas</a>
+#          - <a href='#topstit'>5.18.d Trend of project submission time in Texas</a>
+# - <a href='#bsc'>6. Brief Summary/Conclusion :</a>
+
+# ## <a id='intro'>1. Intoduction</a>
+
+# **About DonorsChoose:**
+# 
+# DonorsChoose.org is a United States–based 501(c)(3) nonprofit organization that allows individuals to donate directly to public school classroom projects. Founded in 2000 by former public school teacher Charles Best, DonorsChoose.org was among the first civic crowdfunding platforms of its kind. The organization has been given Charity Navigator’s highest rating every year since 2005. In January 2018, they announced that 1 million projects had been funded. In 77% of public schools in the United States, at least one project has been requested on DonorsChoose.org. Schools from wealthy areas are more likely to make technology requests, while schools from less affluent areas are more likely to request basic supplies. It's been noted that repeat donors on DonorsChoose typically donate to projects they have no prior relationship with, and most often fund projects serving financially challenged students.
+# 
+# 
+# **Objective of this Notebook:**
+# 
+# In this Notebook i will do Exploratory Analysis.
+# 
+# **Objective of the competition:**
+# 
+# DonorsChoose.org receives hundreds of thousands of project proposals each year for classroom projects in need of funding. Right now, a large number of volunteers is needed to manually screen each submission before it's approved to be posted on the DonorsChoose.org website.The goal of the competition is to predict whether or not a DonorsChoose.org project proposal submitted by a teacher will be approved, using the text of project descriptions as well as additional metadata about the project, teacher, and school. DonorsChoose.org can then use this information to identify projects most likely to need further review before approval.
+# 
+
+# # <a id='rtd'>2. Retrieving the Data</a>
+
+# ## <a id='ll'>2.1 Load libraries</a>
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import pandas as pd # package for high-performance, easy-to-use data structures and data analysis
+import numpy as np # fundamental package for scientific computing with Python
+import matplotlib
+import matplotlib.pyplot as plt # for plotting
+import seaborn as sns # for making plots with seaborn
+color = sns.color_palette()
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+from plotly.offline import init_notebook_mode, iplot
+init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.offline as offline
+offline.init_notebook_mode()
+import plotly.tools as tls
+import squarify
+from mpl_toolkits.basemap import Basemap
+from numpy import array
+from matplotlib import cm
 
-import pandas as pd
-import numpy as np
-import IPython
-import graphviz
-import re
-from IPython.display import display
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, export_graphviz
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings("ignore")
+
+# Print all rows and columns
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
 
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# In[ ]:
+
 
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Any results you write to the current directory are saved as output.
 
-
-# # **Random Forests are Great, but how do they work?**
-# 
-# <img src='http://www.earthtimes.org/newsimage/rising-temperatures-affect-forests-carbon-storage-role-study_265.jpg' />
-# 
-# **Wikipedia** defines random forests as: Random forests or random decision forests are an ensemble learning method for classification, regression and other tasks, that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. 
-# 
-# ## Table of Contents:
-# 
-# **1. [Decision Tree - Baby Steps](#section1)**  <br>
-# **2. [Real Data](#section2)**<br>
-# **3. [Decision Tree from scratch](#section3)**<br>
-# **4. [Nested Tree - TBD](#section4)**<br>
-# **5. [Ensemble of Trees- TBD](#section5)**<br>
-# **6. [Tree Confidence Intervals](#section6)**<br>
-# **7. [Feature Importance](#section7)**<br>
-# **8. [More or Less Features?](#section8)**<br>
-# **10. [Feature Contribution](#section10)**<br>
-# 
-# **Updated 12/7/2017 - added tree variance and feature importance at the bottom **
-# 
-# ### **Summary: A Random Forest, like a real forest is made of trees** 
-# 
-# <img src='https://i1.wp.com/dataaspirant.com/wp-content/uploads/2017/04/Random-Forest-Introduction.jpg?resize=690%2C345' />
-# ## **What is a Decision Tree?**
-# Decision tree learning uses a decision tree (as a predictive model) to go from observations about an item (represented in the branches) to conclusions about the item's target value (represented in the leaves). It is one of the predictive modelling approaches used in statistics, data mining and machine learning. Tree models where the target variable can take a discrete set of values are called classification trees; in these tree structures, leaves represent class labels and branches represent conjunctions of features that lead to those class labels. Decision trees where the target variable can take continuous values (typically real numbers) are called regression trees.
-# 
-# ### **Best way to understand one is to build one from scratch! Let's go!**
-
-# <a id='section1'></a>
-# # **1. Decision Tree by Hand**
-# <img src='https://eight2late.files.wordpress.com/2016/02/7214525854_733237dd83_z1.jpg?w=700' />
-# ### **For our baby case lets work through a tiny dataset**
-# 
-# ## **x = [1,2,3,4,5,6]**
-# ## **y = [1,1,0,1,0,0]**
+# ## <a id='rrtd'>2.2 Read tha Data</a>
 
 # In[ ]:
 
 
-x = pd.DataFrame({'feature':[1,2,3,4,5,6]})
-x_vec = np.array([1,2,3,4,5,6], dtype=int)
-y = np.array([1,1,0,1,0,0], dtype=int)
+train_data = pd.read_csv("../input/train.csv")
+test_data = pd.read_csv("../input/test.csv")
+resources_data = pd.read_csv("../input/resources.csv")
 
-
-# ###  **The Decision Tree Algorithm - in English**
-# 
-# 1. Target: Looking for a division of the dataset where the groups are most evenly split. in this baby example, the ideal split has mostly `1`'s on one side and mostly `0`'s on other side
-# 2. Will check every element and separate the set into a left handed group and a right handed group and calculate a 'purity' score
-# 3. will loop and search for the **lowest** score
-# 
-# ### **Let's go from scratch, step by step**
-# <img src='https://godmoneyandme.files.wordpress.com/2012/01/pencil-and-paper.jpg' />
-# 
-# 
-# ### **i=1, Split at 1st element**
-# 
-# ### **x = [1] // [2,3,4,5,6]**
-# ### **y = [1] // [1,0,1,0,0]**
-# 
-
-# In[ ]:
-
-
-lhs_x = x_vec<=x_vec[0]
-rhs_x = x_vec>x_vec[0]
-lhs_y = y[lhs_x]
-rhs_y = y[rhs_x]
-
-print(lhs_x, rhs_x,lhs_y,rhs_y)
-
-
-# ### **i=1, Calculate the purity score**
-# 
-# $$\sigma_{ylhs}n_{xlhs} + \sigma_{yrhs}n_{xrhs} $$
-# 
-# The score is roughly the standard deviation of the y times the number of samples. Lets consider the extremes:
-# 
-# 1. If the split is perfect, one side will have all 1's and the other will have all 0's, the deviations will equal =0 and the score will be zero
-# 2. If the split is terrible, we will have a huge deviation times a large number of points that will give a very large score
-
-# In[ ]:
-
-
-np.std(lhs_y) * sum(lhs_x) + np.std(rhs_y) * sum(rhs_x)
-
-
-# 
-# ### **i=2, Calculate the purity score**
-# 
-# ### **x = [1,2] // [3,4,5,6]**
-# ### **y = [1,1] // [0,1,0,0]**
-# 
-
-# In[ ]:
-
-
-lhs_x = x_vec<=x_vec[1]
-rhs_x = x_vec>x_vec[1]
-lhs_y = y[lhs_x]
-rhs_y = y[rhs_x]
-
-print(lhs_x, rhs_x,lhs_y,rhs_y)
+## Merging with train and test data ##
+train_resource = pd.merge(train_data, resources_data, on="id", how='left')
+test_resource = pd.merge(test_data, resources_data, on="id", how='left')
 
 
 # In[ ]:
 
 
-np.std(lhs_y) * sum(lhs_x) + np.std(rhs_y) * sum(rhs_x)
+print("Size of training data : ",train_data.shape)
+print("Size of test data : ",test_data.shape)
+print("Size of resource data : ",resources_data.shape)
+print("Size of train_resource data : ",train_resource.shape)
+print("Size of test_resource data : ",test_resource.shape)
 
 
-# ### **i=3, Split at 3rd element**
-# 
-# 
-# ### **x = [1,2,3] // [4,5,6]**
-# ### **y = [1,1,0] // [1,0,0]**
-# 
+# # <a id='god'>3. Glimpse of Data</a>
 
-# In[ ]:
+# ## <a id='oot'>3.1 Overview of tables</a>
 
-
-lhs_x = x_vec<=x_vec[2]
-rhs_x = x_vec>x_vec[2]
-lhs_y = y[lhs_x]
-rhs_y = y[rhs_x]
-
-print(lhs_x, rhs_x,lhs_y,rhs_y)
-np.std(lhs_y) * sum(lhs_x) + np.std(rhs_y) * sum(rhs_x)
-
-
-# ### **Conclusion: it seems that element 2~3 is a good split, with 2 samples going left, and 4 going right!**
-# 
-# ### **Let's compare to sklearn! We will use 1 decision tree with depth 1**
-# 
+# **Training Data**
 
 # In[ ]:
 
 
-dtr = DecisionTreeRegressor(max_depth=1)
-dtr.fit(x,y)
+train_data.head()
 
 
-# ### **Tree Drawing function**
-
-# In[ ]:
-
-
-def draw_tree(t, df, size=10, ratio=0.6, precision=0):
-    """ Draws a representation of a random forest in IPython.
-    Parameters:
-    -----------
-    t: The tree you wish to draw
-    df: The data used to train the tree. This is used to get the names of the features.
-    """
-    s=export_graphviz(t, out_file=None, feature_names=df.columns, filled=True,
-                      special_characters=True, rotate=True, precision=precision)
-    IPython.display.display(graphviz.Source(re.sub('Tree {',
-       f'Tree {{ size={size}; ratio={ratio}', s)))
-draw_tree(dtr, x, precision=3)
-
-
-# ### **We see we are consistent with sklearn**
-
-# <a id='section2'></a>
-# 
-# # **2. On to the real Data:**
-# 
-# ### **We will use Iowa Housing Data from this kaggle competition for the rest of our exploration**
-# <img src='https://www.reno.gov/Home/ShowImage?id=7739&t=635620964226970000' />
+# **Test Data**
 
 # In[ ]:
 
 
-train_df = pd.read_csv('../input/train.csv')
-df_test = pd.read_csv('../input/test.csv')
+test_data.head()
 
 
-# ### **For simplicity lets choose only a few features**
-
-# In[ ]:
-
-
-train_df.columns
-
+# **Resource Data**
 
 # In[ ]:
 
 
-sample_df = train_df[['SalePrice','YrSold','GrLivArea','TotRmsAbvGrd']].copy()
-sample_df.head()
+resources_data.head()
 
 
-# ### **Split into X and y variables**
+# **train_resource**
+
+# In[ ]:
+
+
+train_resource.head()
+
+
+# **test_resource**
+
+# In[ ]:
+
+
+test_resource.head()
+
+
+# ## <a id='sootd'>3.2 Statistical Overview of the Data</a>
+
+# **Training Data some little info**
+
+# In[ ]:
+
+
+train_data.info()
+
+
+# **Little description of training data for numerical features**
 # 
 
 # In[ ]:
 
 
-y_train = sample_df['SalePrice']
-X_train = sample_df[[x for x in sample_df.columns if x != 'SalePrice']]
-print(y_train.shape, X_train.shape)
+train_data.describe()
 
 
-# <a id='section2'></a>
-# # **3. Make a 1-level Decision Tree**
-# ### **Sklearn: Make a Decision Tree with Depth 1**
-
-# In[ ]:
-
-
-dtr = DecisionTreeRegressor(max_depth=1)
-dtr.fit(X_train,y_train)
-
-
-# In[ ]:
-
-
-draw_tree(dtr, X_train, precision=2)
-
-
-# ## **Splitting Algorithm : A simple loop**
-# 
+# **Little description of training data for categorical features**
 # 
 
-# ###  **English**
-# 1. Target: Looking for a division of the dataset where mostly 1's on one side and mostly 0's on other side
-# 2. Will check every element and separate the set into a left handed group and a right handed group and calculate a 'purity' score
-# 3. will loop and search for the lowest score
-# 
-# ### **Score Calculation**:
-# 
-#     - left_grp_Ytrain_deviation * left_Xtrain_sum + right_grp_Ytrain_deviation * right_Xtrain_sum
-# 
-# ### **Python Explicit Code: Setup**
-# - `feature_idx =1` : we can choose which feature we want to look at 
-# - `stored_score = float('inf')` : choose a very high starter score
-# - `stored_split_feature = 0` this is redundant right now, but it would be the idea feature to split on
-# - `stored_split_value = 0` - this is the actual data-frame value to split on, for us `GrLivArea` is in ft
-# - `all_indexes = [x for x in X_train.index]` : makes list of all possible indexes
-# - `feature_list = X_train.columns` - feature list of column names, for labeling
-# 
-# ### **Datasetup**
-# 
-# - `x,y = X_train.iloc[all_indexes,feature_idx],y_train.values[all_indexes]` pulls out the actual values
-# 
-# ### **Split logic: for a given index**
-# 
-# #### **X values split**
-# - `lhs_x = x<=x[split_index]` : for whatever split value you are at, how many values are less
-# - `rhs_x = x>x[split_index]` : how many values are above the selected value
-# 
-# #### **y values split**
-# - `lhs_y_std = y[lhs_x].std()` : the stdev of the left hand y values
-# - `rhs_x_std = y[rhs_x].std()` : the stdev of the right hand y values
-# 
-# #### **Calc the score**
-# - `curr_score = lhs_y_std*lhs_x.sum() + rhs_x_std*rhs_x.sum()` 
-# 
-# #### **If score is better, store the data**
-# 
-# ```python
-#  if curr_score<stored_score: 
-#             print('split index :%d lhs ct: %d | rhs ct: %d| %f' % (split_index, 
-#                                                                    len(lhs_x),
-#                                                                    len(rhs_x), 
-#                                                                    curr_score))
-#             stored_split_feature = feature_idx
-#             stored_score = curr_score
-#             stored_split_value = x[split_index]
-# ```
+# In[ ]:
+
+
+train_data.describe(include=["O"])
+
+
+# **Little description of train_resource data for numerical features**
 # 
 
-# ## **3.1 Our Loop representation of a 1-level Tree**
-# <img src='http://www.onlineteachinghub.com/wp-content/uploads/2015/09/prog101-2.jpg' />
-
 # In[ ]:
 
 
-feature_idx =1
-stored_score = float('inf')
-stored_split_feature = 0
-stored_split_value = 0
+train_resource.describe()
 
-all_indexes = [x for x in X_train.index]
 
-feature_list = X_train.columns
-x,y = X_train.iloc[all_indexes,feature_idx],y_train.values[all_indexes]
-
-print('start loop')
-for split_index in range(1, x.shape[0]-1):
-    lhs_x = x<=x[split_index]
-    rhs_x = x>x[split_index]
-
-    if rhs_x.sum()==0:
-        continue
-    else:
-        lhs_y_std = y[lhs_x].std()
-        rhs_y_std = y[rhs_x].std()
-
-        curr_score = lhs_y_std*lhs_x.sum() + rhs_y_std*rhs_x.sum()
-        
-        if curr_score<stored_score: 
-            print('split index :%d lhs ct: %d | rhs ct: %d| score: %f' % (split_index, sum(lhs_x),sum(rhs_x), curr_score))
-            stored_split_feature = feature_idx
-            stored_score = curr_score
-            stored_split_value = x[split_index]
-
-
-print(stored_score, feature_list[stored_split_feature], stored_split_value)
-
-
-# ### **We see we have the same answer! GrLiv Area around 1487 sqft!**
-
-# ### **3.2 the Class version: Lets turn it into a class with a single function (still only doing 1 feature)**
-# 
-# <img src='http://4.bp.blogspot.com/-ANYNUQrNZug/T4FMIgqFMlI/AAAAAAAAACo/al-4GKDFawM/s1600/oop%5B1%5D.jpg' />
-# 
-# - **Tricky hard to change `variables` to `self.variables`:** be sure to keep track of these, its hard to find and replace all of them. I highly recommend restartting your kernel to make sure old variable values don't remain from a previous calculation and then fail to throw an error when prototyping your tree 
-# 
-# - **Dont repeat yourself** try to streamline as much as possible
-# 
-# - **Don't send data to functions in the same class**: when acting on the data, always use the `self.` versions. The persistence between functions (all functions can access the same data) will help avoid version issues and naming problems
-
-# In[ ]:
-
-
-
-class myIndecisionTree():
-    def __init__(self,x,y):
-        self.indexes = x.index
-        self.x = x
-        self.y = y
-        self.feature_idx =1
-        self.stored_score = float('inf')
-        self.stored_split_feature = 0
-        self.stored_split_value = 0
-        self.feature_list = x.columns
-    
-    def find_split_in_single_feature(self, feature_idx):
-        X_train = self.x
-        y_train = self.y
-
-        x,y = X_train.iloc[self.indexes,feature_idx],y_train.values[self.indexes]
-        print('start loop')
-        for split_index in range(1, self.x.shape[0]-1):
-            lhs_x = x<=x[split_index]
-            rhs_x = x>x[split_index]
-
-            if rhs_x.sum()==0:
-                print(self.stored_score, feature_list[self.stored_split_feature], self.stored_split_value)
-            else:
-                lhs_y_std = y[lhs_x].std()
-                rhs_x_std = y[rhs_x].std()
-
-                curr_score = lhs_y_std*lhs_x.sum() + rhs_x_std*rhs_x.sum()
-                if curr_score<self.stored_score: 
-                    print('split index :%d lhs ct: %d | rhs ct: %d| score: %f' % (split_index, sum(lhs_x),sum(rhs_x), curr_score))
-                    self.stored_split_feature = feature_idx
-                    self.stored_score = curr_score
-                    self.stored_split_value = x[split_index]
-
-        print(self.stored_score, self.feature_list[self.stored_split_feature], self.stored_split_value)
-
-
-# In[ ]:
-
-
-myTree = myIndecisionTree(X_train,y_train)
-myTree.find_split_in_single_feature(1)
-
-
-# ### **3.3: Make a function for all features**
-# 
-# <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/CPT-OOP-interfaces.svg/300px-CPT-OOP-interfaces.svg.png' />
-# 
-# Note that when we call this function we don't have to keep passing around updated scores or split values. That is taken care of by using the `self.` notation. 
-
-# In[ ]:
-
-
-class myIndecisionTree():
-    def __init__(self,x,y):
-        self.indexes = x.index
-        self.x = x
-        self.y = y
-        # self.feature_idx =1
-        self.stored_score = float('inf')
-        self.stored_split_feature = 0
-        self.stored_split_value = 0
-        self.feature_list = x.columns
-
-    
-    # ======== NEW FUNCTION =========================
-    def check_all_features(self):
-        for i in range(len(feature_list)-1):
-            self.find_split_in_single_feature(i)  
-            
-        print(self.stored_score, self.feature_list[self.stored_split_feature], self.stored_split_value)
-    # ======== NEW FUNCTION =========================    
-    
-    def find_split_in_single_feature(self, feature_idx):
-        X_train = self.x
-        y_train = self.y
-
-        x,y = X_train.iloc[self.indexes,feature_idx],y_train.values[self.indexes]
-        print('start loop')
-        for split_index in range(1, self.x.shape[0]-1):
-            lhs_x = x<=x[split_index]
-            rhs_x = x>x[split_index]
-
-            if rhs_x.sum()==0:
-                continue
-            else:
-                lhs_y_std = y[lhs_x].std()
-                rhs_x_std = y[rhs_x].std()
-
-                curr_score = lhs_y_std*lhs_x.sum() + rhs_x_std*rhs_x.sum()
-                if curr_score<self.stored_score: 
-                    print('split index :%d lhs ct: %d | rhs ct: %d| score: %f' % (split_index, sum(lhs_x),sum(rhs_x), curr_score))
-                    self.stored_split_feature = feature_idx
-                    self.stored_score = curr_score
-                    self.stored_split_value = x[split_index]
-
-        
-
-
-# ### **Test it with a different data set - Single Decision Tree**
-
-# In[ ]:
-
-
-y_train = sample_df['SalePrice']
-#X_train = sample_df[['GrLivArea']]
-X_train = sample_df[[x for x in sample_df.columns if x not in ['SalePrice','GrLivArea']]]
-
-
-# In[ ]:
-
-
-dtr = DecisionTreeRegressor(max_depth=1)
-dtr.fit(X_train,y_train)
-
-
-# ### **Sklearn**
-
-# In[ ]:
-
-
-draw_tree(dtr, X_train, precision=2)
-
-
-# In[ ]:
-
-
-myTree = myIndecisionTree(X_train,y_train)
-myTree.check_all_features()
-
-
-# <a id='section4'></a>
-# ## **4. Making our multi-level tree!**
-# -- TBD
-# 
-# <a id='section5'></a>
-# ## **5. Making our ensemble tree!**
-# -- TBD
-
-# <a id='section6'></a>
-# ## 6. **Confidence Interval for Random Forests**
-# 
-# <img src='http://berkeleysciencereview.com/wp-content/uploads/2014/04/to_err_is_human_by_velica-d4i9wjr.jpg' />
-# 
-# How can we get an idea of how much the predictions will vary for a random forest? Is there a way to understand the range or prediction? Yes! Let's go through a quick walkthrough
-
-# ### **Let's Setup a small subset of the data**
-
-# In[ ]:
-
-
-n = 100
-indexes = [x for x in range(n)]
-sample_df = train_df.loc[indexes,['SalePrice','YrSold','TotRmsAbvGrd','Neighborhood']].copy()
-sample_df.head()
-
-
-# In[ ]:
-
-
-y_train = sample_df['SalePrice']
-X_train = sample_df[[x for x in sample_df.columns if x not in ['SalePrice']]]
-X_matrix = pd.get_dummies(X_train)
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestRegressor
-rfr = RandomForestRegressor(n_estimators=10, max_depth=3)
-rfr.fit(X_matrix, y_train)
-
-
-# ### ** Note ! The underlying trees are very different!******
-
-# In[ ]:
-
-
-draw_tree(rfr.estimators_[0], X_matrix)
-
-
-# In[ ]:
-
-
-draw_tree(rfr.estimators_[1], X_matrix)
-
-
-# ## **Since  Every Tree is Different, every prediction for the same point will vary as well **
-# <img src='http://monstermathclub.com/wp-content/uploads/2017/02/types-of-trees-delightful-miti-types-of-trees-mbetula-birch-mchikichi-palm-tree-mfune-beech-tree.jpg'  style='width:500px'/>
-# 
-# ### **Let's collect the individual predictions by tree **
-
-# In[ ]:
-
-
-y_pred = rfr.predict(X_matrix)
-all_trees = rfr.estimators_
-all_predictions = [tree.predict(X_matrix) for tree in all_trees]
-for x in all_predictions:
-    print(len(x))
-
-
-# ### ** Stack them into a single array **
-
-# In[ ]:
-
-
-all_predictions_by_point = np.stack(all_predictions, axis=0)
-print(all_predictions_by_point.shape)
-
-
-# ### ** Let's work through a single point sample, calculate a 95% Confidence interval**
-
-# In[ ]:
-
-
-point_30 = [x[30] for x in all_predictions_by_point]
-point_30 = sorted(point_30)
-point_30
-
-
-# In[ ]:
-
-
-ci_percent = 95
-np.percentile(point_30, (100-ci_percent) / 2 )
-
-
-# In[ ]:
-
-
-np.percentile(point_30, 100-(100-ci_percent) / 2 )
-
-
-# ### ** Now lets calc the CI's for the rest of the samples and Collect in a table**
-# 
-# <img src='http://1.bp.blogspot.com/-S4ypXNVNeh0/VwmnJBXJ3ZI/AAAAAAAACas/AgWJ5aLwl7QFEkOYPgzDtBV8_HOAZFHQg/s1600/Garfield-1.jpg' />
-
-# In[ ]:
-
-
-ci_percent= 95
-ci_down = np.percentile(all_predictions_by_point, (100-ci_percent) / 2 , axis=0)
-ci_up = np.percentile(all_predictions_by_point, 100-(100-ci_percent) / 2 , axis=0)
-
-tree_ci = pd.DataFrame({
-    'x' : [x for x in range(n)],
-    'y_actual' : y_train,
-    'y_pred' :y_pred,
-    'y_95' : ci_up,
-    'y_05' : ci_down,
-    'y_ci_range' : ci_up-ci_down
-})
-
-tree_ci.sort_values(by='y_actual', inplace=True)
-tree_ci['x_sorted'] = [x for x in range(n)]
-tree_ci.head()
-
-
-# ### **Now lets plot our intervals! Note that we chose a low-level forest**
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-fig = plt.figure(figsize=(10,6))
-ax = fig.add_subplot(111)
-ax.scatter(tree_ci['x_sorted'], tree_ci['y_pred'])
-ax.plot(tree_ci['x_sorted'], tree_ci['y_actual'], c='green')
-ax.scatter(tree_ci['x_sorted'], tree_ci['y_05'], c='red', alpha='0.1')
-ax.scatter(tree_ci['x_sorted'], tree_ci['y_95'], c='red', alpha='0.1')
-
-
-# ### **Now lets plot our intervals! Note that we chose a low-level forest**
-
-# In[ ]:
-
-
-x_index_top20_widest = tree_ci.sort_values(by='y_ci_range', ascending=False)[:20]['x'].values
-
-
-# In[ ]:
-
-
-worst_datapoints_w_features = X_train.iloc[x_index_top20_widest,:]
-worst_datapoints_w_features.head(5)
-
-
-# ## ** Which specific attributes lead to more uncertainty?**
-# 
-# <img src='https://hopewissel.files.wordpress.com/2016/04/6a00d8341ca4d953ef01b7c7c17599970b.jpg'  style='width:300px'/>
-
-# In[ ]:
-
-
-X_train.iloc[x_index_top20_widest,:]['YrSold'].value_counts().plot.barh()
-
-
-# In[ ]:
-
-
-X_train.iloc[x_index_top20_widest,:]['TotRmsAbvGrd'].value_counts().plot.barh()
-
-
-# In[ ]:
-
-
-X_train.iloc[x_index_top20_widest,:]['Neighborhood'].value_counts().plot.barh()
-
-
-# <a id='section7'></a>
-# # **7. Features: Not all of them are important**
-# 
-# <img src='http://www.mirchu.net/wp-content/uploads/2014/09/iPhone-6-important-features.png' />
-
-# ## **How do we determine what are the important features?**
-# 
-# Let's prep and train the data as before
-
-# In[ ]:
-
-
-n = 100
-indexes = [x for x in range(n)]
-sample_df = train_df.loc[indexes,['SalePrice','YrSold','TotRmsAbvGrd','Neighborhood']].copy()
-y_train = sample_df['SalePrice']
-X_train = sample_df[[x for x in sample_df.columns if x not in ['SalePrice']]]
-X_matrix = pd.get_dummies(X_train)
-rfr = RandomForestRegressor()
-rfr.fit(X_matrix,y_train)
-
-
-# ## **Define our Metric**
-
-# In[ ]:
-
-
-from sklearn.metrics import mean_squared_error
-def rmse(x1,x2):
-    return np.sqrt(mean_squared_error(x1,x2))
-
-y_pred = rfr.predict(X_matrix)
-orig_score = rmse(y_pred,y_train)
-orig_score
-
-
-# ## **Our Approach: Jumble one column and see how the prediction changes**
-# 
-# <img src='https://lh3.ggpht.com/_oZ6h3pArsOdjbJZ1GCNTlpcvnsO9PU0wjpAuRuhxNBkI2CMxnMjDydm82-AiNqGEYqZ=w300' />
-
-# In[ ]:
-
-
-def jumble_column(df, column_name):
-    idx = X_matrix.index
-    scrambled_idx = np.random.permutation(idx)
-    jumbled = df.copy()
-    values = jumbled[column_name].values
-    jumbled[column_name] = values[scrambled_idx]
-    return jumbled
-
-X_jumble_year = jumble_column(X_matrix,'YrSold')
-y_pred = rfr.predict(X_jumble_year)
-jumbled_year_score = rmse(y_pred,y_train)
-jumbled_year_score - orig_score
-
-
-# In[ ]:
-
-
-X_jumble_rm = jumble_column(X_matrix,'TotRmsAbvGrd')
-y_pred = rfr.predict(X_jumble_rm)
-jumbled_rm_score = rmse(y_pred,y_train)
-jumbled_rm_score - orig_score
-
-
-# In[ ]:
-
-
-X_jumble_ngh = jumble_column(X_train,'Neighborhood')
-X_jumble_ngh = pd.get_dummies(X_jumble_ngh)
-y_pred = rfr.predict(X_jumble_ngh)
-jumbled_ngh_score = rmse(y_pred,y_train)
-jumbled_ngh_score - orig_score
-
-
-# ## **Finally we see that Neighborhood matters the most, then number of rooms**
-
-# In[ ]:
-
-
-to_plot= pd.DataFrame({'headings' : ['Year Sold', 'Total Rooms', 'Neighborhood'],
-              'change_in_error':[jumbled_year_score-orig_score, jumbled_rm_score-orig_score, jumbled_ngh_score-orig_score]
-             })
-
-to_plot.plot.bar('headings','change_in_error')
-
-
-#  ## **But what about specific neighborhoods?**
-#  
-#  <img src='https://s3.amazonaws.com/lowres.cartoonstock.com/social-issues-skid_row-muggings-criminal-bad_neighbourhood-bad_neighborhood-ksmn3365_low.jpg' />
-#  
-# #### **Will jumble the one-hot encoded variables instead of the full categorical column**
-
-# In[ ]:
-
-
-def jumble_score(df, column_name, model):
-    orig_predict = model.predict(df)
-    orig_score = rmse(orig_predict,y_train)
-    tmp_jumble = jumble_column(df,column_name)
-    tmp_predict = model.predict(tmp_jumble) 
-    return rmse(tmp_predict,y_train) - orig_score
-    
-scores =[]
-for col in X_matrix:
-    scores.append({'feature': col,
-                   'imp': jumble_score(X_matrix, col, rfr) 
-                  })
-pd.DataFrame(scores).sort_values(by='imp', ascending=False).plot('feature','imp', figsize=(10,4))
-
-
-# ### **Let's see what SKLearn has to say**
-
-# In[ ]:
-
-
-rfr = RandomForestRegressor(n_jobs=-1)
-rfr.fit(X_matrix,y_train)
-feat_imp = pd.DataFrame({
-    'features': X_matrix.columns,
-    'imp' :rfr.feature_importances_
-})
-feat_imp.sort_values(by='imp', inplace=True, ascending=False)
-feat_imp.plot('features','imp', figsize=(10,5))
-
-
-# <a id='section8'></a>
-# # **8. Reducing Features?**
-# 
-# <img src='https://www.homedepot.com/hdus/en_US/DTCCOMNEW/fetch/DIY_Projects_and_Ideas/Outdoor/Guides/1440-desktop-pruning-hero.jpg' />
-# Sometimes there's a lot of features. And you may suspect that some of them are the same. How can we trim down the feature selection?
+# **Little description of train_resource data for categorical features**
 # 
 
-# #### ** Let's train another baseline RF model to get some baseline importance** 
+# In[ ]:
+
+
+train_resource.describe(include=["O"])
+
+
+# # <a id='dp'>4. Data preparation</a>
+
+# ## <a id='cfmd'>4.1 Checking for missing data</a>
+
+# **Missing data in train_data**
 
 # In[ ]:
 
 
-y_feat = train_df['SalePrice'].values
-features = [x  for x in train_df.columns.values if x not in ['SalePrice','GarageYrBlt','LotFrontage','MasVnrArea']]
-x_feat = train_df[features]
-x_feat_matrix = pd.get_dummies(x_feat)
+# checking missing data in training data 
+total = train_data.isnull().sum().sort_values(ascending = False)
+percent = (train_data.isnull().sum()/train_data.isnull().count()*100).sort_values(ascending = False)
+missing_train_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_train_data.head()
 
 
-# In[ ]:
+# * In training data, we can **project_essay_4** and **project_essay_3** having 96 % null values. so during prediction, better remove these 2 columns.
 
-
-m_rf = RandomForestRegressor(n_estimators=40, min_samples_leaf=3, max_features=0.5, n_jobs=-1, oob_score=True)
-m_rf.fit(x_feat_matrix,y_feat)
-
+# **Missing data in test_data**
 
 # In[ ]:
 
 
-m_rf.score(x_feat_matrix, y_feat)
+# checking missing data in test data 
+total = test_data.isnull().sum().sort_values(ascending = False)
+percent = (test_data.isnull().sum()/test_data.isnull().count()*100).sort_values(ascending = False)
+missing_test_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_test_data.head()
 
 
-# #### **From the RF object, we can pull feature importance and plot**
+# * In test data, we can **project_essay_4** and **project_essay_3** having 96 % null values. so during prediction, better remove these 2 columns.
 
-# In[ ]:
-
-
-feature_imp = m_rf.feature_importances_
-feature_imp_df = pd.DataFrame({'cols':x_feat_matrix.columns.values, 'feat_imp':feature_imp})
-feature_imp_df.sort_values(by='feat_imp', ascending=False, inplace=True)
-feature_imp_df[:20].plot.barh(x='cols', y='feat_imp',figsize=(10,6))
-
-
-# ### **Keep top features, and re-run the model. Checking to see if the feature importance re-distributes at all**
+# **Missing data in resources_data**
 
 # In[ ]:
 
 
-to_keep = feature_imp_df[feature_imp_df['feat_imp'] > 0.01].cols
-X_bestfeat_matrix = x_feat_matrix[to_keep]
+# checking missing data in resource data 
+total = resources_data.isnull().sum().sort_values(ascending = False)
+percent = (resources_data.isnull().sum()/resources_data.isnull().count()*100).sort_values(ascending = False)
+missing_resources_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_resources_data.head()
 
 
-# In[ ]:
+# * In resource data, only **description** column having few null values. So we can ignore these values.
 
+# # <a id='de'>5. Data Exploration</a>
 
-m_best = RandomForestRegressor(n_estimators=40, min_samples_leaf=3, max_features=0.5, n_jobs=-1, oob_score=True)
-m_best.fit(X_bestfeat_matrix, y_feat)
-
-
-# #### **We do note that the columns have changed as well as the order. That means some of the fields have absorbed some of the smaller importances into their score**
-
-# In[ ]:
-
-
-feature_imp = m_best.feature_importances_
-feature_imp_df = pd.DataFrame({'cols':X_bestfeat_matrix.columns.values, 'feat_imp':feature_imp})
-feature_imp_df.sort_values(by='feat_imp', ascending=False, inplace=True)
-feature_imp_df[:20].plot.barh(x='cols', y='feat_imp',figsize=(10,6))
-
-
-# ### **Another way to see the "hierarchy" of features : Dendrograms**
-# 
-# Here's the process, first of all, the **spearman** coefficient is used to compare columns. Spearman's coefficient looks at **RANK** instead of actual distance. So if one dataset had an outlier 10x, it would not affect its RANK when looking at the order. So this `scipy` library will iteratively compare columns (features) to one another and compare if the ranks are very similiar. If they are, they will be grouped together on the same branch
-# 
-# <img src = 'https://camo.githubusercontent.com/bc269d7bd72e9ba9e5af0957b2fbad1883aaf2bc/68747470733a2f2f75706c6f61642e77696b696d656469612e6f72672f77696b6970656469612f636f6d6d6f6e732f7468756d622f342f34652f53706561726d616e5f666967312e7376672f33303070782d53706561726d616e5f666967312e7376672e706e67'>
+# ## <a id='ppan'>5.1 Project proposal is Approved or not ?</a>
 
 # In[ ]:
 
 
-import scipy
-from scipy.cluster import hierarchy as hc
+temp = train_data['project_is_approved'].value_counts()
+labels = temp.index
+sizes = (temp / temp.sum())*100
+trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
+layout = go.Layout(title='Project proposal is approved or not')
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
 
 
-# #### **More rooms = more Squarefoot, More Garage Area = Garage Cars, Total Basement SQFT = 1st Flr SQFT**
-# 
-# So intepretting the chart below we some see of the columns are very closely related.
-# - this affects feature importance, because it is split over two columns instead of 1
-# - if we reduce the features and then recalculate, chances are the relative importance to "overall qualit" will increase
-# - Is a good way to eliminate features post-modeling
+# * Training data is highly imbalanced that is approx. 85 % projetcs were approved and 15 % project were not approved. Majority imbalanced class is positive.
+
+# ## <a id='d'>5.2 Distribution</a>
+
+# ### <a id='doss'>5.2.a Distribution of School states</a>
 
 # In[ ]:
 
 
-corr = np.round(scipy.stats.spearmanr(X_bestfeat_matrix).correlation, 3)
-corr_condensed = hc.distance.squareform(1-corr)
-z = hc.linkage(corr_condensed, method='average')
-fig = plt.figure(figsize=(16,10))
-dendrogram = hc.dendrogram(z, labels=X_bestfeat_matrix.columns, orientation='left', leaf_font_size=16)
+temp = train_data["school_state"].value_counts()
+#print("Total number of states : ",len(temp))
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Distribution of School states in % ",
+    xaxis=dict(
+        title='State Name',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in %',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='schoolStateNames')
+
+
+# * Out of 50 states, **California(CA)** having higher number of projects proposal submitted **approx. 14 %**  followed by **Texas(TX)(7 %)** and **Tennessee(NY)(7 %)**.
+
+# ### <a id='dpgc'>5.2.b Distribution of project_grade_category (school grade levels (PreK-2, 3-5, 6-8, and 9-12))</a>
+
+# In[ ]:
+
+
+temp = train_data["project_grade_category"].value_counts()
+print("Total number of project grade categories : ", len(temp))
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Distribution of project_grade_category (school grade levels) in %",
+    xaxis=dict(
+        title='school grade levels',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in % ',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='schoolStateNames')
+
+
+# * Out of 4 school grade levels, Project proposals submission in school grade levels is higher for **Grades Prek-2** which is approximately **41 %** followed by **Grades 3-5** which has approx. **34 %**.
+
+# ### <a id='dcotp'>5.2.c Distribution of category of the project</a>
+
+# In[ ]:
+
+
+temp = train_data["project_subject_categories"].value_counts().head(10)
+print("Total number of project subject categories : ", len(train_data["project_subject_categories"].value_counts()))
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Distribution of category of the project in %",
+    xaxis=dict(
+        title='category of the project',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in %',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='schoolStateNames')
+
+
+# * Out of 51 Project categories,  Project proposals submission for project categories is higher  for  **Literacy & Language** which is approx. **27 %** followed by **Math & Science** which has approx. **20 %**.
+
+# ### <a id='dnppast'>5.2.d Distribution of number of previously posted applications by the submitting teacher</a>
+
+# In[ ]:
+
+
+plt.figure(figsize = (12, 8))
+
+sns.distplot(train_data['teacher_number_of_previously_posted_projects'])
+plt.xlabel('number of previously posted applications by the submitting teacher', fontsize=12)
+plt.title("Histogram of number of previously posted applications by the submitting teacher")
+plt.show() 
+plt.figure(figsize = (12, 8))
+plt.scatter(range(train_data.shape[0]), np.sort(train_data.teacher_number_of_previously_posted_projects.values))
+plt.xlabel('number of previously posted applications by the submitting teacher', fontsize=12)
+plt.title("Distribution of number of previously posted applications by the submitting teacher")
 plt.show()
 
 
-# <a id='section10'></a>
-# ## **10. Can we Quantify the $ of the decisions with in a Tree?**
+#    ### <a id='dsotp'>5.2.e Distribution of subcategory of the project</a>
+
+# In[ ]:
+
+
+temp = train_data["project_subject_subcategories"].value_counts().head(10)
+print("Total sub-categories of the projects : ",len(train_data["project_subject_subcategories"]))
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Distribution of subcategory of the project in %",
+    xaxis=dict(
+        title='subcategory of the project',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in %',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='schoolStateNames')
+
+
+# * Out of 1,82,020 Project subcategories, Project proposals submission for project sub-categoriesis is higher  for **Literacy** which is approx. **16 % ** followed by **Literacy & Mathematics** which has approx. **16 %** .
+
+# ### <a id='dopt'>5.2.f Distribution of Project titles</a>
+
+# In[ ]:
+
+
+temp = train_data["project_title"].value_counts().head(10)
+print("Total project titles are : ", len(train_data["project_title"]))
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Distribution of Distribution of Project titles in %",
+    xaxis=dict(
+        title='Project Title',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in %',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='schoolStateNames')
+
+
+# * Out of 1,82,080 project titles, Project proposals submission for project titles is higher for **Flexible seating** which is approx. **27 %** followed by **Whiggle while your work** which has approx. **14 %**.
+
+# ### <a id='doporr'>5.2.g Distribution of price of resource requested</a>
+
+# In[ ]:
+
+
+plt.figure(figsize = (12, 8))
+
+sns.distplot(train_resource['price'])
+plt.xlabel('Price', fontsize=12)
+plt.title("Histogran of price of resource requested")
+plt.show() 
+plt.figure(figsize = (12, 8))
+plt.scatter(range(train_resource.shape[0]), np.sort(train_resource.price.values))
+plt.xlabel('price', fontsize=12)
+plt.title("Distribution of price of resource requested")
+plt.show()
+
+
+# ### <a id='doqorr'>5.2.h Distribution of quantity of resource requested</a>
+
+# In[ ]:
+
+
+plt.figure(figsize = (12, 8))
+
+sns.distplot(train_resource['price'])
+plt.xlabel('quantity', fontsize=12)
+plt.title("Histogran of quantity of resource requested")
+plt.show() 
+plt.figure(figsize = (12, 8))
+plt.scatter(range(train_resource.shape[0]), np.sort(train_resource.quantity.values))
+plt.xlabel('price', fontsize=12)
+plt.title("Distribution of quantity of resource requested")
+plt.show()
+
+
+# ### <a id='tpd'>5.2.i Teacher prefix Distribution</a>
+
+# In[ ]:
+
+
+temp = train_data["teacher_prefix"].value_counts()
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Teacher prefix Distribution in %",
+    xaxis=dict(
+        title='Teacher prefix',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in %',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * Higher number of project proposal submitted by **married womens** which is approx. **53 %**  followed by **unmarried womens** which has approx. **37 %**.
+# * Project proposal submitted by **Teacher** which is approx. **2 %** is vey low as compared to **Mrs., Ms., Mr**.
+
+# ## <a id='trnfp'>5.3 Top resources needed for the project</a>
+
+# In[ ]:
+
+
+import re
+from nltk.corpus import stopwords
+
+REPLACE_BY_SPACE_RE = re.compile('[/(){}\[\]\|@,;]')
+BAD_SYMBOLS_RE = re.compile('[^0-9a-z #+_]')
+STOPWORDS = set(stopwords.words('english'))
+def text_prepare(text):
+    """
+        text: a string
+        
+        return: modified initial string
+    """
+    text = text.lower()# lowercase text  
+    text = REPLACE_BY_SPACE_RE.sub(' ',text)# replace REPLACE_BY_SPACE_RE symbols by space in text    
+    text = BAD_SYMBOLS_RE.sub('',text)# delete symbols which are in BAD_SYMBOLS_RE from text    
+    temp = [s.strip() for s in text.split() if s not in STOPWORDS]# delete stopwords from text
+    new_text = ''
+    for i in temp:
+        new_text +=i+' '
+    text = new_text
+    return text.strip()
+
+
+# In[ ]:
+
+
+temp_data = train_data.dropna(subset=['project_resource_summary'])
+# converting into lowercase
+temp_data['project_resource_summary'] = temp_data['project_resource_summary'].apply(lambda x: " ".join(x.lower() for x in x.split()))
+temp_data['project_resource_summary'] = temp_data['project_resource_summary'].map(text_prepare)
+
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(temp_data['project_resource_summary'].values))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Top resources needed for the project", fontsize=35)
+plt.axis("off")
+plt.show() 
+
+
+# ## <a id='wcrr'>5.4 Word Cloud of resources requested</a>
+
+# In[ ]:
+
+
+temp_data = train_resource.dropna(subset=['description'])
+# converting into lowercase
+temp_data['description'] = temp_data['description'].apply(lambda x: " ".join(x.lower() for x in x.split()))
+temp_data['description'] = temp_data['description'].map(text_prepare)
+
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(temp_data['description'].values))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Word Cloud of resources requested", fontsize=35)
+plt.axis("off")
+plt.show() 
+
+
+# ## <a id='vpppan'>5.5 Various popularities in terms of project acceptance rate and project rejection rate</a>
+
+# ### <a id='psstpan'>5.5.a Popular School states in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["school_state"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["school_state"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["school_state"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular School states in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='ptptppa'>5.5.b Popular Teacher Prefix in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["teacher_prefix"].value_counts()
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular Teacher prefixes in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='psgltpp'>5.5.c Popular school grade levels in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["project_grade_category"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular school grade levels in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='pcoptppa'>5.5.d Popular category of the project in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["project_subject_categories"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_subject_categories"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_subject_categories"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular category of the project in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='psotpppan'>5.5.e Popular subcategory of the project in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["project_subject_subcategories"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_subject_subcategories"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_subject_subcategories"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular subcategory of the project in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='ppttpan'>5.5.f Popular project titles in terms of project acceptance rate and project rejection rate</a>
+
+# In[ ]:
+
+
+temp = train_data["project_title"].value_counts().head(20)
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_title"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_title"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular project titles in terms of project acceptance rate and project rejection rate",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ## <a id='ppuss'>5.6 Project Proposals by US States</a>
+
+# In[ ]:
+
+
+temp = pd.DataFrame(train_data["school_state"].value_counts()).reset_index()
+temp.columns = ['state_code', 'num_proposals']
+
+data = [dict(
+        type='choropleth',
+        locations= temp['state_code'],
+        locationmode='USA-states',
+        z=temp['num_proposals'].astype(float),
+        text=temp['state_code'],
+        colorscale='Red',
+        marker=dict(line=dict(width=0.7)),
+        colorbar=dict(autotick=False, tickprefix='', title='Number of project proposals'),
+)]
+layout = dict(title = 'Project Proposals by US States',geo = dict(
+            scope='usa',
+            projection=dict( type='albers usa' ),
+            showlakes = True,
+            lakecolor = 'rgb(255, 255, 255)'),
+             )
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False)
+
+
+# ## <a id='ppmaruss'>5.7 Project Proposals Mean Acceptance Rate by US States</a>
+
+# In[ ]:
+
+
+temp = pd.DataFrame(train_data.groupby("school_state")["project_is_approved"].apply(np.mean)).reset_index()
+temp.columns = ['state_code', 'num_proposals']
+
+data = [dict(
+        type='choropleth',
+        locations= temp['state_code'],
+        locationmode='USA-states',
+        z=temp['num_proposals'].astype(float),
+        text=temp['state_code'],
+        colorscale='Red',
+        marker=dict(line=dict(width=0.7)),
+        colorbar=dict(autotick=False, tickprefix='', title='Number of project proposals'),
+)]
+layout = dict(title = 'Project Proposals Mean Acceptance Rate by US States',geo = dict(
+            scope='usa',
+            projection=dict( type='albers usa' ),
+            showlakes = True,
+            lakecolor = 'rgb(255, 255, 255)'),
+             )
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False)
+
+
+# ## <a id='cmhmtd'>5.8 Correlation Matrix and HeatMap of training data</a>
+
+# ### <a id='tppiaic'>5.8.a Teacher_prefix and project_is_approved Intervals Correlation</a>
+
+# In[ ]:
+
+
+cols = ['teacher_prefix', 'project_is_approved']
+cm = sns.light_palette("red", as_cmap=True)
+pd.crosstab(train_data[cols[0]], train_data[cols[1]]).style.background_gradient(cmap = cm)
+
+
+# ### <a id='tnppppaic'>5.8.b Teacher_number_of_previously_posted_projects and project_is_approved Intervals Correlation</a>
+
+# In[ ]:
+
+
+cols = ['teacher_number_of_previously_posted_projects', 'project_is_approved']
+cm = sns.light_palette("red", as_cmap=True)
+pd.crosstab(train_data[cols[0]], train_data[cols[1]]).style.background_gradient(cmap = cm)
+
+
+# *  Number of previously posted applications by the submitting teacher was** Zero(0)** having more number of acceptance rate.
+
+# ### <a id='cmaht'>5.8.c Correlation Matrix and Heatmap of training data</a>
+
+# In[ ]:
+
+
+#Correlation Matrix
+corr = train_data.corr()
+plt.figure(figsize=(12,12))
+sns.heatmap(corr, 
+            xticklabels=corr.columns.values,
+            yticklabels=corr.columns.values, annot=True, cmap='cubehelix', square=True)
+plt.title('Correlation between different features')
+corr
+
+
+# ## <a id='psta'>5.9 Project Submission Time Analysis</a>
+
+# In[ ]:
+
+
+train_data["project_submitted_datetime"] = pd.to_datetime(train_data["project_submitted_datetime"])
+train_data["month_created"] = train_data["project_submitted_datetime"].dt.month
+train_data["weekday_created"] = train_data["project_submitted_datetime"].dt.weekday
+train_data["date_created"] = train_data["project_submitted_datetime"].dt.date
+train_data["hour_created"] = train_data["project_submitted_datetime"].dt.hour
+
+
+# ### <a id='psma'>5.9.a Project Submission Month Analysis</a>
+
+# In[ ]:
+
+
+temp = train_data["month_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["month_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["month_created"]==val] == 0))
+    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission Month Distribution",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * **August month** has the second  number of proposals followed by **September month** .
+
+# ### <a id='pswa'>5.9.b Project Submission Weekday Analysis</a>
+
+# In[ ]:
+
+
+temp = train_data["weekday_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["weekday_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["weekday_created"]==val] == 0))
+ 
+temp.index = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission weekday Distribution",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * The number of proposals decreases as we move towards the end of the week.
+
+# ### <a id='psda'>5.9.c Project Submission Date Analysis</a>
+
+# In[ ]:
+
+
+temp = train_data["date_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 0))
+ 
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission date Distribution",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * Looks like we have approximately one years' worth of data (May 2016 to April 2017) given in the training set.
+# * There is a sudden spike on a single day (Sep 1, 2016) with respect to the number of proposals (may be some specific reason?)
+
+# ### <a id='psha'>5.9.d Project Submission Hour Analysis</a>
+
+# In[ ]:
+
+
+temp = train_data["hour_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["hour_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["hour_created"]==val] == 0))
+ 
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission Hour Distribution",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * From Hours 03 to 05, number of proposals decreases.
+# * Hours 06 to 14, number of proposals increases.
+# * At Hour 14 has more number of proposals.
+
+# ## <a id='tkips1'>5.10 Top Keywords in project_essay_1</a>
+
+# In[ ]:
+
+
+temp_data = train_data.dropna(subset=['project_essay_1'])
+# converting into lowercase
+temp_data['project_essay_1'] = temp_data['project_essay_1'].apply(lambda x: " ".join(x.lower() for x in x.split()))
+temp_data['project_essay_1'] = temp_data['project_essay_1'].map(text_prepare)
+
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(temp_data['project_essay_1'].values))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Top Keywords in project_essay_1", fontsize=35)
+plt.axis("off")
+plt.show() 
+
+
+# ## <a id='tkipe2'>5.11 Top keywords in project_essay_2</a>
+
+# In[ ]:
+
+
+temp_data = train_data.dropna(subset=['project_essay_2'])
+# converting into lowercase
+temp_data['project_essay_2'] = temp_data['project_essay_2'].apply(lambda x: " ".join(x.lower() for x in x.split()))
+temp_data['project_essay_2'] = temp_data['project_essay_2'].map(text_prepare)
+
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(temp_data['project_essay_2'].values))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Top Keywords in project_essay_2", fontsize=35)
+plt.axis("off")
+plt.show() 
+
+
+# ## <a id='tkinprs'>5.12 Top Keywords in project_resource_summary</a>
+
+# In[ ]:
+
+
+temp_data = train_data.dropna(subset=['project_resource_summary'])
+# converting into lowercase
+temp_data['project_resource_summary'] = temp_data['project_resource_summary'].apply(lambda x: " ".join(x.lower() for x in x.split()))
+temp_data['project_resource_summary'] = temp_data['project_resource_summary'].map(text_prepare)
+
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(temp_data['project_resource_summary'].values))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Top Keywords in project_resource_summary2", fontsize=35)
+plt.axis("off")
+plt.show() 
+
+
+# ##  <a id='qvp'>5.13 Quantity V.S. Price</a>
+
+# In[ ]:
+
+
+#iplot([go.Scatter(x=train_resource['quantity'], y=train_resource['price'], mode='markers')])
+iplot([go.Histogram2dContour(x=train_resource.head(1000)['quantity'], 
+                             y=train_resource.head(1000)['price'], 
+                             contours=go.Contours(coloring='heatmap')),
+       go.Scatter(x=train_resource.head(5000)['quantity'], y=train_resource.head(1000)['price'], mode='markers')])
+
+
+# In[ ]:
+
+
+populated_states = train_resource[:50]
+
+data = [go.Scatter(
+    y = populated_states['quantity'],
+    x = populated_states['price'],
+    mode='markers+text',
+    marker=dict(
+        size= np.log(populated_states.price) - 2,
+        color=populated_states['quantity'],
+        colorscale='Portland',
+        showscale=True
+    ),
+    text=populated_states['school_state'],
+    textposition=["top center"]
+)]
+layout = go.Layout(
+    title='Quantity V.S. Price',
+    xaxis= dict(title='price'),
+    yaxis=dict(title='Quantity')
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ## <a id ='gapc'>5.14 Gender Analysis</a>
+
+# We will create a new column from teacher_prefix and mapping follow as :
 # 
-# <img src='https://www.payoff.com/lift/articles/wp-content/uploads/2015/02/how-to-make-smart-money-decisions-810x355.jpg' />
-# 
-# #### ** how much does each factor contribute to the overall score? **
+# * Mrs, Ms --> Female
+# * Mr. --> Male
+# * Teacher, Dr --> Unknown
 
 # In[ ]:
 
 
-rfr = RandomForestRegressor(n_jobs=-1, max_depth=5)
-rfr.fit(X_matrix,y_train)
-single_row = X_matrix.head(1)
-single_tree = rfr.estimators_[0]
-single_tree.predict(single_row)
-
-
-# In[ ]:
-
-
-draw_tree(single_tree, X_matrix)
+# Creating the gender column
+gender_mapping = {"Mrs.": "Female", "Ms.":"Female", "Mr.":"Male", "Teacher":"Unknown", "Dr.":"Unknown", np.nan:"Unknown"  }
+train_data["gender"] = train_data.teacher_prefix.map(gender_mapping)
+test_data["gender"] = test_data.teacher_prefix.map(gender_mapping)
+train_resource["gender"] = train_resource.teacher_prefix.map(gender_mapping)
+test_resource["gender"] = test_resource.teacher_prefix.map(gender_mapping)
 
 
 # In[ ]:
 
 
-import numpy as np
-import sklearn
-
-from sklearn.ensemble.forest import ForestClassifier, ForestRegressor
-from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier, _tree
-from distutils.version import LooseVersion
-if LooseVersion(sklearn.__version__) < LooseVersion("0.17"):
-    raise Exception("treeinterpreter requires scikit-learn 0.17 or later")
-
-
-def _get_tree_paths(tree, node_id, depth=0):
-    """
-    Returns all paths through the tree as list of node_ids
-    """
-    if node_id == _tree.TREE_LEAF:
-        raise ValueError("Invalid node_id %s" % _tree.TREE_LEAF)
-
-    left_child = tree.children_left[node_id]
-    right_child = tree.children_right[node_id]
-
-    if left_child != _tree.TREE_LEAF:
-        left_paths = _get_tree_paths(tree, left_child, depth=depth + 1)
-        right_paths = _get_tree_paths(tree, right_child, depth=depth + 1)
-
-        for path in left_paths:
-            path.append(node_id)
-        for path in right_paths:
-            path.append(node_id)
-        paths = left_paths + right_paths
-    else:
-        paths = [[node_id]]
-    return paths
+temp = train_data["gender"].value_counts()
+trace = go.Bar(
+    x = temp.index,
+    y = (temp / temp.sum())*100,
+)
+data = [trace]
+layout = go.Layout(
+    title = "Gender in terms of projects proposals submitted in % ",
+    xaxis=dict(
+        title='Gender',
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+    ),
+    yaxis=dict(
+        title='Count of project proposals submitted in % ',
+        titlefont=dict(
+            size=16,
+            color='rgb(107, 107, 107)'
+        ),
+        tickfont=dict(
+            size=14,
+            color='rgb(107, 107, 107)'
+        )
+)
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
 
 
-def _predict_tree(model, X, joint_contribution=False):
-    """
-    For a given DecisionTreeRegressor, DecisionTreeClassifier,
-    ExtraTreeRegressor, or ExtraTreeClassifier,
-    returns a triple of [prediction, bias and feature_contributions], such
-    that prediction ≈ bias + feature_contributions.
-    """
-    leaves = model.apply(X)
-    paths = _get_tree_paths(model.tree_, 0)
+# * Female having more count which is approx. **88 %** than Male which has **10 %** in terms of projects proposals submissions.
 
-    for path in paths:
-        path.reverse()
-
-    leaf_to_path = {}
-    #map leaves to paths
-    for path in paths:
-        leaf_to_path[path[-1]] = path         
-    
-    # remove the single-dimensional inner arrays
-    values = model.tree_.value.squeeze()
-    # reshape if squeezed into a single float
-    if len(values.shape) == 0:
-        values = np.array([values])
-    if isinstance(model, DecisionTreeRegressor):
-        biases = np.full(X.shape[0], values[paths[0][0]])
-        line_shape = X.shape[1]
-    elif isinstance(model, DecisionTreeClassifier):
-        # scikit stores category counts, we turn them into probabilities
-        normalizer = values.sum(axis=1)[:, np.newaxis]
-        normalizer[normalizer == 0.0] = 1.0
-        values /= normalizer
-
-        biases = np.tile(values[paths[0][0]], (X.shape[0], 1))
-        line_shape = (X.shape[1], model.n_classes_)
-    direct_prediction = values[leaves]
-    
-    
-    #make into python list, accessing values will be faster
-    values_list = list(values)
-    feature_index = list(model.tree_.feature)
-    
-    contributions = []
-    if joint_contribution:
-        for row, leaf in enumerate(leaves):
-            path = leaf_to_path[leaf]
-            
-            
-            path_features = set()
-            contributions.append({})
-            for i in range(len(path) - 1):
-                path_features.add(feature_index[path[i]])
-                contrib = values_list[path[i+1]] -                          values_list[path[i]]
-                #path_features.sort()
-                contributions[row][tuple(sorted(path_features))] =                     contributions[row].get(tuple(sorted(path_features)), 0) + contrib
-        return direct_prediction, biases, contributions
-        
-    else:
-
-        for row, leaf in enumerate(leaves):
-            for path in paths:
-                if leaf == path[-1]:
-                    break
-            
-            contribs = np.zeros(line_shape)
-            for i in range(len(path) - 1):
-                
-                contrib = values_list[path[i+1]] -                          values_list[path[i]]
-                contribs[feature_index[path[i]]] += contrib
-            contributions.append(contribs)
-    
-        return direct_prediction, biases, np.array(contributions)
-
-
-def _predict_forest(model, X, joint_contribution=False):
-    """
-    For a given RandomForestRegressor, RandomForestClassifier,
-    ExtraTreesRegressor, or ExtraTreesClassifier returns a triple of
-    [prediction, bias and feature_contributions], such that prediction ≈ bias +
-    feature_contributions.
-    """
-    biases = []
-    contributions = []
-    predictions = []
-
-    
-    if joint_contribution:
-        
-        for tree in model.estimators_:
-            pred, bias, contribution = _predict_tree(tree, X, joint_contribution=joint_contribution)
-
-            biases.append(bias)
-            contributions.append(contribution)
-            predictions.append(pred)
-        
-        
-        total_contributions = []
-        
-        for i in range(len(X)):
-            contr = {}
-            for j, dct in enumerate(contributions):
-                for k in set(dct[i]).union(set(contr.keys())):
-                    contr[k] = (contr.get(k, 0)*j + dct[i].get(k,0) ) / (j+1)
-
-            total_contributions.append(contr)    
-            
-        for i, item in enumerate(contribution):
-            total_contributions[i]
-            sm = sum([v for v in contribution[i].values()])
-                
-
-        
-        return (np.mean(predictions, axis=0), np.mean(biases, axis=0),
-            total_contributions)
-    else:
-        for tree in model.estimators_:
-            pred, bias, contribution = _predict_tree(tree, X)
-
-            biases.append(bias)
-            contributions.append(contribution)
-            predictions.append(pred)
-        
-        
-        return (np.mean(predictions, axis=0), np.mean(biases, axis=0),
-            np.mean(contributions, axis=0))
-
-
-def predict(model, X, joint_contribution=False):
-    """ Returns a triple (prediction, bias, feature_contributions), such
-    that prediction ≈ bias + feature_contributions.
-    Parameters
-    ----------
-    model : DecisionTreeRegressor, DecisionTreeClassifier,
-        ExtraTreeRegressor, ExtraTreeClassifier,
-        RandomForestRegressor, RandomForestClassifier,
-        ExtraTreesRegressor, ExtraTreesClassifier
-    Scikit-learn model on which the prediction should be decomposed.
-    X : array-like, shape = (n_samples, n_features)
-    Test samples.
-    
-    joint_contribution : boolean
-    Specifies if contributions are given individually from each feature,
-    or jointly over them
-    Returns
-    -------
-    decomposed prediction : triple of
-    * prediction, shape = (n_samples) for regression and (n_samples, n_classes)
-        for classification
-    * bias, shape = (n_samples) for regression and (n_samples, n_classes) for
-        classification
-    * contributions, If joint_contribution is False then returns and  array of 
-        shape = (n_samples, n_features) for regression or
-        shape = (n_samples, n_features, n_classes) for classification, denoting
-        contribution from each feature.
-        If joint_contribution is True, then shape is array of size n_samples,
-        where each array element is a dict from a tuple of feature indices to
-        to a value denoting the contribution from that feature tuple.
-    """
-    # Only single out response variable supported,
-    if model.n_outputs_ > 1:
-        raise ValueError("Multilabel classification trees not supported")
-
-    if (isinstance(model, DecisionTreeClassifier) or
-        isinstance(model, DecisionTreeRegressor)):
-        return _predict_tree(model, X, joint_contribution=joint_contribution)
-    elif (isinstance(model, ForestClassifier) or
-          isinstance(model, ForestRegressor)):
-        return _predict_forest(model, X, joint_contribution=joint_contribution)
-    else:
-        raise ValueError("Wrong model type. Base learner needs to be a "
-                         "DecisionTreeClassifier or DecisionTreeRegressor.")
-
-
-# ## **Below i'm using the `predict` function from the tree interpreter package.**
-# https://github.com/andosa/treeinterpreter
-# This great package decomposes the tree into a number of components
+# # <a id='mwdppes'>5.15 Month wise distribution of number of projects proposal submitted in each state</a>
 
 # In[ ]:
 
 
-prediction, bias, contributions = predict(single_tree, X_matrix)
+#train_data['Month_wise'] = kiva_loans_data.date.dt.year
+train_resource["project_submitted_datetime"] = pd.to_datetime(train_resource["project_submitted_datetime"])
+train_resource["month_created"] = train_resource["project_submitted_datetime"].dt.month
+loan = train_resource.groupby(['school_state', 'month_created'])['price'].mean().unstack()
+loan = loan.sort_values([3], ascending=False)
+f, ax = plt.subplots(figsize=(15, 20)) 
+loan = loan.fillna(0)
+temp = sns.heatmap(loan, cmap='Reds')
+plt.show()
 
 
-# ### ** We now have a table of contributions. Each row is a sample, and every column is a field and the $ contribution to the predicted sale price**
+# * USA state **WY** was having more price requested for resources in **March** month than others.
 
-# In[ ]:
+# ## <a id='prfrd'>5.16 Price requested for resources distribution</a>
 
-
-contribution_matrix =  pd.DataFrame(contributions, columns=X_matrix.columns)
-contribution_matrix['bias'] = bias
-
-tmp_sums = contribution_matrix.sum()
-nonzero_cols = tmp_sums[tmp_sums!=0].index
-
-contribution_matrix[nonzero_cols].head(5)
-
-
-# ## **Let's Check to make sure the addition of the components equal the prediction below**
+# ### <a id='prfrbds'>5.16.a Price requested for resources distribution by different states</a>
 
 # In[ ]:
 
 
-contribution_matrix[nonzero_cols].head(4).sum(axis=1)
+# trace = []
+# for name, group in train_resource.groupby("school_state"):
+#     trace.append ( 
+#         go.Box(
+#             x=group["price"].values,
+#             name=name
+#         )
+#     )
+# layout = go.Layout(
+#     title='price requested for resources distributiom by different states ',
+#     width = 800,
+#     height = 800
+# )
+# #data = [trace0, trace1]
+# fig = go.Figure(data=trace, layout=layout)
+# py.iplot(fig)
 
+
+# * As we can see most of the price requested for resources is between **0 to 2k dollar**.
+
+# ### <a id='prfrbtp'>5.16.b Price requested for resources distribution by Teacher prefixes</a>
 
 # In[ ]:
 
 
-prediction[[0,1,2,3,4]]
+# trace = []
+# for name, group in train_resource.groupby("teacher_prefix"):
+#     trace.append ( 
+#         go.Box(
+#             x=group["price"].values,
+#             name=name
+#         )
+#     )
+# layout = go.Layout(
+#     title='price requested for resources distributiom by techer_prefixes ',
+#     width = 800,
+#     height = 800
+# )
+# #data = [trace0, trace1]
+# fig = go.Figure(data=trace, layout=layout)
+# py.iplot(fig)
 
+
+# * Mostly price requested for resources is 
+#    * 0 to 2k Dollar by **teacher** prefix
+#    * 0 to 4k Dolar by **Ms. , Mrs. and Mr.** prefixes 
+#    * 0 to 500 Dollar by **Dr.** prefix.
+
+# ### <a id='prfrddga'>5.16.c Price requested for resources distribution by different Genders</a>
+
+# In[ ]:
+
+
+# trace = []
+# for name, group in train_resource.groupby("gender"):
+#     trace.append ( 
+#         go.Box(
+#             x=group["price"].values,
+#             name=name
+#         )
+#     )
+# layout = go.Layout(
+#     title='price requested for resources distributiom by different genders ',
+#     width = 800,
+#     height = 800
+# )
+# #data = [trace0, trace1]
+# fig = go.Figure(data=trace, layout=layout)
+# py.iplot(fig)
+
+
+# * Mostly price requested for resources is 
+#    * 0 to 2k Dollar by **Unknowns**
+#    * 0 to 4k Dolar by **Males** 
+#    * 0 to 5k Dollar by **Females**.
+
+# ### <a id='prfrddpgc'>5.16.d Price requested for resources distribution by different project_grade_category</a>
+
+# In[ ]:
+
+
+# trace = []
+# for name, group in train_resource.groupby("project_grade_category"):
+#     trace.append ( 
+#         go.Box(
+#             x=group["price"].values,
+#             name=name
+#         )
+#     )
+# layout = go.Layout(
+#     title='price requested for resources distributiom by different project_grade_categories ',
+#     width = 800,
+#     height = 800
+# )
+# #data = [trace0, trace1]
+# fig = go.Figure(data=trace, layout=layout)
+# py.iplot(fig)
+
+
+# * Mostly price requested for resources is between approx. ** 0 to 4k** **Dollar**  for all type of project grade categories.
+
+# ## <a id='ca'>5.17 CA(California)</a>
+
+# ### <a id='potpic'>5.17.a Popularities of Teacher prefixes in California</a>
+
+# In[ ]:
+
+
+temp1 = pd.DataFrame(train_data[train_data["school_state"]=='CA'])
+temp = temp1["teacher_prefix"].value_counts()
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular Teacher prefixes in terms of project proposal approved or not in California",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='posglic'>5.17.b Popularities of school grade levels in California</a>
+
+# In[ ]:
+
+
+temp = temp1["project_grade_category"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular school grade levels in terms of project proposal approved or not in California",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='tptic'>5.17.c Top project titles in California</a>
+
+# In[ ]:
+
+
+project_title_data = temp1['project_title']
+percentages = round(project_title_data.value_counts() / len(project_title_data) * 100, 2)[:13]
+trace = go.Pie(labels=percentages.keys(), values=percentages.values, hoverinfo='label+percent', 
+                textfont=dict(size=18, color='#000000'))
+data = [trace]
+layout = go.Layout(width=800, height=800, title='Top project titles in California',titlefont= dict(size=20), 
+                   legend=dict(x=0.1,y=-5))
+
+fig = go.Figure(data=data, layout=layout)
+offline.iplot(fig, show_link=False)
+
+
+# ### <a id='topstic'>5.17.d Trend of project submission time in California</a>
+
+# In[ ]:
+
+
+temp = temp1["date_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 0))
+    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission Date Distribution in California",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ## <a id='TX'>5.18 TX(Texas)</a>
+
+# ### <a id='potpit'>5.18.a Popularities of Teacher prefixes in Texas</a>
+
+# In[ ]:
+
+
+temp1 = pd.DataFrame(train_data[train_data["school_state"]=='TX'])
+temp = temp1["teacher_prefix"].value_counts()
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["teacher_prefix"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular Teacher prefixes in terms of project proposal approved or not in Texas",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='posglit'>5.18.b Popularities of school grade levels in Texas</a>
+
+# In[ ]:
+
+
+temp = temp1["project_grade_category"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["project_grade_category"]==val] == 0))    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Popular school grade levels in terms of project proposal approved or not in Texas",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ### <a id='tptit'>5.18.c Top project titles in Texas</a>
+
+# In[ ]:
+
+
+project_title_data = temp1['project_title']
+percentages = round(project_title_data.value_counts() / len(project_title_data) * 100, 2)[:13]
+trace = go.Pie(labels=percentages.keys(), values=percentages.values, hoverinfo='label+percent', 
+                textfont=dict(size=18, color='#000000'))
+data = [trace]
+layout = go.Layout(width=800, height=800, title='Top project titles in Texas',titlefont= dict(size=20), 
+                   legend=dict(x=0.1,y=-5))
+
+fig = go.Figure(data=data, layout=layout)
+offline.iplot(fig, show_link=False)
+
+
+# ### <a id='topstit'>5.18.d Trend of project submission time in Texas</a>
+
+# In[ ]:
+
+
+temp = temp1["date_created"].value_counts()
+#print(temp.values)
+temp_y0 = []
+temp_y1 = []
+for val in temp.index:
+    temp_y1.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 1))
+    temp_y0.append(np.sum(train_data["project_is_approved"][train_data["date_created"]==val] == 0))
+    
+trace1 = go.Bar(
+    x = temp.index,
+    y = temp_y1,
+    name='Accepted Proposals'
+)
+trace2 = go.Bar(
+    x = temp.index,
+    y = temp_y0, 
+    name='Rejected Proposals'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    title = "Project Proposal Submission Date Distribution in Texas",
+    barmode='stack',
+    width = 1000
+)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# # <a id='bsc'>6. Brief Summary/Conclusion :</a>
+# --------------------------------------------------------------------------
+# * I have done analysis only on training data.
+# * This is only a brief summary if want more details please go through my Notebook.
+
+# * Training data is highly imbalanced that is approx. 85 % projetcs were approved and 15 % project were not approved. Majority imbalanced class is positive.
+# * Out of 50 states, **California(CA)** having higher number of projects proposal submitted **approx. 14 %**  followed by **Texas(TX)(7 %)** and **Tennessee(NY)(7 %)**.
+# * Out of 4 school grade levels, Project proposals submission in school grade levels is higher for **Grades Prek-2** which is approximately **41 %** followed by **Grades 3-5** which has approx. **34 %**.
+# * Out of 51 Project categories,  Project proposals submission for project categories is higher  for  **Literacy & Language** which is approx. **27 %** followed by **Math & Science** which has approx. **20 %**.
+# * Out of 1,82,020 Project subcategories, Project proposals submission for project sub-categoriesis is higher  for **Literacy** which is approx. **16 % ** followed by **Literacy & Mathematics** which has approx. **16 %** .
+# * Out of 1,82,080 project titles, Project proposals submission for project titles is higher for **Flexible seating** which is approx. **27 %** followed by **Whiggle while your work** which has approx. **14 %**.
+# * Most of the price requested for resources is between **0 to 2k dollar**.
+# * Mostly price requested for resources is 
+#    * 0 to 2k Dollar by **teacher** prefix
+#    * 0 to 4k Dolar by **Ms. , Mrs. and Mr.** prefixes 
+#    * 0 to 500 Dollar by **Dr.** prefix.
+# * Mostly price requested for resources is 
+#    * 0 to 2k Dollar by **Unknowns**
+#    * 0 to 4k Dolar by **Males** 
+#    * 0 to 5k Dollar by **Females**.
+# * Mostly price requested for resources is between approx. ** 0 to 4k** **Dollar**  for all type of project grade categories.   
+# * Higher number of project proposal submitted by **married womens** which is approx. **53 %**  followed by **unmarried womens** which has approx. **37 %**.
+# * Project proposal submitted by **Teacher** which is approx. **2 %** is vey low as compared to **Mrs., Ms., Mr**.
+# *  Number of previously posted applications by the submitting teacher was** Zero(0)** having more number of acceptance rate.
+# * Female having more count which is approx. **88 %** than Male which has **10 %** in terms of projects proposals submissions.
+# * USA state **WY** was having more price requested for resources in **March** month than others.
+# * Most of the price requested for resources is between 0 to 2k dollar.
+# * If price per project is less then more chances of approval.
+# * Projects with lesser number of quantity better chances of approval.
+# * If project essay description having more number number of words better chances of approval.
+# * **Project Submission Time Analysis** :
+#    * **September month** has the second highest number of proposals .
+#    * The number of proposals decreases as we move towards the end of the week.
+#    * Looks like we have approximately one years' worth of data (May 2016 to April 2017) given in the training set.
+#    * There is a sudden spike on a single day (Sep 1, 2016) with respect to the number of proposals (may be some specific reason?)
+#    * From Hours 03 to 05, number of proposals decreases.
+#    * Hours 06 to 14, number of proposals increases.
+#    * At Hour 14 has more number of proposals.
+
+# # More To Come. Stayed Tuned !!

@@ -1,333 +1,475 @@
-'''
-Example of an LSTM model with GloVe embeddings along with magic features
+__author__ = "n01z3"
 
-Tested under Keras 2.0 with Tensorflow 1.0 backend
-
-Single model may achieve LB scores at around 0.18+, average ensembles can get 0.17+
-'''
-
-########################################
-## import packages
-########################################
-import os
-import re
-import csv
-import codecs
+import matplotlib.pyplot as plt
 import numpy as np
+import cv2
 import pandas as pd
-
-from string import punctuation
+from shapely.wkt import loads as wkt_loads
+import tifffile as tiff
+import os
+import random
+from keras.models import Model
+from keras.layers import Input, merge, Convolution2D, MaxPooling2D, UpSampling2D, Reshape, core, Dropout
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras import backend as K
+from sklearn.metrics import jaccard_similarity_score
+from shapely.geometry import MultiPolygon, Polygon
+import shapely.wkt
+import shapely.affinity
 from collections import defaultdict
 
-from nltk.corpus import stopwords
-from nltk.stem import SnowballStemmer
+N_Cls = 10
+inDir = '/home/n01z3/dataset/dstl'
+DF = pd.read_csv(inDir + '/train_wkt_v4.csv')
+GS = pd.read_csv(inDir + '/grid_sizes.csv', names=['ImageId', 'Xmax', 'Ymin'], skiprows=1)
+SB = pd.read_csv(os.path.join(inDir, 'sample_submission.csv'))
+ISZ = 160
+smooth = 1e-12
 
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation
-from keras.layers.merge import concatenate
-from keras.models import Model
-from keras.layers.normalization import BatchNormalization
-from keras.callbacks import EarlyStopping, ModelCheckpoint
 
-from sklearn.preprocessing import StandardScaler
+def _convert_coordinates_to_raster(coords, img_size, xymax):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    Xmax, Ymax = xymax
+    H, W = img_size
+    W1 = 1.0 * W * W / (W + 1)
+    H1 = 1.0 * H * H / (H + 1)
+    xf = W1 / Xmax
+    yf = H1 / Ymax
+    coords[:, 1] *= yf
+    coords[:, 0] *= xf
+    coords_int = np.round(coords).astype(np.int32)
+    return coords_int
 
-import sys
-reload(sys)
-sys.setdefaultencoding('utf-8')
 
-########################################
-## set directories and parameters
-########################################
-BASE_DIR = '../input/'
-EMBEDDING_FILE = BASE_DIR + 'glove.840B.300d.txt'
-TRAIN_DATA_FILE = BASE_DIR + 'train.csv'
-TEST_DATA_FILE = BASE_DIR + 'test.csv'
-MAX_SEQUENCE_LENGTH = 30
-MAX_NB_WORDS = 200000
-EMBEDDING_DIM = 300
-VALIDATION_SPLIT = 0.1
+def _get_xmax_ymin(grid_sizes_panda, imageId):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    xmax, ymin = grid_sizes_panda[grid_sizes_panda.ImageId == imageId].iloc[0, 1:].astype(float)
+    return (xmax, ymin)
 
-num_lstm = np.random.randint(175, 275)
-num_dense = np.random.randint(100, 150)
-rate_drop_lstm = 0.15 + np.random.rand() * 0.25
-rate_drop_dense = 0.15 + np.random.rand() * 0.25
 
-act = 'relu'
-re_weight = True # whether to re-weight classes to fit the 17.5% share in test set
+def _get_polygon_list(wkt_list_pandas, imageId, cType):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    df_image = wkt_list_pandas[wkt_list_pandas.ImageId == imageId]
+    multipoly_def = df_image[df_image.ClassType == cType].MultipolygonWKT
+    polygonList = None
+    if len(multipoly_def) > 0:
+        assert len(multipoly_def) == 1
+        polygonList = wkt_loads(multipoly_def.values[0])
+    return polygonList
 
-STAMP = 'lstm_%d_%d_%.2f_%.2f'%(num_lstm, num_dense, rate_drop_lstm, \
-        rate_drop_dense)
 
-########################################
-## index word vectors
-########################################
-print('Indexing word vectors')
+def _get_and_convert_contours(polygonList, raster_img_size, xymax):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    perim_list = []
+    interior_list = []
+    if polygonList is None:
+        return None
+    for k in range(len(polygonList)):
+        poly = polygonList[k]
+        perim = np.array(list(poly.exterior.coords))
+        perim_c = _convert_coordinates_to_raster(perim, raster_img_size, xymax)
+        perim_list.append(perim_c)
+        for pi in poly.interiors:
+            interior = np.array(list(pi.coords))
+            interior_c = _convert_coordinates_to_raster(interior, raster_img_size, xymax)
+            interior_list.append(interior_c)
+    return perim_list, interior_list
 
-embeddings_index = {}
-f = open(EMBEDDING_FILE)
-count = 0
-for line in f:
-    values = line.split()
-    word = values[0]
-    coefs = np.asarray(values[1:], dtype='float32')
-    embeddings_index[word] = coefs
-f.close()
 
-print('Found %d word vectors of glove.' % len(embeddings_index))
+def _plot_mask_from_contours(raster_img_size, contours, class_value=1):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    img_mask = np.zeros(raster_img_size, np.uint8)
+    if contours is None:
+        return img_mask
+    perim_list, interior_list = contours
+    cv2.fillPoly(img_mask, perim_list, class_value)
+    cv2.fillPoly(img_mask, interior_list, 0)
+    return img_mask
 
-########################################
-## process texts in datasets
-########################################
-print('Processing text dataset')
 
-# The function "text_to_wordlist" is from
-# https://www.kaggle.com/currie32/quora-question-pairs/the-importance-of-cleaning-text
-def text_to_wordlist(text, remove_stopwords=False, stem_words=False):
-    # Clean the text, with the option to remove stopwords and to stem words.
-    
-    # Convert words to lower case and split them
-    text = text.lower().split()
+def generate_mask_for_image_and_class(raster_size, imageId, class_type, grid_sizes_panda=GS, wkt_list_pandas=DF):
+    # __author__ = visoft
+    # https://www.kaggle.com/visoft/dstl-satellite-imagery-feature-detection/export-pixel-wise-mask
+    xymax = _get_xmax_ymin(grid_sizes_panda, imageId)
+    polygon_list = _get_polygon_list(wkt_list_pandas, imageId, class_type)
+    contours = _get_and_convert_contours(polygon_list, raster_size, xymax)
+    mask = _plot_mask_from_contours(raster_size, contours, 1)
+    return mask
 
-    # Optionally, remove stop words
-    if remove_stopwords:
-        stops = set(stopwords.words("english"))
-        text = [w for w in text if not w in stops]
-    
-    text = " ".join(text)
 
-    # Clean the text
-    text = re.sub(r"[^A-Za-z0-9^,!.\/'+-=]", " ", text)
-    text = re.sub(r"what's", "what is ", text)
-    text = re.sub(r"\'s", " ", text)
-    text = re.sub(r"\'ve", " have ", text)
-    text = re.sub(r"can't", "cannot ", text)
-    text = re.sub(r"n't", " not ", text)
-    text = re.sub(r"i'm", "i am ", text)
-    text = re.sub(r"\'re", " are ", text)
-    text = re.sub(r"\'d", " would ", text)
-    text = re.sub(r"\'ll", " will ", text)
-    text = re.sub(r",", " ", text)
-    text = re.sub(r"\.", " ", text)
-    text = re.sub(r"!", " ! ", text)
-    text = re.sub(r"\/", " ", text)
-    text = re.sub(r"\^", " ^ ", text)
-    text = re.sub(r"\+", " + ", text)
-    text = re.sub(r"\-", " - ", text)
-    text = re.sub(r"\=", " = ", text)
-    text = re.sub(r"'", " ", text)
-    text = re.sub(r"(\d+)(k)", r"\g<1>000", text)
-    text = re.sub(r":", " : ", text)
-    text = re.sub(r" e g ", " eg ", text)
-    text = re.sub(r" b g ", " bg ", text)
-    text = re.sub(r" u s ", " american ", text)
-    text = re.sub(r"\0s", "0", text)
-    text = re.sub(r" 9 11 ", "911", text)
-    text = re.sub(r"e - mail", "email", text)
-    text = re.sub(r"j k", "jk", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    
-    # Optionally, shorten words to their stems
-    if stem_words:
-        text = text.split()
-        stemmer = SnowballStemmer('english')
-        stemmed_words = [stemmer.stem(word) for word in text]
-        text = " ".join(stemmed_words)
-    
-    # Return a list of words
-    return(text)
+def M(image_id):
+    # __author__ = amaia
+    # https://www.kaggle.com/aamaia/dstl-satellite-imagery-feature-detection/rgb-using-m-bands-example
+    filename = os.path.join(inDir, 'sixteen_band', '{}_M.tif'.format(image_id))
+    img = tiff.imread(filename)
+    img = np.rollaxis(img, 0, 3)
+    return img
 
-texts_1 = [] 
-texts_2 = []
-labels = []
-with codecs.open(TRAIN_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        texts_1.append(text_to_wordlist(values[3]))
-        texts_2.append(text_to_wordlist(values[4]))
-        labels.append(int(values[5]))
-print('Found %s texts in train.csv' % len(texts_1))
 
-test_texts_1 = []
-test_texts_2 = []
-test_ids = []
-with codecs.open(TEST_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        test_texts_1.append(text_to_wordlist(values[1]))
-        test_texts_2.append(text_to_wordlist(values[2]))
-        test_ids.append(values[0])
-print('Found %s texts in test.csv' % len(test_texts_1))
+def stretch_n(bands, lower_percent=5, higher_percent=95):
+    out = np.zeros_like(bands)
+    n = bands.shape[2]
+    for i in range(n):
+        a = 0  # np.min(band)
+        b = 1  # np.max(band)
+        c = np.percentile(bands[:, :, i], lower_percent)
+        d = np.percentile(bands[:, :, i], higher_percent)
+        t = a + (bands[:, :, i] - c) * (b - a) / (d - c)
+        t[t < a] = a
+        t[t > b] = b
+        out[:, :, i] = t
 
-tokenizer = Tokenizer(num_words=MAX_NB_WORDS)
-tokenizer.fit_on_texts(texts_1 + texts_2 + test_texts_1 + test_texts_2)
+    return out.astype(np.float32)
 
-sequences_1 = tokenizer.texts_to_sequences(texts_1)
-sequences_2 = tokenizer.texts_to_sequences(texts_2)
-test_sequences_1 = tokenizer.texts_to_sequences(test_texts_1)
-test_sequences_2 = tokenizer.texts_to_sequences(test_texts_2)
 
-word_index = tokenizer.word_index
-print('Found %s unique tokens' % len(word_index))
+def jaccard_coef(y_true, y_pred):
+    # __author__ = Vladimir Iglovikov
+    intersection = K.sum(y_true * y_pred, axis=[0, -1, -2])
+    sum_ = K.sum(y_true + y_pred, axis=[0, -1, -2])
 
-data_1 = pad_sequences(sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-data_2 = pad_sequences(sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-labels = np.array(labels)
-print('Shape of data tensor:', data_1.shape)
-print('Shape of label tensor:', labels.shape)
+    jac = (intersection + smooth) / (sum_ - intersection + smooth)
 
-test_data_1 = pad_sequences(test_sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-test_data_2 = pad_sequences(test_sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-test_ids = np.array(test_ids)
+    return K.mean(jac)
 
-########################################
-## generate leaky features
-########################################
 
-train_df = pd.read_csv(TRAIN_DATA_FILE)
-test_df = pd.read_csv(TEST_DATA_FILE)
+def jaccard_coef_int(y_true, y_pred):
+    # __author__ = Vladimir Iglovikov
+    y_pred_pos = K.round(K.clip(y_pred, 0, 1))
 
-ques = pd.concat([train_df[['question1', 'question2']], \
-        test_df[['question1', 'question2']]], axis=0).reset_index(drop='index')
-q_dict = defaultdict(set)
-for i in range(ques.shape[0]):
-        q_dict[ques.question1[i]].add(ques.question2[i])
-        q_dict[ques.question2[i]].add(ques.question1[i])
+    intersection = K.sum(y_true * y_pred_pos, axis=[0, -1, -2])
+    sum_ = K.sum(y_true + y_pred, axis=[0, -1, -2])
+    jac = (intersection + smooth) / (sum_ - intersection + smooth)
+    return K.mean(jac)
 
-def q1_freq(row):
-    return(len(q_dict[row['question1']]))
-    
-def q2_freq(row):
-    return(len(q_dict[row['question2']]))
-    
-def q1_q2_intersect(row):
-    return(len(set(q_dict[row['question1']]).intersection(set(q_dict[row['question2']]))))
 
-train_df['q1_q2_intersect'] = train_df.apply(q1_q2_intersect, axis=1, raw=True)
-train_df['q1_freq'] = train_df.apply(q1_freq, axis=1, raw=True)
-train_df['q2_freq'] = train_df.apply(q2_freq, axis=1, raw=True)
+def stick_all_train():
+    print "let's stick all imgs together"
+    s = 835
 
-test_df['q1_q2_intersect'] = test_df.apply(q1_q2_intersect, axis=1, raw=True)
-test_df['q1_freq'] = test_df.apply(q1_freq, axis=1, raw=True)
-test_df['q2_freq'] = test_df.apply(q2_freq, axis=1, raw=True)
+    x = np.zeros((5 * s, 5 * s, 8))
+    y = np.zeros((5 * s, 5 * s, N_Cls))
 
-leaks = train_df[['q1_q2_intersect', 'q1_freq', 'q2_freq']]
-test_leaks = test_df[['q1_q2_intersect', 'q1_freq', 'q2_freq']]
+    ids = sorted(DF.ImageId.unique())
+    print len(ids)
+    for i in range(5):
+        for j in range(5):
+            id = ids[5 * i + j]
 
-ss = StandardScaler()
-ss.fit(np.vstack((leaks, test_leaks)))
-leaks = ss.transform(leaks)
-test_leaks = ss.transform(test_leaks)
+            img = M(id)
+            img = stretch_n(img)
+            print img.shape, id, np.amax(img), np.amin(img)
+            x[s * i:s * i + s, s * j:s * j + s, :] = img[:s, :s, :]
+            for z in range(N_Cls):
+                y[s * i:s * i + s, s * j:s * j + s, z] = generate_mask_for_image_and_class(
+                    (img.shape[0], img.shape[1]), id, z + 1)[:s, :s]
 
-########################################
-## prepare embeddings
-########################################
-print('Preparing embedding matrix')
+    print np.amax(y), np.amin(y)
 
-nb_words = min(MAX_NB_WORDS, len(word_index))+1
+    np.save('data/x_trn_%d' % N_Cls, x)
+    np.save('data/y_trn_%d' % N_Cls, y)
 
-embedding_matrix = np.zeros((nb_words, EMBEDDING_DIM))
-for word, i in word_index.items():
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        embedding_matrix[i] = embedding_vector
-print('Null word embeddings: %d' % np.sum(np.sum(embedding_matrix, axis=1) == 0))
 
-########################################
-## sample train/validation data
-########################################
-#np.random.seed(1234)
-perm = np.random.permutation(len(data_1))
-idx_train = perm[:int(len(data_1)*(1-VALIDATION_SPLIT))]
-idx_val = perm[int(len(data_1)*(1-VALIDATION_SPLIT)):]
+def get_patches(img, msk, amt=10000, aug=True):
+    is2 = int(1.0 * ISZ)
+    xm, ym = img.shape[0] - is2, img.shape[1] - is2
 
-data_1_train = np.vstack((data_1[idx_train], data_2[idx_train]))
-data_2_train = np.vstack((data_2[idx_train], data_1[idx_train]))
-leaks_train = np.vstack((leaks[idx_train], leaks[idx_train]))
-labels_train = np.concatenate((labels[idx_train], labels[idx_train]))
+    x, y = [], []
 
-data_1_val = np.vstack((data_1[idx_val], data_2[idx_val]))
-data_2_val = np.vstack((data_2[idx_val], data_1[idx_val]))
-leaks_val = np.vstack((leaks[idx_val], leaks[idx_val]))
-labels_val = np.concatenate((labels[idx_val], labels[idx_val]))
+    tr = [0.4, 0.1, 0.1, 0.15, 0.3, 0.95, 0.1, 0.05, 0.001, 0.005]
+    for i in range(amt):
+        xc = random.randint(0, xm)
+        yc = random.randint(0, ym)
 
-weight_val = np.ones(len(labels_val))
-if re_weight:
-    weight_val *= 0.472001959
-    weight_val[labels_val==0] = 1.309028344
+        im = img[xc:xc + is2, yc:yc + is2]
+        ms = msk[xc:xc + is2, yc:yc + is2]
 
-########################################
-## define the model structure
-########################################
-embedding_layer = Embedding(nb_words,
-        EMBEDDING_DIM,
-        weights=[embedding_matrix],
-        input_length=MAX_SEQUENCE_LENGTH,
-        trainable=False)
-lstm_layer = LSTM(num_lstm, dropout=rate_drop_lstm, recurrent_dropout=rate_drop_lstm)
+        for j in range(N_Cls):
+            sm = np.sum(ms[:, :, j])
+            if 1.0 * sm / is2 ** 2 > tr[j]:
+                if aug:
+                    if random.uniform(0, 1) > 0.5:
+                        im = im[::-1]
+                        ms = ms[::-1]
+                    if random.uniform(0, 1) > 0.5:
+                        im = im[:, ::-1]
+                        ms = ms[:, ::-1]
 
-sequence_1_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_1 = embedding_layer(sequence_1_input)
-x1 = lstm_layer(embedded_sequences_1)
+                x.append(im)
+                y.append(ms)
 
-sequence_2_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_2 = embedding_layer(sequence_2_input)
-y1 = lstm_layer(embedded_sequences_2)
+    x, y = 2 * np.transpose(x, (0, 3, 1, 2)) - 1, np.transpose(y, (0, 3, 1, 2))
+    print x.shape, y.shape, np.amax(x), np.amin(x), np.amax(y), np.amin(y)
+    return x, y
 
-leaks_input = Input(shape=(leaks.shape[1],))
-leaks_dense = Dense(num_dense/2, activation=act)(leaks_input)
 
-merged = concatenate([x1, y1, leaks_dense])
-merged = BatchNormalization()(merged)
-merged = Dropout(rate_drop_dense)(merged)
+def make_val():
+    print "let's pick some samples for validation"
+    img = np.load('data/x_trn_%d.npy' % N_Cls)
+    msk = np.load('data/y_trn_%d.npy' % N_Cls)
+    x, y = get_patches(img, msk, amt=3000)
 
-merged = Dense(num_dense, activation=act)(merged)
-merged = BatchNormalization()(merged)
-merged = Dropout(rate_drop_dense)(merged)
+    np.save('data/x_tmp_%d' % N_Cls, x)
+    np.save('data/y_tmp_%d' % N_Cls, y)
 
-preds = Dense(1, activation='sigmoid')(merged)
 
-########################################
-## add class weight
-########################################
-if re_weight:
-    class_weight = {0: 1.309028344, 1: 0.472001959}
-else:
-    class_weight = None
+def get_unet():
+    inputs = Input((8, ISZ, ISZ))
+    conv1 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(inputs)
+    conv1 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(conv1)
+    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
 
-########################################
-## train the model
-########################################
-model = Model(inputs=[sequence_1_input, sequence_2_input, leaks_input], \
-        outputs=preds)
-model.compile(loss='binary_crossentropy',
-        optimizer='nadam',
-        metrics=['acc'])
-#model.summary()
-print(STAMP)
+    conv2 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(pool1)
+    conv2 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(conv2)
+    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
 
-early_stopping =EarlyStopping(monitor='val_loss', patience=3)
-bst_model_path = STAMP + '.h5'
-model_checkpoint = ModelCheckpoint(bst_model_path, save_best_only=True, save_weights_only=True)
+    conv3 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(pool2)
+    conv3 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(conv3)
+    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
 
-hist = model.fit([data_1_train, data_2_train, leaks_train], labels_train, \
-        validation_data=([data_1_val, data_2_val, leaks_val], labels_val, weight_val), \
-        epochs=200, batch_size=2048, shuffle=True, \
-        class_weight=class_weight, callbacks=[early_stopping, model_checkpoint])
+    conv4 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(pool3)
+    conv4 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(conv4)
+    pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
 
-model.load_weights(bst_model_path)
-bst_val_score = min(hist.history['val_loss'])
+    conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(pool4)
+    conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(conv5)
 
-########################################
-## make the submission
-########################################
-print('Start making the submission before fine-tuning')
+    up6 = merge([UpSampling2D(size=(2, 2))(conv5), conv4], mode='concat', concat_axis=1)
+    conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(up6)
+    conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(conv6)
 
-preds = model.predict([test_data_1, test_data_2, test_leaks], batch_size=8192, verbose=1)
-preds += model.predict([test_data_2, test_data_1, test_leaks], batch_size=8192, verbose=1)
-preds /= 2
+    up7 = merge([UpSampling2D(size=(2, 2))(conv6), conv3], mode='concat', concat_axis=1)
+    conv7 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(up7)
+    conv7 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(conv7)
 
-submission = pd.DataFrame({'test_id':test_ids, 'is_duplicate':preds.ravel()})
-submission.to_csv('%.4f_'%(bst_val_score)+STAMP+'.csv', index=False)
+    up8 = merge([UpSampling2D(size=(2, 2))(conv7), conv2], mode='concat', concat_axis=1)
+    conv8 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(up8)
+    conv8 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(conv8)
+
+    up9 = merge([UpSampling2D(size=(2, 2))(conv8), conv1], mode='concat', concat_axis=1)
+    conv9 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(up9)
+    conv9 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(conv9)
+
+    conv10 = Convolution2D(N_Cls, 1, 1, activation='sigmoid')(conv9)
+
+    model = Model(input=inputs, output=conv10)
+    model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=[jaccard_coef, jaccard_coef_int, 'accuracy'])
+    return model
+
+
+def calc_jacc(model):
+    img = np.load('data/x_tmp_%d.npy' % N_Cls)
+    msk = np.load('data/y_tmp_%d.npy' % N_Cls)
+
+    prd = model.predict(img, batch_size=4)
+    print prd.shape, msk.shape
+    avg, trs = [], []
+
+    for i in range(N_Cls):
+        t_msk = msk[:, i, :, :]
+        t_prd = prd[:, i, :, :]
+        t_msk = t_msk.reshape(msk.shape[0] * msk.shape[2], msk.shape[3])
+        t_prd = t_prd.reshape(msk.shape[0] * msk.shape[2], msk.shape[3])
+
+        m, b_tr = 0, 0
+        for j in range(10):
+            tr = j / 10.0
+            pred_binary_mask = t_prd > tr
+
+            jk = jaccard_similarity_score(t_msk, pred_binary_mask)
+            if jk > m:
+                m = jk
+                b_tr = tr
+        print i, m, b_tr
+        avg.append(m)
+        trs.append(b_tr)
+
+    score = sum(avg) / 10.0
+    return score, trs
+
+
+def mask_for_polygons(polygons, im_size):
+    # __author__ = Konstantin Lopuhin
+    # https://www.kaggle.com/lopuhin/dstl-satellite-imagery-feature-detection/full-pipeline-demo-poly-pixels-ml-poly
+    img_mask = np.zeros(im_size, np.uint8)
+    if not polygons:
+        return img_mask
+    int_coords = lambda x: np.array(x).round().astype(np.int32)
+    exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
+    interiors = [int_coords(pi.coords) for poly in polygons
+                 for pi in poly.interiors]
+    cv2.fillPoly(img_mask, exteriors, 1)
+    cv2.fillPoly(img_mask, interiors, 0)
+    return img_mask
+
+
+def mask_to_polygons(mask, epsilon=5, min_area=1.):
+    # __author__ = Konstantin Lopuhin
+    # https://www.kaggle.com/lopuhin/dstl-satellite-imagery-feature-detection/full-pipeline-demo-poly-pixels-ml-poly
+
+    # first, find contours with cv2: it's much faster than shapely
+    image, contours, hierarchy = cv2.findContours(
+        ((mask == 1) * 255).astype(np.uint8),
+        cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
+    # create approximate contours to have reasonable submission size
+    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True)
+                       for cnt in contours]
+    if not contours:
+        return MultiPolygon()
+    # now messy stuff to associate parent and child contours
+    cnt_children = defaultdict(list)
+    child_contours = set()
+    assert hierarchy.shape[0] == 1
+    # http://docs.opencv.org/3.1.0/d9/d8b/tutorial_py_contours_hierarchy.html
+    for idx, (_, _, _, parent_idx) in enumerate(hierarchy[0]):
+        if parent_idx != -1:
+            child_contours.add(idx)
+            cnt_children[parent_idx].append(approx_contours[idx])
+    # create actual polygons filtering by area (removes artifacts)
+    all_polygons = []
+    for idx, cnt in enumerate(approx_contours):
+        if idx not in child_contours and cv2.contourArea(cnt) >= min_area:
+            assert cnt.shape[1] == 1
+            poly = Polygon(
+                shell=cnt[:, 0, :],
+                holes=[c[:, 0, :] for c in cnt_children.get(idx, [])
+                       if cv2.contourArea(c) >= min_area])
+            all_polygons.append(poly)
+    # approximating polygons might have created invalid ones, fix them
+    all_polygons = MultiPolygon(all_polygons)
+    if not all_polygons.is_valid:
+        all_polygons = all_polygons.buffer(0)
+        # Sometimes buffer() converts a simple Multipolygon to just a Polygon,
+        # need to keep it a Multi throughout
+        if all_polygons.type == 'Polygon':
+            all_polygons = MultiPolygon([all_polygons])
+    return all_polygons
+
+
+def get_scalers(im_size, x_max, y_min):
+    # __author__ = Konstantin Lopuhin
+    # https://www.kaggle.com/lopuhin/dstl-satellite-imagery-feature-detection/full-pipeline-demo-poly-pixels-ml-poly
+    h, w = im_size  # they are flipped so that mask_for_polygons works correctly
+    h, w = float(h), float(w)
+    w_ = 1.0 * w * (w / (w + 1))
+    h_ = 1.0 * h * (h / (h + 1))
+    return w_ / x_max, h_ / y_min
+
+
+def train_net():
+    print "start train net"
+    x_val, y_val = np.load('data/x_tmp_%d.npy' % N_Cls), np.load('data/y_tmp_%d.npy' % N_Cls)
+    img = np.load('data/x_trn_%d.npy' % N_Cls)
+    msk = np.load('data/y_trn_%d.npy' % N_Cls)
+
+    x_trn, y_trn = get_patches(img, msk)
+
+    model = get_unet()
+    model.load_weights('weights/unet_10_jk0.7878')
+    model_checkpoint = ModelCheckpoint('weights/unet_tmp.hdf5', monitor='loss', save_best_only=True)
+    for i in range(1):
+        model.fit(x_trn, y_trn, batch_size=64, nb_epoch=1, verbose=1, shuffle=True,
+                  callbacks=[model_checkpoint], validation_data=(x_val, y_val))
+        del x_trn
+        del y_trn
+        x_trn, y_trn = get_patches(img, msk)
+        score, trs = calc_jacc(model)
+        print 'val jk', score
+        model.save_weights('weights/unet_10_jk%.4f' % score)
+
+    return model
+
+
+def predict_id(id, model, trs):
+    img = M(id)
+    x = stretch_n(img)
+
+    cnv = np.zeros((960, 960, 8)).astype(np.float32)
+    prd = np.zeros((N_Cls, 960, 960)).astype(np.float32)
+    cnv[:img.shape[0], :img.shape[1], :] = x
+
+    for i in range(0, 6):
+        line = []
+        for j in range(0, 6):
+            line.append(cnv[i * ISZ:(i + 1) * ISZ, j * ISZ:(j + 1) * ISZ])
+
+        x = 2 * np.transpose(line, (0, 3, 1, 2)) - 1
+        tmp = model.predict(x, batch_size=4)
+        for j in range(tmp.shape[0]):
+            prd[:, i * ISZ:(i + 1) * ISZ, j * ISZ:(j + 1) * ISZ] = tmp[j]
+
+    # trs = [0.4, 0.1, 0.4, 0.3, 0.3, 0.5, 0.3, 0.6, 0.1, 0.1]
+    for i in range(N_Cls):
+        prd[i] = prd[i] > trs[i]
+
+    return prd[:, :img.shape[0], :img.shape[1]]
+
+
+def predict_test(model, trs):
+    print "predict test"
+    for i, id in enumerate(sorted(set(SB['ImageId'].tolist()))):
+        msk = predict_id(id, model, trs)
+        np.save('msk/10_%s' % id, msk)
+        if i % 100 == 0: print i, id
+
+
+def make_submit():
+    print "make submission file"
+    df = pd.read_csv(os.path.join(inDir, 'sample_submission.csv'))
+    print df.head()
+    for idx, row in df.iterrows():
+        id = row[0]
+        kls = row[1] - 1
+
+        msk = np.load('msk/10_%s.npy' % id)[kls]
+        pred_polygons = mask_to_polygons(msk)
+        x_max = GS.loc[GS['ImageId'] == id, 'Xmax'].as_matrix()[0]
+        y_min = GS.loc[GS['ImageId'] == id, 'Ymin'].as_matrix()[0]
+
+        x_scaler, y_scaler = get_scalers(msk.shape, x_max, y_min)
+
+        scaled_pred_polygons = shapely.affinity.scale(pred_polygons, xfact=1.0 / x_scaler, yfact=1.0 / y_scaler,
+                                                      origin=(0, 0, 0))
+
+        df.iloc[idx, 2] = shapely.wkt.dumps(scaled_pred_polygons)
+        if idx % 100 == 0: print idx
+    print df.head()
+    df.to_csv('subm/1.csv', index=False)
+
+
+def check_predict(id='6120_2_3'):
+    model = get_unet()
+    model.load_weights('weights/unet_10_jk0.7878')
+
+    msk = predict_id(id, model, [0.4, 0.1, 0.4, 0.3, 0.3, 0.5, 0.3, 0.6, 0.1, 0.1])
+    img = M(id)
+
+    plt.figure()
+    ax1 = plt.subplot(131)
+    ax1.set_title('image ID:6120_2_3')
+    ax1.imshow(img[:, :, 5], cmap=plt.get_cmap('gist_ncar'))
+    ax2 = plt.subplot(132)
+    ax2.set_title('predict bldg pixels')
+    ax2.imshow(msk[0], cmap=plt.get_cmap('gray'))
+    ax3 = plt.subplot(133)
+    ax3.set_title('predict bldg polygones')
+    ax3.imshow(mask_for_polygons(mask_to_polygons(msk[0], epsilon=1), img.shape[:2]), cmap=plt.get_cmap('gray'))
+
+    plt.show()
+
+
+if __name__ == '__main__':
+    stick_all_train()
+    make_val()
+    model = train_net()
+    score, trs = calc_jacc(model)
+    predict_test(model, trs)
+    make_submit()
+
+    # bonus
+    check_predict()

@@ -1,254 +1,142 @@
 
 # coding: utf-8
 
-# Here we use a simple linear model and article content with `CountVectorizer`.
-
-# Import libraries.
-
-# In[1]:
+# In[ ]:
 
 
-import os
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import json
-from tqdm import tqdm_notebook
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
+import os
+from IPython.display import display_markdown as mkdown # as print
+
+def nl():
+    print('\n')
+
+for f in os.listdir('../input'):
+    print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
 
 
-# The following code will help to throw away all HTML tags from an article content.
-
-# In[2]:
-
-
-from html.parser import HTMLParser
-
-class MLStripper(HTMLParser):
-    def __init__(self):
-        self.reset()
-        self.strict = False
-        self.convert_charrefs= True
-        self.fed = []
-    def handle_data(self, d):
-        self.fed.append(d)
-    def get_data(self):
-        return ''.join(self.fed)
-
-def strip_tags(html):
-    s = MLStripper()
-    s.feed(html)
-    return s.get_data()
-
-
-# In[3]:
-
-
-PATH_TO_DATA = '../input/'
-
-
-# Assume you have all data downloaded from competition's [page](https://www.kaggle.com/c/how-good-is-your-medium-article/data) in the PATH_TO_DATA folder and `.gz` files are ungzipped.
-
-# In[4]:
-
-
-get_ipython().system('ls -l $PATH_TO_DATA')
-
-
-# Supplementary function to read a JSON line without crashing on escape characters. 
-
-# In[5]:
-
-
-def read_json_line(line=None):
-    result = None
-    try:        
-        result = json.loads(line)
-    except Exception as e:      
-        # Find the offending character index:
-        idx_to_replace = int(str(e).split(' ')[-1].replace(')',''))      
-        # Remove the offending character:
-        new_line = list(line)
-        new_line[idx_to_replace] = ' '
-        new_line = ''.join(new_line)     
-        return read_json_line(line=new_line)
-    return result
-
-
-# This function takes a JSON and forms a txt file leaving only article content. When you resort to feature engineering and extract various features from articles, a good idea is to modify this function.
-
-# In[6]:
-
-
-def preprocess(path_to_inp_json_file):
-    output_list = []
-    with open(path_to_inp_json_file, encoding='utf-8') as inp_file:
-        for line in tqdm_notebook(inp_file):
-            json_data = read_json_line(line)
-            content = json_data['content'].replace('\n', ' ').replace('\r', ' ')
-            content_no_html_tags = strip_tags(content)
-            output_list.append(content_no_html_tags)
-    return output_list
-
+# #### It looks like we are given quite a few sets as an input! Let's take a look at each one, starting with train and test.
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "train_raw_content = preprocess(path_to_inp_json_file=os.path.join(PATH_TO_DATA, \n                                                                  'train.json'),)")
+df_train = pd.read_csv('../input/train.csv', nrows=500000)
+df_test = pd.read_csv('../input/test.csv', nrows=500000)
+
+nl()
+print('Size of training set: ' + str(df_train.shape))
+print(' Size of testing set: ' + str(df_test.shape))
+
+nl()
+print('Columns in train: ' + str(df_train.columns.tolist()))
+print(' Columns in test: ' + str(df_test.columns.tolist()))
+
+nl()
+print(df_train.describe())
 
 
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', "test_raw_content = preprocess(path_to_inp_json_file=os.path.join(PATH_TO_DATA, \n                                                                  'test.json'),)")
-
-
-# We'll use a linear model (`Ridge`) with a very simple feature extractor – `CountVectorizer`, meaning that we resort to the Bag-of-Words approach. For now, we are leaving only 50k features. 
-
-# In[ ]:
-
-
-cv = CountVectorizer(max_features=50000)
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'X_train = cv.fit_transform(train_raw_content)')
-
+# `Demanda_uni_equil` is the target value that we are trying to predict.
+# 
+# Let's take a look at the distribution:
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'X_test = cv.transform(test_raw_content)')
+target = df_train['Demanda_uni_equil'].tolist()
+
+def label_plot(title, x, y):
+    plt.title(title)
+    plt.xlabel(x)
+    plt.ylabel(y)
+
+plt.hist(target, bins=200, color='blue')
+label_plot('Distribution of target values', 'Demanda_uni_equil', 'Count')
+plt.show()
+
+print("Looks like we have some pretty big outliers, let's zoom in and try again")
+
+print('Data with target values under 50: ' + str(round(len(df_train.loc[df_train['Demanda_uni_equil'] <= 50]) / 5000, 2)) + '%')
+
+plt.hist(target, bins=50, color='blue', range=(0, 50))
+label_plot('Distribution of target values under 50', 'Demanda_uni_equil', 'Count')
+plt.show()
 
 
-# In[ ]:
-
-
-X_train.shape, X_test.shape
-
-
-# Read targets from file.
-
-# In[ ]:
-
-
-train_target = pd.read_csv(os.path.join(PATH_TO_DATA, 'train_log1p_recommends.csv'), 
-                           index_col='id')
-
-
-# In[ ]:
-
-
-train_target.shape
-
-
-# In[ ]:
-
-
-y_train = train_target['log_recommends'].values
-
-
-# Make a 30%-holdout set. 
+# From this distribution, we can see that some target values are much more common than others.
+# 
+# Let's find the mode of the target and make a naive submission using that!
 
 # In[ ]:
 
 
-train_part_size = int(0.7 * train_target.shape[0])
-X_train_part = X_train[:train_part_size, :]
-y_train_part = y_train[:train_part_size]
-X_valid =  X_train[train_part_size:, :]
-y_valid = y_train[train_part_size:]
+from collections import Counter
+print(Counter(target).most_common(10))
+print('Our most common value is 2')
+
+sub = pd.read_csv('../input/sample_submission.csv')
+sub['Demanda_uni_equil'] = 2
+sub.to_csv('mostcommon.csv', index=False)
 
 
-# Now we are ready to fit a linear model.
-
-# In[ ]:
-
-
-from sklearn.linear_model import Ridge
-
-
-# In[ ]:
-
-
-ridge = Ridge(random_state=17)
-
+# Interestingly, our script (0.96080) performs worse than submitting `6` as the predicted value. This could be for two reasons:
+# 
+# 1) Our values are incorrect since we have only read the first 500,000 values of the dataset and the set is not randomised.  
+# 2) Due to the [evaluation metric](https://www.kaggle.com/c/grupo-bimbo-inventory-demand/details/evaluation) predicting 6 actually gives a lower overall logarithmic error.
+# 
+# We will begin by investigating the first possibility, and will look at whether the time-series has any effect on data.
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'ridge.fit(X_train_part, y_train_part);')
+pseudo_time = df_train.loc[df_train.Demanda_uni_equil < 20].index.tolist()
+target = df_train.loc[df_train.Demanda_uni_equil < 20].Demanda_uni_equil.tolist()
+
+plt.hist2d(pseudo_time, target, bins=[50,20])
+label_plot('Histogram of target value over index', 'Index', 'Target')
+plt.show()
 
 
-# In[ ]:
-
-
-ridge_pred = ridge.predict(X_valid)
-
-
-# Let's plot predictions and targets for the holdout set. Recall that these are #recommendations (= #claps) of Medium articles with the `np.log1p` transformation.
-
-# In[ ]:
-
-
-plt.hist(y_valid, bins=30, alpha=.5, color='red', label='true', range=(0,10));
-plt.hist(ridge_pred, bins=30, alpha=.5, color='green', label='pred', range=(0,10));
-plt.legend();
-
-
-# As we can see, the prediction is far from perfect, and we get MAE $\approx$ 1.3 that corresponds to $\approx$ 2.7 error in #recommendations.
+# It does not look like the time-series has much effect on the data, except for that anomaly around 200k (we may take a closer look at another time)
+# 
+# To test out option 2, I created a script which evaluates the RMSLE on the training set to try and find the best value to submit, and it scored 0.82735:  
+# https://www.kaggle.com/anokas/grupo-bimbo-inventory-demand/optimised-beat-the-benchmark
+# 
+# Now that we have found the best naive submission to make, we can go onto looking at the other columns!
+# 
+# We will begin by looking at the time column, semana (meaning week)
 
 # In[ ]:
 
 
-valid_mae = mean_absolute_error(y_valid, ridge_pred)
-valid_mae, np.expm1(valid_mae)
+semana = df_train['Semana']
+print(semana.value_counts())
+print('\nIt looks like by sampling only the first 500,000 columns, we have only sampled from week 3.\nWe will have to take a larger portion of the dataset\n')
+
+timing = pd.read_csv('../input/train.csv', usecols=['Semana','Demanda_uni_equil'])
+print('Size: ' + str(timing.shape))
+
+print(timing['Semana'].value_counts())
+plt.hist(timing['Semana'].tolist(), bins=7, color='red')
+label_plot('Distribution of weeks in training data', 'Semana', 'Frequency')
+plt.show()
+
+timing_test = pd.read_csv('../input/test.csv', usecols=['Semana'])
+print(timing_test['Semana'].value_counts())
 
 
-# Finally, train the model on the full accessible training set, make predictions for the test set and form a submission file. 
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'ridge.fit(X_train, y_train);')
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'ridge_test_pred = ridge.predict(X_test)')
-
-
-# In[ ]:
-
-
-def write_submission_file(prediction, filename,
-    path_to_sample=os.path.join(PATH_TO_DATA, 'sample_submission.csv')):
-    submission = pd.read_csv(path_to_sample, index_col='id')
-    
-    submission['log_recommends'] = prediction
-    submission.to_csv(filename)
-
+# We have a different set of weeks in the testing data for us to predict - meaning that this is likely a time series prediction problem for each of the product/client/location pairs in train and test sets.
+# 
+# Since this appears to be a time series prediction task, let's see if there are any trends in the target value over time.
 
 # In[ ]:
 
 
-write_submission_file(prediction=ridge_test_pred, 
-                      filename='first_ridge.csv')
+timing = timing.sample(1000000)
+timing = timing.loc[timing['Demanda_uni_equil'] < 15] # We only want to look at the most common values
 
+plt.hist2d(timing['Semana'].tolist(), timing['Demanda_uni_equil'].tolist(), bins=[7, 15])
+label_plot('Distribution of target value over time', 'Week', 'Target')
+plt.show()
 
-# With this, you'll get 1.91185 on [public leaderboard](https://www.kaggle.com/c/how-good-is-your-medium-article/leaderboard). This is much higher than our validation MAE. This indicates that the target distribution in test set somewhat differs from that of the training set (recent Medium articles are more popular). This shouldn't confuse us as long as we see a correlation between local improvements and improvements on the leaderboard. 
-
-# Some ideas for improvement:
-# - Engineer good features, this is the key to success. Some simple features will be based on publication time, authors, content length and so on
-# - You may not ignore HTML and extract some features from there
-# - You'd better experiment with your validation scheme. You should see a correlation between your local improvements and LB score
-# - Try TF-IDF, ngrams, Word2Vec and GloVe embeddings
-# - Try various NLP techniques like stemming and lemmatization
-# - Tune hyperparameters. In our example, we've left only 50k features and used `C`=1 as a regularization parameter, this can be changed 
-# - SGD and Vowpal Wabbit will learn much faster
-# - In our course, we don't cover neural nets. But it's not obliged to use GRUs or LSTMs in this competition. 

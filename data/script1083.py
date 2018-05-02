@@ -1,264 +1,352 @@
 
 # coding: utf-8
 
-# Starter EDA and ConvNet implementation using Keras. 
-# 
-# Inspiration for this notebook comes from this [Keras blog post](https://blog.keras.io/building-powerful-image-classification-models-using-very-little-data.html) and the [VGG ConvNet paper](https://arxiv.org/pdf/1409.1556.pdf). 
-# 
-
 # In[ ]:
 
 
-import os, cv2, random
-import numpy as np
-import pandas as pd
+# Imports
 
+# pandas
+import pandas as pd
+from pandas import Series,DataFrame
+
+# numpy, matplotlib, seaborn
+import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import ticker
 import seaborn as sns
+sns.set_style('whitegrid')
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-from keras.models import Sequential
-from keras.layers import Input, Dropout, Flatten, Convolution2D, MaxPooling2D, Dense, Activation
-from keras.optimizers import RMSprop
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
-from keras.utils import np_utils
-
-
-# ## Preparing the Data
-# 
-# This function resizes the images to 64x64 and samples 2000 images (8%) of the data to run efficiently as a Kaggle Kernel. I also separated cats and dogs for exploratory analysis. 
-
-# In[ ]:
-
-
-TRAIN_DIR = '../input/train/'
-TEST_DIR = '../input/test/'
-
-ROWS = 64
-COLS = 64
-CHANNELS = 3
-
-train_images = [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR)] # use this for full dataset
-train_dogs =   [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR) if 'dog' in i]
-train_cats =   [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR) if 'cat' in i]
-
-test_images =  [TEST_DIR+i for i in os.listdir(TEST_DIR)]
-
-
-# slice datasets for memory efficiency on Kaggle Kernels, delete if using full dataset
-train_images = train_dogs[:1000] + train_cats[:1000]
-random.shuffle(train_images)
-test_images =  test_images[:25]
-
-def read_image(file_path):
-    img = cv2.imread(file_path, cv2.IMREAD_COLOR) #cv2.IMREAD_GRAYSCALE
-    return cv2.resize(img, (ROWS, COLS), interpolation=cv2.INTER_CUBIC)
-
-
-def prep_data(images):
-    count = len(images)
-    data = np.ndarray((count, CHANNELS, ROWS, COLS), dtype=np.uint8)
-
-    for i, image_file in enumerate(images):
-        image = read_image(image_file)
-        data[i] = image.T
-        if i%250 == 0: print('Processed {} of {}'.format(i, count))
-    
-    return data
-
-train = prep_data(train_images)
-test = prep_data(test_images)
-
-print("Train shape: {}".format(train.shape))
-print("Test shape: {}".format(test.shape))
-
-
-# ### Generating the Labels
-# 
-# We're dealing with a binary classification problem here - (1) dog (0) cat. The lables can be created by looping over the file names in the train directory. It's nice to see the training data is perfectly balanced. 
-
-# In[ ]:
-
-
-labels = []
-for i in train_images:
-    if 'dog' in i:
-        labels.append(1)
-    else:
-        labels.append(0)
-
-sns.countplot(labels)
-sns.plt.title('Cats and Dogs')
-
-
-# ### Checking out Cats and Dogs
-# A quick side-by-side comparison of the animals.
-
-# In[ ]:
-
-
-def show_cats_and_dogs(idx):
-    cat = read_image(train_cats[idx])
-    dog = read_image(train_dogs[idx])
-    pair = np.concatenate((cat, dog), axis=1)
-    plt.figure(figsize=(10,5))
-    plt.imshow(pair)
-    plt.show()
-    
-for idx in range(0,5):
-    show_cats_and_dogs(idx)
-
-
-# ### Your Average Cat and Dog Photo
-# 
-# Just for fun, the mean pixel values for cats and dogs. I can almost see a resemblance, a ghost, if you will...
-
-# In[ ]:
-
-
-dog_avg = np.array([dog[0].T for i, dog in enumerate(train) if labels[i]==1]).mean(axis=0)
-plt.imshow(dog_avg)
-plt.title('Your Average Dog')
+# machine learning
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC, LinearSVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn import cross_validation
+import xgboost as xgb
 
 
 # In[ ]:
 
 
-cat_avg = np.array([cat[0].T for i, cat in enumerate(train) if labels[i]==0]).mean(axis=0)
-plt.imshow(cat_avg)
-plt.title('Your Average Cat')
+# get airbnb & test csv files as a DataFrame
+airbnb_df  = pd.read_csv('../input/train_users.csv')
+test_df    = pd.read_csv('../input/test_users.csv')
 
-
-# ## CatdogNet-16
-# 
-# A scaled down version of the VGG-16, with a few notable changes.
-# 
-# - Number of convolution filters cut in half, fully connected (dense) layers scaled down. 
-# - Optimizer changed to `RMSprop`. 
-# - Output layer activation set to `sigmoid` for binary crossentropy. 
-# - Some layers commented out for efficiency.
-# 
-# The full network takes about 80s per epoch on a GTX1070 (or 2hr+ on CPU) on the full dataset.  (This script only trains on 8% of the 25K images. )
-
-# In[ ]:
-
-
-optimizer = RMSprop(lr=1e-4)
-objective = 'binary_crossentropy'
-
-
-def catdog():
-    
-    model = Sequential()
-
-    model.add(Convolution2D(32, 3, 3, border_mode='same', input_shape=(3, ROWS, COLS), activation='relu'))
-    model.add(Convolution2D(32, 3, 3, border_mode='same', activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu'))
-    model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    
-    model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu'))
-    model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    
-    model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-    model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-#     model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-
-#     model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-#     model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-#     model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu'))
-#     model.add(MaxPooling2D(pool_size=(2, 2)))
-
-    model.add(Flatten())
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.5))
-    
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(1))
-    model.add(Activation('sigmoid'))
-
-    model.compile(loss=objective, optimizer=optimizer, metrics=['accuracy'])
-    return model
-
-
-model = catdog()
-
-
-# ### Train and Predict
-# 
-# I'm using Keras's early stopping callback to end training when the validation loss stops improving, otherwise the model will overfit. I will also be tracking the loss history on each epoch to visualize the overfitting trend. 
-# 
-# Note: A slice of 1000 images was used to fit the model for CPU efficency. The model's perfrmance improves significantly when used on the entire dataset. 
-
-# In[ ]:
-
-
-nb_epoch = 10
-batch_size = 16
-
-## Callback for loss logging per epoch
-class LossHistory(Callback):
-    def on_train_begin(self, logs={}):
-        self.losses = []
-        self.val_losses = []
-        
-    def on_epoch_end(self, batch, logs={}):
-        self.losses.append(logs.get('loss'))
-        self.val_losses.append(logs.get('val_loss'))
-
-early_stopping = EarlyStopping(monitor='val_loss', patience=3, verbose=1, mode='auto')        
-        
-def run_catdog():
-    
-    history = LossHistory()
-    model.fit(train, labels, batch_size=batch_size, nb_epoch=nb_epoch,
-              validation_split=0.25, verbose=0, shuffle=True, callbacks=[history, early_stopping])
-    
-
-    predictions = model.predict(test, verbose=0)
-    return predictions, history
-
-predictions, history = run_catdog()
+# preview the data
+airbnb_df.head()
 
 
 # In[ ]:
 
 
-loss = history.losses
-val_loss = history.val_losses
+airbnb_df.info()
+print("----------------------------")
+test_df.info()
 
-plt.xlabel('Epochs')
-plt.ylabel('Loss')
-plt.title('VGG-16 Loss Trend')
-plt.plot(loss, 'blue', label='Training Loss')
-plt.plot(val_loss, 'green', label='Validation Loss')
-plt.xticks(range(0,nb_epoch)[0::2])
-plt.legend()
-plt.show()
-
-
-# ## How'd We Do?
-# 
-# I'm pretty sure I can distinguish a cat from a dog 100% of the time, but how confident is the model?...
-# 
-# Tip: Run on the full dataset with a GPU for a LB logloss of ~0.4 and accuracy at approx 90%. 
 
 # In[ ]:
 
 
-for i in range(0,10):
-    if predictions[i, 0] >= 0.5: 
-        print('I am {:.2%} sure this is a Dog'.format(predictions[i][0]))
-    else: 
-        print('I am {:.2%} sure this is a Cat'.format(1-predictions[i][0]))
-        
-    plt.imshow(test[i].T)
-    plt.show()
+# drop unnecessary columns, these columns won't be useful in analysis and prediction
+airbnb_df  = airbnb_df.drop(['date_account_created','timestamp_first_active'], axis=1)
+test_df    = test_df.drop(['date_account_created','timestamp_first_active'], axis=1)
+
+
+# In[ ]:
+
+
+# country_destination
+
+airbnb_df['booked'] = (airbnb_df['country_destination'] != 'NDF').astype(int)
+# test_df['booked']   = (test_df['country_destination'] != 'NDF').astype(int)
+
+# Plot the frequency for every country_destination value
+fig, (axis1) = plt.subplots(1,1,figsize=(15,5))
+sns.countplot(x='country_destination', data=airbnb_df, palette="husl", ax=axis1)
+
+
+# In[ ]:
+
+
+# date_first_booking
+
+def get_year(date):
+    if date == date: 
+        return int(str(date)[:4])
+    return date
+
+def get_month(date):
+    if date == date: 
+        return int(str(date)[5:7])
+    return date
+
+# Create Year and Month columns
+airbnb_df['Year']  = airbnb_df['date_first_booking'].apply(get_year)
+airbnb_df['Month'] = airbnb_df['date_first_booking'].apply(get_month)
+
+test_df['Year']  = test_df['date_first_booking'].apply(get_year)
+test_df['Month'] = test_df['date_first_booking'].apply(get_month)
+
+# fill NaN
+airbnb_df['Year'].fillna(airbnb_df['Year'].median(), inplace=True)
+airbnb_df['Month'].fillna(airbnb_df['Month'].median(), inplace=True)
+
+test_df['Year'].fillna(test_df['Year'].median(), inplace=True)
+test_df['Month'].fillna(test_df['Month'].median(), inplace=True)
+
+# convert type to integer
+airbnb_df[['Year', 'Month']] = airbnb_df[['Year', 'Month']].astype(int)
+test_df[['Year', 'Month']]   = test_df[['Year', 'Month']].astype(int)
+
+# Plot
+fig, (axis1, axis2) = plt.subplots(2,1,sharex=True,figsize=(15,8))
+
+# frequency of country_destination for every year
+sns.countplot(x="Year",hue="country_destination", data=airbnb_df[airbnb_df['country_destination'] != 'NDF'], palette="husl", ax=axis1)
+
+# frequency of booked Vs no-booking users for every year
+# NOTICE that in year 2014, and 2015 there wasn't "no-booking"
+sns.countplot(x="Year",hue="booked", data=airbnb_df, palette="husl", order=[2010,2011,2012,2013,2014,2015], ax=axis2)
+
+# drop columns
+airbnb_df.drop(['date_first_booking','Month'], axis=1, inplace=True)
+test_df.drop(['date_first_booking','Month'], axis=1, inplace=True)
+
+
+# In[ ]:
+
+
+# gender
+
+i = 0
+def get_gender(gender):
+    global i
+    if gender != 'FEMALE' and gender != 'MALE':
+        return 'FEMALE' if(i % 2) else 'MALE'
+    i = i + 1
+    return gender
+
+# replace all values other than 'FEMALE' and 'MALE'
+airbnb_df['gender'] = airbnb_df['gender'].apply(get_gender)
+test_df['gender']   = test_df['gender'].apply(get_gender)
+
+# Plot
+fig, (axis1, axis2) = plt.subplots(2,1,sharex=True,figsize=(15,8))
+
+# frequency of country_destination for every gender
+sns.countplot(x="gender",hue="country_destination", data=airbnb_df[airbnb_df['country_destination'] != 'NDF'], palette="husl", ax=axis1)
+
+# frequency of booked Vs no-booking users for every gender
+sns.countplot(x="gender",hue="booked", data=airbnb_df, palette="husl", ax=axis2)
+
+# Map gender values to 1s and 0s
+airbnb_df["gender"] = airbnb_df["gender"].map({"FEMALE": 1, "MALE": 0})
+test_df["gender"]   = test_df["gender"].map({"FEMALE": 1, "MALE": 0})
+
+# drop columns
+airbnb_df.drop(['gender'], axis=1,inplace=True)
+test_df.drop(['gender'], axis=1,inplace=True)
+
+
+# In[ ]:
+
+
+# age
+
+# assign all age values > 100 to NaN, these NaN values will be replaced with real ages below
+airbnb_df["age"][airbnb_df["age"] > 100] = np.NaN
+test_df["age"][test_df["age"] > 100]     = np.NaN
+
+# get average, std, and number of NaN values in airbnb_df
+average_age_airbnb   = airbnb_df["age"].mean()
+std_age_airbnb       = airbnb_df["age"].std()
+count_nan_age_airbnb = airbnb_df["age"].isnull().sum()
+
+# get average, std, and number of NaN values in test_df
+average_age_test   = test_df["age"].mean()
+std_age_test       = test_df["age"].std()
+count_nan_age_test = test_df["age"].isnull().sum()
+
+# generate random numbers between (mean - std) & (mean + std)
+rand_1 = np.random.randint(average_age_airbnb - std_age_airbnb, average_age_airbnb + std_age_airbnb, size = count_nan_age_airbnb)
+rand_2 = np.random.randint(average_age_test - std_age_test, average_age_test + std_age_test, size = count_nan_age_test)
+
+# fill NaN values in Age column with random values generated
+airbnb_df["age"][np.isnan(airbnb_df["age"])] = rand_1
+test_df["age"][np.isnan(test_df["age"])]     = rand_2
+
+# convert type to integer
+airbnb_df['age'] = airbnb_df['age'].astype(int)
+test_df['age']   = test_df['age'].astype(int)
+
+
+# In[ ]:
+
+
+# .... continue with age
+
+# Plot
+fig, (axis1, axis2) = plt.subplots(2,1,figsize=(15,10))
+
+# frequency for age values(in case there was a booking)
+airbnb_df['age'][airbnb_df['country_destination'] != 'NDF'].hist(ax=axis1)
+
+# cut age values into ranges 
+airbnb_df['age_range'] = pd.cut(airbnb_df["age"], [0, 20, 40, 60, 80, 100])
+
+# frequency of country_destination for every age range
+sns.countplot(x="age_range",hue="country_destination", data=airbnb_df[airbnb_df['country_destination'] != 'NDF'], palette="husl", ax=axis2)
+
+# drop age_range
+airbnb_df.drop(['age_range'], axis=1, inplace=True)
+
+# drop columns
+airbnb_df.drop(['age'], axis=1,inplace=True)
+test_df.drop(['age'], axis=1,inplace=True)
+
+
+# In[ ]:
+
+
+# first_affiliate_tracked
+
+# fill NaN values randomly
+count_first_affiliate = 7    # len(np.unique(airbnb_df["first_affiliate_tracked"].value_counts()))
+
+count_nan_department_airbnb = airbnb_df["first_affiliate_tracked"].isnull().sum()
+count_nan_department_test   = test_df["first_affiliate_tracked"].isnull().sum()
+
+rand_1 = np.random.randint(0, count_first_affiliate, size = count_nan_department_airbnb)
+rand_2 = np.random.randint(0, count_first_affiliate, size = count_nan_department_test)
+
+range_departments_airbnb = airbnb_df['first_affiliate_tracked'].value_counts().index
+range_departments_test   = test_df['first_affiliate_tracked'].value_counts().index
+
+airbnb_df["first_affiliate_tracked"][airbnb_df["first_affiliate_tracked"] != airbnb_df["first_affiliate_tracked"]] = range_departments_airbnb[rand_1]
+test_df["first_affiliate_tracked"][test_df["first_affiliate_tracked"] != test_df["first_affiliate_tracked"]]       = range_departments_test[rand_2]
+
+# drop columns
+# airbnb_df.drop(['first_affiliate_tracked'], axis=1,inplace=True)
+# test_df.drop(['first_affiliate_tracked'], axis=1,inplace=True)
+
+
+# In[ ]:
+
+
+# signup_method
+airbnb_df["signup_method"] = (airbnb_df["signup_method"] == "basic").astype(int)
+test_df["signup_method"]   = (test_df["signup_method"] == "basic").astype(int)
+
+# signup_flow
+airbnb_df["signup_flow"] = (airbnb_df["signup_flow"] == 3).astype(int)
+test_df["signup_flow"]   = (test_df["signup_flow"] == 3).astype(int)
+
+# language
+airbnb_df["language"] = (airbnb_df["language"] == 'en').astype(int)
+test_df["language"]   = (test_df["language"] == 'en').astype(int)
+
+# affiliate_channel
+airbnb_df["affiliate_channel"] = (airbnb_df["affiliate_channel"] == 'direct').astype(int)
+test_df["affiliate_channel"]   = (test_df["affiliate_channel"] == 'direct').astype(int)
+
+# affiliate_provider
+airbnb_df["affiliate_provider"] = (airbnb_df["affiliate_provider"] == 'direct').astype(int)
+test_df["affiliate_provider"]   = (test_df["affiliate_provider"] == 'direct').astype(int)
+
+
+# In[ ]:
+
+
+# There are some columns with non-numerical values(i.e. dtype='object'),
+# So, We will create a corresponding unique numerical value for each non-numerical value in a column of training and testing set.
+
+from sklearn import preprocessing
+
+for f in airbnb_df.columns:
+    if f == "country_destination" or f == "id": continue
+    if airbnb_df[f].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(np.unique(list(airbnb_df[f].values) + list(test_df[f].values)))
+        airbnb_df[f] = lbl.transform(list(airbnb_df[f].values))
+        test_df[f]   = lbl.transform(list(test_df[f].values))
+
+
+# In[ ]:
+
+
+# define training and testing sets
+
+X_train = airbnb_df.drop(["country_destination", "id", 'booked'],axis=1)
+Y_train = airbnb_df["country_destination"]
+X_test  = test_df.drop("id",axis=1).copy()
+
+
+# In[ ]:
+
+
+# modify country_destination to numerical values
+
+country_num_dic = {'NDF': 0, 'US': 1, 'other': 2, 'FR': 3, 'IT': 4, 'GB': 5, 'ES': 6, 'CA': 7, 'DE': 8, 'NL': 9, 'AU': 10, 'PT': 11}
+num_country_dic = {y:x for x,y in country_num_dic.items()}
+
+Y_train    = Y_train.map(country_num_dic)
+
+
+# In[ ]:
+
+
+# Random Forests
+
+# random_forest = RandomForestClassifier(n_estimators=100)
+
+# random_forest.fit(X_train, Y_train)
+
+# Y_pred = random_forest.predict(X_test)
+
+# random_forest.score(X_train, Y_train)
+
+
+# In[ ]:
+
+
+# Xgboost 
+
+params = {"objective": "multi:softmax", "num_class": 12}
+
+T_train_xgb = xgb.DMatrix(X_train, Y_train)
+X_test_xgb  = xgb.DMatrix(X_test)
+
+gbm = xgb.train(params, T_train_xgb, 20)
+Y_pred = gbm.predict(X_test_xgb)
+
+
+# In[ ]:
+
+
+# convert type to integer
+Y_pred = Y_pred.astype(int)
+
+# change values back to original country symbols
+Y_pred = Series(Y_pred).map(num_country_dic)
+
+
+# In[ ]:
+
+
+# Create submission
+
+country_df = pd.DataFrame({
+        "id": test_df["id"],
+        "country": Y_pred
+    })
+
+submission = DataFrame(columns=["id", "country"])
+
+# sort countries according to most probable destination country 
+for key in country_df['country'].value_counts().index:
+    submission = pd.concat([submission, country_df[country_df["country"] == key]], ignore_index=True)
+
+submission.to_csv('airbnb.csv', index=False)
 

@@ -1,114 +1,93 @@
 
 # coding: utf-8
 
-# In[1]:
+# This is an example notebook to demonstrate how the IoU metric works for a single image. Please note: this is not the official scoring implementation, but should work in the same manner.
+
+# In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-import os
-print(os.listdir("../input"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[6]:
-
-
-import pytz
-import gc
-import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np
+import skimage.io
+import matplotlib.pyplot as plt
+import skimage.segmentation
 
+# Load a single image and its associated masks
+id = '0a7d30b252359a10fd298b638b90cb9ada3acced4e0c0e5a3692013f432ee4e9'
+file = "../input/stage1_train/{}/images/{}.png".format(id,id)
+masks = "../input/stage1_train/{}/masks/*.png".format(id)
+image = skimage.io.imread(file)
+masks = skimage.io.imread_collection(masks).concatenate()
+height, width, _ = image.shape
+num_masks = masks.shape[0]
 
-tr_s = 300000
-te_s = 100000
-nrows=None
+# Make a ground truth label image (pixel value is index of object label)
+labels = np.zeros((height, width), np.uint16)
+for index in range(0, num_masks):
+    labels[masks[index] > 0] = index + 1
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
+# Show label image
+fig = plt.figure()
+plt.imshow(image)
+plt.title("Original image")
+fig = plt.figure()
+plt.imshow(labels)
+plt.title("Ground truth masks")
 
-tr = pd.read_csv('../input/train.csv', dtype=dtypes, usecols=['ip', 'is_attributed', 'click_time'], nrows=nrows).sample(tr_s)
-gc.collect()
-te = pd.read_csv('../input/test_supplement.csv', dtype=dtypes, usecols=['ip', 'click_time'], nrows=nrows).sample(te_s)
-all_df = tr.append(te)
-gc.collect()
+# Simulate an imperfect submission
+offset = 2 # offset pixels
+y_pred = labels[offset:, offset:]
+y_pred = np.pad(y_pred, ((0, offset), (0, offset)), mode="constant")
+y_pred[y_pred == 20] = 0 # Remove one object
+y_pred, _, _ = skimage.segmentation.relabel_sequential(y_pred) # Relabel objects
 
-cst = pytz.timezone('Asia/Shanghai')
-all_df['click_time'] = pd.to_datetime(all_df['click_time']).dt.tz_localize(pytz.utc).dt.tz_convert(cst)
-all_df['day'] = all_df.click_time.dt.day.astype('uint8')
+# Show simulated predictions
+fig = plt.figure()
+plt.imshow(y_pred)
+plt.title("Simulated imperfect submission")
 
-all_df['day7'] = all_df.day == 7 # 1'st day
-all_df['day8'] = all_df.day == 8 # 2'nd day
-all_df['day9'] = all_df.day == 9 # 3'rd day
-all_df['day_test'] = all_df.day == 10 # 4'th day(test)
+# Compute number of objects
+true_objects = len(np.unique(labels))
+pred_objects = len(np.unique(y_pred))
+print("Number of true objects:", true_objects)
+print("Number of predicted objects:", pred_objects)
 
+# Compute intersection between all objects
+intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
 
-# In[7]:
+# Compute areas (needed for finding the union between all objects)
+area_true = np.histogram(labels, bins = true_objects)[0]
+area_pred = np.histogram(y_pred, bins = pred_objects)[0]
+area_true = np.expand_dims(area_true, -1)
+area_pred = np.expand_dims(area_pred, 0)
 
+# Compute union
+union = area_true + area_pred - intersection
 
-def print_count(df, tgt):
-    df = df[['ip', tgt]].groupby('ip')[tgt].sum().to_frame().reset_index()
-    df[tgt+'_count'] = df[tgt].rolling(window=1000).mean()
-    plt.plot(df.ip, df[tgt+'_count'])
+# Exclude background from the analysis
+intersection = intersection[1:,1:]
+union = union[1:,1:]
+union[union == 0] = 1e-9
 
+# Compute the intersection over union
+iou = intersection / union
 
-# In[8]:
+# Precision helper function
+def precision_at(threshold, iou):
+    matches = iou > threshold
+    true_positives = np.sum(matches, axis=1) == 1   # Correct objects
+    false_positives = np.sum(matches, axis=0) == 0  # Missed objects
+    false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
+    tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
+    return tp, fp, fn
 
-
-print_count(all_df,'day_test')
-
-
-# In[9]:
-
-
-print_count(all_df,'day7')
-
-
-# In[10]:
-
-
-print_count(all_df,'day8')
-
-
-# In[11]:
-
-
-print_count(all_df,'day9')
-
-
-# Endoding should be done by day10(test) -> day7 -> day8 -> day9.
-# 
-# IPs between 130,000 and 220,000 did not appear on the 10th (test), but it appeared on the 7th.
-# 
-# So, it is no wonder that these IPs are different from the behavior of IPs that appeared on the 10th.
-# 
-# Also, it is not surprising that CVR differs in these groups as follows.
-
-# In[13]:
-
-
-def print_attr(df):
-    df = df[['ip', 'is_attributed']].groupby('ip').is_attributed.mean().to_frame().reset_index()
-    df['roll'] = df.is_attributed.rolling(window=1000).mean()
-    plt.plot(df.ip, df.roll)
-
-print_attr(all_df[all_df.day == 7])
-print_attr(all_df[all_df.day == 8])
-print_attr(all_df[all_df.day == 9])
+# Loop over IoU thresholds
+prec = []
+print("Thresh\tTP\tFP\tFN\tPrec.")
+for t in np.arange(0.5, 1.0, 0.05):
+    tp, fp, fn = precision_at(t, iou)
+    p = tp / (tp + fp + fn)
+    print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
+    prec.append(p)
+print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
 

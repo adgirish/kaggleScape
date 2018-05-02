@@ -1,45 +1,104 @@
-import kagglegym
+import cv2
+import io
 import numpy as np
-import pandas as pd
-from sklearn import linear_model as lm
+import random
+import math
+import csv as csv
+import json
+import zipfile
 
+def getDist(posStart,posEnd):
+    dispair = (posStart-posEnd)*[83.818,111.23] # distance in kilometers for longitude and latitude
+    return np.sqrt(np.power(dispair[0],2)+np.power(dispair[1],2))
 
-# The "environment" is our interface for code competitions
-env = kagglegym.make()
+def drawTrips(image,data,border):
+    minlat,maxlon,maxlat,minlon = border
+    absLat = abs(minlat-maxlat)
+    absLon = abs(minlon-maxlon)
+    for i in range(len(data)):
+        if (data[i][7] != False): # only if there are no missing gps datas
+            gpsTrack = np.array(json.loads(data[i][8]))
+            if len(gpsTrack) > 0: # the gpsTrack must be longer than 0s
+                for p in range(len(gpsTrack)-1):
+                    # get the correct px values for the current gps position
+                    pxXS = np.rint((gpsTrack[p][0]-minlon)*(np.shape(image)[1]/absLon))-1
+                    pxYS = np.rint((maxlat-gpsTrack[p][1])*(np.shape(image)[0]/absLat))-1
 
-# We get our initial observation by calling "reset"
-observation = env.reset()
+                    # and for the following one
+                    pxXE = np.rint((gpsTrack[p+1][0]-minlon)*(np.shape(image)[1]/absLon))-1
+                    pxYE = np.rint((maxlat-gpsTrack[p+1][1])*(np.shape(image)[0]/absLat))-1
 
-# Get the train dataframe
-train = observation.train
-mean_values = train.mean(axis=0)
-train.fillna(mean_values, inplace=True)
+                    # px is an array of all pixels that are between the current gps position and the following one
+                    px = [[pxYS,pxXS]]
+                    # calculate the shortest path between the current pos and the following one
+                    while(px[-1] != [pxYE,pxXE]):
+                        # calculate the distance between the last point and the end pos (the next real gps pos)
+                        dX = pxXE-px[-1][1]
+                        dY = pxYE-px[-1][0]
+                        if abs(dY) < abs(dX):
+                            if (dX > 0):
+                                px.append([px[-1][0],px[-1][1]+1])
+                            else:
+                                px.append([px[-1][0],px[-1][1]-1])
+                        else:
+                            if (dY > 0):
+                                px.append([px[-1][0]+1,px[-1][1]])
+                            else:
+                                px.append([px[-1][0]-1,px[-1][1]])
 
-cols_to_use = ['technical_30', 'technical_20', 'fundamental_11', 'technical_19']
+                    # calculate the distance of the current gpsTrack part (in km)
+                    dist = getDist(gpsTrack[p],gpsTrack[p+1])
+                    # the distance shouldn't be longer than 0.5 km cause that would be 120km/h
+                    if (dist > 0.5):
+                        break
+                    else:
+                        # save the distance for each pixel in the px array
+                        for pi in range(len(px)):
+                            pxY = px[pi][0]
+                            pxX = px[pi][1]
+                            # we are only analysing the points which are near the city of Porto (ignore the other ones)
+                            if pxX >= 0 and pxX < np.shape(image)[1] and pxY >= 0 and pxY < np.shape(image)[0]:
+                                image[pxY,pxX]+=[0,1,dist]
+    return image
 
+# generate a 4000 x 4000 image in RGB mode
+image = np.zeros((4000,4000,3))
 
-models_dict = {}
-for col in cols_to_use:
-    model = lm.LinearRegression()
-    model.fit(np.array(train[col].values).reshape(-1,1), train.y.values)
-    models_dict[col] = model
+minlat = 41 # most southern part
+minlon = -8.8
+maxlat = 41.3 # most northern part
+maxlon = -8.4
 
-col = 'technical_20'
-model = models_dict[col]
-while True:
-    observation.features.fillna(mean_values, inplace=True)
-    test_x = np.array(observation.features[col].values).reshape(-1,1)
-    observation.target.y = model.predict(test_x)
-    #observation.target.fillna(0, inplace=True)
-    target = observation.target
-    timestamp = observation.features["timestamp"][0]
-    if timestamp % 100 == 0:
-        print("Timestamp #{}".format(timestamp))
+zf = zipfile.ZipFile("../input/train.csv.zip")
+f = io.TextIOWrapper(zf.open("train.csv", "rU"))
+r = csv.reader(f)
+header = r.__next__()
 
-    observation, reward, done, info = env.step(target)
-    if done:
-        break
+data=[] 	# Create a variable to hold the data
+# use only the first 5000 trips
+for i in range(5000):
+    row=r.__next__()
+    data.append(row[0:]) 								# adding each row to the data variable
     
-info
+    if i%1000==999:
+        data = np.array(data) 								
+        # do the cool stuff here  
+        image = drawTrips(image,data,[minlat,maxlon,maxlat,minlon])
+        data = []
 
+f.close()
 
+old_settings = np.seterr(divide='ignore',invalid='ignore')
+
+image[:,:,2] = np.nan_to_num(image[:,:,2]/image[:,:, 1])
+image[:,:,1] = 0
+image[:,:,0] = 0
+
+# get the maximum accumlated distance and set that one to 255
+maxF = np.max(image[:,:,2])
+image[:,:,2] *= 255/maxF
+image[:,:,1]  = image[:,:,2]
+image[:,:,0] = image[:,:,2]
+image[:,:,1][image[:,:,1] < 50] = 0 # really slow => change to red
+image[:,:,0][image[:,:,0] < 150] = 0 # kind of slow => orange/yellow
+cv2.imwrite("image.png", image)

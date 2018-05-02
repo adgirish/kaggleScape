@@ -1,89 +1,134 @@
 
 # coding: utf-8
 
-# Visualizing earthquakes (1965-2016)
-# -----------------------------------
+# There are four clusters when one plots train 'y' with train prediction. In Scirpus' [__original script__][1] this is pretty clear, yet the color-coding for y-values doesn't show all that well.
+# 
+# 
+#   [1]: https://www.kaggle.com/scirpus/four-blob-tsne "original script"
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
+import numpy as np 
+import pandas as pd 
+from sklearn.manifold import TSNE
+from sklearn.metrics import r2_score
+import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 get_ipython().run_line_magic('matplotlib', 'inline')
-from mpl_toolkits.basemap import Basemap
-import matplotlib.animation as animation
-from IPython.display import HTML
-import warnings
-warnings.filterwarnings('ignore')
 
-try:
-    t_file = pd.read_csv('../input/database.csv', encoding='ISO-8859-1')
-    print('File load: Success')
-except:
-    print('File load: Failed')
+
+# Different color map.
+# 
+
+# In[ ]:
+
+
+cm = plt.cm.get_cmap('RdYlBu')
+
+
+# Five new features were added: X29, X48, X232, X236 and X263. All of them were found by genetic programming, just like the original set of Scirpus' features. I think this is justified as the scores will be better in the end. __X48 and X236 were subsequently removed.__
+
+# In[ ]:
+
+
+features = ['X118',
+            'X127',
+            'X47',
+            'X315',
+            'X311',
+            'X179',
+            'X314',
+### added by Tilii
+            'X232',
+            'X29',
+            'X263',
+###
+            'X261']
+
+
+# In Scirpus' [__original script__][1] the whole y-range is used, so the color-coding gets stretched because of the >250 outlier. Therefore, most of the y-values end up in the bottom half of the color range and the whole plot is just various shades of blue that are difficult to tell apart. In this script I clip y-values so that everything above 130 will be the same shade of BLUE.
+# 
+# 
+#   [1]: https://www.kaggle.com/scirpus/four-blob-tsne "original script"
+
+# In[ ]:
+
+
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+y_clip = np.clip(train['y'].values, a_min=None, a_max=130)
 
 
 # In[ ]:
 
 
-t_file['Year']= t_file['Date'].str[6:]
+tsne = TSNE(random_state=2016,perplexity=50,verbose=2)
+x = tsne.fit_transform(pd.concat([train[features],test[features]]))
 
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(10, 10))
-fig.text(.8, .3, 'Soumitra', ha='right')
-cmap = plt.get_cmap('coolwarm')
-
-m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-m.drawcoastlines()
-m.drawcountries()
-m.fillcontinents(color='burlywood',lake_color='lightblue', zorder = 1)
-m.drawmapboundary(fill_color='lightblue')
-
-
-START_YEAR = 1965
-LAST_YEAR = 2016
-
-points = t_file[['Date', 'Time', 'Latitude', 'Longitude', 'Depth', 'Magnitude']][t_file['Year']==str(START_YEAR)]
-
-x, y= m(list(points['Longitude']), list(points['Latitude']))
-scat = m.scatter(x, y, s = points['Magnitude']*points['Depth']*0.3, marker='o', alpha=0.3, zorder=10, cmap = cmap)
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-plt.title("Earthquake visualisation (1965 - 2016)")
-plt.close()
+plt.figure(figsize=(12,10))
+# plt.scatter(x[train.shape[0]:,0],x[train.shape[0]:,1], cmap=cm, marker='.', s=15, label='test')
+cb = plt.scatter(x[:train.shape[0],0],x[:train.shape[0],1], c=y_clip, cmap=cm, marker='o', s=15, label='train')
+plt.colorbar(cb)
+plt.legend(prop={'size':15})
+#plt.title('t-SNE embedding of train & test data', fontsize=20)
+plt.title('t-SNE embedding of train data', fontsize=20)
+plt.savefig('four-blob-tSNE-01.png')
 
 
-def update(frame_number):
-    current_year = START_YEAR + (frame_number % (LAST_YEAR - START_YEAR + 1))
-    year_text.set_text(str(current_year))
-    points = t_file[['Date', 'Time', 'Latitude', 'Longitude', 'Depth', 'Magnitude']][t_file['Year']==str(current_year)]
-    x, y= m(list(points['Longitude']), list(points['Latitude']))
-    color = points['Depth']*points['Magnitude'];
-    scat.set_offsets(np.dstack((x, y)))
-    scat.set_sizes(points['Magnitude']*points['Depth']*0.3)
-    
-ani = animation.FuncAnimation(fig, update, interval=750, frames=LAST_YEAR - START_YEAR + 1)
-ani.save('animation.gif', writer='imagemagick', fps=5)
+# Pretty sure that the plot in this notebook will not look the same as my local plot. Not being paranoid - this is based on my experience with t-SNE Kaggle implementation from this [__script__][1]. Anyway, this is how my local plot looks like using the same script as in this notebook.
+# 
+# ![__t-SNE on raw data__][2]
+# 
+# Given that this t-SNE embedding was done on raw data, I think it compares quite nicely with the t-SNE embedding below which was done after neural network training. Four clusters should be obvious in both plots. One could even argue that there is a small 5th cluster.
+# 
+# ![__t-SNE after neural network training__][3]
+# 
+# 
+#   [1]: https://www.kaggle.com/tilii7/you-want-outliers-we-got-them-outliers
+#   [2]: https://i.imgur.com/JpmDztu.png
+#   [3]: https://i.imgur.com/wRuOZkO.png
+
+# In[ ]:
+
+
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.model_selection import KFold
 
 
 # In[ ]:
 
 
-import io
-import base64
+score = 0
+splits = 5
+kf = KFold(n_splits=splits)
+y = train.y.ravel()
+for train_index, test_index in kf.split(range(train.shape[0])):
+    blind = x[:train.shape[0]][test_index]
+    vis = x[:train.shape[0]][train_index]
+    knn = KNeighborsRegressor(n_neighbors=80,weights='uniform',p=2)
+    knn.fit(vis,y[train_index])
+    score +=(r2_score(y[test_index],(knn.predict(blind))))
+print(score/splits)
 
-filename = 'animation.gif'
 
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+# In[ ]:
 
 
-# **The points above represent the all the earthquakes in the given timeframe.**
-# <br>
-# The size represents the approximate amount of strength/sensation on the surface, taking in account the depth and magnitude. We can see that the west coast of Southern America and South East Asia experience the worst earthquakes. Most earthquakes near the Sumatran region are underwater thus resulting in frequent tsunamis. 
+score = 0
+splits = 5
+kf = KFold(n_splits=splits)
+y = train.y.ravel()
+for train_index, test_index in kf.split(range(train.shape[0])):
+    blind = train[features].loc[test_index]
+    vis = train[features].loc[train_index]
+    knn = KNeighborsRegressor(n_neighbors=80,weights='uniform',p=2)
+    knn.fit(vis,y[train_index])
+    score +=(r2_score(y[test_index],(knn.predict(blind))))
+print(score/splits)
 
-# The script is inspired from Ronald Troncoso's work on the Global terrorist dataset. (https://www.kaggle.com/ronaldtroncoso20/d/START-UMD/gtd/global-terrorism-trends-animation)

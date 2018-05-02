@@ -1,773 +1,564 @@
 
 # coding: utf-8
 
-# # Introduction
+# # **PPP, Salaries and XGBoost ! **
+# ***
 # 
-# This notebook is a very basic and simple introductory primer to the method of ensembling (combining) base learning models, in particular the variant of ensembling known as Stacking. In a nutshell stacking uses as a first-level (base), the predictions of a few basic classifiers and then uses another model at the second-level to predict the output from the earlier first-level predictions.
+# **Mhamed Jabri — 11/22/17**
 # 
-# The Titanic dataset is a prime candidate for introducing this concept as many newcomers to Kaggle start out here. Furthermore even though stacking has been responsible for many a team winning Kaggle competitions there seems to be a dearth of kernels on this topic so I hope this notebook can fill somewhat of that void.
+# When I started working on this dataset, I checked other kernels that had a salary-approach and noticed that it was really complicated to give unbiased insights when you compare incomes from all over the world. So in my previous [kernel](http://www.kaggle.com/mhajabri/what-do-kagglers-say-about-data-science), I restricted my income analysis to US Data Scientists and , as I explained there, the reason why I did so is that comparing wages across countries can be misleading and actually false.
+# The main problem that arises is the fact that **the cost of living** is not the same for every country. As a consequence to that, the wages we get after converting to the same currency using market exchange rates are different from one another.
 # 
-# I myself am quite a newcomer to the Kaggle scene as well and the first proper ensembling/stacking script that I managed to chance upon and study was one written in the AllState Severity Claims competition by the great Faron. The material in this notebook borrows heavily from Faron's script although ported to factor in ensembles of classifiers whilst his was ensembles of regressors. Anyway please check out his script here:
-# 
-# [Stacking Starter][1] : by Faron 
-# 
-# 
-# Now onto the notebook at hand and I hope that it manages to do justice and convey the concept of ensembling in an intuitive and concise manner.  My other standalone Kaggle [script][2] which implements exactly the same ensembling steps (albeit with different parameters) discussed below gives a Public LB score of 0.808 which is good enough to get to the top 9% and runs just under 4 minutes. Therefore I am pretty sure there is a lot of room to improve and add on to that script. Anyways please feel free to leave me any comments with regards to how I can improve
-# 
-# 
-#   [1]: https://www.kaggle.com/mmueller/allstate-claims-severity/stacking-starter/run/390867
-#   [2]: https://www.kaggle.com/arthurtok/titanic/simple-stacking-with-xgboost-0-808
+# In this kernel, I'll try to show you how you can analyze income data when the respondents come from differents countries and we'll see who are the most valued data scientists in different parts of the world. After that, we'll use the adjusted incomes from part 1 and the insights from part 2 to build a ML model that predicts the income of a Kaggler Data Scientist.
 
-# In[2]:
+# # Table of contents
+# 
+# * [Purchasing Power Parity (PPP) for dummies](#ppp)
+# * [PPP-Adjusted Kagglers' incomes ](#adjusted)
+# * [How valued are Data Scientists across the world](#valuation)
+# * [What makes a Data Scientist valuable for each country](#properties)
+#    * [Most valuated ML methods](#methods)
+#    * [Most valuated DS tools](#tools)
+#    * [Most valuated job titles](#titles)
+#    * [Most valuated job functions](#functions)
+# * [Income prediction across the world using xgboost](#xgboost)
+#     * [Feature engineering](#features)
+#     * [Prediction and scores](#prediction)
+#     * [Analysis of the results](#analysis)
+
+# In[ ]:
 
 
-# Load in our libraries
-import pandas as pd
-import numpy as np
-import re
-import sklearn
-import xgboost as xgb
-import seaborn as sns
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+sns.set(color_codes=True)
 
 import plotly.offline as py
 py.init_notebook_mode(connected=True)
 import plotly.graph_objs as go
 import plotly.tools as tls
 
-import warnings
-warnings.filterwarnings('ignore')
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Going to use these 5 base models for the stacking
-from sklearn.ensemble import (RandomForestClassifier, AdaBoostClassifier, 
-                              GradientBoostingClassifier, ExtraTreesClassifier)
-from sklearn.svm import SVC
-from sklearn.cross_validation import KFold
+import xgboost as xgb
+from sklearn.metrics import mean_squared_log_error as MSLE
+
+# Any results you write to the current directory are saved as output.
 
 
-# # Feature Exploration, Engineering and Cleaning 
+# # What's Purchasing Power Parity (PPP) ?
+# <a id="ppp"></a>
+# ***
+
+# When you're traveling across the country you live in, you notice that prices for food, rent and common goods vary from one city to another. This happens in a much larger scale when changing countries !      
+# Let's take an example : Consider 1 USD, Google tells you that it equals 64.92 Indian Rupee. An average dinner in the US may cost you 10-12 USD which corresponds to 640-760 INR. But in fact, it appears that you could get yourself a good meal with 150-200INR in India. In other words : **You can do with 1USD in India more than what you would do with 1USD in the US.**
 # 
-# Now we will proceed much like how most kernels in general are structured, and that is to first explore the data on hand, identify possible feature engineering opportunities as well as numerically encode any categorical features.
-
-# In[3]:
-
-
-# Load in the train and test datasets
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-# Store our passenger ID for easy access
-PassengerId = test['PassengerId']
-
-train.head(3)
-
-
-# Well it is no surprise that our task is to somehow extract the information out of the categorical variables 
+# As a basic example, let's say we find that 1USD in India = 3USD in the US, that would mean that if you get paid 3000 USD in India you would lead the same someone would be leading in the US if he's getting paid 9000 USD.
 # 
-# **Feature Engineering**
+# Here comes the **Purchasing Power Parity (PPP from now on)** : Faced with this problematic of different costs of livings, economists came up with a ratio to convert currencies without using market exchange rates. To do so, they select a **basket of goods**, say orange/Milk/tomato ..., and check its value in the USD and in the country they're interested in.     
+# Let's say they find that : 
+# * Value of the basket in the US = 10 USD
+# * Value of the basket in India = 200 INR        
 # 
-# Here, credit must be extended to Sina's very comprehensive and well-thought out notebook for the feature engineering ideas so please check out his work 
+# Then they would say that **PPP(India) = 200/10 = 20**, in other words, you need 20 local currency units to get what you would get with 1 USD in the US.   
 # 
-# [Titanic Best Working Classfier][1] : by Sina
-# 
-# 
-#   [1]: https://www.kaggle.com/sinakhorami/titanic/titanic-best-working-classifier
+# **All in all,* The purchasing power of a currency refers to the quantity of the currency needed to purchase a given unit of a good, or common basket of goods and services.***
 
-# In[4]:
+# # Kagglers incomes adjusted according to PPPs
+# <a id="adjusted"></a>
+# ***
+
+# In the following, we'll convert the incomes using the PPP rates and see what happens for different countries.      
+# To get significant results, we'll only keep countries from where at least 80 respondents gave their income informations.
+
+# In[ ]:
 
 
-full_data = [train, test]
+data = pd.read_csv('../input/multipleChoiceResponses.csv', encoding="ISO-8859-1")
 
-# Some features of my own that I have added in
-# Gives the length of the name
-train['Name_length'] = train['Name'].apply(len)
-test['Name_length'] = test['Name'].apply(len)
-# Feature that tells whether a passenger had a cabin on the Titanic
-train['Has_Cabin'] = train["Cabin"].apply(lambda x: 0 if type(x) == float else 1)
-test['Has_Cabin'] = test["Cabin"].apply(lambda x: 0 if type(x) == float else 1)
+#We convert the salaries to numerical values and keep salaries between 1000 and 1.000.000 Local currency
+data['CompensationAmount'] = data['CompensationAmount'].fillna(0)
+data['CompensationAmount'] = data.CompensationAmount.apply(lambda x: 0 if (pd.isnull(x) or (x=='-') or (x==0))
+                                                       else float(x.replace(',','')))
+df = data[(data['CompensationAmount']>1000) & (data['CompensationAmount']<2000000)]
 
-# Feature engineering steps taken from Sina
-# Create new feature FamilySize as a combination of SibSp and Parch
-for dataset in full_data:
-    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
-# Create new feature IsAlone from FamilySize
-for dataset in full_data:
-    dataset['IsAlone'] = 0
-    dataset.loc[dataset['FamilySize'] == 1, 'IsAlone'] = 1
-# Remove all NULLS in the Embarked column
-for dataset in full_data:
-    dataset['Embarked'] = dataset['Embarked'].fillna('S')
-# Remove all NULLS in the Fare column and create a new feature CategoricalFare
-for dataset in full_data:
-    dataset['Fare'] = dataset['Fare'].fillna(train['Fare'].median())
-train['CategoricalFare'] = pd.qcut(train['Fare'], 4)
-# Create a New feature CategoricalAge
-for dataset in full_data:
-    age_avg = dataset['Age'].mean()
-    age_std = dataset['Age'].std()
-    age_null_count = dataset['Age'].isnull().sum()
-    age_null_random_list = np.random.randint(age_avg - age_std, age_avg + age_std, size=age_null_count)
-    dataset['Age'][np.isnan(dataset['Age'])] = age_null_random_list
-    dataset['Age'] = dataset['Age'].astype(int)
-train['CategoricalAge'] = pd.cut(train['Age'], 5)
-# Define function to extract titles from passenger names
-def get_title(name):
-    title_search = re.search(' ([A-Za-z]+)\.', name)
-    # If the title exists, extract and return it.
-    if title_search:
-        return title_search.group(1)
-    return ""
-# Create a new feature Title, containing the titles of passenger names
-for dataset in full_data:
-    dataset['Title'] = dataset['Name'].apply(get_title)
-# Group all non-common titles into one single grouping "Rare"
-for dataset in full_data:
-    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess','Capt', 'Col','Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
 
-    dataset['Title'] = dataset['Title'].replace('Mlle', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Ms', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Mme', 'Mrs')
+#We only keep the countries with more than 80 respondents to get significant results later on
+s_temp = df['Country'].value_counts()
+s_temp = s_temp[s_temp>80]
+countries=list(s_temp.index)
+countries.remove('Other')
+df=df[df.Country.isin(countries)]
 
-for dataset in full_data:
-    # Mapping Sex
-    dataset['Sex'] = dataset['Sex'].map( {'female': 0, 'male': 1} ).astype(int)
+
+# We have some missing values in the Currency column.    
+# We won't drop the rows with missing values, instead, we'll fill them with the currency of the country the respondent lives in, here's the code to do so : 
+
+# In[ ]:
+
+
+df['CompensationCurrency'] =df.groupby('Country')['CompensationCurrency'].apply(lambda x: x.fillna(x.value_counts().idxmax()))
+
+
+# Now, we'll provide PPP rates for the countries we kept earlier.
+# > I tried to use the latest PPP rates available, you can found the PPP for each country [here](http://www.imf.org/external/datamapper/PPPEX@WEO/OEMDC/ADVEC/WEOWORLD/IND).
+
+# In[ ]:
+
+
+#The PPP rates
+rates_ppp={'Countries':['United States','India','United Kingdom','Germany','France','Brazil','Canada','Spain','Australia','Russia','Italy',"People 's Republic of China",'Netherlands'],
+           'Currency':['USD','INR','GBP','EUR','EUR','BRL','CAD','EUR','AUD','RUB','EUR','CNY','EUR'],
+           'PPP':[1.00,17.7,0.7,0.78,0.81,2.05,1.21,0.66,1.46,25.13,0.74,3.51,0.8]}
+
+rates_ppp = pd.DataFrame(data=rates_ppp)
+rates_ppp
+
+
+# We notice that **the currency used for each country respondents is most of the time the local currency but not always** so we can't directly use the PPP rates.    
+# What we'll do instead is the following : 
+# 1. Convert all incomes to USD using Market Exchange Rates that were given by kaggle
+# 2. Calculature the ratio of PPP rates to MER rates
+# 3. Calculate the adjusted salaries using the ratio adjusting factor
+
+# In[ ]:
+
+
+#we load the exchange rates that were given by Kaggle a
+rates_mer=pd.read_csv('../input/conversionRates.csv', encoding="ISO-8859-1")
+rates_mer.drop('Unnamed: 0',inplace=True,axis=1)
+
+rates=rates_ppp.merge(rates_mer,left_on='Currency',right_on='originCountry',how='left')
+rates['PPP/MER']=rates['PPP']*rates['exchangeRate']
+
+#keep the PPP/MER rates plus the 'Countries' column that will be used for the merge
+rates=rates[['Countries','PPP','PPP/MER']]
+rates
+
+
+# In[ ]:
+
+
+df=df.merge(rates_mer,left_on='CompensationCurrency',right_on='originCountry',how='left')
+df=df.merge(rates,left_on='Country',right_on='Countries',how='left')
+
+df['AdjustedSalary']=df['CompensationAmount']*df['exchangeRate']/df['PPP/MER']
+
+d_salary = {}
+for country in df['Country'].value_counts().index :
+    d_salary[country]=df[df['Country']==country]['AdjustedSalary'].median()
     
-    # Mapping titles
-    title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Rare": 5}
-    dataset['Title'] = dataset['Title'].map(title_mapping)
-    dataset['Title'] = dataset['Title'].fillna(0)
+median_wages = pd.DataFrame.from_dict(data=d_salary, orient='index').round(2)
+median_wages.sort_values(by=list(median_wages),axis=0, ascending=True, inplace=True)
+ax = median_wages.plot(kind='barh',figsize=(15,8),width=0.7,align='center')
+ax.legend_.remove()
+ax.set_title("Adjusted incomes over the world",fontsize=16)
+ax.set_xlabel("Amount", fontsize=14)
+ax.set_ylabel("Country", fontsize=14)
+for tick in ax.get_xticklabels():
+    tick.set_rotation(0)
+    tick.set_fontsize(10)
+plt.tight_layout()
+
+plt.show();
+
+
+# Let's analyze this plot.    
+# Other kernels, such as this [one](http://www.kaggle.com/drgilermo/salary-analysis), have already plotted the medians of the yearly incomes  using Market Exchanges Rates. We notice there for example that the median for India was about 12k USD while it was 36k USD for China.      
+# Using the PPP rates as above, the results are more balanced, with 33k USD for India and 50K for USD for China. That being said, the problem is not entirely solved as the gap is still quite big comparing to the US. Why is that ? 
+# 
+# Two main reasons : 
+# * **Very populated and/or developing countries often set the value of their currency to be lower than the U.S. dollar** because they want the cost of living to be lower, so that they can pay their workers less. This also mean that they are more attractive markers to big companies and investors who are interested in implementing themselves in countries where it would cost them less (Hello Apple) ! 
+# * **There are some limitations to PPP rates**. One of them is that, as we've said before, we use baskets of products and compare their price in different countries. By doing that, we are regaling with a similar group of commodities in both countries which is not entirely reasonable since production for some products depends on geographical parameters.
+
+# # Which country values its Data Scientists the most ?
+# <a id="valuation"></a>
+# ***
+
+# **We know the median salary for each country so we can compare between that and the median income in that country to measure how well is a data scientist paid by the standards of the country he lives in.**
+# 
+# Unfortunately, the information we find easily on the internet is the *average income* which is not trustworthy at all because as we know the mean is very sensitive to abnormally high values and, in any country in the world, the wealthiest people have ridiculous incomes.
+# 
+# That being said [Gallup](http://news.gallup.com/poll/166211/worldwide-median-household-income-000.aspx) conducted a survey between 2005 and 2012 to publish the medians over the world for 2013. This information is valuable, but how to use it ? 
+# 
+# You certainly heard your grandfather saying *When I was your age, I traveled across the country with 100\$ in my pocket* and you tought to yourself *that's absurd, I can't believe it.* Well, that's **inflation** ! Inflation is the fact that, in the same country with the same currency, you can't do in the present with some amount X what you could have done in the past with that same amount. So yeah obviously, **100\$ in the 1930s is much more *valuable* than 100\$ in 2017**.    
+# What we'll do is the following : 
+# 1. We take the median incomes that were measured in 2013 
+# 2. We calculate the inflation rate between 2013 and now ([source](http://data.oecd.org/price/inflation-cpi.htm))
+# 3. We use the inflation rate to calculate new medians that would correspond to the present ([tutorial](http://www.cpwr.com/sites/default/files/annex_how_to_calculate_the_real_wages.pdf) on how to do that)
+
+# In[ ]:
+
+
+inflations={'Countries':['United States','India','United Kingdom','Germany','France','Brazil','Canada','Spain','Australia','Russia','Italy',"People 's Republic of China",'Netherlands'],
+           'CPI_2013':[106.83,131.98,110.15,105.68,105.01,119.37,105.45,107.21,107.70,121.64,107.20,111.16,107.48],
+           'CPI_2017':[113.10,162.01,116.51,109.6,107.1,156.73,112.39,109.13,113.48,168.50,108.61,119.75,111.55],
+           'medians_2013':[15480,615,12399,14098,12445,2247,15181,7284,15026,4129,6874,1786,14450]}
+
+rates_inflations = pd.DataFrame(inflations)
+rates_inflations['adjusted_medians']=(rates_inflations['medians_2013']*rates_inflations['CPI_2017']/rates_inflations['CPI_2013']).round(2)
+rates_inflations
+
+
+# The three steps are now completed.    
+# We move on to calculate the ratio of data scientists incomes to median incomes for each country.
+
+# In[ ]:
+
+
+tmp=median_wages.reset_index()
+tmp = tmp.rename(columns={'index': 'Country', 0: 'median_income'})
+
+rates_inflations=rates_inflations.merge(tmp,left_on='Countries',right_on='Country',how='left')
+rates_inflations['ratio_incomes']=(rates_inflations['median_income']/rates_inflations['adjusted_medians']).round(2)
+
+tmp2=rates_inflations[['Country','ratio_incomes']]
+tmp2.sort_values(by='ratio_incomes',axis=0, ascending=True, inplace=True)
+
+
+# In[ ]:
+
+
+tmp2.plot.barh(x='Country',figsize=(12,8))
+plt.show();
+
+
+# **Indian Data Scientists are paid 44 times more than average workers, WOW !    **
+# In second and third position we find China (25 times more) and Brazil (15 times more). Is that to be expected ? In fact, Yes !   
+# Actually, India, China and Brazil are part of what's called [BRICS](http://en.wikipedia.org/wiki/BRICS) which is the acronym for an association of five major emerging national economies: *Brazil, Russia, India, China and South Africa*. These countries have fast-growing economies but are still suffering from high poverty rates (Russia not to be included). The consequence of that is a social imbalance where workers with high status (such as data scientists) are getting paid much more higher (at least 15 times more) than average workers, hence the results above.   
+# 
+# Looking at developed countries, we find that data scientists are pretty well payed comparing to average, with minimums in Canada and France and maximums in Spain and the US.
+
+# So much for the economics course ! Personnaly, I enjoyed digging to find data about inflation rates and PPP rates. I hope you guys learned a thing or two from what's above and hopefully you can use that in the future when you deal with incomes from various years (inflations) or countries (PPP).
+# 
+# We move on to more usual stuff to understand what impacts most the income of data scientists across the world.
+
+# # Who are the most valued Data Scientists ? 
+# <a id="properties"></a>
+# ***
+
+# In this section, we'll try to see who are the data scientists who earn by analyzing what they do at work : their job function, their roles, the ML/DS methods they use the most ...
+# 
+# In order to progress in our analysis and obtain significant results, we'll construct baskets of countries for which salaries are similar.
+# 1. First group will only contain the US,
+# 2. Second group will contain *Australia, Netherlands, Germany, United Kingdom and Canada*,
+# 3. Third group will contain *Spain, France, Italy, China, Brazil*,
+# 4. At last, the last group will contain *India and Russia*
+
+# In[ ]:
+
+
+datasets = {'USA' : df[df['Country']=='United States'] , 
+            'Eur+Ca' :df[df.Country.isin(['Australia','Germany','Canada','United Kingdom','Netherlands'])],
+            'Eur2+Bra+Chi' : df[df.Country.isin(['Spain','France','Brazil',"People 's Republic of China",'Italy'])],
+            'India/Russia' : df[df.Country.isin(['India','Russia'])]}
+
+
+# ## Methods used at work
+# <a id="methods"></a>
+
+# In[ ]:
+
+
+methods=['WorkMethodsFrequencyBayesian','WorkMethodsFrequencyNaiveBayes','WorkMethodsFrequencyLogisticRegression',
+       'WorkMethodsFrequencyDecisionTrees','WorkMethodsFrequencyRandomForests',
+       'WorkMethodsFrequencyEnsembleMethods','WorkMethodsFrequencyDataVisualization','WorkMethodsFrequencyPCA',
+       'WorkMethodsFrequencyNLP','WorkMethodsFrequencyNeuralNetworks',
+       'WorkMethodsFrequencyTextAnalysis',
+       'WorkMethodsFrequencyRecommenderSystems','WorkMethodsFrequencyKNN','WorkMethodsFrequencySVMs',
+       'WorkMethodsFrequencyTimeSeriesAnalysis']
+
+
+d_method_countries={} 
+for key, value in datasets.items():
+    d_method_countries[key]={}
+    for col in methods : 
+        method = col.split('WorkMethodsFrequency')[1]
+        d_method_countries[key][method]=value[value[col].isin(['Most of the time','Often'])]['AdjustedSalary'].median()
+        
+positions=[(0,0),(1,0),(0,1),(1,1)]
+f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
+for ((key, value), pos) in zip(d_method_countries.items() , positions):
+    methods = pd.DataFrame.from_dict(data=value, orient='index').round(2)
+    methods.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
+    methods.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
+    ax[pos[0],pos[1]].set_title(key,fontsize=14)
+    ax[pos[0],pos[1]].legend_.remove()
     
-    # Mapping Embarked
-    dataset['Embarked'] = dataset['Embarked'].map( {'S': 0, 'C': 1, 'Q': 2} ).astype(int)
+
+plt.tight_layout()
+plt.show();
     
-    # Mapping Fare
-    dataset.loc[ dataset['Fare'] <= 7.91, 'Fare'] 						        = 0
-    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
-    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare']   = 2
-    dataset.loc[ dataset['Fare'] > 31, 'Fare'] 							        = 3
-    dataset['Fare'] = dataset['Fare'].astype(int)
+
+
+# People who often use Recommender Systems in their work are generally well paid no matter the country (2nd in the US, 3rd in India/Russia...).      
+# 
+# It's interesting to notice a clear contrast in the 4 plots : In the US, Canada and the first group of european countries (where the median income was high), the most valued method seems to be Naive Bayes. On the other hand, in the BRICS countries (see above) + other european countries, not only Native Bayes users aren't the best paid like their counterparties in the US, they're actually the lowest paid !      
+# The same thing happens with Data Visualization but the other way around this time : not too valuable in the US + first basket of Europe, quite important in the rest of the world.
+# 
+# **For me, this really shows how data science has a different meaning and value depending on the country you live in. Some countries would pay more if you're good at visualizing data while others will pay more if you know how to use bayesian methods so the needs and the purpose of DS/ML vary across the world.**
+# 
+# 
+
+# ## Tools and programming languages used at work
+# <a id="tools"></a>
+
+# In[ ]:
+
+
+tools=['WorkToolsFrequencyC','WorkToolsFrequencyJava','WorkToolsFrequencyMATLAB',
+       'WorkToolsFrequencyPython','WorkToolsFrequencyR','WorkToolsFrequencyTensorFlow',
+       'WorkToolsFrequencyHadoop','WorkToolsFrequencySpark','WorkToolsFrequencySQL',
+       'WorkToolsFrequencyNoSQL','WorkToolsFrequencyExcel','WorkToolsFrequencyTableau',
+       'WorkToolsFrequencyJupyter','WorkToolsFrequencyAWS',
+       'WorkToolsFrequencySASBase','WorkToolsFrequencyUnix']
+
+d_tools_countries={} 
+for key, value in datasets.items():
+    d_tools_countries[key]={}
+    for col in tools : 
+        tool = col.split('WorkToolsFrequency')[1]
+        d_tools_countries[key][tool]=value[value[col].isin(['Most of the time','Often'])]['AdjustedSalary'].median()
+        
+positions=[(0,0),(1,0),(0,1),(1,1)]
+f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
+for ((key, value), pos) in zip(d_tools_countries.items() , positions):
+    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
+    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
+    tools.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
+    ax[pos[0],pos[1]].set_title(key,fontsize=14)
+    ax[pos[0],pos[1]].legend_.remove()
     
-    # Mapping Age
-    dataset.loc[ dataset['Age'] <= 16, 'Age'] 					       = 0
-    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
-    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
-    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
-    dataset.loc[ dataset['Age'] > 64, 'Age'] = 4 ;
+
+plt.tight_layout()
+plt.show();
+        
 
 
-# In[5]:
-
-
-# Feature selection
-drop_elements = ['PassengerId', 'Name', 'Ticket', 'Cabin', 'SibSp']
-train = train.drop(drop_elements, axis = 1)
-train = train.drop(['CategoricalAge', 'CategoricalFare'], axis = 1)
-test  = test.drop(drop_elements, axis = 1)
-
-
-# All right so now having cleaned the features and extracted relevant information and dropped the categorical columns our features should now all be numeric, a format suitable to feed into our Machine Learning models. However before we proceed let us generate some simple correlation and distribution plots of our transformed dataset to observe ho
+# I found the results on this plot quite surprising and not that expected.    
 # 
-# ## Visualisations 
-
-# In[6]:
-
-
-train.head(3)
-
-
-# **Pearson Correlation Heatmap**
+# Technologies that are often used with big data architecture such as Hadoop, Spark and AWS grant good incomes abslutely everywhere, which is stunning.        
 # 
-# let us generate some correlation plots of the features to see how related one feature is to the next. To do so, we will utilise the Seaborn plotting package which allows us to plot heatmaps very conveniently as follows
-
-# In[7]:
-
-
-colormap = plt.cm.RdBu
-plt.figure(figsize=(14,12))
-plt.title('Pearson Correlation of Features', y=1.05, size=15)
-sns.heatmap(train.astype(float).corr(),linewidths=0.1,vmax=1.0, 
-            square=True, cmap=colormap, linecolor='white', annot=True)
-
-
-# **Takeaway from the Plots**
+# Java users in the US seem to be well payed too, I didn't expect that actually but I thought about it and my guess is that data scientsts that still work with Java occupy senior positions and have been using it for a long time while Python and R coders can be junior data scientists.        
 # 
-# One thing that that the Pearson Correlation plot can tell us is that there are not too many features strongly correlated with one another. This is good from a point of view of feeding these features into your learning model because this means that there isn't much redundant or superfluous data in our training set and we are happy that each feature carries with it some unique information. Here are two most correlated features are that of Family size and Parch (Parents and Children). I'll still leave both features in for the purposes of this exercise.
-# 
-# **Pairplots**
-# 
-# Finally let us generate some pairplots to observe the distribution of data from one feature to the other. Once again we use Seaborn to help us.
+# MATLAB coders are the lowest paid in all countries.
 
-# In[8]:
+# ## Job titles
+# <a id="titles"></a>
 
-
-g = sns.pairplot(train[[u'Survived', u'Pclass', u'Sex', u'Age', u'Parch', u'Fare', u'Embarked',
-       u'FamilySize', u'Title']], hue='Survived', palette = 'seismic',size=1.2,diag_kind = 'kde',diag_kws=dict(shade=True),plot_kws=dict(s=10) )
-g.set(xticklabels=[])
+# In[ ]:
 
 
-# # Ensembling & Stacking models
-# 
-# Finally after that brief whirlwind detour with regards to feature engineering and formatting, we finally arrive at the meat and gist of the this notebook.
-# 
-# Creating a Stacking ensemble!
-
-# ### Helpers via Python Classes
-# 
-# Here we invoke the use of Python's classes to help make it more convenient for us. For any newcomers to programming, one normally hears Classes being used in conjunction with Object-Oriented Programming (OOP). In short, a class helps to extend some code/program for creating objects (variables for old-school peeps) as well as to implement functions and methods specific to that class.
-# 
-# In the section of code below, we essentially write a class *SklearnHelper* that allows one to extend the inbuilt methods (such as train, predict and fit) common to all the Sklearn classifiers. Therefore this cuts out redundancy as  won't need to write the same methods five times if we wanted to invoke five different classifiers.
-
-# In[9]:
-
-
-# Some useful parameters which will come in handy later on
-ntrain = train.shape[0]
-ntest = test.shape[0]
-SEED = 0 # for reproducibility
-NFOLDS = 5 # set folds for out-of-fold prediction
-kf = KFold(ntrain, n_folds= NFOLDS, random_state=SEED)
-
-# Class to extend the Sklearn classifier
-class SklearnHelper(object):
-    def __init__(self, clf, seed=0, params=None):
-        params['random_state'] = seed
-        self.clf = clf(**params)
-
-    def train(self, x_train, y_train):
-        self.clf.fit(x_train, y_train)
-
-    def predict(self, x):
-        return self.clf.predict(x)
+titles=list(df['CurrentJobTitleSelect'].value_counts().index)
+d_titles_countries={} 
+for key, value in datasets.items():
+    d_titles_countries[key]={}
+    for title in titles : 
+        d_titles_countries[key][title]=value[value['CurrentJobTitleSelect']==title]['AdjustedSalary'].median()
+        
+positions=[(0,0),(1,0),(0,1),(1,1)]
+f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
+for ((key, value), pos) in zip(d_titles_countries.items() , positions):
+    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
+    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
+    tools.plot(kind='barh',figsize=(12,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
+    ax[pos[0],pos[1]].set_title(key,fontsize=14)
+    ax[pos[0],pos[1]].legend_.remove()
     
-    def fit(self,x,y):
-        return self.clf.fit(x,y)
+
+plt.tight_layout()
+plt.show();
+
+
+# In the US, business analysts and data analysts are far from getting paid as much as data scientists or ML engineers. On the other hand, in Russia and India, business analysts are better paid than data scientists actually !      
+# 
+# This plot gives us yet another view of what we said above : **countries and companies have different needs across the world**, it seems that US employers are hungry for ML practitioners and they pay them good money while in other emerging countries, the most important role is Predictive Modeler and analysts are still quite needed.
+
+# ## Job Functions
+# <a id="functions"></a>
+
+# In[ ]:
+
+
+func = list(df['JobFunctionSelect'].value_counts().index)
+tmp = df
+tmp=tmp.replace(to_replace=func, value=['Analyze data','Build a ML service','Build prototypes',
+                                        'Build the Data Infrastructure','Other','Research'])
+
+datasets_tmp = {'USA' : tmp[tmp['Country']=='United States'] , 
+            'Eur+Ca' :tmp[tmp.Country.isin(['Australia','Germany','Canada','United Kingdom','Netherlands'])],
+            'Eur2+Bra+Chi' : tmp[tmp.Country.isin(['Spain','France','Brazil',"People 's Republic of China",'Italy'])],
+            'India/Russia' : tmp[tmp.Country.isin(['India','Russia'])]}
+
+functions=list(tmp['JobFunctionSelect'].value_counts().index)
+d_functions_countries={} 
+for key, value in datasets_tmp.items():
+    d_functions_countries[key]={}
+    for function in functions : 
+        d_functions_countries[key][function]=value[value['JobFunctionSelect']==function]['AdjustedSalary'].median()
+        
+positions=[(0,0),(1,0),(0,1),(1,1)]
+f,ax=plt.subplots(nrows=2, ncols=2,figsize=(15,8))
+for ((key, value), pos) in zip(d_functions_countries.items() , positions):
+    tools = pd.DataFrame.from_dict(data=value, orient='index').round(2)
+    tools.sort_values(by=list(methods),axis=0, ascending=True, inplace=True)
+    tools.plot(kind='barh',figsize=(15,8),width=0.7,align='center',ax=ax[pos[0],pos[1]])
+    ax[pos[0],pos[1]].set_title(key,fontsize=14)
+    ax[pos[0],pos[1]].legend_.remove()
     
-    def feature_importances(self,x,y):
-        print(self.clf.fit(x,y).feature_importances_)
+plt.tight_layout()
+plt.show();
+
+
+# Building prototypes seems to be the function that's the most rewarded everywhere. It's not the most paid one in the US but it's a close second.** Being a researcher in a lab to advance the SOTA of ML isn't rewarding, no matter the country.** That's a pity :( I always felt like researchers aren't valued enough in France and that's honestly a real issue for many researchers here who switch to industry based roles for salary purposes. This plot shows that it's in fact the case everywhere.   
+# Let's hope that this will change in the future ! 
+
+# # How hard is it to predict the incomes for different respondents ?
+# <a id="xgboost"></a>
+# ***
+
+# In this part, I try to predict the income for kagglers.   
+# 
+# First, I would like to show how to benefit from the data analysis part to build a model. When you complete your data exploration and find insights, you have to perform some feature engineering according to your findings. For example, we found that MATLAB users are always under-paid while Hadoop/Spark users are always amongst the most paid. We'll add specific binarized features that indicate whether the instance uses that tool or not.    
+# Then we do the exact same thing with ML methods using again the results we found above.
+# 
+# At last, we keep the feature we think will be the most important to our prediction.
+
+# **Feature engineering and preprocessing**
+# <a id="features"></a>
+
+# In[ ]:
+
+
+df['MATLABUsers']=[1 if df['WorkToolsFrequencyMATLAB'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+df['AWSUsers']=[1 if df['WorkToolsFrequencyAWS'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+df['HadoopUsers']=[1 if df['WorkToolsFrequencyHadoop'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+df['SparkUsers']=[1 if df['WorkToolsFrequencySpark'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+
+df['NaiveBayesUsers']=[1 if df['WorkMethodsFrequencyNaiveBayes'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+df['RecommenderSystemsUsers']=[1 if df['WorkMethodsFrequencyRecommenderSystems'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+df['DataVisualizationUsers']=[1 if df['WorkMethodsFrequencyDataVisualization'].iloc[i] in ['Most of the time','Often'] else 0 for i in range(df.shape[0])]
+
+features= ['GenderSelect','Country','Age','FormalEducation','MajorSelect','ParentsEducation',
+           'EmploymentStatus','StudentStatus','DataScienceIdentitySelect','CodeWriter',
+           'CurrentEmployerType','SalaryChange','RemoteWork','WorkMLTeamSeatSelect',
+           'Tenure','EmployerIndustry','EmployerSize','CurrentJobTitleSelect','JobFunctionSelect',
+           'MATLABUsers','AWSUsers','HadoopUsers','SparkUsers',
+           'NaiveBayesUsers','RecommenderSystemsUsers','DataVisualizationUsers',
+           'TimeGatheringData','TimeModelBuilding','TimeProduction','TimeVisualizing','TimeFindingInsights',
+           'AdjustedSalary']
+
+
+
+
+# Now that we don't really have to worry about having the same range of salary in the same dataset, we'll group countries using a more meaningful way.
+# * USA will be kept alone as it already has enough respondents
+# * We talked about BRICS earliers, we'll make a dataset with those countries
+# * We merge all european countries and add to them Canada and Australia
+
+# In[ ]:
+
+
+df_us = df[df['Country']=='United States'][features]
+df_eur = df[df.Country.isin(['Spain','France','Germany','Canada','United Kingdom','Netherlands','Italy','Australia','Canada'])][features]
+df_bric = df[df.Country.isin(['India','Russia','Brazil',"People 's Republic of China"])][features]
+
+
+# The scoring metric we'll use is the [Mean Squared Logarithmic Error](http://www.kaggle.com/wiki/RootMeanSquaredLogarithmicError). This metric is appropriate when the target variable in the regression problem takes high values so that large differences aren't too penalized. For example, using RMSE, if you predict an annual income of 80k when the real income is 82k, your prediction is quite good but the error score you commit would be $2000^2$ ! Hence our choice.     
+# 
+# In my previous Kernel, I used logistic regression as it's the most simple model around for classification. Here, instead of using linear regression, I'll go with the most used algorithm on Kaggle, the beloved **XGBoost** !   
+# Here we go ! 
+
+# **Predictions**
+# <a id="prediction"></a>
+
+# In[ ]:
+
+
+for (dataset,zone) in zip([df_us,df_bric,df_eur],['USA','BRIC','Europe + Canada and Australia']) : 
     
-# Class to extend XGboost classifer
+    dataset=pd.get_dummies(dataset,columns=['GenderSelect','Country','FormalEducation','MajorSelect','ParentsEducation',
+           'EmploymentStatus','StudentStatus','DataScienceIdentitySelect','CodeWriter',
+           'CurrentEmployerType','SalaryChange','RemoteWork','WorkMLTeamSeatSelect',
+           'Tenure','EmployerIndustry','EmployerSize','CurrentJobTitleSelect','JobFunctionSelect'])
+    for col in ['Age','TimeGatheringData','TimeModelBuilding','TimeProduction','TimeVisualizing','TimeFindingInsights']:
+        dataset[col] = dataset[col].fillna(value=dataset[col].median())
+    dataset.dropna(axis=0,inplace=True)
+
+    np.random.seed(42)
+    perm = np.random.permutation(dataset.shape[0])
+    train = dataset.iloc[perm[0:round(0.85*len(perm))]]
+    test = dataset.iloc[perm[round(0.85*len(perm))::]]
+    y_train , y_test = train['AdjustedSalary'] , test['AdjustedSalary']
+    X_train , X_test = train.drop('AdjustedSalary',axis=1) , test.drop('AdjustedSalary',axis=1)
+
+    clf=xgb.XGBRegressor(learning_rate=0.05, n_estimators=500, objective='reg:linear',reg_lambda=0.5, 
+                         random_state=42)
+    clf.fit(X_train,y_train)
+    y_pred=clf.predict(X_test)
+    
+    print('Prediction for : %s'%zone)
+    print('The RMSLE score is : {:0.4f}'.format(np.sqrt(MSLE(y_test,y_pred)) /np.sqrt(len(y_pred)) ))
+    print('-------------------------------------------------')
 
 
-# Bear with me for those who already know this but for people who have not created classes or objects in Python before, let me explain what the code given above does. In creating my base classifiers, I will only use the models already present in the Sklearn library and therefore only extend the class for that.
+# **Results analysis**
+# <a id="analysis"></a>
+
+# Those scores are actually not bad at all ! I consider them to be really great.
+# Just to get an idea, the public leaderboard for beginners competition "Bike Sharing Demand" on kaggle displays a best RMSLE of $0.33$. I didn't expect the regression prediction problem to yield results that are as good. If you want to to get an idea about what a RMSLE score means and how it can be interpreted, I invite you to check @j_scheibel response to this [Kaggle topic](https://www.kaggle.com/general/9933).
 # 
-# **def init** : Python standard for invoking the default constructor for the class. This means that when you want to create an object (classifier), you have to give it the parameters of clf (what sklearn classifier you want), seed (random seed) and params (parameters for the classifiers).
-# 
-# The rest of the code are simply methods of the class which simply call the corresponding methods already existing within the sklearn classifiers. Essentially, we have created a wrapper class to extend the various Sklearn classifiers so that this should help us reduce having to write the same code over and over when we implement multiple learners to our stacker.
-
-# ### Out-of-Fold Predictions
-# 
-# Now as alluded to above in the introductory section, stacking uses predictions of base classifiers as input for training to a second-level model. However one cannot simply train the base models on the full training data, generate predictions on the full test set and then output these for the second-level training. This runs the risk of your base model predictions already having "seen" the test set and therefore overfitting when feeding these predictions.
-
-# In[10]:
-
-
-def get_oof(clf, x_train, y_train, x_test):
-    oof_train = np.zeros((ntrain,))
-    oof_test = np.zeros((ntest,))
-    oof_test_skf = np.empty((NFOLDS, ntest))
-
-    for i, (train_index, test_index) in enumerate(kf):
-        x_tr = x_train[train_index]
-        y_tr = y_train[train_index]
-        x_te = x_train[test_index]
-
-        clf.train(x_tr, y_tr)
-
-        oof_train[test_index] = clf.predict(x_te)
-        oof_test_skf[i, :] = clf.predict(x_test)
-
-    oof_test[:] = oof_test_skf.mean(axis=0)
-    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
-
-
-# # Generating our Base First-Level Models 
-# 
-# So now let us prepare five learning models as our first level classification. These models can all be conveniently invoked via the Sklearn library and are listed as follows:
-# 
-#  1. Random Forest classifier
-#  2. Extra Trees classifier
-#  3. AdaBoost classifer
-#  4. Gradient Boosting classifer
-#  5. Support Vector Machine
-
-# **Parameters**
-# 
-# Just a quick summary of the parameters that we will be listing here for completeness,
-# 
-# **n_jobs** : Number of cores used for the training process. If set to -1, all cores are used.
-# 
-# **n_estimators** : Number of classification trees in your learning model ( set to 10 per default)
-# 
-# **max_depth** : Maximum depth of tree, or how much a node should be expanded. Beware if set to too high  a number would run the risk of overfitting as one would be growing the tree too deep
-# 
-# **verbose** : Controls whether you want to output any text during the learning process. A value of 0 suppresses all text while a value of 3 outputs the tree learning process at every iteration.
-# 
-#  Please check out the full description via the official Sklearn website. There you will find that there are a whole host of other useful parameters that you can play around with. 
-
-# In[11]:
-
-
-# Put in our parameters for said classifiers
-# Random Forest parameters
-rf_params = {
-    'n_jobs': -1,
-    'n_estimators': 500,
-     'warm_start': True, 
-     #'max_features': 0.2,
-    'max_depth': 6,
-    'min_samples_leaf': 2,
-    'max_features' : 'sqrt',
-    'verbose': 0
-}
-
-# Extra Trees Parameters
-et_params = {
-    'n_jobs': -1,
-    'n_estimators':500,
-    #'max_features': 0.5,
-    'max_depth': 8,
-    'min_samples_leaf': 2,
-    'verbose': 0
-}
-
-# AdaBoost parameters
-ada_params = {
-    'n_estimators': 500,
-    'learning_rate' : 0.75
-}
-
-# Gradient Boosting parameters
-gb_params = {
-    'n_estimators': 500,
-     #'max_features': 0.2,
-    'max_depth': 5,
-    'min_samples_leaf': 2,
-    'verbose': 0
-}
-
-# Support Vector Classifier parameters 
-svc_params = {
-    'kernel' : 'linear',
-    'C' : 0.025
-    }
-
-
-# Furthermore, since having mentioned about Objects and classes within the OOP framework, let us now create 5 objects that represent our 5 learning models via our Helper Sklearn Class we defined earlier.
-
-# In[12]:
-
-
-# Create 5 objects that represent our 4 models
-rf = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
-et = SklearnHelper(clf=ExtraTreesClassifier, seed=SEED, params=et_params)
-ada = SklearnHelper(clf=AdaBoostClassifier, seed=SEED, params=ada_params)
-gb = SklearnHelper(clf=GradientBoostingClassifier, seed=SEED, params=gb_params)
-svc = SklearnHelper(clf=SVC, seed=SEED, params=svc_params)
-
-
-# **Creating NumPy arrays out of our train and test sets**
-# 
-# Great. Having prepared our first layer base models as such, we can now ready the training and test test data for input into our classifiers by generating NumPy arrays out of their original dataframes as follows:
+# We notice that it's way harder to predict the salary for BRIC countries as the RMSLE is 4 times as high as the RMSLE for US Prediction or Europe prediciton.          
+# Let's check the salary distribution (plot histograms) for each one of those datasets.
 
 # In[ ]:
 
 
-# Create Numpy arrays of train, test and target ( Survived) dataframes to feed into our models
-y_train = train['Survived'].ravel()
-train = train.drop(['Survived'], axis=1)
-x_train = train.values # Creates an array of the train data
-x_test = test.values # Creats an array of the test data
+f,ax=plt.subplots(nrows=1, ncols=3,figsize=(15,8))
+df_bric['AdjustedSalary'].plot.hist(bins=50,ax=ax[0],figsize=(15,8),title='Salary distribution in BRIC countries')
+df_eur['AdjustedSalary'].plot.hist(bins=50,ax=ax[1],figsize=(15,8),title='Salary distribution in Europe + Ca+ Aus')
+df_us['AdjustedSalary'].plot.hist(bins=50,ax=ax[2],figsize=(15,8),title='Salary distribution in the the US')
+plt.show();
 
 
-# **Output of the First level Predictions** 
-# 
-# We now feed the training and test data into our 5 base classifiers and use the Out-of-Fold prediction function we defined earlier to generate our first level predictions. Allow a handful of minutes for the chunk of code below to run.
-
-# In[ ]:
-
-
-# Create our OOF train and test predictions. These base results will be used as new features
-et_oof_train, et_oof_test = get_oof(et, x_train, y_train, x_test) # Extra Trees
-rf_oof_train, rf_oof_test = get_oof(rf,x_train, y_train, x_test) # Random Forest
-ada_oof_train, ada_oof_test = get_oof(ada, x_train, y_train, x_test) # AdaBoost 
-gb_oof_train, gb_oof_test = get_oof(gb,x_train, y_train, x_test) # Gradient Boost
-svc_oof_train, svc_oof_test = get_oof(svc,x_train, y_train, x_test) # Support Vector Classifier
-
-print("Training is complete")
-
-
-# **Feature importances generated from the different classifiers**
-# 
-# Now having learned our the first-level classifiers, we can utilise a very nifty feature of the Sklearn models and that is to output the importances of the various features in the training and test sets with one very simple line of code.
-# 
-# As per the Sklearn documentation, most of the classifiers are built in with an attribute which returns feature importances by simply typing in **.feature_importances_**. Therefore we will invoke this very useful attribute via our function earliand plot the feature importances as such
+# We notice that the salary distributions in the US + Euro zone are quite similar : a bit skewed to the right because of some very high values. For the BRIC countries, it's really different : it's highly skewed to the right and most values of the income are actually near 0 ! As a consequence to that, 'outlier bins' appear earlier for BRIC countries than for the rest.   
+# Let's confirm that with boxplots.
 
 # In[ ]:
 
 
-rf_feature = rf.feature_importances(x_train,y_train)
-et_feature = et.feature_importances(x_train, y_train)
-ada_feature = ada.feature_importances(x_train, y_train)
-gb_feature = gb.feature_importances(x_train,y_train)
+f,ax=plt.subplots(nrows=1, ncols=3,figsize=(15,8))
+sns.boxplot(y=df_bric['AdjustedSalary'],data=df_bric,ax=ax[0]).set_title('Quartiles and outliers in BRIC')
+sns.boxplot(y=df_eur['AdjustedSalary'],data=df_eur,ax=ax[1]).set_title('Quartiles and outliers in EUR')
+sns.boxplot(y=df_us['AdjustedSalary'],data=df_us,ax=ax[2]).set_title('Quartiles and outliers in USA')
+plt.show();
 
 
-# So I have not yet figured out how to assign and store the feature importances outright. Therefore I'll print out the values from the code above and then simply copy and paste into Python lists as below (sorry for the lousy hack)
+# As we observed before, too many points near the 0 mark for BRIC zone and also a higher density of outliers (isolated points). Those points are the hardest for algorithms because they don't have enough data that looks like them, I think that this is the main reason why the error we got for BRIC was much higher than the errors we got for EUR/USA.
 
-# In[ ]:
-
-
-rf_features = [0.10474135,  0.21837029,  0.04432652,  0.02249159,  0.05432591,  0.02854371
-  ,0.07570305,  0.01088129 , 0.24247496,  0.13685733 , 0.06128402]
-et_features = [ 0.12165657,  0.37098307  ,0.03129623 , 0.01591611 , 0.05525811 , 0.028157
-  ,0.04589793 , 0.02030357 , 0.17289562 , 0.04853517,  0.08910063]
-ada_features = [0.028 ,   0.008  ,      0.012   ,     0.05866667,   0.032 ,       0.008
-  ,0.04666667 ,  0.     ,      0.05733333,   0.73866667,   0.01066667]
-gb_features = [ 0.06796144 , 0.03889349 , 0.07237845 , 0.02628645 , 0.11194395,  0.04778854
-  ,0.05965792 , 0.02774745,  0.07462718,  0.4593142 ,  0.01340093]
-
-
-# Create a dataframe from the lists containing the feature importance data for easy plotting via the Plotly package.
-
-# In[ ]:
-
-
-cols = train.columns.values
-# Create a dataframe with features
-feature_dataframe = pd.DataFrame( {'features': cols,
-     'Random Forest feature importances': rf_features,
-     'Extra Trees  feature importances': et_features,
-      'AdaBoost feature importances': ada_features,
-    'Gradient Boost feature importances': gb_features
-    })
-
-
-# **Interactive feature importances via Plotly scatterplots**
+# # Conclusion and perspectives
+# ***
+# What I truly appreciate about Data Analytics is that you can always dig deeper, try to find additional informations elsewhere to complete the dataset that you have and then gain new insights. Moreover, your knowledge from different fields can be put into practice, you just have to think about what's the best way to use it !    
 # 
-# I'll use the interactive Plotly package at this juncture to visualise the feature importances values of the different classifiers  via a plotly scatter plot by calling "Scatter" as follows:
-
-# In[ ]:
-
-
-# Scatter plot 
-trace = go.Scatter(
-    y = feature_dataframe['Random Forest feature importances'].values,
-    x = feature_dataframe['features'].values,
-    mode='markers',
-    marker=dict(
-        sizemode = 'diameter',
-        sizeref = 1,
-        size = 25,
-#       size= feature_dataframe['AdaBoost feature importances'].values,
-        #color = np.random.randn(500), #set color equal to a variable
-        color = feature_dataframe['Random Forest feature importances'].values,
-        colorscale='Portland',
-        showscale=True
-    ),
-    text = feature_dataframe['features'].values
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Random Forest Feature Importance',
-    hovermode= 'closest',
-#     xaxis= dict(
-#         title= 'Pop',
-#         ticklen= 5,
-#         zeroline= False,
-#         gridwidth= 2,
-#     ),
-    yaxis=dict(
-        title= 'Feature Importance',
-        ticklen= 5,
-        gridwidth= 2
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatter2010')
-
-# Scatter plot 
-trace = go.Scatter(
-    y = feature_dataframe['Extra Trees  feature importances'].values,
-    x = feature_dataframe['features'].values,
-    mode='markers',
-    marker=dict(
-        sizemode = 'diameter',
-        sizeref = 1,
-        size = 25,
-#       size= feature_dataframe['AdaBoost feature importances'].values,
-        #color = np.random.randn(500), #set color equal to a variable
-        color = feature_dataframe['Extra Trees  feature importances'].values,
-        colorscale='Portland',
-        showscale=True
-    ),
-    text = feature_dataframe['features'].values
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Extra Trees Feature Importance',
-    hovermode= 'closest',
-#     xaxis= dict(
-#         title= 'Pop',
-#         ticklen= 5,
-#         zeroline= False,
-#         gridwidth= 2,
-#     ),
-    yaxis=dict(
-        title= 'Feature Importance',
-        ticklen= 5,
-        gridwidth= 2
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatter2010')
-
-# Scatter plot 
-trace = go.Scatter(
-    y = feature_dataframe['AdaBoost feature importances'].values,
-    x = feature_dataframe['features'].values,
-    mode='markers',
-    marker=dict(
-        sizemode = 'diameter',
-        sizeref = 1,
-        size = 25,
-#       size= feature_dataframe['AdaBoost feature importances'].values,
-        #color = np.random.randn(500), #set color equal to a variable
-        color = feature_dataframe['AdaBoost feature importances'].values,
-        colorscale='Portland',
-        showscale=True
-    ),
-    text = feature_dataframe['features'].values
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'AdaBoost Feature Importance',
-    hovermode= 'closest',
-#     xaxis= dict(
-#         title= 'Pop',
-#         ticklen= 5,
-#         zeroline= False,
-#         gridwidth= 2,
-#     ),
-    yaxis=dict(
-        title= 'Feature Importance',
-        ticklen= 5,
-        gridwidth= 2
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatter2010')
-
-# Scatter plot 
-trace = go.Scatter(
-    y = feature_dataframe['Gradient Boost feature importances'].values,
-    x = feature_dataframe['features'].values,
-    mode='markers',
-    marker=dict(
-        sizemode = 'diameter',
-        sizeref = 1,
-        size = 25,
-#       size= feature_dataframe['AdaBoost feature importances'].values,
-        #color = np.random.randn(500), #set color equal to a variable
-        color = feature_dataframe['Gradient Boost feature importances'].values,
-        colorscale='Portland',
-        showscale=True
-    ),
-    text = feature_dataframe['features'].values
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Gradient Boosting Feature Importance',
-    hovermode= 'closest',
-#     xaxis= dict(
-#         title= 'Pop',
-#         ticklen= 5,
-#         zeroline= False,
-#         gridwidth= 2,
-#     ),
-    yaxis=dict(
-        title= 'Feature Importance',
-        ticklen= 5,
-        gridwidth= 2
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatter2010')
-
-
-# Now let us calculate the mean of all the feature importances and store it as a new column in the feature importance dataframe.
-
-# In[ ]:
-
-
-# Create the new column containing the average of values
-
-feature_dataframe['mean'] = feature_dataframe.mean(axis= 1) # axis = 1 computes the mean row-wise
-feature_dataframe.head(3)
-
-
-# **Plotly Barplot of Average Feature Importances**
+# I hope you enjoyed learning some basic economics (PPP and inflation rates) and its application to this particular dataset that helped us analyzing the incomes for several countries all at once. Throughout the second part of the kernel, I tried to emphasize on the fact that data science importance is really country-related : the most needed and valuable tools / methods / functions in a country will be very different from those of another one, espacially if their economies are very different from one another (USA vs India for example). At last, I wanted to see how related the income was to some features by building a predictive model and I was surprised by how good the model was.
 # 
-# Having obtained the mean feature importance across all our classifiers, we can plot them into a Plotly bar plot as follows:
-
-# In[ ]:
-
-
-y = feature_dataframe['mean'].values
-x = feature_dataframe['features'].values
-data = [go.Bar(
-            x= x,
-             y= y,
-            width = 0.5,
-            marker=dict(
-               color = feature_dataframe['mean'].values,
-            colorscale='Portland',
-            showscale=True,
-            reversescale = False
-            ),
-            opacity=0.6
-        )]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Barplots of Mean Feature Importance',
-    hovermode= 'closest',
-#     xaxis= dict(
-#         title= 'Pop',
-#         ticklen= 5,
-#         zeroline= False,
-#         gridwidth= 2,
-#     ),
-    yaxis=dict(
-        title= 'Feature Importance',
-        ticklen= 5,
-        gridwidth= 2
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='bar-direct-labels')
-
-
-# # Second-Level Predictions from the First-level Output
-
-# **First-level output as new features**
+# **To do list **       
+# I would suggest you guys think of other features that can show the difference of perception and application of Data Science and Machine Learning across the globe; maybe the method to learn next year isn't the same for everyone for example ?      
+# Also, since the regresison model for BRIC countries gave a score not as good as the one for the US and Europe, I would suugest building a specific ML model for BRIC that would be more suited to its specifities.
 # 
-# Having now obtained our first-level predictions, one can think of it as essentially building a new set of features to be used as training data for the next classifier. As per the code below, we are therefore having as our new columns the first-level predictions from our earlier classifiers and we train the next classifier on this.
-
-# In[ ]:
-
-
-base_predictions_train = pd.DataFrame( {'RandomForest': rf_oof_train.ravel(),
-     'ExtraTrees': et_oof_train.ravel(),
-     'AdaBoost': ada_oof_train.ravel(),
-      'GradientBoost': gb_oof_train.ravel()
-    })
-base_predictions_train.head()
-
-
-# **Correlation Heatmap of the Second Level Training set**
-
-# In[ ]:
-
-
-data = [
-    go.Heatmap(
-        z= base_predictions_train.astype(float).corr().values ,
-        x=base_predictions_train.columns.values,
-        y= base_predictions_train.columns.values,
-          colorscale='Viridis',
-            showscale=True,
-            reversescale = True
-    )
-]
-py.iplot(data, filename='labelled-heatmap')
-
-
-# There have been quite a few articles and Kaggle competition winner stories about the merits of having trained models that are more uncorrelated with one another producing better scores.
-
-# In[ ]:
-
-
-x_train = np.concatenate(( et_oof_train, rf_oof_train, ada_oof_train, gb_oof_train, svc_oof_train), axis=1)
-x_test = np.concatenate(( et_oof_test, rf_oof_test, ada_oof_test, gb_oof_test, svc_oof_test), axis=1)
-
-
-# Having now concatenated and joined both the first-level train and test predictions as x_train and x_test, we can now fit a second-level learning model.
-
-# ### Second level learning model via XGBoost
+# Of course, if you guys have any suggestions about informations I could add to this kernel or improvements to what's already here,  don't hesitate to put that in the comments section, I'd appreciate that !       
+# Also, an upvote is always welcome if you feel like the content here is worth it :)
 # 
-# Here we choose the eXtremely famous library for boosted tree learning model, XGBoost. It was built to optimize large-scale boosted tree algorithms. For further information about the algorithm, check out the [official documentation][1].
+# Thanks for your time and see on another one fellow Kagglers ! 
 # 
-#   [1]: https://xgboost.readthedocs.io/en/latest/
-# 
-# Anyways, we call an XGBClassifier and fit it to the first-level train and target data and use the learned model to predict the test data as follows:
-
-# In[ ]:
-
-
-gbm = xgb.XGBClassifier(
-    #learning_rate = 0.02,
- n_estimators= 2000,
- max_depth= 4,
- min_child_weight= 2,
- #gamma=1,
- gamma=0.9,                        
- subsample=0.8,
- colsample_bytree=0.8,
- objective= 'binary:logistic',
- nthread= -1,
- scale_pos_weight=1).fit(x_train, y_train)
-predictions = gbm.predict(x_test)
-
-
-# Just a quick run down of the XGBoost parameters used in the model:
-# 
-# **max_depth** : How deep you want to grow your tree. Beware if set to too high a number might run the risk of overfitting.
-# 
-# **gamma** : minimum loss reduction required to make a further partition on a leaf node of the tree. The larger, the more conservative the algorithm will be.
-# 
-# **eta** : step size shrinkage used in each boosting step to prevent overfitting
-
-# **Producing the Submission file**
-# 
-# Finally having trained and fit all our first-level and second-level models, we can now output the predictions into the proper format for submission to the Titanic competition as follows:
-
-# In[ ]:
-
-
-# Generate Submission File 
-StackingSubmission = pd.DataFrame({ 'PassengerId': PassengerId,
-                            'Survived': predictions })
-StackingSubmission.to_csv("StackingSubmission.csv", index=False)
-
-
-# **Steps for Further Improvement**
-# 
-# As a closing remark it must be noted that the steps taken above just show a very simple way of producing an ensemble stacker. You hear of ensembles created at the highest level of Kaggle competitions which involves monstrous combinations of stacked classifiers as well as levels of stacking which go to more than 2 levels. 
-# 
-# Some additional steps that may be taken to improve one's score could be:
-# 
-#  1. Implementing a good cross-validation strategy in training the models to find optimal parameter values
-#  2. Introduce a greater variety of base models for learning. The more uncorrelated the results, the better the final score.
-
-# ### Conclusion
-# 
-# I have this notebook has been helpful somewhat in introducing a working script for stacking learning models. Again credit must be extended to Faron and Sina. 
-# 
-# For other excellent material on stacking or ensembling in general, refer to the de-facto Must read article on the website MLWave: [Kaggle Ensembling Guide][1]. 
-# 
-# Till next time, Peace Out
-# 
-#   [1]: http://mlwave.com/kaggle-ensembling-guide/

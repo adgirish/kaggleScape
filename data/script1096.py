@@ -1,95 +1,100 @@
 
 # coding: utf-8
 
-# # Intro
+# This dataset is great for learning BigQuery. It's so small that in practice you'll never be able to hit any query limits so you can run as many tests as you want.
 # 
-# **This is Lesson 4 in the [Deep Learning](https://www.kaggle.com/learn/deep-learning) track**  
+# I'll show you how to run a simple query against BigQuery and export the results to Pandas. We'll start with a helper library that lets us do this in one line and then move on to exploring how that function works.
 # 
-# At the end of this lesson, you will be able to use transfer learning to build highly accurate computer vision models for your custom purposes, even when you have relatively little data.
-# 
-# # Lesson
-# 
+# If you're looking to get started quickly you can just use bq_helper to execute a SQL query. When you're ready to dig deeper the [full BigQuery SQL reference is here](https://cloud.google.com/bigquery/docs/reference/standard-sql/).
 
-# In[1]:
+# In[5]:
 
 
-from IPython.display import YouTubeVideo
-YouTubeVideo('mPFq5KMxKVw', width=800, height=450)
+import pandas as pd
+from google.cloud import bigquery
+from bq_helper import BigQueryHelper
 
 
-# # Sample Code
-# 
-# ### Specify Model
-
-# In[2]:
+# In[6]:
 
 
-from tensorflow.python.keras.applications import ResNet50
-from tensorflow.python.keras.models import Sequential
-from tensorflow.python.keras.layers import Dense, Flatten, GlobalAveragePooling2D
-
-num_classes = 2
-resnet_weights_path = '../input/resnet50/resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
-
-my_new_model = Sequential()
-my_new_model.add(ResNet50(include_top=False, pooling='avg', weights=resnet_weights_path))
-my_new_model.add(Dense(num_classes, activation='softmax'))
-
-# Say not to train first layer (ResNet) model. It is already trained
-my_new_model.layers[0].trainable = False
+# sample query from:
+# https://cloud.google.com/bigquery/public-data/openaq#which_10_locations_have_had_the_worst_air_quality_this_month_as_measured_by_high_pm10
+QUERY = """
+        SELECT location, city, country, value, timestamp
+        FROM `bigquery-public-data.openaq.global_air_quality`
+        WHERE pollutant = "pm10" AND timestamp > "2017-04-01"
+        ORDER BY value DESC
+        LIMIT 1000
+        """
 
 
-# ### Compile Model
+# The quick way to execute this query is to use [the bq_helper library](https://github.com/SohierDane/BigQuery_Helper):
 
-# In[3]:
-
-
-my_new_model.compile(optimizer='sgd', loss='categorical_crossentropy', metrics=['accuracy'])
+# In[7]:
 
 
-# ### Fit Model
+bq_assistant = BigQueryHelper('bigquery-public-data', 'openaq')
+df = bq_assistant.query_to_pandas(QUERY)
+df.head(3)
+
+
+# But what is bq_helper actually doing under the hood? Let's replicate the same process through the core BigQuery API to find out.
+
+# In[8]:
+
+
+client = bigquery.Client()
+query_job = client.query(QUERY)
+rows = list(query_job.result(timeout=30))
+for row in rows[:3]:
+    print(row)
+
+
+# The outputs look reasonable, but what's this storage format?
+
+# In[9]:
+
+
+type(rows[0])
+
+
+# Per the [BigQuery Python API documentation](https://googlecloudplatform.github.io/google-cloud-python/latest/bigquery/reference.html?highlight=google%20cloud%20bigquery%20table%20row#google.cloud.bigquery.table.Row), it turns out that  we can access the labels and data separately. This will allow us to make a clean export to pandas.
+
+# In[10]:
+
+
+list(rows[0].keys())
+
+
+# In[11]:
+
+
+list(rows[0].values())
+
 
 # In[12]:
 
 
-from tensorflow.python.keras.applications.resnet50 import preprocess_input
-from tensorflow.python.keras.preprocessing.image import ImageDataGenerator
-
-image_size = 224
-# The ImageDataGenerator was previously generated with
-# data_generator = ImageDataGenerator(preprocessing_function=preprocess_input)
-# recent changes in keras require that we use the following instead:
-data_generator = ImageDataGenerator() 
-
-train_generator = data_generator.flow_from_directory(
-        '../input/urban-and-rural-photos/rural_and_urban_photos/train',
-        target_size=(image_size, image_size),
-        batch_size=24,
-        class_mode='categorical')
-
-validation_generator = data_generator.flow_from_directory(
-        '../input/urban-and-rural-photos/rural_and_urban_photos/val',
-        target_size=(image_size, image_size),
-        class_mode='categorical')
-
-my_new_model.fit_generator(
-        train_generator,
-        steps_per_epoch=3,
-        validation_data=validation_generator,
-        validation_steps=1)
+df = pd.DataFrame(data=[list(x.values()) for x in rows], columns=list(rows[0].keys()))
 
 
-# ### Note on Results:
-# The printed validation accuracy can be meaningfully better than the training accuracy at this stage. This can be puzzling at first.
-# 
-# It occurs because the training accuracy was calculated at multiple points as the network was improving (the numbers in the convolutions were being updated to make the model more accurate).  The network was still quite when the model saw the first training images, since the weights hadn't been trained/improved much yet.  Those first training results were averaged into the measure above.
-# 
-# The validation loss and accuracy measures were calculated **after** the model had gone through all the data.  So the network had been fully trained when these scores were calculated.
-# 
-# This isn't a serious issue in practice, and we tend not to worry about it.
+# In[16]:
 
-# # Your Turn
-# [Write your own kernel to do transfer learning](https://www.kaggle.com/dansbecker/exercise-using-transfer-learning/).
-# 
-# # Keep Going
-# After the exercise, you move on to [data augmentation](https://www.kaggle.com/dansbecker/data-augmentation/).  It's a clever (and easy) trick to improve your models.
+
+df.head(3)
+
+
+# In[14]:
+
+
+df.info()
+
+
+# In[15]:
+
+
+df['value'].plot()
+
+
+# At the time of writing, the single most polluted site was a small town in rural Chile. I thought that had to be a problem with the data but it turns out [to be plausible](http://www.coha.org/the-battle-to-breathe-chiles-toxic-threat/) due to wildfires generating a lot of smoke and a severe drought causing smog to linger. The most polluted sites are an order of magnitude worse than the other cities, so I hope for their sake that it's a transient problem!

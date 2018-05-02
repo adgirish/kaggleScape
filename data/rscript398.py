@@ -11,184 +11,202 @@ import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten
-from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-import cv2
-from tqdm import tqdm
-from keras import optimizers
+# Any results you write to the current directory are saved as output.
+import matplotlib.pyplot as plt
+import random
+rnd=57
+maxCategories=20
 
-from sklearn.cross_validation import KFold
-from sklearn.metrics import fbeta_score
-import time
+train=pd.read_csv('../input/train.csv')
+test=pd.read_csv('../input/test.csv')
+random.seed(rnd)
+train.index=train.ID
+test.index=test.ID
+del train['ID'], test['ID']
+target=train.target
+del train['target']
 
-x_train = []
-x_test = []
-y_train = []
 
-df_train = pd.read_csv('../input/train_v2.csv')
-df_test = pd.read_csv('../input/sample_submission_v2.csv')
+#prepare data
+traindummies=pd.DataFrame()
+testdummies=pd.DataFrame()
 
-flatten = lambda l: [item for sublist in l for item in sublist]
-labels = list(set(flatten([l.split(' ') for l in df_train['tags'].values])))
+for elt in train.columns:
+    vector=pd.concat([train[elt],test[elt]], axis=0)
 
-labels = ['blow_down',
- 'bare_ground',
- 'conventional_mine',
- 'blooming',
- 'cultivation',
- 'artisinal_mine',
- 'haze',
- 'primary',
- 'slash_burn',
- 'habitation',
- 'clear',
- 'road',
- 'selective_logging',
- 'partly_cloudy',
- 'agriculture',
- 'water',
- 'cloudy']
+    #count as categorial if number of unique values is less than maxCategories
+    if len(vector.unique())<maxCategories:
+        traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+        testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+        del train[elt], test[elt]
+    else:
+        typ=str(train[elt].dtype)[:3]
+        if (typ=='flo') or (typ=='int'):
+            minimum=vector.min()
+            maximum=vector.max()
+            train[elt]=train[elt].fillna(int(minimum)-2)
+            test[elt]=test[elt].fillna(int(minimum)-2)
+            minimum=int(minimum)-2
+            traindummies[elt+'_na']=train[elt].apply(lambda x: 1 if x==minimum else 0)
+            testdummies[elt+'_na']=test[elt].apply(lambda x: 1 if x==minimum else 0)
+            
 
-label_map = {'agriculture': 14,
- 'artisinal_mine': 5,
- 'bare_ground': 1,
- 'blooming': 3,
- 'blow_down': 0,
- 'clear': 10,
- 'cloudy': 16,
- 'conventional_mine': 2,
- 'cultivation': 4,
- 'habitation': 9,
- 'haze': 6,
- 'partly_cloudy': 13,
- 'primary': 7,
- 'road': 11,
- 'selective_logging': 12,
- 'slash_burn': 8,
- 'water': 15}
+            #resize between 0 and 1 linearly ax+b
+            a=1/(maximum-minimum)
+            b=-a*minimum
+            train[elt]=a*train[elt]+b
+            test[elt]=a*test[elt]+b
+        else:
+            if (typ=='obj'):
+                list2keep=vector.value_counts()[:maxCategories].index
+                train[elt]=train[elt].apply(lambda x: x if x in list2keep else np.nan)
+                test[elt]=test[elt].apply(lambda x: x if x in list2keep else np.nan)                
+                traindummies=pd.concat([traindummies, pd.get_dummies(train[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+                testdummies=pd.concat([testdummies, pd.get_dummies(test[elt],prefix=elt,dummy_na=True)], axis=1).astype('int8')
+                
+                #Replace categories by their weights
+                tempTable=pd.concat([train[elt], target], axis=1)
+                tempTable=tempTable.groupby(by=elt, axis=0).agg(['sum','count']).target
+                tempTable['weight']=tempTable.apply(lambda x: .5+.5*x['sum']/x['count'] if (x['sum']>x['count']-x['sum']) else .5+.5*(x['sum']-x['count'])/x['count'], axis=1)
+                tempTable.reset_index(inplace=True)
+                train[elt+'weight']=pd.merge(train, tempTable, how='left', on=elt)['weight']
+                test[elt+'weight']=pd.merge(test, tempTable, how='left', on=elt)['weight']
+                train[elt+'weight']=train[elt+'weight'].fillna(.5)
+                test[elt+'weight']=test[elt+'weight'].fillna(.5)
+                del train[elt], test[elt]
+            else:
+                print('error', typ)
 
-for f, tags in tqdm(df_train.values, miniters=1000):
-    img = cv2.imread('./train-jpg/{}.jpg'.format(f))
-    targets = np.zeros(17)
-    for t in tags.split(' '):
-        targets[label_map[t]] = 1 
-    x_train.append(cv2.resize(img, (64, 64)))
-    y_train.append(targets)
+#remove na values too similar to v2_na
+from sklearn import metrics
+for elt in train.columns:
+    if (elt[-2:]=='na') & (elt!='v2_na'):
+        dist=metrics.pairwise_distances(train.v2_na.reshape(1, -1),train[elt].reshape(1, -1))
+        if dist<8:
+            del train[elt],test[elt]
+        else:
+            print(elt, dist)
+            
+            
+train=pd.concat([train,traindummies, target], axis=1)
+test=pd.concat([test,testdummies], axis=1)
+del traindummies,testdummies
 
-for f, tags in tqdm(df_test.values, miniters=1000):
-    img = cv2.imread('./test-jpg/{}.jpg'.format(f))
-    x_test.append(cv2.resize(img, (64, 64)))
+
+#remove features only present in train or test
+for elt in list(set(train.columns)-set(test.columns)):
+    del train[elt]
+for elt in list(set(test.columns)-set(train.columns)):
+    del test[elt]
     
-y_train = np.array(y_train, np.uint8)
-x_train = np.array(x_train, np.float32)/255.
-x_test  = np.array(x_test, np.float32)/255.
+#run cross validation
+from sklearn import cross_validation
+X, Y, Xtarget, Ytarget=cross_validation.train_test_split(train, target, test_size=0.2)
+del train
 
-print(x_train.shape)
-print(y_train.shape)
+from sklearn import ensemble
 
-nfolds = 5
+clfs=[
+    ensemble.RandomForestClassifier(bootstrap=False, class_weight='auto', criterion='entropy',
+            max_depth=None, max_features='sqrt', max_leaf_nodes=None,
+            min_samples_leaf=1, min_samples_split=4,
+            min_weight_fraction_leaf=0.0, n_estimators=500, n_jobs=-1,
+            oob_score=False, random_state=rnd, verbose=0,
+            warm_start=False),
+    ensemble.ExtraTreesClassifier(bootstrap=False, class_weight=None, criterion='entropy',
+           max_depth=None, max_features='sqrt', max_leaf_nodes=None,
+           min_samples_leaf=1, min_samples_split=3,
+           min_weight_fraction_leaf=1e-5, n_estimators=500, n_jobs=-1,
+           oob_score=False, random_state=rnd, verbose=0, warm_start=False),
+    ensemble.GradientBoostingClassifier(init=None, learning_rate=0.1, loss='deviance',
+              max_depth=2, max_features=None, max_leaf_nodes=None,
+              min_samples_leaf=1, min_samples_split=3,
+              min_weight_fraction_leaf=0.0, n_estimators=50,
+              presort='auto', random_state=rnd, subsample=1.0, verbose=0,
+              warm_start=False)
+]
 
-num_fold = 0
-sum_score = 0
+indice=0
+preds=[]
+predstest=[]
 
-yfull_test = []
-yfull_train =[]
-
-kf = KFold(len(y_train), n_folds=nfolds, shuffle=True, random_state=1)
-
-for train_index, test_index in kf:
-        start_time_model_fitting = time.time()
-        
-        X_train = x_train[train_index]
-        Y_train = y_train[train_index]
-        X_valid = x_train[test_index]
-        Y_valid = y_train[test_index]
-
-        num_fold += 1
-        print('Start KFold number {} from {}'.format(num_fold, nfolds))
-        print('Split train: ', len(X_train), len(Y_train))
-        print('Split valid: ', len(X_valid), len(Y_valid))
-        
-        kfold_weights_path = os.path.join('', 'weights_kfold_' + str(num_fold) + '.h5')
-        
-        model = Sequential()
-        model.add(BatchNormalization(input_shape=(64, 64,3)))
-        model.add(Conv2D(32, kernel_size=(3, 3),padding='same', activation='relu'))
-        model.add(Conv2D(32, (3, 3), activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-
-        model.add(Conv2D(64, kernel_size=(3, 3),padding='same', activation='relu'))
-        model.add(Conv2D(64, (3, 3), activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-        
-        model.add(Conv2D(128, kernel_size=(3, 3),padding='same', activation='relu'))
-        model.add(Conv2D(128, (3, 3), activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-        
-        model.add(Conv2D(256, kernel_size=(3, 3),padding='same', activation='relu'))
-        model.add(Conv2D(256, (3, 3), activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-        
-        model.add(Flatten())
-        model.add(Dense(512, activation='relu'))
-        model.add(BatchNormalization())
-        model.add(Dropout(0.5))
-        model.add(Dense(17, activation='sigmoid'))
-
-        epochs_arr = [20, 5, 5]
-        learn_rates = [0.001, 0.0001, 0.00001]
-
-        for learn_rate, epochs in zip(learn_rates, epochs_arr):
-            opt  = optimizers.Adam(lr=learn_rate)
-            model.compile(loss='binary_crossentropy', # We NEED binary here, since categorical_crossentropy l1 norms the output before calculating loss.
-                          optimizer=opt,
-                          metrics=['accuracy'])
-            callbacks = [EarlyStopping(monitor='val_loss', patience=2, verbose=0),
-            ModelCheckpoint(kfold_weights_path, monitor='val_loss', save_best_only=True, verbose=0)]
-
-            model.fit(x = X_train, y= Y_train, validation_data=(X_valid, Y_valid),
-                  batch_size=128,verbose=2, epochs=epochs,callbacks=callbacks,shuffle=True)
-        
-        if os.path.isfile(kfold_weights_path):
-            model.load_weights(kfold_weights_path)
-        
-        p_valid = model.predict(X_valid, batch_size = 128, verbose=2)
-        print(fbeta_score(Y_valid, np.array(p_valid) > 0.2, beta=2, average='samples'))
-
-        p_train = model.predict(x_train, batch_size =128, verbose=2)
-        yfull_train.append(p_train)
-        
-        p_test = model.predict(x_test, batch_size = 128, verbose=2)
-        yfull_test.append(p_test)
-
-result = np.array(yfull_test[0])
-for i in range(1, nfolds):
-    result += np.array(yfull_test[i])
-result /= nfolds
-result = pd.DataFrame(result, columns = labels)
-result
-
-from tqdm import tqdm
-thres = [0.07, 0.17, 0.2, 0.04, 0.23, 0.33, 0.24, 0.22, 0.1, 0.19, 0.23, 0.24, 0.12, 0.14, 0.25, 0.26, 0.16]
-preds = []
-for i in tqdm(range(result.shape[0]), miniters=1000):
-    a = result.ix[[i]]
-    a = a.apply(lambda x: x > 0.2, axis=1)
-    a = a.transpose()
-    a = a.loc[a[i] == True]
-    ' '.join(list(a.index))
-    preds.append(' '.join(list(a.index)))
+#run models
+for model in clfs:
     
-df_test['tags'] = preds
-df_test.to_csv('submission_keras_5_fold_CV_0.9136_LB_0.913.csv', index=False)
+    model.fit(X, Xtarget)
 
-## 0.913
+    preds.append(model.predict_proba(Y)[:,1])
+    print('model ',indice,': loss=',metrics.log_loss(Ytarget,preds[indice]))
+
+    noms=pd.DataFrame(test.columns[abs(model.feature_importances_)>1e-10][:30])
+    noms.columns=['noms']
+    coefs=pd.DataFrame(model.feature_importances_[abs(model.feature_importances_)>1e-10][:30])
+    coefs.columns=['coefs']
+    df=pd.concat([noms, coefs], axis=1).sort_values(by=['coefs'])
+
+    plt.figure(indice)
+    df.plot(kind='barh', x='noms', y='coefs', legend=True, figsize=(6, 10))
+    plt.savefig('clf'+str(indice)+'_ft_importances.jpg')
+
+    predstest.append(model.predict_proba(test)[:,1])
+    indice+=1
+
+#find best weights
+step=0.1 * (1./len(preds))
+print("step:", step)
+poidsref=np.zeros(len(preds))
+poids=np.zeros(len(preds))
+poidsreftemp=np.zeros(len(preds))
+poidsref=poidsref+1./len(preds)
+
+bestpoids=poidsref.copy()
+blend_cv=np.zeros(len(preds[0]))
+
+for k in range(0,len(preds),1):
+    blend_cv=blend_cv+bestpoids[k]*preds[k]
+bestscore=metrics.log_loss(Ytarget.values,blend_cv)
+
+getting_better_score=True
+while getting_better_score:
+    getting_better_score=False
+    for i in range(0,len(preds),1):
+        poids=poidsref
+        if poids[i]-step>-step:
+            #decrease weight in position i
+            poids[i]-=step
+            for j in range(0,len(preds),1):
+                if j!=i:
+                    if poids[j]+step<=1:
+                        #try an increase in position j
+                        poids[j]+=step
+                        #score new weights
+                        blend_cv=np.zeros(len(preds[0]))
+                        for k in range(0,len(preds),1):
+                            blend_cv=blend_cv+poids[k]*preds[k]
+                        actualscore=metrics.log_loss(Ytarget.values,blend_cv)
+                        #if better, keep it
+                        if actualscore<bestscore:
+                            bestscore=actualscore
+                            bestpoids=poids.copy()
+                            getting_better_score=True
+                        poids[j]-=step
+            poids[i]+=step
+    poidsref=bestpoids.copy()
+
+print("weights: ", bestpoids)
+print("optimal blend loss: ", bestscore)
+
+
+blend_to_submit=np.zeros(len(predstest[0]))
+
+for i in range(0,len(preds),1):
+    blend_to_submit=blend_to_submit+bestpoids[i]*predstest[i]
+
+#submit
+submission=pd.read_csv('../input/sample_submission.csv')
+submission.PredictedProb=blend_to_submit
+submission.to_csv('simpleblend.csv', index=False)
+
+plt.figure(indice)
+submission.PredictedProb.hist(bins=30)
+plt.savefig('distribution.jpg')

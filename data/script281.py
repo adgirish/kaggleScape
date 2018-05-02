@@ -1,221 +1,290 @@
 
 # coding: utf-8
 
-# Based on the1owl's [kernel](https://www.kaggle.com/the1owl/forza-baseline-lightgbm-example)
+# This kernels aims at segmenting the cervix using the technique presented in this paper: https://www.researchgate.net/publication/24041301_Automatic_Detection_of_Anatomical_Landmarks_in_Uterine_Cervix_Images
 
 # In[ ]:
 
 
-MAX_ROUNDS = 1200
-OPTIMIZE_ROUNDS = False
-LEARNING_RATE = 0.024
-
-
-# I recommend initially setting <code>MAX_ROUNDS</code> fairly high and using <code>OPTIMIZE_ROUNDS</code> to get an idea of the appropriate number of rounds (which, in my judgment, should be close to the maximum value of <code>best_iteration</code> among all folds, maybe even a bit higher if your model is adequately regularized...or alternatively, you can look at the detailed output from the boosting rounds and choose a value that seems like it would work OK for all folds).  Then I would turn off <code>OPTIMIZE_ROUNDS</code> and set <code>MAX_ROUNDS</code> to the appropraite number of total rounds.  The problem with "early stopping" by choosing the best round for each fold is that it overfits to the validation data.    It's therefore liable not to produce the optimal model for predicting test data, and if it's used to produce validation predictions for stacking/ensembling with other models, it would cause this one to have too much weight in the ensemble.
-
-# In[ ]:
-
-
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
 import pandas as pd
-from catboost import CatBoostClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import KFold
-from numba import jit
-from sklearn import *
-import lightgbm as lgb
-from multiprocessing import *
+import cv2
+import math
+from sklearn import mixture
+from sklearn.utils import shuffle
+from skimage import measure
+from glob import glob
+import os
+from multiprocessing import Pool, cpu_count
+from functools import partial
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
+TRAIN_DATA = "../input/train"
 
-# In[ ]:
+types = ['Type_1']#,'Type_2','Type_3']
+type_ids = []
 
+for type in enumerate(types):
+    type_i_files = glob(os.path.join(TRAIN_DATA, type[1], "*.jpg"))
+    type_i_ids = np.array([s[len(TRAIN_DATA)+8:-4] for s in type_i_files])
+    type_ids.append(type_i_ids[:5])
 
-# Compute gini
-
-# from CPMP's kernel https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
-@jit
-def eval_gini(y_true, y_prob):
-    y_true = np.asarray(y_true)
-    y_true = y_true[np.argsort(y_prob)]
-    ntrue = 0
-    gini = 0
-    delta = 0
-    n = len(y_true)
-    for i in range(n-1, -1, -1):
-        y_i = y_true[i]
-        ntrue += y_i
-        gini += y_i * delta
-        delta += 1 - y_i
-    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
-    return gini
-
-
-# In[ ]:
-
-
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c: #standard arithmetic
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
-    for c in one_hot:
-        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
-            for val in one_hot[c]:
-                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
-    return df
-
-def multi_transform(df):
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    p.close(); p.join()
-    return df
-
-def gini_lgb(preds, dtrain):
-    y = list(dtrain.get_label())
-    score = eval_gini(y, preds) / eval_gini(y, y)
-    return 'gini', score, True
-
-
-
-# In[ ]:
-
-
-# Read data
-train_df = pd.read_csv('../input/train.csv') # .iloc[0:200,:]
-test_df = pd.read_csv('../input/test.csv')
-
-
-# In[ ]:
-
-
-# Process data
-col = [c for c in train_df.columns if c not in ['id','target']]
-col = [c for c in col if not c.startswith('ps_calc_')]
-
-id_test = test_df['id'].values
-id_train = train_df['id'].values
-
-y = train_df['target']
-X = train_df[col]
-y_valid_pred = 0*y
-X_test = test_df.drop(['id'], axis=1)
-y_test_pred = 0
-
-
-# In[ ]:
-
-
-# Set up folds
-K = 5
-kf = KFold(n_splits = K, random_state = 1, shuffle = True)
-
-
-# In[ ]:
-
-
-# Set up classifier
-params = {
-    'learning_rate': LEARNING_RATE, 
-    'max_depth': 4, 
-    'lambda_l1': 16.7,
-    'boosting': 'gbdt', 
-    'objective': 'binary', 
-    'metric': 'auc',
-    'feature_fraction': .7,
-    'is_training_metric': False, 
-    'seed': 99
-}
-
-
-# In[ ]:
-
-
-# Run CV
-
-for i, (train_index, test_index) in enumerate(kf.split(train_df)):
-    
-    # Create data for this fold
-    y_train, y_valid = y.iloc[train_index].copy(), y.iloc[test_index].copy()
-    X_train, X_valid = X.iloc[train_index,:].copy(), X.iloc[test_index,:].copy()
-    test = test_df.copy()[col]
-    print( "\nFold ", i)
-
-    # Transform data for this fold
-    one_hot = {c: list(X_train[c].unique()) for c in X_train.columns}
-    X_train = X_train.replace(-1, np.NaN)  # Get rid of -1 while computing summary stats
-    d_median = X_train.median(axis=0)
-    d_mean = X_train.mean(axis=0)
-    X_train = X_train.fillna(-1)  # Restore -1 for missing values
-
-    X_train = multi_transform(X_train)
-    X_valid = multi_transform(X_valid)
-    test = multi_transform(test)
-
-    # Run model for this fold
-    if OPTIMIZE_ROUNDS:
-        fit_model = lgb.train( 
-                               params, 
-                               lgb.Dataset(X_train, label=y_train), 
-                               MAX_ROUNDS, 
-                               lgb.Dataset(X_valid, label=y_valid), 
-                               verbose_eval=50, 
-                               feval=gini_lgb, 
-                               early_stopping_rounds=200 
-                             )
-        print( " Best iteration = ", fit_model.best_iteration )
-        pred = fit_model.predict(X_valid, num_iteration=fit_model.best_iteration)
-        test_pred = fit_model.predict(test[col], num_iteration=fit_model.best_iteration)
+def get_filename(image_id, image_type):
+    """
+    Method to get image file path from its id and type   
+    """
+    if image_type == "Type_1" or         image_type == "Type_2" or         image_type == "Type_3":
+        data_path = os.path.join(TRAIN_DATA, image_type)
+    elif image_type == "Test":
+        data_path = TEST_DATA
+    elif image_type == "AType_1" or           image_type == "AType_2" or           image_type == "AType_3":
+        data_path = os.path.join(ADDITIONAL_DATA, image_type)
     else:
-        fit_model = lgb.train( 
-                               params, 
-                               lgb.Dataset(X_train, label=y_train), 
-                               MAX_ROUNDS, 
-                               verbose_eval=50 
-                             )
-        pred = fit_model.predict(X_valid)
-        test_pred = fit_model.predict(test)
+        raise Exception("Image type '%s' is not recognized" % image_type)
 
-    # Save validation predictions for this fold
-    print( "  Gini = ", eval_gini(y_valid, pred) )
-    y_valid_pred.iloc[test_index] = (np.exp(pred) - 1.0).clip(0,1)
-    
-    # Accumulate test set predictions
-    y_test_pred += (np.exp(test_pred) - 1.0).clip(0,1)
-    
-y_test_pred /= K  # Average test set predictions
+    ext = 'jpg'
+    return os.path.join(data_path, "{}.{}".format(image_id, ext))
 
-print( "\nGini for full training set:" )
-eval_gini(y, y_valid_pred)
+def get_image_data(image_id, image_type):
+    """
+    Method to get image data as np.array specifying image id and type
+    """
+    fname = get_filename(image_id, image_type)
+    img = cv2.imread(fname)
+    assert img is not None, "Failed to read image : %s, %s" % (image_id, image_type)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
+
+# First, we crop the image in order to remove the circular frames that might be present. This is done by finding the largest inscribed rectangle to the thresholded image. The image is then cropped to this rectangle. (see these videos for an explanation of the algorithm: https://www.youtube.com/watch?v=g8bSdXCG-lA, https://www.youtube.com/watch?v=VNbkzsnllsU)
+
+# In[ ]:
+
+
+def maxHist(hist):
+    maxArea = (0, 0, 0)
+    height = []
+    position = []
+    for i in range(len(hist)):
+        if (len(height) == 0):
+            if (hist[i] > 0):
+                height.append(hist[i])
+                position.append(i)
+        else: 
+            if (hist[i] > height[-1]):
+                height.append(hist[i])
+                position.append(i)
+            elif (hist[i] < height[-1]):
+                while (height[-1] > hist[i]):
+                    maxHeight = height.pop()
+                    area = maxHeight * (i-position[-1])
+                    if (area > maxArea[0]):
+                        maxArea = (area, position[-1], i)
+                    last_position = position.pop()
+                    if (len(height) == 0):
+                        break
+                position.append(last_position)
+                if (len(height) == 0):
+                    height.append(hist[i])
+                elif(height[-1] < hist[i]):
+                    height.append(hist[i])
+                else:
+                    position.pop()    
+    while (len(height) > 0):
+        maxHeight = height.pop()
+        last_position = position.pop()
+        area =  maxHeight * (len(hist) - last_position)
+        if (area > maxArea[0]):
+            maxArea = (area, len(hist), last_position)
+    return maxArea
+            
+
+def maxRect(img):
+    maxArea = (0, 0, 0)
+    addMat = np.zeros(img.shape)
+    for r in range(img.shape[0]):
+        if r == 0:
+            addMat[r] = img[r]
+            area = maxHist(addMat[r])
+            if area[0] > maxArea[0]:
+                maxArea = area + (r,)
+        else:
+            addMat[r] = img[r] + addMat[r-1]
+            addMat[r][img[r] == 0] *= 0
+            area = maxHist(addMat[r])
+            if area[0] > maxArea[0]:
+                maxArea = area + (r,)
+    return (int(maxArea[3]+1-maxArea[0]/abs(maxArea[1]-maxArea[2])), maxArea[2], maxArea[3], maxArea[1], maxArea[0])
+
+def cropCircle(img):
+    if(img.shape[0] > img.shape[1]):
+        tile_size = (int(img.shape[1]*256/img.shape[0]),256)
+    else:
+        tile_size = (256, int(img.shape[0]*256/img.shape[1]))
+
+    img = cv2.resize(img, dsize=tile_size)
+            
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY);
+    _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+
+    _, contours, _ = cv2.findContours(thresh.copy(),cv2.RETR_TREE,cv2.CHAIN_APPROX_NONE)
+
+    main_contour = sorted(contours, key = cv2.contourArea, reverse = True)[0]
+            
+    ff = np.zeros((gray.shape[0],gray.shape[1]), 'uint8') 
+    cv2.drawContours(ff, main_contour, -1, 1, 15)
+    ff_mask = np.zeros((gray.shape[0]+2,gray.shape[1]+2), 'uint8')
+    cv2.floodFill(ff, ff_mask, (int(gray.shape[1]/2), int(gray.shape[0]/2)), 1)
+    
+    rect = maxRect(ff)
+    rectangle = [min(rect[0],rect[2]), max(rect[0],rect[2]), min(rect[1],rect[3]), max(rect[1],rect[3])]
+    img_crop = img[rectangle[0]:rectangle[1], rectangle[2]:rectangle[3]]
+    cv2.rectangle(ff,(min(rect[1],rect[3]),min(rect[0],rect[2])),(max(rect[1],rect[3]),max(rect[0],rect[2])),3,2)
+    
+    return [img_crop, rectangle, tile_size]
+
+
+# “For an initial delineation of the cervix, we use two features: 
+# 
+#  - the *a* color channel of the source image in Lab color space (the higher the value of *a* , the “redder” the pixel color)
+#  - *R*, the distance of a pixel from the image center. The *R* feature provides spatial information and supports the extraction of continuous regions within the image plane."
+
+# In[ ]:
+
+
+def Ra_space(img, Ra_ratio, a_threshold):
+    imgLab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB);
+    w = img.shape[0]
+    h = img.shape[1]
+    Ra = np.zeros((w*h, 2))
+    for i in range(w):
+        for j in range(h):
+            R = math.sqrt((w/2-i)*(w/2-i) + (h/2-j)*(h/2-j))
+            Ra[i*h+j, 0] = R
+            Ra[i*h+j, 1] = min(imgLab[i][j][1], a_threshold)
+            
+    Ra[:,0] /= max(Ra[:,0])
+    Ra[:,0] *= Ra_ratio
+    Ra[:,1] /= max(Ra[:,1])
+
+    return Ra
+
+
+# "The image is separated next into two clusters in the 2-D (*a-R*) feature space; we use Gaussian mixture modeling, initialized by a K-means procedure."
+
+# In[ ]:
+
+
+def get_and_crop_image(image_id, image_type):
+    img = get_image_data(image_id, image_type)
+    initial_shape = img.shape
+    [img, rectangle_cropCircle, tile_size] = cropCircle(img)
+    imgLab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB);
+    w = img.shape[0]
+    h = img.shape[1]
+    Ra = Ra_space(imgLab, 1.0, 150)
+    a_channel = np.reshape(Ra[:,1], (w,h))
+    
+    g = mixture.GaussianMixture(n_components = 2, covariance_type = 'diag', random_state = 0, init_params = 'kmeans')
+    image_array_sample = shuffle(Ra, random_state=0)[:1000]
+    g.fit(image_array_sample)
+    labels = g.predict(Ra)
+    labels += 1 # Add 1 to avoid labeling as 0 since regionprops ignores the 0-label.
+    
+    # The cluster that has the highest a-mean is selected.
+    labels_2D = np.reshape(labels, (w,h))
+    gg_labels_regions = measure.regionprops(labels_2D, intensity_image = a_channel)
+    gg_intensity = [prop.mean_intensity for prop in gg_labels_regions]
+    cervix_cluster = gg_intensity.index(max(gg_intensity)) + 1
+
+    mask = np.zeros((w * h,1),'uint8')
+    mask[labels==cervix_cluster] = 255
+    mask_2D = np.reshape(mask, (w,h))
+
+    cc_labels = measure.label(mask_2D, background=0)
+    regions = measure.regionprops(cc_labels)
+    areas = [prop.area for prop in regions]
+
+    regions_label = [prop.label for prop in regions]
+    largestCC_label = regions_label[areas.index(max(areas))]
+    mask_largestCC = np.zeros((w,h),'uint8')
+    mask_largestCC[cc_labels==largestCC_label] = 255
+
+    img_masked = img.copy()
+    img_masked[mask_largestCC==0] = (0,0,0)
+    img_masked_gray = cv2.cvtColor(img_masked, cv2.COLOR_RGB2GRAY);
+            
+    _,thresh_mask = cv2.threshold(img_masked_gray,0,255,0)
+            
+    kernel = np.ones((11,11), np.uint8)
+    thresh_mask = cv2.dilate(thresh_mask, kernel, iterations = 1)
+    thresh_mask = cv2.erode(thresh_mask, kernel, iterations = 2)
+    _, contours_mask, _ = cv2.findContours(thresh_mask.copy(),cv2.RETR_TREE,cv2.CHAIN_APPROX_NONE)
+
+    main_contour = sorted(contours_mask, key = cv2.contourArea, reverse = True)[0]
+    cv2.drawContours(img, main_contour, -1, 255, 3)
+    
+    x,y,w,h = cv2.boundingRect(main_contour)
+    
+    rectangle = [x+rectangle_cropCircle[2],
+                 y+rectangle_cropCircle[0],
+                 w,
+                 h,
+                 initial_shape[0],
+                 initial_shape[1],
+                 tile_size[0],
+                 tile_size[1]]
+
+    return [image_id, img, rectangle]
 
 
 # In[ ]:
 
 
-# Save validation predictions for stacking/ensembling
-val = pd.DataFrame()
-val['id'] = id_train
-val['target'] = y_valid_pred.values
-val.to_csv('lgb_valid.csv', float_format='%.6f', index=False)
+def parallelize_image_cropping(image_ids):
+    out = open('rectangles.csv', "w")
+    out.write("image_id,type,x,y,w,h,img_shp_0_init,img_shape1_init,img_shp_0,img_shp_1\n")
+    imf_d = {}
+    p = Pool(cpu_count())
+    for type in enumerate(types):
+        partial_get_and_crop = partial(get_and_crop_image, image_type = type[1])    
+        ret = p.map(partial_get_and_crop, image_ids[type[0]])
+        for i in range(len(ret)):
+            out.write(image_ids[type[0]][i])
+            out.write(',' + str(type[1]))
+            out.write(',' + str(ret[i][2][0]))
+            out.write(',' + str(ret[i][2][1]))
+            out.write(',' + str(ret[i][2][2]))
+            out.write(',' + str(ret[i][2][3]))
+            out.write(',' + str(ret[i][2][4]))
+            out.write(',' + str(ret[i][2][5]))
+            out.write(',' + str(ret[i][2][6]))
+            out.write(',' + str(ret[i][2][7]))
+            out.write('\n')
+            img = get_image_data(image_ids[type[0]][i], type[1])
+            if(img.shape[0] > img.shape[1]):
+                tile_size = (int(img.shape[1]*256/img.shape[0]), 256)
+            else:
+                tile_size = (256, int(img.shape[0]*256/img.shape[1]))
+            img = cv2.resize(img, dsize=tile_size)
+            cv2.rectangle(img,
+                          (ret[i][2][0], ret[i][2][1]), 
+                          (ret[i][2][0]+ret[i][2][2], ret[i][2][1]+ret[i][2][3]),
+                          255,
+                          2)
+            plt.imshow(img)
+            plt.show()
+        ret = []
+    out.close()
+
+    return
 
 
 # In[ ]:
 
 
-# Create submission file
-sub = pd.DataFrame()
-sub['id'] = id_test
-sub['target'] = y_test_pred
-sub.to_csv('lgb_submit.csv', float_format='%.6f', index=False)
+parallelize_image_cropping(type_ids)
 
-
-# version 8:  Resubmitting identical run because version 7 seems to have become invisible<br>
-# versions 9,10 (substantively identical): Set <code>lambda_l1=16.7</code>, sorted LB score improved but still reported as .282<br>
-# version 11: With <code>OPTIMIZE_ROUNDS</code>, negate gini score so LightGBM will minimize. <code>is_higher_better</code> not working.<br>
-# version 12: Un-negate gini score and set <code>is_higher_better</code> again. Maybe I misunderstood.<br>
-# version 14: Set <code>MAX_ROUNDS=1400</code> for prediction run.<br>
-# versions 15-21: Set <code>feature_fraction</code>. LB score goes up but still reported as .282

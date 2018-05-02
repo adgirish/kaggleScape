@@ -1,278 +1,423 @@
 
 # coding: utf-8
 
+# This notebook showcases a fast way to read data from BSON into a generator for Keras.  
+# The idea is strongly inspired from https://www.kaggle.com/humananalog/keras-generator-for-reading-directly-from-bson  
+# 
+# Since I don't have a SSD, the original Generator is ~3s per batch , I just added the feature to read chunks of file and shuffle into batch to improve speed.
+
 # In[1]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-import os
-from keras.layers import Dense,Input,LSTM,Bidirectional,Activation,Conv1D,GRU
-from keras.callbacks import Callback
-from keras.layers import Dropout,Embedding,GlobalMaxPooling1D, MaxPooling1D, Add, Flatten
-from keras.preprocessing import text, sequence
-from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-from keras.callbacks import EarlyStopping,ModelCheckpoint
-from keras.models import Model
-from keras.optimizers import Adam
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import roc_auc_score
-print(os.listdir("../input"))
-
-# Any results you write to the current directory are saved as output.
+import pandas as pd
+import numpy as np
 
 
 # In[2]:
 
 
-EMBEDDING_FILE = '../input/glove840b300dtxt/glove.840B.300d.txt'
-#train = pd.read_csv('../input/cleaned-toxic-comments/train_preprocessed.csv')
-train= pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-#test = pd.read_csv('../input/cleaned-toxic-comments/test_preprocessed.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+import bson
 
 
 # In[3]:
 
 
-train["comment_text"].fillna("fillna")
-test["comment_text"].fillna("fillna")
-X_train = train["comment_text"].str.lower()
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-
-X_test = test["comment_text"].str.lower()
+import cv2
 
 
 # In[4]:
 
 
-max_features=100000
-maxlen=200
-embed_size=300
+from tqdm import *
+import struct
 
+
+# # Load meta data
+
+# From https://www.kaggle.com/humananalog/keras-generator-for-reading-directly-from-bson
 
 # In[5]:
 
 
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
+def read_bson(bson_path, num_records, with_categories):
+    rows = {}
+    with open(bson_path, "rb") as f, tqdm(total=num_records) as pbar:
+        offset = 0
+        while True:
+            item_length_bytes = f.read(4)
+            if len(item_length_bytes) == 0:
+                break
 
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
+            length = struct.unpack("<i", item_length_bytes)[0]
 
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
+            f.seek(offset)
+            item_data = f.read(length)
+            assert len(item_data) == length
+
+            item = bson.BSON.decode(item_data)
+            product_id = item["_id"]
+            num_imgs = len(item["imgs"])
+
+            row = [num_imgs, offset, length]
+            if with_categories:
+                row += [item["category_id"]]
+            rows[product_id] = row
+
+            offset += length
+            f.seek(offset)
+            pbar.update()
+
+    columns = ["num_imgs", "offset", "length"]
+    if with_categories:
+        columns += ["category_id"]
+
+    df = pd.DataFrame.from_dict(rows, orient="index")
+    df.index.name = "product_id"
+    df.columns = columns
+    df.sort_index(inplace=True)
+    return df
+
+
+# In[6]:
+
+
+TRAIN_BSON_FILE = '../input/train.bson'
 
 
 # In[7]:
 
 
-tok=text.Tokenizer(num_words=max_features,lower=True)
-tok.fit_on_texts(list(X_train)+list(X_test))
-X_train=tok.texts_to_sequences(X_train)
-X_test=tok.texts_to_sequences(X_test)
-x_train=sequence.pad_sequences(X_train,maxlen=maxlen)
-x_test=sequence.pad_sequences(X_test,maxlen=maxlen)
+meta_data = read_bson(TRAIN_BSON_FILE, 7069896, with_categories=True)
 
 
-# In[ ]:
+# # Test read performance
+
+# The read performance on HDD is orders pr magnitude higher when random read vs contiguous read
+
+# In[8]:
 
 
-embeddings_index = {}
-with open(EMBEDDING_FILE,encoding='utf8') as f:
-    for line in f:
-        values = line.rstrip().rsplit(' ')
-        word = values[0]
-        coefs = np.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
+def get_obs(file, offset, length):
+    file.seek(offset)
+    return bson.BSON.decode(file.read(length))
 
 
-# In[ ]:
+# In[9]:
 
 
-word_index = tok.word_index
-#prepare embedding matrix
-num_words = min(max_features, len(word_index) + 1)
-embedding_matrix = np.zeros((num_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features:
-        continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        # words not found in embedding index will be all-zeros.
-        embedding_matrix[i] = embedding_vector
+file = open(TRAIN_BSON_FILE, 'rb')
 
 
-# In[ ]:
+# ## Contiguous read
+
+# In[10]:
 
 
-from keras.layers import K, Activation
-from keras.engine import Layer
-from keras.layers import Dense, Input, Embedding, Dropout, Bidirectional, GRU, Flatten, SpatialDropout1D
-gru_len = 128
-Routings = 5
-Num_capsule = 10
-Dim_capsule = 16
-dropout_p = 0.25
-rate_drop_dense = 0.28
-
-def squash(x, axis=-1):
-    # s_squared_norm is really small
-    # s_squared_norm = K.sum(K.square(x), axis, keepdims=True) + K.epsilon()
-    # scale = K.sqrt(s_squared_norm)/ (0.5 + s_squared_norm)
-    # return scale * x
-    s_squared_norm = K.sum(K.square(x), axis, keepdims=True)
-    scale = K.sqrt(s_squared_norm + K.epsilon())
-    return x / scale
+get_ipython().run_cell_magic('timeit', '', "i = np.random.choice(meta_data.shape[0], size=1)[0]\nsample = meta_data.iloc[i:i+256]\nres = []\nfor _id, row in sample.iterrows():\n    obs = get_obs(file, row['offset'], row['length'])\n    assert _id == obs['_id'] ")
 
 
-# A Capsule Implement with Pure Keras
-class Capsule(Layer):
-    def __init__(self, num_capsule, dim_capsule, routings=3, kernel_size=(9, 1), share_weights=True,
-                 activation='default', **kwargs):
-        super(Capsule, self).__init__(**kwargs)
-        self.num_capsule = num_capsule
-        self.dim_capsule = dim_capsule
-        self.routings = routings
-        self.kernel_size = kernel_size
-        self.share_weights = share_weights
-        if activation == 'default':
-            self.activation = squash
+# ## Random read
+
+# In[11]:
+
+
+get_ipython().run_cell_magic('timeit', '', "sample = meta_data.sample(256)\nfor _id, row in sample.iterrows():\n    obs = get_obs(file, row['offset'], row['length'])\n    assert _id == obs['_id']")
+
+
+# It takes ~600 ms here but on my hdd it is 3.15 s per loop. With more preprocessing of the batch, my GPU would be starving all the time
+
+# ## Semi contiguous read
+
+# Here we can simulate getting a chunk and read only a sample from it. Since the offset are nearby in the file and sorted, it is still quite fast
+
+# In[12]:
+
+
+get_ipython().run_cell_magic('timeit', '', "i = np.random.choice(meta_data.shape[0], size=1)[0]\nsample = meta_data.iloc[i:i+10000].sample(256).sort_index()\nres = []\nfor _id, row in sample.iterrows():\n    obs = get_obs(file, row['offset'], row['length'])\n    assert _id == obs['_id'] ")
+
+
+# ## Semi contiguous read wo  sort
+
+# In[13]:
+
+
+get_ipython().run_cell_magic('timeit', '', "i = np.random.choice(meta_data.shape[0], size=1)[0]\nsample = meta_data.iloc[i:i+10000].sample(256)\nres = []\nfor _id, row in sample.iterrows():\n    obs = get_obs(file, row['offset'], row['length'])\n    assert _id == obs['_id'] ")
+
+
+# # Generator
+
+# In[14]:
+
+
+from keras.preprocessing.image import Iterator
+from keras.preprocessing.image import ImageDataGenerator
+from keras import backend as K
+from keras.applications import inception_v3
+
+
+# In[15]:
+
+
+from threading import Lock
+
+
+# ** Let's define 2 mode of read: contiguous read for test (faster) and block random read for train (slower but not too much) **
+
+# In[16]:
+
+
+def contiguous_read(bson_file):
+    while True:
+        iter_file = bson.decode_file_iter(open(bson_file, 'rb'))
+        for obs in iter_file:
+            yield obs
+
+
+# The idea is to split file into chunks of rather small size and read chunk in shuffled order
+
+# In[17]:
+
+
+def block_reader(bson_file, meta_data, chunk_size=1000, shuffle=False):
+    assert isinstance(meta_data, pd.DataFrame)
+    assert len(meta_data.columns.intersection(['offset', 'length'])) == 2
+    # prepare metadata
+    n_obs = meta_data.shape[0]
+    meta_data_sorted = meta_data.sort_values('offset', ascending=True)
+    meta_chunks = np.array_split(meta_data_sorted, 
+                                 np.ceil(n_obs/chunk_size))
+    open_file = open(bson_file, 'rb')
+    while True:
+        # Generate chunks order
+        chunk_indexes = np.arange(len(meta_chunks))
+        if shuffle:
+            chunk_indexes = np.random.permutation(chunk_indexes)
+        # Iterate over chunks
+        for ind in chunk_indexes:
+            chunk = meta_chunks[ind]
+            for _id, _meta in chunk.iterrows():
+                open_file.seek(_meta['offset'])
+                obs = bson.BSON.decode(open_file.read(_meta['length']))
+                yield obs
+
+
+# Chunk can still note shuffled inside, so we need a batching mecanism with some cache to shuffle more (inspired by tensorflow Iterator)
+
+# In[18]:
+
+
+def batch(generator, batch_size, shuffle=False, cache_size=10000):
+    gen_stopped = False
+    cached_data = []
+    while True:        
+        # Fill up cache
+        while (len(cached_data) < cache_size) & (gen_stopped == False):
+            try:
+                cached_data.append(next(generator))
+            except StopIteration:
+                gen_stopped = True
+                break
+        # Stop if there is nothing left
+        if len(cached_data) == 0:
+            return
+        # Generate batch       
+        batch_data = []
+        bsize = min(batch_size, len(cached_data))
+        if shuffle:
+            inds = np.random.choice(len(cached_data), size=(bsize,), replace=False)
         else:
-            self.activation = Activation(activation)
+            inds = np.arange(bsize)
+        
+        for i in sorted(inds, reverse=True):
+            try:
+                batch_data.append(cached_data.pop(i))            
+            except IndexError:
+                print(i, bsize, len(cached_data))
+        yield batch_data
 
-    def build(self, input_shape):
-        super(Capsule, self).build(input_shape)
-        input_dim_capsule = input_shape[-1]
-        if self.share_weights:
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(1, input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     # shape=self.kernel_size,
-                                     initializer='glorot_uniform',
-                                     trainable=True)
+
+# Some functions to process data
+
+# In[19]:
+
+
+def get_img(obs, img_size=180, keep=None):
+    if keep is None:
+        keep = np.random.choice(len(obs['imgs']))
+    else:
+        keep = 0
+    byte_str = obs['imgs'][keep]['picture']
+    img = cv2.imdecode(np.fromstring(byte_str, dtype=np.uint8), 
+                       cv2.IMREAD_COLOR)
+    img = cv2.resize(img, (img_size,img_size))
+    return img
+
+
+# In[20]:
+
+
+def preprocess_batch(batch_data, labels=None, weights=None, img_size=180):
+    batch_size = len(batch_data)
+    X = np.zeros(shape=(batch_size, img_size, img_size, 3), dtype=np.float32)
+    y = np.zeros(shape=(batch_size,), dtype=np.float32)
+    w = np.ones(shape=(batch_size,), dtype=np.float32)
+    for ind, obs in enumerate(batch_data):
+        _id = obs['_id']
+        X[ind] = get_img(obs, img_size=img_size)
+        if labels is not None:
+            y[ind] = labels[_id]
+        if weights is not None:
+            w[ind] = weights[_id]
+    X = inception_v3.preprocess_input(X)
+    return X, y, w
+
+
+# ** Let's wrap it up in a Iterator with lock so we can do multithreading later**
+
+# In[21]:
+
+
+class BSONIterator(Iterator):
+    def __init__(self, bson_file, batch_size=32, preprocess_batch_func=None, metadata=None,
+                 shuffle=False, chunk_size=1000, shuffle_cache=100000):
+        if shuffle:
+            self.obs_generator = block_reader(bson_file, metadata, chunk_size=chunk_size, shuffle=True)
         else:
-            input_num_capsule = input_shape[-2]
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(input_num_capsule,
-                                            input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-
-    def call(self, u_vecs):
-        if self.share_weights:
-            u_hat_vecs = K.conv1d(u_vecs, self.W)
+            self.obs_generator = contiguous_read(bson_file)
+        self.batch_generator = batch(self.obs_generator, batch_size=batch_size, 
+                                     shuffle=shuffle, cache_size=shuffle_cache)
+        self.preprocess_batch_func = preprocess_batch_func
+        self.lock = Lock()
+        
+    def next(self):
+        with self.lock:
+            batch_data = next(self.batch_generator)
+        if self.preprocess_batch_func is None:
+            return batch_data
         else:
-            u_hat_vecs = K.local_conv1d(u_vecs, self.W, [1], [1])
-
-        batch_size = K.shape(u_vecs)[0]
-        input_num_capsule = K.shape(u_vecs)[1]
-        u_hat_vecs = K.reshape(u_hat_vecs, (batch_size, input_num_capsule,
-                                            self.num_capsule, self.dim_capsule))
-        u_hat_vecs = K.permute_dimensions(u_hat_vecs, (0, 2, 1, 3))
-        # final u_hat_vecs.shape = [None, num_capsule, input_num_capsule, dim_capsule]
-
-        b = K.zeros_like(u_hat_vecs[:, :, :, 0])  # shape = [None, num_capsule, input_num_capsule]
-        for i in range(self.routings):
-            b = K.permute_dimensions(b, (0, 2, 1))  # shape = [None, input_num_capsule, num_capsule]
-            c = K.softmax(b)
-            c = K.permute_dimensions(c, (0, 2, 1))
-            b = K.permute_dimensions(b, (0, 2, 1))
-            outputs = self.activation(K.batch_dot(c, u_hat_vecs, [2, 2]))
-            if i < self.routings - 1:
-                b = K.batch_dot(outputs, u_hat_vecs, [2, 3])
-
-        return outputs
-
-    def compute_output_shape(self, input_shape):
-        return (None, self.num_capsule, self.dim_capsule)
+            return self.preprocess_batch_func(batch_data)
+        
+    def __next__(self):
+        return self.next()
 
 
-def get_model():
-    input1 = Input(shape=(maxlen,))
-    embed_layer = Embedding(max_features,
-                            embed_size,
-                            input_length=maxlen,
-                            weights=[embedding_matrix],
-                            trainable=False)(input1)
-    embed_layer = SpatialDropout1D(rate_drop_dense)(embed_layer)
+# ## Test
 
-    x = Bidirectional(
-        GRU(gru_len, activation='relu', dropout=dropout_p, recurrent_dropout=dropout_p, return_sequences=True))(
-        embed_layer)
-    capsule = Capsule(num_capsule=Num_capsule, dim_capsule=Dim_capsule, routings=Routings,
-                      share_weights=True)(x)
-    # output_capsule = Lambda(lambda x: K.sqrt(K.sum(K.square(x), 2)))(capsule)
-    capsule = Flatten()(capsule)
-    capsule = Dropout(dropout_p)(capsule)
-    output = Dense(6, activation='sigmoid')(capsule)
-    model = Model(inputs=input1, outputs=output)
-    model.compile(
-        loss='binary_crossentropy',
-        optimizer='adam',
-        metrics=['accuracy'])
-    model.summary()
-    return model
+# In[22]:
 
 
-# In[ ]:
+from tqdm import *
 
 
-model = get_model()
+# ## contiguous read
+# It is recommended to create a separate BSON file with validation data so you can read the whole file
 
-batch_size = 256
-epochs = 3
-X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
-RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
+# In[23]:
 
 
-# In[ ]:
+gen = contiguous_read(TRAIN_BSON_FILE)
+for _ in tqdm(range(10000)):
+    obs = next(gen)
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# ## Block read without shuffle
+
+# In[24]:
 
 
-# In[ ]:
+gen = block_reader(TRAIN_BSON_FILE, meta_data, chunk_size=1000, shuffle=False)
+next(gen) #warm up
+for _ in tqdm(range(10000)):
+    obs = next(gen)
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# ## Block read with shuffle
+# The performance hit is hard but it is still much better pure random read
+
+# In[25]:
 
 
-# In[ ]:
+gen = block_reader(TRAIN_BSON_FILE, meta_data.sample(100000), chunk_size=1000, shuffle=True)
+next(gen) #warm up
+for _ in tqdm(range(10000)):
+    obs = next(gen)
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# ## Let's try some more realistic settings
+
+# ** Testing settings: reading the whole file **
+
+# In[26]:
 
 
-# In[ ]:
+gen = BSONIterator(TRAIN_BSON_FILE, batch_size=256)
+next(gen) #warm up
+for _ in tqdm(range(1000)):
+    batch_data = next(gen)
 
 
-y_pred = model.predict(x_test, batch_size=1024, verbose=1)
+# ** Training settings: random read**
+
+# In[28]:
 
 
-# In[ ]:
+# Let's simulate case where train is 90% of total obs
+train_meta = meta_data.sample(frac=0.9, replace=False)
 
 
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
-model.save_weights('best.hdf5')
+# In[29]:
 
+
+gen = BSONIterator(TRAIN_BSON_FILE, batch_size=256, shuffle=True, metadata=train_meta)
+next(gen) #warm up
+for _ in tqdm(range(1000)):
+    batch_data = next(gen)
+
+
+# In[30]:
+
+
+import functools
+
+
+# ** Add preprocessing ** 
+
+# In[31]:
+
+
+gen = BSONIterator(TRAIN_BSON_FILE, batch_size=256, shuffle=True, metadata=train_meta, 
+                   preprocess_batch_func=functools.partial(preprocess_batch, 
+                                                           img_size=128, 
+                                                           labels=meta_data.category_id))
+next(gen) #warm up
+for _ in tqdm(range(100)):
+    batch_data = next(gen)
+
+
+# ** Simulate (poorly) multithreading**
+
+# In[32]:
+
+
+from sklearn.externals.joblib import Parallel, delayed
+
+
+# In[33]:
+
+
+gen = BSONIterator(TRAIN_BSON_FILE, batch_size=256, shuffle=True, metadata=train_meta, 
+                   preprocess_batch_func=functools.partial(preprocess_batch, 
+                                                           img_size=128, 
+                                                           labels=meta_data.category_id))
+next(gen) #warm up
+_ = Parallel(n_jobs=4, backend='threading', verbose=1)(delayed(next)(gen) 
+                                                   for _ in tqdm(range(100)))
+
+
+# 5 batches/s should be enough especially most of the time my GPU can only hold batchsize of 128. 
+
+# ** DISCLAIMER ** : I did not actually test the shuffling capability but the BSON file seem already shuffled so it should do the job.  
+# One can tune the chunk_size smaller and cache_size higher for more shuffling vs cost of memory and/or speed
+# 
+
+# ** Hope some might find this helpful. Enjoy GPU feeding! **

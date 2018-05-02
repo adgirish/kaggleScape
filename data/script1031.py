@@ -1,166 +1,178 @@
 
 # coding: utf-8
 
+# Hello everyone. In this kernel I want to share one of our solutions. 
+# Here will be fragments of the code with changed model parametrs because of forgotten values, but all submission files will be provided.
+
+# We took 3 different XGBoost models:
+# - 2 models with 5Kfolds, but with different parametrs (eta, max_depth)
+# - 1 models with 4Kfolds
+# 
+
+# Also, we made feature binarization and scaling by my class:
+
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from skimage.io import imread
-from skimage.transform import downscale_local_mean
-from os.path import join
-from tqdm import tqdm_notebook
-import cv2
-from sklearn.model_selection import train_test_split
+import numpy as np
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler, LabelBinarizer
+import xgboost as xgb
+class FeatureBinarizatorAndScaler:
+    """ This class needed for scaling and binarization features
+    """
+    NUMERICAL_FEATURES = list()
+    CATEGORICAL_FEATURES = list()
+    BIN_FEATURES = list()
+    binarizers = dict()
+    scalers = dict()
 
-input_folder = join('..', 'input')
+    def __init__(self, numerical=list(), categorical=list(), binfeatures = list(), binarizers=dict(), scalers=dict()):
+        self.NUMERICAL_FEATURES = numerical
+        self.CATEGORICAL_FEATURES = categorical
+        self.BIN_FEATURES = binfeatures
+        self.binarizers = binarizers
+        self.scalers = scalers
 
-df_mask = pd.read_csv(join(input_folder, 'train_masks.csv'), usecols=['img'])
-ids_train = df_mask['img'].map(lambda s: s.split('_')[0]).unique()
+    def fit(self, train_set):
+        for feature in train_set.columns:
 
-imgs_idx = list(range(1, 17))
+            if feature.split('_')[-1] == 'cat':
+                self.CATEGORICAL_FEATURES.append(feature)
+            elif feature.split('_')[-1] != 'bin':
+                self.NUMERICAL_FEATURES.append(feature)
 
-
-# In[ ]:
-
-
-load_img = lambda im, idx: imread(join(input_folder, 'train', '{}_{:02d}.jpg'.format(im, idx)))
-load_mask = lambda im, idx: imread(join(input_folder, 'train_masks', '{}_{:02d}_mask.gif'.format(im, idx)))
-resize = lambda im: downscale_local_mean(im, (4,4) if im.ndim==2 else (4,4,1))
-mask_image = lambda im, mask: (im * np.expand_dims(mask, 2))
-
-
-# In[ ]:
-
-
-num_train = 32  # len(ids_train)
-
-# Load data for position id=1
-X = np.empty((num_train, 320, 480, 12), dtype=np.float32)
-y = np.empty((num_train, 320, 480, 1), dtype=np.float32)
-
-with tqdm_notebook(total=num_train) as bar:
-    idx = 1 # Rotation index
-    for i, img_id in enumerate(ids_train[:num_train]):
-        imgs_id = [resize(load_img(img_id, j)) for j in imgs_idx]
-        # Input is image + mean image per channel + std image per channel
-        X[i, ..., :9] = np.concatenate([imgs_id[idx-1], np.mean(imgs_id, axis=0), np.std(imgs_id, axis=0)], axis=2)
-        y[i] = resize(np.expand_dims(load_mask(img_id, idx), 2)) / 255.
-        del imgs_id # Free memory
-        bar.update()
+            else:
+                self.BIN_FEATURES.append(feature)
+        for feature in self.NUMERICAL_FEATURES:
+            scaler = StandardScaler()
+            self.scalers[feature] = scaler.fit(np.float64(train_set[feature]).reshape((len(train_set[feature]), 1)))
+        for feature in self.CATEGORICAL_FEATURES:
+            binarizer = LabelBinarizer()
+            self.binarizers[feature] = binarizer.fit(train_set[feature])
 
 
-# In[ ]:
+    def transform(self, data):
+        binarizedAndScaledFeatures = np.empty((0, 0))
+        for feature in self.NUMERICAL_FEATURES:
+            if feature == self.NUMERICAL_FEATURES[0]:
+                binarizedAndScaledFeatures = self.scalers[feature].transform(np.float64(data[feature]).reshape(
+                    (len(data[feature]), 1)))
+            else:
+                binarizedAndScaledFeatures = np.concatenate((
+                    binarizedAndScaledFeatures,
+                    self.scalers[feature].transform(np.float64(data[feature]).reshape((len(data[feature]),
+                                                                                       1)))), axis=1)
+        for feature in self.CATEGORICAL_FEATURES:
+
+            binarizedAndScaledFeatures = np.concatenate((binarizedAndScaledFeatures,
+                                                         self.binarizers[feature].transform(data[feature])), axis=1)
+
+        for feature in self.BIN_FEATURES:
+            binarizedAndScaledFeatures = np.concatenate((binarizedAndScaledFeatures, np.array(data[feature]).reshape((
+                len(data[feature]), 1))), axis=1)
+        print(binarizedAndScaledFeatures.shape)
+        return binarizedAndScaledFeatures
 
 
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
-
-# In[ ]:
-
-
-# Concat overall y info to X
-# This is important as the kernels of CNN used below has no information of its location
-y_train_mean = y_train.mean(axis=0)
-y_train_std = y_train.std(axis=0)
-y_train_min = y_train.min(axis=0)
-
-y_features = np.concatenate([y_train_mean, y_train_std, y_train_min], axis=2)
-
-X_train[:, ..., -3:] = y_features
-X_val[:, ..., -3:] = y_features
-
+# Gini coefficient:
 
 # In[ ]:
 
 
-# Normalize input and output
-X_mean = X_train.mean(axis=(0,1,2), keepdims=True)
-X_std = X_train.std(axis=(0,1,2), keepdims=True)
+def gini(actual, pred, cmpcol=0, sortcol=1):
+    assert (len(actual) == len(pred))
+    all = np.asarray(np.c_[actual, pred, np.arange(len(actual))], dtype=np.float)
+    all = all[np.lexsort((all[:, 2], -1 * all[:, 1]))]
+    totalLosses = all[:, 0].sum()
+    giniSum = all[:, 0].cumsum().sum() / totalLosses
 
-X_train -= X_mean
-X_train /= X_std
-
-X_val -= X_mean
-X_val /= X_std
-
-
-# In[ ]:
+    giniSum -= (len(actual) + 1) / 2.
+    return giniSum / len(actual)
 
 
-# Create simple model
-from keras.layers import Conv2D
-from keras.models import Sequential
-import keras.backend as K
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
 
-model = Sequential()
-model.add( Conv2D(16, 3, activation='relu', padding='same', input_shape=(320, 480, 12) ) )
-model.add( Conv2D(32, 3, activation='relu', padding='same') )
-model.add( Conv2D(1, 5, activation='sigmoid', padding='same') )
 
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = gini_normalized(labels, preds)
+    return [('gini', gini_score)]
+
+
+# Here is our preprocessing approach:
 
 # In[ ]:
 
 
-from keras.optimizers import Adam
-from keras.losses import binary_crossentropy
-
-smooth = 1.
-
-# From here: https://github.com/jocicmarko/ultrasound-nerve-segmentation/blob/master/train.py
-def dice_coef(y_true, y_pred):
-    y_true_f = K.flatten(y_true)
-    y_pred_f = K.flatten(y_pred)
-    intersection = K.sum(y_true_f * y_pred_f)
-    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
-
-
-def bce_dice_loss(y_true, y_pred):
-    return 0.5 * binary_crossentropy(y_true, y_pred) - dice_coef(y_true, y_pred)
-
-model.compile(Adam(lr=1e-3), bce_dice_loss, metrics=['accuracy', dice_coef])
+def preproc(X_train):
+    # Adding new features and deleting features with low importance
+    multreg = X_train['ps_reg_01'] * X_train['ps_reg_03'] * X_train['ps_reg_02']
+    ps_car_reg = X_train['ps_car_13'] * X_train['ps_reg_03'] * X_train['ps_car_13']
+    X_train = X_train.drop(['ps_calc_01', 'ps_calc_02', 'ps_calc_03', 'ps_calc_04', 'ps_calc_05', 'ps_calc_06',
+                            'ps_calc_07', 'ps_calc_08', 'ps_calc_09', 'ps_calc_10', 'ps_calc_11', 'ps_calc_12',
+                            'ps_calc_13', 'ps_calc_14', 'ps_calc_15_bin', 'ps_calc_16_bin', 'ps_calc_17_bin',
+                            'ps_calc_18_bin', 'ps_calc_19_bin', 'ps_calc_20_bin', 'ps_car_10_cat', 'ps_ind_10_bin',
+                            'ps_ind_13_bin', 'ps_ind_12_bin'], axis=1)
+    X_train['mult'] = multreg
+    X_train['ps_car'] = ps_car_reg
+    X_train['ps_ind'] = X_train['ps_ind_03'] * X_train['ps_ind_15']
+    return X_train
 
 
-# In[ ]:
-
-
-history = model.fit(X_train, y_train, epochs=15, validation_data=(X_val, y_val), batch_size=5, verbose=2)
-
+# And main XGBoost body:
+# 
 
 # In[ ]:
 
 
-pd.DataFrame(history.history)[['dice_coef', 'val_dice_coef']].plot()
+X_train = pd.read_csv('../input/train.csv')
+y_train = X_train['target']
+X_train = X_train.drop(['id', 'target'], axis=1)
+X_test = pd.read_csv('../input/test.csv')
+X_test = X_test.drop(['id'], axis=1)
+X_train = preproc(X_train)
+X_test = preproc(X_test)
 
+binarizerandscaler = FeatureBinarizatorAndScaler()
+binarizerandscaler.fit(X_train)
+X_train = binarizerandscaler.transform(X_train)
+X_test = binarizerandscaler.transform(X_test)
 
-# In[ ]:
+# Kinetic features https://www.kaggle.com/alexandrudaia/kinetic-and-transforms-0-482-up-the-board
+kinetic_train = []
+for i in range(4):
+    kinetic_train = pd.read_csv(str(i+1)+'k.csv').iloc[:, 1:2]
+    X_train = np.concatenate((X_train, np.array(kinetic_train).reshape((len(kinetic_train), 1))), axis=1)
+    kinetic_test = pd.read_csv(str(i+1)+'kt.csv').iloc[:, 1:2]
+    X_test = np.concatenate((X_test, np.array(kinetic_test).reshape((len(kinetic_test), 1))), axis=1)
 
+i = 0
+K = 5
+kf = KFold(n_splits=K, random_state=42, shuffle=True)
+# 5 Cross Validation
+results = []
+for train_index, test_index in kf.split(X_train):
+    train_X, valid_X = X_train[train_index], X_train[test_index]
+    train_y, valid_y = y_train[train_index], y_train[test_index]
+    weights = np.zeros(len(y_train))
+    weights[y_train == 0] = 1
+    weights[y_train == 1] = 1
+    print(weights, np.mean(weights))
+    watchlist = [(xgb.DMatrix(train_X, train_y, weight=weights), 'train'), (xgb.DMatrix(valid_X, valid_y), 'valid')]
+    # Setting parameters for XGBoost model
+    params = {'eta': 0.03, 'max_depth': 4, 'objective': 'binary:logistic', 'seed': 42, 'silent': True}
+    model = xgb.train(params, xgb.DMatrix(train_X, train_y, weight=weights), 1500, watchlist,  maximize=True, verbose_eval=5,
+                        feval=gini_xgb, early_stopping_rounds=100)
+    resy = pd.DataFrame(model.predict(xgb.DMatrix(X_test)))
+    i += 1
+    # Saving results for all CV models
+    results.append(resy)
+    # resy.to_csv(str(i)+'fold.csv')
 
-idx = 0
-x = X_val[idx]
-
-fig, ax = plt.subplots(5,3, figsize=(16, 16))
-ax = ax.ravel()
-
-cmaps = ['Reds', 'Greens', 'Blues']
-for i in range(x.shape[-1]):
-    ax[i].imshow(x[...,i], cmap='gray') #cmaps[i%3])
-    ax[i].set_title('channel {}'.format(i))
-
-ax[-3].imshow((x[...,:3] * X_std[0,...,:3] + X_mean[0,...,:3]) / 255.)
-ax[-3].set_title('X')
-
-ax[-2].imshow(y_train[idx,...,0], cmap='gray')
-ax[-2].set_title('y')
-
-y_pred = model.predict(x[None]).squeeze()
-ax[-1].imshow(y_pred, cmap='gray')
-ax[-1].set_title('y_pred')
-
-
-# In[ ]:
-
-
-plt.imshow(y_pred > 0.5, cmap='gray')
+# Creating the submission file
+submission = pd.DataFrame((results[0]+results[1]+results[2]+results[3]+results[4])/5)
+#submission.to_csv('sumbission.csv')
 

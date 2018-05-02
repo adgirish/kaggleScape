@@ -1,222 +1,208 @@
 
 # coding: utf-8
 
-# In[ ]:
+# # Bayesian hyperparameter tuning of xgBoost
+# I took the features generated in my [previous notebook](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) and tried to tune a xgBoost model to those features using bayesian optimization. I ran the code locally for a few days, after which it had found some good parameters which gave a score of 0.9769 (using all the features of the previous notebook) - this worked out well for me, since I do not have a lot of time to actively work on trying out different models etc, but letting a script like this run for a few days to find good parameters is easy :)
+
+# ## Example 1: xgBoost Parameter Tuning with Scikit-Optimize
+# The following code is exactly what I used to tune the parameters - only difference is that I ran with the last 20 million samples in training set, and used the features from [previous notebook](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) instead of the raw features as done here. First I'll load the needed libraries and data.
+
+# In[1]:
 
 
-'''
-NCAA Project
-Look at the difference between winning and losing teams in the NCAAM tournament, 
-using stats of every NCAAM tournament game since 2003.
-Rashad Alston
-General Basketball Analysis Repo >> https://github.com/ralston3/basketball
-'''
-
-
-# In[ ]:
-
-
-from __future__ import division
 import pandas as pd
 import numpy as np
-import random
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns ; sns.set()
-get_ipython().run_line_magic('matplotlib', 'inline')
+import xgboost as xgb
+import lightgbm as lgb
+from skopt import BayesSearchCV
+from sklearn.model_selection import StratifiedKFold
 
+# SETTINGS - CHANGE THESE TO GET SOMETHING MEANINGFUL
+ITERATIONS = 10 # 1000
+TRAINING_SIZE = 100000 # 20000000
+TEST_SIZE = 25000
+
+# Load data
+X = pd.read_csv(
+    '../input/train.csv', 
+    skiprows=range(1,184903891-TRAINING_SIZE), 
+    nrows=TRAINING_SIZE,
+    parse_dates=['click_time']
+)
+
+# Split into X and y
+y = X['is_attributed']
+X = X.drop(['click_time','is_attributed', 'attributed_time'], axis=1)
+
+
+# To do the bayesian parameter tuning, I use the [BayesSearchCV](https://scikit-optimize.github.io/#skopt.BayesSearchCV) class of scikit-optimize. It works basically as a drop-in replacement for GridSearchCV and RandomSearchCV, but generally I get better results with it. In the following I define the BayesSearchCV object, and write a short convenience function that will be used during optimization to output current status of the tuning. Locally I have access to more cores and run with n_jobs=4 for the classifier, and n_jobs=6 for the BayesSearchCV object.
+
+# In[2]:
+
+
+# Classifier
+bayes_cv_tuner = BayesSearchCV(
+    estimator = xgb.XGBClassifier(
+        n_jobs = 1,
+        objective = 'binary:logistic',
+        eval_metric = 'auc',
+        silent=1,
+        tree_method='approx'
+    ),
+    search_spaces = {
+        'learning_rate': (0.01, 1.0, 'log-uniform'),
+        'min_child_weight': (0, 10),
+        'max_depth': (0, 50),
+        'max_delta_step': (0, 20),
+        'subsample': (0.01, 1.0, 'uniform'),
+        'colsample_bytree': (0.01, 1.0, 'uniform'),
+        'colsample_bylevel': (0.01, 1.0, 'uniform'),
+        'reg_lambda': (1e-9, 1000, 'log-uniform'),
+        'reg_alpha': (1e-9, 1.0, 'log-uniform'),
+        'gamma': (1e-9, 0.5, 'log-uniform'),
+        'min_child_weight': (0, 5),
+        'n_estimators': (50, 100),
+        'scale_pos_weight': (1e-6, 500, 'log-uniform')
+    },    
+    scoring = 'roc_auc',
+    cv = StratifiedKFold(
+        n_splits=3,
+        shuffle=True,
+        random_state=42
+    ),
+    n_jobs = 3,
+    n_iter = ITERATIONS,   
+    verbose = 0,
+    refit = True,
+    random_state = 42
+)
+
+def status_print(optim_result):
+    """Status callback durring bayesian hyperparameter search"""
+    
+    # Get all the models tested so far in DataFrame format
+    all_models = pd.DataFrame(bayes_cv_tuner.cv_results_)    
+    
+    # Get current parameters and the best parameters    
+    best_params = pd.Series(bayes_cv_tuner.best_params_)
+    print('Model #{}\nBest ROC-AUC: {}\nBest params: {}\n'.format(
+        len(all_models),
+        np.round(bayes_cv_tuner.best_score_, 4),
+        bayes_cv_tuner.best_params_
+    ))
+    
+    # Save all model results
+    clf_name = bayes_cv_tuner.estimator.__class__.__name__
+    all_models.to_csv(clf_name+"_cv_results.csv")
+
+
+# Finally, let the parameter tuning run and wait for good results :)
+
+# In[3]:
+
+
+# Fit the model
+result = bayes_cv_tuner.fit(X.values, y.values, callback=status_print)
+
+
+# ## Example 2: lightGBM Parameter Tuning with Scikit-Optimize
+# I have not myself submitted any models run with lightGBM as of yet, but here is an example of how to run the parameter search with lightGBM instead of xgBoost
+
+# In[4]:
+
+
+# Classifier
+bayes_cv_tuner = BayesSearchCV(
+    estimator = lgb.LGBMRegressor(
+        objective='binary',
+        metric='auc',
+        n_jobs=1,
+        verbose=0
+    ),
+    search_spaces = {
+        'learning_rate': (0.01, 1.0, 'log-uniform'),
+        'num_leaves': (1, 100),      
+        'max_depth': (0, 50),
+        'min_child_samples': (0, 50),
+        'max_bin': (100, 1000),
+        'subsample': (0.01, 1.0, 'uniform'),
+        'subsample_freq': (0, 10),
+        'colsample_bytree': (0.01, 1.0, 'uniform'),
+        'min_child_weight': (0, 10),
+        'subsample_for_bin': (100000, 500000),
+        'reg_lambda': (1e-9, 1000, 'log-uniform'),
+        'reg_alpha': (1e-9, 1.0, 'log-uniform'),
+        'scale_pos_weight': (1e-6, 500, 'log-uniform'),
+        'n_estimators': (50, 100),
+    },    
+    scoring = 'roc_auc',
+    cv = StratifiedKFold(
+        n_splits=3,
+        shuffle=True,
+        random_state=42
+    ),
+    n_jobs = 3,
+    n_iter = ITERATIONS,   
+    verbose = 0,
+    refit = True,
+    random_state = 42
+)
+
+# Fit the model
+result = bayes_cv_tuner.fit(X.values, y.values, callback=status_print)
+
+
+# ## Example 3: Different cross-validators
+# Some people have asked about CV strategy, and as seen I've just used the basic Stratified K-fold strategy; that was however mostly due to time constraints, and thus me not thinking that much about it. There are a lot of potentially better options, especially considering the temporal nature of this problem. Adding these are really easy using scikit-learn cross-validators; you just plug-n-play a new cross-validator into the `cv = ` options of BayesSearchCV. Examples could be a single train-test split, where we e.g. use one day for training, and one for testing (adjust accordingly):
+
+# In[6]:
+
+
+from sklearn.model_selection import PredefinedSplit
+
+# Training [index == -1], testing [index == 0])
+test_fold = np.zeros(len(X))
+test_fold[:(TRAINING_SIZE-TEST_SIZE)] = -1
+cv = PredefinedSplit(test_fold)
+
+# Check that we only have a single train-test split, and the size
+train_idx, test_idx = next(cv.split())
+print(f"Splits: {cv.get_n_splits()}, Train size: {len(train_idx)}, Test size: {len(test_idx)}")
+
+
+# Alternatively, we could want to use the [TimeSeriesSplit](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html#sklearn.model_selection.TimeSeriesSplit) cross-validator, which allows us to do several "into the future folds" for predictions
+
+# In[14]:
+
+
+from sklearn.model_selection import TimeSeriesSplit
+
+# Here we just do 3-fold timeseries CV
+cv = TimeSeriesSplit(max_train_size=None, n_splits=3)
+
+# Let us check the sizes of the folds. Note that you can keep train size constant with max_train_size if needed
+for i, (train_index, test_index) in enumerate(cv.split(X)):
+    print(f"Split {i+1} / {cv.get_n_splits()}:, Train size: {len(train_index)}, Test size: {len(test_index)}")
+
+
+# ## Optimal xgBoost parameters
+# ![](http://)After a few days of running for xgBoost, it found the following optimal parameters. Again, note that these gave me a 0.9769 score on [these features](https://www.kaggle.com/nanomathias/feature-engineering-importance-testing) and not the raw features, by training on the entire training set.
 
 # In[ ]:
 
 
-# Only using the Teams, and Detailed Tournament Results files
-
-tourney_df = pd.read_csv('../input/TourneyDetailedResults.csv')
-teams_df = pd.read_csv('../input/Teams.csv')
-team_dict = dict(zip(teams_df['Team_Id'].values, teams_df['Team_Name'].values))
-tourney_df['Wteam_name'] = tourney_df['Wteam'].map(team_dict)
-tourney_df['Lteam_name'] = tourney_df['Lteam'].map(team_dict)
-
-print('================================================')
-print('Tournament data:')
-print('================================================')
-print(tourney_df.head(10))
-print('================================================')
-print('Teams data:')
-print('================================================')
-print(teams_df.head(10))
-
-
-# In[ ]:
-
-
-# Distribution density of wins and losses.
-
-tourney_wins = tourney_df.loc[tourney_df['Wteam'] !=0, 'Wteam'].value_counts()
-tourney_losses = tourney_df.loc[tourney_df['Wteam'] !=0, 'Lteam'].value_counts()
-tourney_df['Wwins'] = tourney_df['Wteam'].map(tourney_wins)
-tourney_df['Lwins'] = tourney_df['Lteam'].map(tourney_wins)
-tourney_df = tourney_df.replace(np.nan, 0)
-
-plt.figure(figsize=(15, 4))
-
-sns.kdeplot(tourney_losses, color='#ff6600', label='Distribution | STD=(+/-) %3.2f losses'%(np.std(tourney_losses)))
-sns.kdeplot(tourney_wins, shade='True', color ='#0080ff', label='Distribution | STD=(+/-) %3.2f wins'%(np.std(tourney_wins)))
-
-plt.title('Distribution of Outcome Density')
-plt.xlabel('Number of Wins/Losses')
-plt.ylabel('Density of Win/Loss Occrence')
-plt.xlim([0, max(tourney_wins)])
-plt.legend(loc='upper right')
-
-
-# In[ ]:
-
-
-# Look at a key statistic "Aggressiveness Percentage (AP)" - 
-# [Free throws to Field goals taken ratio], <code>[Three pointers taken to Field 
-# goals ratio], for both the winning and the losing teams.
-
-wft_wfg = (tourney_df['Wfta'].values * 0.66) / tourney_df['Wfga'].values 
-wtp_wfg = tourney_df['Wfga3'].values / tourney_df['Wfga'].values
-
-# arbitraty penalty term = 0.66 - some ft attempts stem from fg attempts
-# this can obviously be changed to a different value
-
-lft_lfg = (tourney_df['Lfta'].values * 0.66) / tourney_df['Lfga'].values
-ltp_lfg = tourney_df['Lfga3'].values / tourney_df['Lfga'].values
-
-fig = plt.figure(figsize=(12, 7))
-ax = fig.add_subplot(111, projection='3d')
-
-ax.set_title('Aggressiveness Percentage (AP)')
-ax.scatter(wft_wfg, tourney_df['Wscore'], wtp_wfg, c='#0080ff')
-ax.scatter(lft_lfg, tourney_df['Lscore'], ltp_lfg, c='#ff6600')
-ax.set_xlabel('Ft : Fg')
-ax.set_ylabel('Points Scored')
-ax.set_zlabel('3pt : Fg')
-ax.view_init(azim=10)
-
-
-# In[ ]:
-
-
-# Correlation coefficient between these 3 features
-
-print('==============================')
-print('Correlation matrix for wins:')
-print('==============================')
-print(np.corrcoef((wft_wfg, tourney_df['Wscore'], wtp_wfg)))
-print('===============================')
-print('Correlation matrix for losses:')
-print('===============================')
-print(np.corrcoef((lft_lfg, tourney_df['Lscore'], ltp_lfg)))
-
-
-# In[ ]:
-
-
-# In winning teams, [Ft : Fg] ratio correlation to Points scored is much 
-# stronger (9.78) than it is in losing teams (0.22). Further, in winning teams, 
-# Points scored is much more negatively correlated to [Tp : Fg] ratio, than it is 
-# in losing teams.
-
-# True shooting percentage
-wtsp = tourney_df['Wscore'] / (2 * (tourney_df['Wfga'] + (0.44 * tourney_df['Wfta'])))
-ltsp = tourney_df['Lscore'] / (2 * (tourney_df['Lfga'] + (0.44 * tourney_df['Lfta'])))
-
-# Offensive effeciency rating
-w_off_rating = 100 * tourney_df['Wscore'] / (tourney_df['Wfga'] + 0.40 * tourney_df['Wfta'] - 1.07 *                                             (tourney_df['Wor'] / (tourney_df['Wor'] + tourney_df['Wdr'])) *                                             (tourney_df['Wfga'] + tourney_df['Wfgm']) + tourney_df['Wto'])
-l_off_rating = 100 * tourney_df['Lscore'] / (tourney_df['Lfga'] + 0.40 * tourney_df['Lfta'] - 1.07 *                                             (tourney_df['Lor'] / (tourney_df['Lor'] + tourney_df['Ldr'])) *                                             (tourney_df['Lfga'] + tourney_df['Lfgm']) + tourney_df['Lto'])
-
-
-# In[ ]:
-
-
-# Heatmap correlation matrix showing which stats have highest correlation to 
-# offensive rating. Focusing on the last two columns.
-
-tourney_df['Worating'] = w_off_rating
-tourney_df['Lorating'] = l_off_rating
-
-plt.figure(figsize=(20, 15))
-cm = np.corrcoef(tourney_df.iloc[:, 8:34].values.T)
-hm = sns.heatmap(cm, cbar=True, annot=True, square=True, fmt='.2f',                  yticklabels=tourney_df.columns.values[8:34], xticklabels=tourney_df.columns.values[8:34])
-
-
-# In[ ]:
-
-
-# Note: Number of wins for a team in the "Wteam" column will equal number of wins of 
-# that same team if that team is in the "Lteam" column. Number of tournament wins is just, 
-# "How many times has this "Team_Id" won an NCAA tourney game".
-
-fig = plt.figure(figsize=(12, 7))
-ax = fig.add_subplot(111, projection='3d')
-
-ax.set_title('Correlation: Offensive rating & NCAAM tourney wins')
-ax.scatter(w_off_rating, tourney_df['Wwins'], wft_wfg, c='#0080ff', alpha=0.5, edgecolors='None', label='Winning Teams')
-ax.scatter(l_off_rating, tourney_df['Lwins'], lft_lfg, c='#ff6600', alpha=0.5, edgecolors='None', label='Losing Teams')
-ax.set_xlabel('Offensive Rating')
-ax.set_ylabel('Tournament Wins')
-ax.set_zlabel('True Shooting Percentage')
-ax.view_init(azim=110)
-
-print('==================================================')
-print('Correlation between Winning team offensive rating')
-print('and amount of NCAAM tourney wins winning team has:')
-print('==================================================')
-print(np.corrcoef((w_off_rating, tourney_df['Wwins'], wft_wfg)))
-
-# While I was surprised to see that Offensive Rating didn't have more of a 
-# correlation with Number of Tourney Wins, I'm not surprised at Offensive Rating's 
-# relatively strong correlation to the Aggressiveness Percentage (AP) "[FT's : FG's]/[3s:FGs]", 
-# which just shows how key of a stat AP really is (in my opinion).
-
-
-# In[ ]:
-
-
-# See how the average stats from all games measure up against the top teams.
-
-all_means = []
-
-# Get mean of all games played 
-for column in tourney_df.columns.values[8:34]:
-    all_means.append([column, np.mean(tourney_df[column])])
-
-# Get top teams who've won at least 20 NCAA tournament games
-bt = tourney_df.loc[(tourney_df['Wwins'] >= 20) & (tourney_df['Lwins'] >= 20), ['Wteam_name', 'Lteam_name']]
-bt1 = bt['Wteam_name'] 
-bt2 = bt['Lteam_name']
-best_teams = np.concatenate((bt1, bt2))
-
-best_means = []
-
-# Just picking a single random team out of the list of best teams
-num = random.randint(0,21)
-bt_stats = tourney_df.loc[tourney_df['Wteam_name'] == best_teams[num]]
-
-for column in bt_stats.columns.values[8:34]:
-    best_means.append([column, np.mean(bt_stats[column])])
-
-x1 = [item[0] for item in all_means]   
-y1 = [item[1] for item in all_means]
-x2 = [item[0] for item in best_means]
-y2 = [item[1] for item in best_means]
-
-plt.figure(figsize=(20,5))
-sns.set_style('whitegrid')
-
-plt.title('The Best vs. The Field')
-sns.barplot(x=x1, y=y1, color='#0080ff', alpha=0.5, label='Means of All Games')
-sns.barplot(x=x2, y=y2, color='#ff6600', alpha=0.5, label='Means of Games from Top Team')
-plt.xlabel('Statistic')
-plt.ylabel('Statistic Count')
-plt.legend(loc='upper right')
-
-print('===============')
-print('Best Teams:')
-print('===============')
-print(pd.Series(best_teams).unique())
+{
+    'colsample_bylevel': 0.1,
+    'colsample_bytree': 1.0,
+    'gamma': 5.103973694670875e-08,
+    'learning_rate': 0.140626707498132,
+    'max_delta_step': 20,
+    'max_depth': 6,
+    'min_child_weight': 4,
+    'n_estimators': 100,
+    'reg_alpha': 1e-09,
+    'reg_lambda': 1000.0,
+    'scale_pos_weight': 499.99999999999994,
+    'subsample': 1.0
+}
 

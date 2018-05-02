@@ -1,112 +1,119 @@
-import numpy as np
+import pickle
+from io import BytesIO
+import logging
+
+import ujson as json
 import pandas as pd
+import numpy as np
+from scipy.spatial import distance
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import cross_val_score
-from scipy.sparse import hstack
-from sklearn.metrics import log_loss, matthews_corrcoef, roc_auc_score
-from sklearn.model_selection import cross_val_score
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.model_selection import KFold
-from sklearn.linear_model import Lasso
-from sklearn.linear_model import ElasticNet
+from requests import Session
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util import Retry
+from PIL import Image, ImageStat, ImageOps
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+from keras.applications.resnet50 import ResNet50, preprocess_input
+from keras.applications.vgg19 import VGG19, decode_predictions
 
-train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv').fillna(' ')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv').fillna(' ')
+import pytesseract
 
-train_text = train['comment_text']
-test_text = test['comment_text']
-all_text = pd.concat([train_text, test_text])
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    datefmt='%H:%M:%S', )
+logger = logging.getLogger(__name__)
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-tr_ids = train[['id']]
-train[class_names] = train[class_names].astype(np.int8)
-target = train[class_names]
+ses = Session()
+ses.mount('https://', HTTPAdapter(max_retries=Retry(total=5)))
 
-print('Tfidf word vector')
-word_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='word',
-    token_pattern=r'\w{1,}',
-    stop_words='english',
-    ngram_range=(1, 1),
-    max_features=10000)
-word_vectorizer.fit(all_text)
-train_word_features = word_vectorizer.transform(train_text)
-test_word_features = word_vectorizer.transform(test_text)
-
-print('Tfidf char vector')
-char_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='char',
-    stop_words='english',
-    ngram_range=(2, 6),
-    max_features=50000)
-char_vectorizer.fit(all_text)
-train_char_features = char_vectorizer.transform(train_text)
-test_char_features = char_vectorizer.transform(test_text)
-
-print('stack both')
-#train_features = hstack([train_char_features, train_word_features])
-#test_features = hstack([test_char_features, test_word_features])
-
-#train_features = train_word_features
-#test_features = test_word_features
-
-train_features = hstack([train_char_features, train_word_features]).tocsr()
-test_features = hstack([test_char_features, test_word_features]).tocsr()
-
-scores = []
-scores_classes = np.zeros((len(class_names), 5))
-
-submission = pd.DataFrame.from_dict({'id': test['id']})
-submission_oof = train[['id', 'toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']]
-
-idpred = tr_ids
-number_of_folds = 5
-
-#kfolder=StratifiedKFold(train_text, n_folds=number_of_folds,shuffle=True, random_state=15)
-kfolder = KFold(n_splits=number_of_folds, shuffle=True, random_state=239)
+resnet = ResNet50(include_top=False, input_shape=(210, 266, 3))
+vgg = VGG19()
 
 
-for j, (class_name) in enumerate(class_names):
-    
-    print('class_name is: ' + class_name)
-    avreal = target[class_name]
-    lr_cv_sum = 0
-    lr_test_pred = np.zeros(test.shape[0])
-    lr_avpred = np.zeros(train.shape[0])
-    
-    for i, (train_index, val_index) in enumerate(kfolder.split(train_features)):
-        print(train_index)
-        print(val_index)
-        X_train, X_val = train_features[train_index], train_features[val_index]
-        y_train, y_val = target.loc[train_index], target.loc[val_index]
+def get_data(train=True):
+    if train:
+        with open('train.json', 'r') as raw_data:
+            data = json.load(raw_data)
+    else:
+        with open('test.json', 'r') as raw_data:
+            data = json.load(raw_data)
 
-        classifier = Ridge(alpha=20, copy_X=True, fit_intercept=True, solver='auto',max_iter=100,normalize=False, random_state=0,  tol=0.0025)
-        
-        #classifier = Lasso(alpha=0.1,normalize=True, max_iter=1e5)
-    #    classifier = ElasticNet(alpha=1.0, l1_ratio =0.5)
-        classifier.fit(X_train, y_train[class_name])
-        scores_val = classifier.predict(X_val)
-        lr_avpred[val_index] = scores_val
-        lr_test_pred += classifier.predict(test_features)
-        scores_classes[j][i] = roc_auc_score(y_val[class_name], scores_val)
-        print('\n Fold %02d class %s AUC: %.6f' % ((i+1), class_name, scores_classes[j][i]))
+    df = pd.DataFrame(data)
+    return df['photos']
 
-    lr_cv_score = (lr_cv_sum / number_of_folds)
-    lr_oof_auc = roc_auc_score(avreal, lr_avpred)
-    print('\n Average class %s AUC:\t%.6f' % (class_name, np.mean(scores_classes[j])))
-    print(' Out-of-fold class %s AUC:\t%.6f' % (class_name, lr_oof_auc))
 
-    submission[class_name] = lr_test_pred / number_of_folds
-    submission_oof[class_name] = lr_avpred
+def _parse(pic):
+    pic = ses.get(pic)
+    img = Image.open(BytesIO(pic.content))
+    t = pytesseract.image_to_string(img)
+    has_text = 1 if len(t) else 0
 
-#print('\n Overall AUC:\t%.6f' % (np.mean(scores_classes)))
-submission.to_csv('5-fold_elast_test.csv', index=False)
-submission_oof.to_csv('5-fold_ridge_train.csv', index=False)
+    img = ImageOps.fit(img, (266, 210), Image.ANTIALIAS)
+    img_for_clf = ImageOps.fit(img, (224, 224), Image.ANTIALIAS)
+    img_for_clf = preprocess_input(np.array(img_for_clf.convert("RGB")).reshape(1, 224, 224, 3).astype(np.float64))
+
+    preds = decode_predictions(vgg.predict(img_for_clf), top=3)
+    objects = [x[1] for x in preds[0]]
+    logger.info('There are {} on the picture'.format(objects))
+
+    stats = ImageStat.Stat(img, mask=None)
+    if len(stats.mean) == 3:
+        r_mean, g_mean, b_mean = stats.mean
+        r_var, g_var, b_var = stats.var
+    else:
+        # grayscale image happened
+        r_mean, g_mean, b_mean = stats.mean[0], stats.mean[0], stats.mean[0]
+        r_var, g_var, b_var = stats.var[0], stats.var[0], stats.var[0]
+
+    img = preprocess_input(np.array(img.convert("RGB")).reshape(1, 210, 266, 3).astype(np.float64))
+    features = resnet.predict(img)
+    return (r_mean, g_mean, b_mean, r_var, g_var, b_var, has_text), features.reshape(2048), objects
+
+
+default_values = (255, 255, 255, 0, 0, 0, 0), np.zeros(2048), []
+
+
+def parse(pic):
+    try:
+        return _parse(pic)
+    except KeyboardInterrupt:
+        raise SystemExit()
+    except:
+        logger.exception('Parsing failed: {}')
+        return default_values
+
+
+def process_photo(photo):
+    # two pics are used because preview at website contains two first photos
+    if not len(photo):
+        m1, e1, objects1 = default_values
+        m2, e2, objects2 = default_values
+        dist = 0
+        objects_set = {}
+    elif len(photo) == 1:
+        m1, e1, objects1 = parse(photo[0])
+        m2, e2, objects2 = default_values
+        dist = distance.euclidean(e1, e2)
+        objects_set = set(objects1)
+    else:
+        m1, e1, objects1 = parse(photo[0])
+        m2, e2, objects2 = parse(photo[1])
+        dist = distance.euclidean(e1, e2)
+        objects_set = set(objects1 + objects2)
+
+    return [m1, m2], [e1, e2], dist, objects_set
+
+
+def main(train=True):
+    photos = get_data(train=train)
+
+    processed = map(process_photo, photos)
+    manual, extracted, distances, objects = zip(*processed)
+
+    fname = 'pics_train.bin' if train else 'pics_test.bin'
+    with open(fname, 'wb') as out:
+        pickle.dump((manual, extracted, distances, objects), out)
+
+
+if __name__ == '__main__':
+    main()
+    main(False)

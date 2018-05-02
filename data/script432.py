@@ -1,235 +1,122 @@
 
 # coding: utf-8
 
-# # TED-Talks topic models
-
-# ![](http://greatperformersacademy.com/images/images/Articles_images/10-best-ted-talks-ever.jpg)
-
-# In this notebook we will study text processing using TED transcripts, passing through feature extraction to topic modeling in order to (1) have a first meet with text processing techniques and (2) analyze briefly some TED-Talks patterns.
+# *This tutorial is part of the series [Learning Machine Learning](kaggle.com/learn/machine-learning).*
 # 
-# In the amazing TED-Talks dataset, we have two files, one (ted_main.csv) with meta information about the talks, as # of comment, rating, related TEDs and so on; the other file has the transcripts which we'll care about in this tutorial. Even so, we'll use the ted_main.csv file to evaluate our topic modeling implementation, because it has a columns of talks' tags, useful as our "ground truth topics".
+# # Choosing the Prediction Target
+# 
+# You have the code to load your data, and you know how to index it. You are ready to choose which column you want to predict. This column is called the **prediction target**. There is a convention that the prediction target is referred to as **y**. Here is an example doing that with the example data.
 
 # In[ ]:
 
 
-import numpy as np 
-import pandas as pd 
-import seaborn as sns
-from time import time
+# This code loads the data. You have seen it before, so you don't need to focus on it here.
 
+import pandas as pd
 
-# ### 0.1. Transcripts loading
+melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
+melbourne_data = pd.read_csv(melbourne_file_path)
 
-# In[ ]:
+# The Melbourne data has somemissing values (some houses for which some variables weren't recorded.)
+# We'll learn to handle missing values in a later tutorial.  
+# Your Iowa data doesn't have missing values in the predictors you use. 
+# So we will take the simplest option for now, and drop those houses from our data. 
+#Don't worry about this much for now, though the code is:
 
-
-ted_main_df = pd.read_csv('../input/ted_main.csv', encoding='utf-8')
-transcripts_df = pd.read_csv('../input/transcripts.csv', encoding='utf-8')
-transcripts_df.head()
-
-
-# ## 1. Text feature extraction with TFIDF
-# 
-# First,  consider the term-frequency (TF) matrix above, that can be extracted from a list of documents and the universe of terms in such documents.
-# 
-# |        | Document 1 | Document 2 | ... | Document N |
-# |--------|------------|------------|-----|------------|
-# | Term 1 | 3          | 0          | ... | 1          |
-# | Term 2 | 0          | 1          | ... | 2          |
-# | Term 3 | 2          | 2          | ... | 1          |
-# | ...    | ...        | ...        | ... | ...        |
-# | Term N | 1          | 0          | ... | 0          |
-# 
-# 
-# This is a huge matrix with all elements' frequency in all documents. Now consider de idf (inverse document frequency) as an operation to transform this frequency into word importance, calculated by:
-# 
-# $$ tfidf_{i,j} = tf_{i,j}  \times log(\frac{N}{df_{i}}) $$
-# 
-# Where $i$ refers to term index and $j$ document index. $N$ is the total number of documents and $df_{i}$ is the number of documents containing $i$.
-# 
-# 
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-vectorizer = TfidfVectorizer(stop_words="english",
-                        use_idf=True,
-                        ngram_range=(1,1), # considering only 1-grams
-                        min_df = 0.05,     # cut words present in less than 5% of documents
-                        max_df = 0.3)      # cut words present in more than 30% of documents 
-t0 = time()
-
-tfidf = vectorizer.fit_transform(transcripts_df['transcript'])
-print("done in %0.3fs." % (time() - t0))
-
-
-# Keeping that in mind, we'll want to see the 'most important' words in our matrix...
-
-# In[ ]:
-
-
-# Let's make a function to call the top ranked words in a vectorizer
-def rank_words(terms, feature_matrix):
-    sums = feature_matrix.sum(axis=0)
-    data = []
-    for col, term in enumerate(terms):
-        data.append( (term, sums[0,col]) )
-    ranked = pd.DataFrame(data, columns=['term','rank']).sort_values('rank', ascending=False)
-    return ranked
-
-ranked = rank_words(terms=vectorizer.get_feature_names(), feature_matrix=tfidf)
-ranked.head()
+# dropna drops missing values (think of na as "not available")
+melbourne_data = melbourne_data.dropna(axis=0)
 
 
 # In[ ]:
 
 
-# Let's visualize a word cloud with the frequencies obtained by idf transformation
-dic = {ranked.loc[i,'term'].upper(): ranked.loc[i,'rank'] for i in range(0,len(ranked))}
-
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-wordcloud = WordCloud(background_color='white',
-                      max_words=100,
-                      colormap='Reds').generate_from_frequencies(dic)
-fig = plt.figure(1,figsize=(12,10))
-plt.imshow(wordcloud,interpolation="bilinear")
-plt.axis('off')
-plt.show()
+y = melbourne_data.Price
 
 
-# ## 2. Topic modeling
+# # Choosing Predictors
+# Next we select the predictors. Sometimes, you will want to use all of the variables except the target..
 # 
-# Not recently decomposition techniques have been used to extract topics from text data. A topic is a mixture of words and a document should be pertinent to a topic if these words are present in there. Look at the diagram to understand better.
-# 
-# ![alt text](https://image.ibb.co/kH9t87/d.png)
-# 
-# Here we will extract topics from NMF and LDA to check for better results. First, let's try LDA.
+# It's possible to model with non-numeric variables, but we'll start with a narrower set of numeric variables.  In the example data, the predictors will be chosen as:
 
 # In[ ]:
 
 
-from sklearn.decomposition import LatentDirichletAllocation
+melbourne_predictors = ['Rooms', 'Bathroom', 'Landsize', 'BuildingArea', 
+                        'YearBuilt', 'Lattitude', 'Longtitude']
 
-n_topics = 10
-lda = LatentDirichletAllocation(n_components=n_topics,random_state=0)
 
-topics = lda.fit_transform(tfidf)
-top_n_words = 5
-t_words, word_strengths = {}, {}
-for t_id, t in enumerate(lda.components_):
-    t_words[t_id] = [vectorizer.get_feature_names()[i] for i in t.argsort()[:-top_n_words - 1:-1]]
-    word_strengths[t_id] = t[t.argsort()[:-top_n_words - 1:-1]]
-t_words
-
+# By convention, this data is called **X**.
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(7,15), ncols=2, nrows=5)
-plt.subplots_adjust(
-    wspace  =  0.5,
-    hspace  =  0.5
-)
-c=0
-for row in range(0,5):
-    for col in range(0,2):
-        sns.barplot(x=word_strengths[c], y=t_words[c], color="red", ax=ax[row][col])
-        c+=1
-plt.show()
+X = melbourne_data[melbourne_predictors]
 
 
-# Not so bad, but there are topics that has words fairly inappropriate. We could say that these topics are uncohesive for humans. That is common difficult when applying topic modeling to real problems. 
+# ---
+# # Building Your Model
 # 
-# Another problem is the optimal number of topics. There are several ways to validate it, as with perplexity or log-likelyhood. However, let's keep with 10 topics! :)
-
-# In[ ]:
-
-
-from sklearn.decomposition import NMF
-
-n_topics = 10
-nmf = NMF(n_components=n_topics,random_state=0)
-
-topics = nmf.fit_transform(tfidf)
-top_n_words = 5
-t_words, word_strengths = {}, {}
-for t_id, t in enumerate(nmf.components_):
-    t_words[t_id] = [vectorizer.get_feature_names()[i] for i in t.argsort()[:-top_n_words - 1:-1]]
-    word_strengths[t_id] = t[t.argsort()[:-top_n_words - 1:-1]]
-t_words
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(figsize=(7,15), ncols=2, nrows=5)
-plt.subplots_adjust(
-    wspace  =  0.5,
-    hspace  =  0.5
-)
-c=0
-for row in range(0,5):
-    for col in range(0,2):
-        sns.barplot(x=word_strengths[c], y=t_words[c], color="red", ax=ax[row][col])
-        c+=1
-plt.show()
-
-
-# Hmm. Now you see that with NMF things get better. So, we'll use it testing for a document and see what topics are extracted.
-
-# In[ ]:
-
-
-# Formulating a pipeline to insert a document and extract the topics pertinency
-from sklearn.pipeline import Pipeline
-pipe = Pipeline([
-    ('tfidf', vectorizer),
-    ('nmf', nmf)
-])
-
-document_id = 4
-t = pipe.transform([transcripts_df['transcript'].iloc[document_id]]) 
-print('Topic distribution for document #{}: \n'.format(document_id),t)
-print('Relevant topics for document #{}: \n'.format(document_id),np.where(t>0.01)[1])
-print('\nTranscript:\n',transcripts_df['transcript'].iloc[document_id][:500],'...')
-
-talk = ted_main_df[ted_main_df['url']==transcripts_df['url'].iloc[document_id]]
-print('\nTrue tags from ted_main.csv: \n',talk['tags'])
-
-
-# Seems nice! The transcript #4 really talk about topic #5.
+# You will use the **scikit-learn** library to create your models.  When coding, this library is written as **sklearn**, as you will see in the sample code. Scikit-learn is easily the most popular library for modeling the types of data typically stored in DataFrames. 
 # 
-# Now we would do a exploratory analysis about our topics and extract descriptitve statistics and visualizations for the transcripts.
+# The steps to building and using a model are:
+# * **Define:** What type of model will it be?  A decision tree?  Some other type of model? Some other parameters of the model type are specified too.
+# * **Fit:** Capture patterns from provided data. This is the heart of modeling.
+# * **Predict:** Just what it sounds like
+# * **Evaluate**: Determine how accurate the model's predictions are.
+# 
+# Here is the example for defining and fitting the model.
 
 # In[ ]:
 
 
-t = pipe.transform(transcripts_df['transcript']) 
-t = pd.DataFrame(t, columns=['#{}'.format(i) for i in range(0,10)])
+from sklearn.tree import DecisionTreeRegressor
 
+# Define model
+melbourne_model = DecisionTreeRegressor()
+
+# Fit model
+melbourne_model.fit(X, y)
+
+
+# The output describes some parameters about the type of model you've built. Don't worry about it for now.
+
+# In practice, you'll want to make predictions for new houses coming on the market rather than the houses we already have prices for. But we'll make predictions for the first rows of the training data to see how the predict function works.
+# 
 
 # In[ ]:
 
 
-import seaborn as sns
-
-new_t = pd.DataFrame({'value':t['#0'].values,'topic':['#0']*len(t)})
-for tid in t.columns[1:]:
-    new_t = pd.concat([new_t, pd.DataFrame({'value':t[tid].values,'topic':[tid]*len(t)})])
-
-fig = plt.figure(1,figsize=(12,6))
-sns.violinplot(x="topic", y="value", data=new_t, palette='Reds')
-plt.show()
+print("Making predictions for the following 5 houses:")
+print(X.head())
+print("The predictions are")
+print(melbourne_model.predict(X.head()))
 
 
-# Through analyzing this plot, I would say that in general the topic distribution behaves evenly, excepts for #0. Things to be concluded:
+# ---
 # 
-# 1. Topic #0 (['god', 'book', 'stories', 'oh', 'art']) is very general per si in terms of words meaning and perhaps explain this result. 
-# 2. Topic #2 is only about music and it has high incidences because of its specificity, in contrast to #0.
-# 3. Excluding #0 (open meaning issues), topics **#4 (about earth), #5 (about government), #7 (about data&information) and #9 (about education)** have higher quartiles, meaning that they are the most frequent topics that TED Talks carry on.
+# # Your Turn
+# Now it's time for you to define and fit a model for your data (in your notebook).
+# 1. Select the target variable you want to predict. You can go back to the list of columns from your earlier commands to recall what it's called (*hint: you've already worked with this variable*). Save this to a new variable called `y`.
+# 2. Create a **list** of the names of the predictors we will use in the initial model.  Use just the following columns in the list (you can copy and paste the whole list to save some typing, though you'll still need to add quotes):
+#     * LotArea
+#     * YearBuilt
+#     * 1stFlrSF
+#     * 2ndFlrSF
+#     * FullBath
+#     * BedroomAbvGr
+#     * TotRmsAbvGrd
 # 
-# I believe that it effectively summarizes what TEDs are about: **ideas that really matter and worth spreading**.
+# 3. Using the list of variable names you just created, select a new DataFrame of the predictors data. Save this with the variable name `X`.
+# 4. Create a `DecisionTreeRegressorModel` and save it to a variable (with a name like my_model or iowa_model). Ensure you've done the relevant import so you can run this command.
+# 5. Fit the model you have created using the data in `X` and the target data you saved above.
+# 6. Make a few predictions with the model's `predict` command and print out the predictions.  
 # 
-# Hope that it could help NLP beginners!
+# 
+# ---
+# 
+# # Continue
+# 
+# You've built a decision tree model that can predict the prices of houses based on their characteristics.  It's natural to ask how accurate the model's predictions will be, and measuring accuracy is necessary for us to see whether or not other approaches improve our model. 
+# 
+# Move on to the [next page](https://www.kaggle.com/dansbecker/model-validation) to see how we measure model accuracy.
+# 

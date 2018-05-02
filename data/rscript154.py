@@ -1,381 +1,396 @@
-import kagglegym
-import numpy as np
+# coding: utf-8
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+
+import datetime
 import pandas as pd
+import numpy as np
+import xgboost as xgb
+from sklearn.cross_validation import KFold
+from sklearn.metrics import roc_auc_score
+from scipy.io import loadmat
+from operator import itemgetter
 import random
-from sklearn import ensemble, linear_model, metrics
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
-from sklearn.linear_model import HuberRegressor
-from itertools import combinations
-import gc
-from threading import Thread
-import multiprocessing
-from multiprocessing import Manager
-from sklearn import preprocessing as pp
-from numpy.fft import fft
-from sklearn.naive_bayes import GaussianNB
+import os
+import time
+import glob
+import re
+from multiprocessing import Process
+import copy
+
+random.seed(2016)
+np.random.seed(2016)
 
 
-env = kagglegym.make()
-o = env.reset()
-train = o.train
-print(train.shape)
-d_mean= train.median(axis=0)
+def natural_key(string_):
+    return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_)]
 
 
-low_y_cut = -0.075
-high_y_cut = 0.075
-y_is_above_cut = (train.y > high_y_cut)
-y_is_below_cut = (train.y < low_y_cut)
-y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)  
-
-train["nbnulls"]=train.isnull().sum(axis=1)
-col=[x for x in train.columns if x not in ['id', 'timestamp', 'y']]
-
-rnd=17
-
-#keeping na information on some columns (best selected by the tree algorithms)
-add_nas_ft=True
-nas_cols=['technical_9', 'technical_0', 'technical_32', 'technical_16', 'technical_38', 
-'technical_44', 'technical_20', 'technical_30', 'technical_13']
-
-#columns kept for evolution from one month to another (best selected by the tree algorithms)
-add_diff_ft=True
-diff_cols=['technical_22','technical_20', 'technical_30', 'technical_13', 'technical_34']
-
-class createLinearFeatures:
-    
-    def __init__(self, n_neighbours=1, max_elts=None, verbose=True, random_state=None):
-        self.rnd=random_state
-        self.n=n_neighbours
-        self.max_elts=max_elts
-        self.verbose=verbose
-        self.neighbours=[]
-        self.clfs=[]
-        
-    def fit(self,train,y):
-        if self.rnd!=None:
-            random.seed(self.rnd)
-        if self.max_elts==None:
-            self.max_elts=len(train.columns)
-        list_vars=list(train.columns)
-        random.shuffle(list_vars)
-        
-        lastscores=np.zeros(self.n)+1e15
-
-        for elt in list_vars[:self.n]:
-            self.neighbours.append([elt])
-        list_vars=list_vars[self.n:]
-        
-        for elt in list_vars:
-            indice=0
-            scores=[]
-            for elt2 in self.neighbours:
-                if len(elt2)<self.max_elts:
-                    clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
-                    clf.fit(train[elt2+[elt]], y)
-                    scores.append(metrics.mean_squared_error(y,clf.predict(train[elt2 + [elt]])))
-                    indice=indice+1
-                else:
-                    scores.append(lastscores[indice])
-                    indice=indice+1
-            gains=lastscores-scores
-            if gains.max()>0:
-                temp=gains.argmax()
-                lastscores[temp]=scores[temp]
-                self.neighbours[temp].append(elt)
-
-        indice=0
-        for elt in self.neighbours:
-            clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
-            clf.fit(train[elt], y)
-            self.clfs.append(clf)
-            if self.verbose:
-                print(indice, lastscores[indice], elt)
-            indice=indice+1
-                    
-    def transform(self, train):
-        indice=0
-        for elt in self.neighbours:
-            #this line generates a warning. Could be avoided by working and returning
-            #with a copy of train.
-            #kept this way for memory management
-            train['neighbour'+str(indice)]=self.clfs[indice].predict(train[elt])
-            indice=indice+1
-        return train
-    
-    def fit_transform(self, train, y):
-        self.fit(train, y)
-        return self.transform(train)
-
-class huber_linear_model():
-    def __init__(self):
-
-        self.bestmodel=None
-        self.scaler = pp.MinMaxScaler()
-       
-    def fit(self, train, y):
-
-        indextrain=train.dropna().index
-        tr = self.scaler.fit_transform(train.ix[indextrain])
-        self.bestmodel = HuberRegressor().fit(tr, y.ix[indextrain])
-        
-
-    def predict(self, test):
-        te = self.scaler.transform(test)
-        return self.bestmodel.predict(te)
-
-class LGB_model():
-    def __init__(self, num_leaves=25, feature_fraction=0.6, bagging_fraction=0.6):
-        self.lgb_params = {
-                'task': 'train',
-                'boosting_type': 'gbdt',
-                'objective': 'regression',
-                'metric': {'l2'},
-                'learning_rate': 0.05,
-                'bagging_freq': 5,
-                'num_thread':4,
-                'verbose': 0
-            }
-        
-        self.lgb_params['feature_fraction'] = feature_fraction
-        self.lgb_params['bagging_fraction'] = bagging_fraction
-        self.lgb_params['num_leaves'] = num_leaves
-        
-
-        self.bestmodel=None
-       
-    def fit(self, train, y):
-        
-        X_train, X_val, y_train, y_val = train_test_split(train, y, test_size=0.2, random_state=343)
-        
-        lgtrain = lgb.Dataset(X_train, y_train)
-        lgval = lgb.Dataset(X_val, y_val, reference=lgtrain)
-                
-        self.bestmodel = lgb.train(self.lgb_params,
-                                    lgtrain,
-                                    num_boost_round=100,
-                                    valid_sets=lgval,
-                                    verbose_eval=False,
-                                    early_stopping_rounds=5)
+def create_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    for i, feat in enumerate(features):
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+    outfile.close()
 
 
-    def predict(self, test):
-        return self.bestmodel.predict(test, num_iteration=self.bestmodel.best_iteration)
-
-def calcHuberParallel(df_train, train_cols, result):
-    model=huber_linear_model()
-    model.fit(df_train.loc[:,train_cols], df_train.loc[:, 'y'])
-    residual = abs(model.predict(df_train[train_cols].fillna(d_mean))-df_train.y)
-    
-    result.append([model, train_cols, residual])
-    
-    return 0
+def get_importance(gbm, features):
+    create_feature_map(features)
+    importance = gbm.get_fscore(fmap='xgb.fmap')
+    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
+    return importance
 
 
-if add_nas_ft:
-    for elt in nas_cols:
-        train[elt + '_na'] = pd.isnull(train[elt]).apply(lambda x: 1 if x else 0)
-        #no need to keep columns with no information
-        if len(train[elt + '_na'].unique())==1:
-            print("removed:", elt, '_na')
-            del train[elt + '_na']
-            nas_cols.remove(elt)
+def intersect(a, b):
+    return list(set(a) & set(b))
 
 
-if add_diff_ft:
-    train=train.sort_values(by=['id','timestamp'])
-    for elt in diff_cols:
-        #a quick way to obtain deltas from one month to another but it is false on the first
-        #month of each id
-        train[elt+"_d"]= train[elt].rolling(2).apply(lambda x:x[1]-x[0]).fillna(0)
-    #removing month 0 to reduce the impact of erroneous deltas
-    train=train[train.timestamp!=0]
-
-print(train.shape)
-cols=[x for x in train.columns if x not in ['id', 'timestamp', 'y']]
+def print_features_importance(imp):
+    for i in range(len(imp)):
+        print("# " + str(imp[i][1]))
+        print('output.remove(\'' + imp[i][0] + '\')')
 
 
-cols2fit=['technical_22','technical_20', 'technical_30_d', 'technical_20_d', 'technical_30', 
-          'technical_13', 'technical_34']
-
-models=[]
-columns=[]
-residuals=[]
-
-num_threads = 4
-result = Manager().list()
-threads = []
-
-for (col1, col2) in combinations(cols2fit, 2):
-    print("fitting Huber model on ", [col1, col2])
-    threads.append(multiprocessing.Process(target=calcHuberParallel, args=(train, [col1, col2], result)))
-
-    if (len(threads) == num_threads):
-        for thread in threads:
-            thread.start()
-    
-        for thread in threads:
-            thread.join()
-        
-        print(len(result))
-        
-        threads = []
-        
-        
-''' Last bit '''
-print("running last threads ..")
-if (len(threads)>0):
-    for thread in threads:
-        thread.start()
-
-    for thread in threads:
-        thread.join()
-    print(len(result))
-    
-    threads = []
+def mat_to_pandas(path):
+    mat = loadmat(path)
+    names = mat['dataStruct'].dtype.names
+    ndata = {n: mat['dataStruct'][n][0, 0] for n in names}
+    sequence = -1
+    if 'sequence' in names:
+        sequence = mat['dataStruct']['sequence']
+    return pd.DataFrame(ndata['data'], columns=ndata['channelIndices'][0]), sequence
 
 
-for data in result:
-    model, train_cols, residual = data
-    models.append(model)
-    columns.append(train_cols)
-    residuals.append(residual) 
+def create_simple_csv_train(patient_id):
 
-del result, threads
-gc.collect()
+    out = open("simple_train_" + str(patient_id) + ".csv", "w")
+    out.write("Id,sequence_id,patient_id")
+    for i in range(16):
+        out.write(",avg_" + str(i))
+    out.write(",file_size,result\n")
 
+    # TRAIN (0)
+    out_str = ''
+    files = sorted(glob.glob("../input/train_" + str(patient_id) + "/*0.mat"), key=natural_key)
+    sequence_id = 0
+    total = 0
+    for fl in files:
+        total += 1
+        # print('Go for ' + fl)
+        id_str = os.path.basename(fl)[:-4]
+        arr = id_str.split("_")
+        patient = int(arr[0])
+        id = int(arr[1])
+        result = int(arr[2])
+        new_id = patient*100000 + id
+        try:
+            tables, sequence_from_mat = mat_to_pandas(fl)
+        except:
+            print('Some error here {}...'.format(fl))
+            continue
+        out_str += str(new_id) + "," + str(sequence_id) + "," + str(patient)
+        for f in sorted(list(tables.columns.values)):
+            mean = tables[f].mean()
+            out_str += "," + str(mean)
+        out_str += "," + str(os.path.getsize(fl)) + "," + str(result) + "\n"
+        if total % 6 == 0:
+            if int(sequence_from_mat) != 6:
+                print('Check error! {}'.format(sequence_from_mat))
+                exit()
+            sequence_id += 1
 
+    out.write(out_str)
 
-train=train.fillna(d_mean)
+    # TRAIN (1)
+    out_str = ''
+    files = sorted(glob.glob("../input/train_" + str(patient_id) + "/*1.mat"), key=natural_key)
+    sequence_id += 1
+    total = 0
+    for fl in files:
+        total += 1
+        # print('Go for ' + fl)
+        id_str = os.path.basename(fl)[:-4]
+        arr = id_str.split("_")
+        patient = int(arr[0])
+        id = int(arr[1])
+        result = int(arr[2])
+        new_id = patient*100000 + id
+        try:
+            tables, sequence_from_mat = mat_to_pandas(fl)
+        except:
+            print('Some error here {}...'.format(fl))
+            continue
+        out_str += str(new_id) + "," + str(sequence_id) + "," + str(patient)
+        for f in sorted(list(tables.columns.values)):
+            mean = tables[f].mean()
+            out_str += "," + str(mean)
+        out_str += "," + str(os.path.getsize(fl)) + "," + str(result) + "\n"
+        if total % 6 == 0:
+            if int(sequence_from_mat) != 6:
+                print('Check error! {}'.format(sequence_from_mat))
+                exit()
+            sequence_id += 1
 
-print("adding new features")
-featureexpander=createLinearFeatures(n_neighbours=20, max_elts=2, verbose=True, random_state=rnd)
-index2use=train[abs(train.y)<0.086].index
-featureexpander.fit(train.ix[index2use,cols],train.ix[index2use,'y'])
-trainer=featureexpander.transform(train[cols])
-
-treecols=trainer.columns
-
-print("training LGB model ")
-num_leaves = [70]
-feature_fractions = [0.2, 0.6]
-bagging_fractions = [0.7]
-
-#with Timer("running LGB models "):
-for num_leaf in num_leaves:
-    for feature_fraction in feature_fractions:
-        for bagging_fraction in bagging_fractions:
-            print("fitting LGB tree model with ", num_leaf, feature_fraction, bagging_fraction)
-            model = LGB_model(num_leaves=num_leaf, feature_fraction=feature_fraction, bagging_fraction=bagging_fraction)
-            model.fit(trainer,train.y)
-            models.append(model)
-            columns.append(treecols)
-            residuals.append(abs(model.predict(trainer)-train.y))
-
-print("training trees")
-model = ensemble.ExtraTreesRegressor(n_estimators=100, max_depth=4, n_jobs=-1, random_state=rnd, verbose=0)
-model.fit(trainer,train.y)
-print(pd.DataFrame(model.feature_importances_,index=treecols).sort_values(by=[0]).tail(30))
-for elt in model.estimators_:
-    models.append(elt)
-    columns.append(treecols)
-    residuals.append(abs(elt.predict(trainer)-train.y))
-
-num_to_keep=7
-targetselector=np.array(residuals).T
-targetselector=np.argmin(targetselector, axis=1)
-print("selecting best models:")
-print(pd.Series(targetselector).value_counts().head(num_to_keep))
-
-tokeep=pd.Series(targetselector).value_counts().head(num_to_keep).index
-tokeepmodels=[]
-tokeepcolumns=[]
-tokeepresiduals=[]
-for elt in tokeep:
-    tokeepmodels.append(models[elt])
-    tokeepcolumns.append(columns[elt])
-    tokeepresiduals.append(residuals[elt])
-
-
-for modelp in tokeepmodels:
-    print("")
-    print(modelp)
-
-
-#creating a new target for a model in charge of predicting which model is best for the current line
-targetselector=np.array(tokeepresiduals).T
-targetselector=np.argmin(targetselector, axis=1)
-
-#with Timer("Training ET selection model "):
-print("training selection model")
-modelselector = ensemble.ExtraTreesClassifier(n_estimators= 120, max_depth=4, n_jobs=-1, random_state=rnd, verbose=0)
-modelselector.fit(trainer, targetselector)
-
-model2 = GaussianNB()
-model2.fit(trainer,targetselector)
-
-print(pd.DataFrame(modelselector.feature_importances_,index=treecols).sort_values(by=[0]).tail(30))
+    out.write(out_str)
+    out.close()
+    print('Train CSV for patient {} has been completed...'.format(patient_id))
 
 
-lastvalues=train[train.timestamp==max(train.timestamp)][['id']+diff_cols].copy()
+def create_simple_csv_test(patient_id):
 
-print("end of training, now predicting")
-indice=0
-countplus=0
-rewards=[]
+    # TEST
+    out_str = ''
+    files = sorted(glob.glob("../input/test_" + str(patient_id) + "_new/*.mat"), key=natural_key)
+    out = open("simple_test_" + str(patient_id) + ".csv", "w")
+    out.write("Id,patient_id")
+    for i in range(16):
+        out.write(",avg_" + str(i))
+    out.write(",file_size\n")
+    for fl in files:
+        # print('Go for ' + fl)
+        id_str = os.path.basename(fl)[:-4]
+        arr = id_str.split("_")
+        patient = int(arr[1])
+        id = int(arr[2])
+        new_id = patient*100000 + id
+        try:
+            tables, sequence_from_mat = mat_to_pandas(fl)
+        except:
+            print('Some error here {}...'.format(fl))
+            continue
+        out_str += str(new_id) + "," + str(patient)
+        for f in sorted(list(tables.columns.values)):
+            mean = tables[f].mean()
+            out_str += "," + str(mean)
+        out_str += "," + str(os.path.getsize(fl)) + "\n"
+        # break
+
+    out.write(out_str)
+    out.close()
+    print('Test CSV for patient {} has been completed...'.format(patient_id))
 
 
-del models
-del columns
-del residuals
-del tokeepresiduals
-gc.collect()
+def run_single(train, test, features, target, random_state=1):
+    eta = 0.2
+    max_depth = 3
+    subsample = 0.9
+    colsample_bytree = 0.9
+    start_time = time.time()
 
-while True:
-    indice+=1
-    test = o.features
-    test["nbnulls"]=test.isnull().sum(axis=1)
-    if add_nas_ft:
-        for elt in nas_cols:
-            test[elt + '_na'] = pd.isnull(test[elt]).apply(lambda x: 1 if x else 0)
-    test=test.fillna(d_mean)
-    
-    timestamp = o.features.timestamp[0]
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "tree_method": 'exact',
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state,
+    }
+    num_boost_round = 1000
+    early_stopping_rounds = 50
+    test_size = 0.2
 
-    pred = o.target
-    if add_diff_ft:
-        #creating deltas from lastvalues
-        indexcommun=list(set(lastvalues.id) & set(test.id))
-        lastvalues=pd.concat([test[test.id.isin(indexcommun)]['id'],
-            pd.DataFrame(test[diff_cols][test.id.isin(indexcommun)].values-lastvalues[diff_cols][lastvalues.id.isin(indexcommun)].values,
-            columns=diff_cols, index=test[test.id.isin(indexcommun)].index)],
-            axis=1)
-        #adding them to test data    
-        test=test.merge(right=lastvalues, how='left', on='id', suffixes=('','_d')).fillna(0)
-        #storing new lastvalues
-        lastvalues=test[['id']+diff_cols].copy()
-    
-    testid=test.id
-    test=featureexpander.transform(test[cols])
-    #prediction using modelselector and models list
-    selected_prediction = modelselector.predict_proba(test.loc[: ,treecols])
-    selected_prediction2 = model2.predict_proba(test.loc[: ,treecols])
-    for ind,elt in enumerate(tokeepmodels):
-        pred['y']+= (selected_prediction[:,ind]*elt.predict(test[tokeepcolumns[ind]])*1.00) +  (selected_prediction2[:,ind]*elt.predict(test[tokeepcolumns[ind]])*0.05)
-    
-    
-    pred['y'] = pred['y'].clip(low_y_cut, high_y_cut)
+    unique_sequences = np.array(train['sequence_id'].unique())
+    kf = KFold(len(unique_sequences), n_folds=int(round(1/test_size, 0)), shuffle=True, random_state=random_state)
+    train_seq_index, test_seq_index = list(kf)[0]
+    print('Length of sequence train: {}'.format(len(train_seq_index)))
+    print('Length of sequence valid: {}'.format(len(test_seq_index)))
+    train_seq = unique_sequences[train_seq_index]
+    valid_seq = unique_sequences[test_seq_index]
 
-    o, reward, done, info = env.step(pred)
+    X_train, X_valid = train[train['sequence_id'].isin(train_seq)][features], train[train['sequence_id'].isin(valid_seq)][features]
+    y_train, y_valid = train[train['sequence_id'].isin(train_seq)][target], train[train['sequence_id'].isin(valid_seq)][target]
+    X_test = test[features]
 
-    rewards.append(reward)
-    if reward>0:
-        countplus+=1
-    
-    if indice%100==0:
-        print(indice, countplus, reward, np.mean(rewards), info)
-        
-    if done:
-        print(info["public_score"])
-        break
+    print('Length train:', len(X_train))
+    print('Length valid:', len(X_valid))
+
+    dtrain = xgb.DMatrix(X_train, y_train)
+    dvalid = xgb.DMatrix(X_valid, y_valid)
+
+    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist,
+                    early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+
+    print("Validating...")
+    check = gbm.predict(xgb.DMatrix(X_valid), ntree_limit=gbm.best_iteration+1)
+    score = roc_auc_score(y_valid, check)
+    print('Check error value: {:.6f}'.format(score))
+
+    imp = get_importance(gbm, features)
+    print('Importance array: ', imp)
+
+    print("Predict test set...")
+    test_prediction = gbm.predict(xgb.DMatrix(X_test), ntree_limit=gbm.best_iteration+1)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return test_prediction.tolist(), score
+
+
+def run_kfold(nfolds, train, test, features, target, random_state=2016):
+    eta = 0.2
+    max_depth = 3
+    subsample = 0.7
+    colsample_bytree = 0.7
+    start_time = time.time()
+
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "tree_method": 'exact',
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state,
+    }
+    num_boost_round = 1000
+    early_stopping_rounds = 50
+
+    yfull_train = dict()
+    yfull_test = copy.deepcopy(test[['Id']].astype(object))
+
+    unique_sequences = np.array(train['sequence_id'].unique())
+    kf = KFold(len(unique_sequences), n_folds=nfolds, shuffle=True, random_state=random_state)
+    num_fold = 0
+    for train_seq_index, test_seq_index in kf:
+        num_fold += 1
+        print('Start fold {} from {}'.format(num_fold, nfolds))
+        train_seq = unique_sequences[train_seq_index]
+        valid_seq = unique_sequences[test_seq_index]
+        print('Length of train people: {}'.format(len(train_seq)))
+        print('Length of valid people: {}'.format(len(valid_seq)))
+
+        X_train, X_valid = train[train['sequence_id'].isin(train_seq)][features], train[train['sequence_id'].isin(valid_seq)][features]
+        y_train, y_valid = train[train['sequence_id'].isin(train_seq)][target], train[train['sequence_id'].isin(valid_seq)][target]
+        X_test = test[features]
+
+        print('Length train:', len(X_train))
+        print('Length valid:', len(X_valid))
+
+        dtrain = xgb.DMatrix(X_train, y_train)
+        dvalid = xgb.DMatrix(X_valid, y_valid)
+
+        watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+        gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=1000)
+
+        yhat = gbm.predict(xgb.DMatrix(X_valid), ntree_limit=gbm.best_iteration+1)
+
+        # Each time store portion of precicted data in train predicted values
+        for i in range(len(X_valid.index)):
+            yfull_train[X_valid.index[i]] = yhat[i]
+
+        print("Validating...")
+        check = gbm.predict(xgb.DMatrix(X_valid), ntree_limit=gbm.best_iteration+1)
+        score = roc_auc_score(y_valid.tolist(), check)
+        print('Check error value: {:.6f}'.format(score))
+
+        imp = get_importance(gbm, features)
+        print('Importance array: ', imp)
+
+        print("Predict test set...")
+        test_prediction = gbm.predict(xgb.DMatrix(X_test), ntree_limit=gbm.best_iteration+1)
+        yfull_test['kfold_' + str(num_fold)] = test_prediction
+
+    # Copy dict to list
+    train_res = []
+    for i in range(len(train.index)):
+        train_res.append(yfull_train[i])
+
+    score = roc_auc_score(train[target], np.array(train_res))
+    print('Check error value: {:.6f}'.format(score))
+
+    # Find mean for KFolds on test
+    merge = []
+    for i in range(1, nfolds+1):
+        merge.append('kfold_' + str(i))
+    yfull_test['mean'] = yfull_test[merge].mean(axis=1)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return yfull_test['mean'].values, score
+
+
+def create_submission(score, test, prediction):
+    # Make Submission
+    now = datetime.datetime.now()
+    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print('Writing submission: ', sub_file)
+    f = open(sub_file, 'w')
+    f.write('File,Class\n')
+    total = 0
+    for id in test['Id']:
+        patient = id // 100000
+        fid = id % 100000
+        str1 = 'new_' + str(patient) + '_' + str(fid) + '.mat' + ',' + str(prediction[total])
+        str1 += '\n'
+        total += 1
+        f.write(str1)
+    f.close()
+
+
+def get_features(train, test):
+    trainval = list(train.columns.values)
+    testval = list(test.columns.values)
+    output = intersect(trainval, testval)
+    output.remove('Id')
+    # output.remove('file_size')
+    return sorted(output)
+
+
+def read_test_train():
+    print("Load train.csv...")
+    train1 = pd.read_csv("simple_train_1.csv")
+    train2 = pd.read_csv("simple_train_2.csv")
+    train3 = pd.read_csv("simple_train_3.csv")
+    train = pd.concat([train1, train2, train3])
+    # Remove all zeroes files
+    train = train[train['file_size'] > 55000].copy()
+    # Shuffle rows since they are ordered
+    train = train.iloc[np.random.permutation(len(train))]
+    # Reset broken index
+    train = train.reset_index()
+    print("Load test.csv...")
+    test1 = pd.read_csv("simple_test_1.csv")
+    test2 = pd.read_csv("simple_test_2.csv")
+    test3 = pd.read_csv("simple_test_3.csv")
+    test = pd.concat([test1, test2, test3])
+    print("Process tables...")
+    features = get_features(train, test)
+    return train, test, features
+
+
+if __name__ == '__main__':
+    print('XGBoost: {}'.format(xgb.__version__))
+    if 1:
+        # Do reading and processing of MAT files in parallel
+        p = dict()
+        p[1] = Process(target=create_simple_csv_train, args=(1,))
+        p[1].start()
+        p[2] = Process(target=create_simple_csv_train, args=(2,))
+        p[2].start()
+        p[3] = Process(target=create_simple_csv_train, args=(3,))
+        p[3].start()
+        p[4] = Process(target=create_simple_csv_test, args=(1,))
+        p[4].start()
+        p[5] = Process(target=create_simple_csv_test, args=(2,))
+        p[5].start()
+        p[6] = Process(target=create_simple_csv_test, args=(3,))
+        p[6].start()
+        p[1].join()
+        p[2].join()
+        p[3].join()
+        p[4].join()
+        p[5].join()
+        p[6].join()
+    train, test, features = read_test_train()
+    print('Length of train: ', len(train))
+    print('Length of test: ', len(test))
+    print('Features [{}]: {}'.format(len(features), sorted(features)))
+    # test_prediction, score = run_single(train, test, features, 'result')
+    test_prediction, score = run_kfold(5, train, test, features, 'result')
+    create_submission(score, test, test_prediction)

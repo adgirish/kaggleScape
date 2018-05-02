@@ -1,300 +1,201 @@
 
 # coding: utf-8
 
-# As the name says, all I am doing here is cleaning the data - more specifically, replacing missing values in the training data. The result should be the starting point for further exploration and/or feature engineering. In order to build the actual model, further steps will have to be taken.
-
-# In[ ]:
+# In[33]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+__author__ = 'Tilii: https://kaggle.com/tilii7' 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
+import warnings
+with warnings.catch_warnings():
+    warnings.filterwarnings('ignore')
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    get_ipython().run_line_magic('matplotlib', 'inline')
+    import matplotlib.cm as cm
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    
 
 
-houseprice=pd.read_csv('../input/train.csv')
-houseprice.head()
+# Simply loading the files without any transformation. If you wish to manipulate the data in any way, it should be done here before doing dimensionality reduction in subsequent steps.
+
+# In[34]:
 
 
-# You can already see that there are NaNs in some columns. So let's see where exactly and how many
-
-# In[ ]:
-
-
-# To check how many columns have missing values - this can be repeated to see the progress made
-def show_missing():
-    missing = houseprice.columns[houseprice.isnull().any()].tolist()
-    return missing
+print('\nLoading files ...')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+X = train.drop(['id', 'target'], axis=1).values
+y = train['target'].values.astype(np.int8)
+target_names = np.unique(y)
+print('\nThere are %d unique target valuess in this dataset:' % (len(target_names)), target_names)
 
 
-# In[ ]:
+# Principal Component Analysis (**[PCA](https://en.wikipedia.org/wiki/Principal_component_analysis)**) identifies the combination of  components (directions in the feature space) that account for the most variance in the data.
+
+# In[35]:
 
 
-houseprice[show_missing()].isnull().sum()
+n_comp = 20
+# PCA
+print('\nRunning PCA ...')
+pca = PCA(n_components=n_comp, svd_solver='full', random_state=1001)
+X_pca = pca.fit_transform(X)
+print('Explained variance: %.4f' % pca.explained_variance_ratio_.sum())
+
+print('Individual variance contributions:')
+for j in range(n_comp):
+    print(pca.explained_variance_ratio_[j])
 
 
-# ## Data Cleaning Plan
-# Let's look at these variables in the data dictionary:
+# Better than 90% of the data is explained by a single principal component. Just a shade under 99% of variance is explained by 15 components, which means that this dataset can be safely reduced to ~15 features.
 # 
-# * LotFrontage: Linear feet of street connected to property. I can't imagine that this would be 0 (as this would be a property without access), so either impute mean, or maybe see if there's a correlation with LotArea (like square root?).
+# Here we plot our 0/1 samples on the first two principal components.
+
+# In[36]:
+
+
+colors = ['blue', 'red']
+plt.figure(1, figsize=(10, 10))
+
+for color, i, target_name in zip(colors, [0, 1], target_names):
+    plt.scatter(X_pca[y == i, 0], X_pca[y == i, 1], color=color, s=1,
+                alpha=.8, label=target_name, marker='.')
+plt.legend(loc='best', shadow=False, scatterpoints=3)
+plt.title(
+        "Scatter plot of the training data projected on the 1st "
+        "and 2nd principal components")
+plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[0] * 100.0))
+plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[1] * 100.0))
+
+plt.savefig('pca-porto-01.png', dpi=150)
+plt.show()
+
+
+# There is a nice separation between various groups of customers, but not so between 0/1 categories within each group. This is somewhat exaggerated by the fact that "0" points (blue) are plotted first and "1" points (red) are plotted last. There seems to be more red than blue in that image, even though there are >25x "0" points in reality. I'd be grateful if someone knows how to plot this in a way that would not create this misleading impression.
 # 
-# * Alley: Type of alley access to property -> Many missing values, I would presume that these properties just don't have an alley access.
+# Regardless, 0/1 points are not separated well at all. That means that they will not be easy to classify, which we all know by now.
+
+# **[t-SNE](https://lvdmaaten.github.io/tsne/)** could potentially lead to better data separation/visualization, because unlike PCA it preserves the local structure of data points. The problem with sklearn implementation of t-SNE is its lack of memory optimization. I am pretty sure that the t-SNE code at the very bottom will lead to memory errors on most personal computers, but I leave it commented out if anyone wants to try.
 # 
-# * MasVnrType/MasVnrArea -> both have 8 values missing, I presume they are the same ones. Either set as "None"/0 or use most frequent value/median.
+# Instead, I ran t-SNE using a much faster and more memory-friendly commandline version, which can be found at the link above.
 # 
-# * Bsmt... Variables: A  number of variables in connection with the basement. About the same number of missing values. However, there are two basement-related variables without missing values "BsmtFinSF1" and "BsmtFinSF2" - look at those and then decide what to do with the missing values.
+# Here is the output of that exercise:
 # 
-# * Electrical: Just one missing value - here just impute most frequent one.
+# ![](https://i.imgur.com/7EqkUWH.png)
+
+# Again, we can see clear separation between different groups of customers. Some groups even have a nice "coffee bean" structure where two subgroups can be identified (gender?). Alas, there is no clear separation between 0/1 categories.
 # 
-# * FireplaceQu: I assume the properties with missing values just don't have a fireplace. There's also the variable Fireplaces (without missing values) - check this and then decide.
+# In strictly technical terms, we are screwed :D
+
+# In[37]:
+
+
+# tsne = TSNE(n_components=2, init='pca', random_state=1001, perplexity=30, method='barnes_hut', n_iter=1000, verbose=1)
+# X_tsne = tsne.fit_transform(X) # this will either fail or take a while (most likely overnight)
+
+# plt.figure(2, figsize=(10, 10))
+
+# for color, i, target_name in zip(colors, [0, 1], target_names):
+#     plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], color=color, s=1,
+#                 alpha=.8, label=target_name, marker='.')
+# plt.legend(loc='best', shadow=False, scatterpoints=3)
+# plt.title('Scatter plot of t-SNE embedding')
+# plt.xlabel('X')
+# plt.ylabel('Y')
+
+# plt.savefig('t-SNE-porto-01.png', dpi=150)
+# plt.show()
+
+
+# It was kindly brought up to me that a strange-looking PCA plot above is probably because of categorical variables in this dataset. I leave the original plot up there for posterity.
 # 
-# * Garage ... Variables: 81 missing in these columns. However, there are some Garage-related variables without missing values: GarageCars, GarageArea - check these and then decide.
+# Let's encode the categorical variables and try again.
+
+# In[38]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+
+def scale_data(X, scaler=None):
+    if not scaler:
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+X = train.drop(['id', 'target'], axis=1)
+test.drop(['id'], axis=1, inplace=True)
+n_train = X.shape[0]
+train_test = pd.concat((X, test)).reset_index(drop=True)
+col_to_drop = X.columns[X.columns.str.endswith('_cat')]
+col_to_dummify = X.columns[X.columns.str.endswith('_cat')].astype(str).tolist()
+
+for col in col_to_dummify:
+    dummy = pd.get_dummies(train_test[col].astype('category'))
+    columns = dummy.columns.astype(str).tolist()
+    columns = [col + '_' + w for w in columns]
+    dummy.columns = columns
+    train_test = pd.concat((train_test, dummy), axis=1)
+
+train_test.drop(col_to_dummify, axis=1, inplace=True)
+train_test_scaled, scaler = scale_data(train_test)
+X = np.array(train_test_scaled[:n_train, :])
+test = np.array(train_test_scaled[n_train:, :])
+print('\n Shape of processed train data:', X.shape)
+print(' Shape of processed test data:', test.shape)
+
+
+# Repeating PCA and making another plot of the first two principal components.
+
+# In[39]:
+
+
+print('\nRunning PCA again ...')
+pca = PCA(n_components=n_comp, svd_solver='full', random_state=1001)
+X_pca = pca.fit_transform(X)
+print('Explained variance: %.4f' % pca.explained_variance_ratio_.sum())
+
+print('Individual variance contributions:')
+for j in range(n_comp):
+    print(pca.explained_variance_ratio_[j])
+
+plt.figure(1, figsize=(10, 10))
+
+for color, i, target_name in zip(colors, [0, 1], target_names):
+    plt.scatter(X_pca[y == i, 0], X_pca[y == i, 1], color=color, s=1,
+                alpha=.8, label=target_name, marker='.')
+plt.legend(loc='best', shadow=False, scatterpoints=3)
+plt.title(
+        "Scatter plot of the training data projected on the 1st "
+        "and 2nd principal components")
+plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[0] * 100.0))
+plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[1] * 100.0))
+
+plt.savefig('pca-porto-02.png', dpi=150)
+plt.show()
+
+
+# I think that's a better plot visually and there is a good number of well-defined clusters, but still no clear separation between 0/1 points.
 # 
-# * PoolQC - probably no pool - but check against PoolArea (which has no missing values).
+# We can red-do the t-SNE plot as well using modified dataset. **Don't try this at home** - it takes 24+ hours using a commandline version of bh_tsne.
 # 
-# * Fence: Many missing values - probably no fence, just impute 'None'
+# Anyway, here is the new t-SNE plot:
 # 
-# * MiscFeature: Assuming none - probably no special features, just impute 'None'
-
-# In[ ]:
-
-
-# Looking at categorical values
-def cat_exploration(column):
-    return houseprice[column].value_counts()
-
-
-# In[ ]:
-
-
-# Imputing the missing values
-def cat_imputation(column, value):
-    houseprice.loc[houseprice[column].isnull(),column] = value
-
-
-# ### LotFrontage/LotArea
-# A number of values are missing and one possibility would be to just impute the mean. However, there should actually be a correlation with LotArea, which has no missing values.
-
-# In[ ]:
-
-
-# check correlation with LotArea
-houseprice['LotFrontage'].corr(houseprice['LotArea'])
-
-
-# Ok, that's not great. I we assume that most lots are rectangular, using the square root might be an improvement. 
-
-# In[ ]:
-
-
-# improvement - and good enough for now
-houseprice['SqrtLotArea']=np.sqrt(houseprice['LotArea'])
-houseprice['LotFrontage'].corr(houseprice['SqrtLotArea'])
-
-
-# In[ ]:
-
-
-import seaborn as sns
-get_ipython().run_line_magic('pylab', 'inline')
-sns.pairplot(houseprice[['LotFrontage','SqrtLotArea']].dropna())
-
-
-# In[ ]:
-
-
-cond = houseprice['LotFrontage'].isnull()
-houseprice.LotFrontage[cond]=houseprice.SqrtLotArea[cond]
-
-
-# In[ ]:
-
-
-# This column is not needed anymore
-del houseprice['SqrtLotArea']
-
-
-# ### Alley
-
-# In[ ]:
-
-
-cat_exploration('Alley')
-
-
-# In[ ]:
-
-
-# I assume empty fields here mean no alley access
-cat_imputation('Alley','None')
-
-
-# ### MasVnr
-
-# In[ ]:
-
-
-houseprice[['MasVnrType','MasVnrArea']][houseprice['MasVnrType'].isnull()==True]
-
-
-# So the missing values for the "MasVnr..." Variables are in the same rows.
-
-# In[ ]:
-
-
-cat_exploration('MasVnrType')
-
-
-# Since "None" is the most frequent value, I will impute "None" for the Type, and 0.0 for the area.
-
-# In[ ]:
-
-
-cat_imputation('MasVnrType', 'None')
-cat_imputation('MasVnrArea', 0.0)
-
-
-# ### Basement
-
-# In[ ]:
-
-
-basement_cols=['BsmtQual','BsmtCond','BsmtExposure','BsmtFinType1','BsmtFinType2','BsmtFinSF1','BsmtFinSF2']
-houseprice[basement_cols][houseprice['BsmtQual'].isnull()==True]
-
-
-# So in the cases where the categorical variables are NaN, the numerical ones are 0. Which means there's no basement, so the categorical ones should also be set to "None".
-
-# In[ ]:
-
-
-for cols in basement_cols:
-    if 'FinSF'not in cols:
-        cat_imputation(cols,'None')
-
-
-# ### Electrical
-
-# In[ ]:
-
-
-cat_exploration('Electrical')
-
-
-# In[ ]:
-
-
-# Impute most frequent value
-cat_imputation('Electrical','SBrkr')
-
-
-# ### Fireplace
-
-# In[ ]:
-
-
-cat_exploration('FireplaceQu')
-
-
-# I would assume that the 690 just don't have a fireplace. Let's check:
-
-# In[ ]:
-
-
-houseprice['Fireplaces'][houseprice['FireplaceQu'].isnull()==True].describe()
-
-
-# In[ ]:
-
-
-cat_imputation('FireplaceQu','None')
-
-
-# In[ ]:
-
-
-pd.crosstab(houseprice.Fireplaces, houseprice.FireplaceQu)
-
-
-# ### Garages
-
-# In[ ]:
-
-
-garage_cols=['GarageType','GarageQual','GarageCond','GarageYrBlt','GarageFinish','GarageCars','GarageArea']
-houseprice[garage_cols][houseprice['GarageType'].isnull()==True]
-
-
-# In[ ]:
-
-
-#Garage Imputation
-for cols in garage_cols:
-    if houseprice[cols].dtype==np.object:
-        cat_imputation(cols,'None')
-    else:
-        cat_imputation(cols, 0)
-
-
-# ### Pool
-
-# In[ ]:
-
-
-cat_exploration('PoolQC')
-
-
-# Many missing values - are they all without a pool?
-
-# In[ ]:
-
-
-houseprice['PoolArea'][houseprice['PoolQC'].isnull()==True].describe()
-
-
-# Yes, seems like it - if PoolQC is empty, PoolArea is 0
-
-# In[ ]:
-
-
-cat_imputation('PoolQC', 'None')
-
-
-# ### Fence
-
-# In[ ]:
-
-
-cat_imputation('Fence', 'None')
-
-
-# ### MiscFeature
-
-# In[ ]:
-
-
-cat_imputation('MiscFeature', 'None')
-
-
-# ### Are we done?
-
-# In[ ]:
-
-
-houseprice[show_missing()].isnull().sum()
-
-
-# Yes, all missing values are gone!
+# ![](https://i.imgur.com/HYR699D.png)
+# 
+# Again, lots of interesting clusters, but blue and red dots overlap for the most part.
+
+# This just happens to be a difficult classification classification problem, so maybe it is not a big surprise that raw data does not contain enough info for t-SNE to distinguish clearly between the classes.
+# 
+# Unfortunately, it is not much better even after training. Below is a t-SNE plot of activations from the last hidden layer (3rd) of a neural network that was trained on this dataset for 80 epochs. If you download the full version (it is roughly 10.5 x 10.5 inches), you may be able to see better that lots of red dots are concetrated in the lower left quadrat (6-9 on a clock dial), and that there are clearly fewer red dots in the upper right quadrant (0-3 on a clock dial). So the network has succeded somewhat in sequestering the red dots, but they still overlap quite a bit with blue ones.
+# 
+# ![](https://i.imgur.com/qilITsO.png)
+# 
+# Later I will have more t-SNE plots from neural network activations in [__this kernel__](https://www.kaggle.com/tilii7/keras-averaging-runs-gini-early-stopping).

@@ -1,173 +1,376 @@
 
 # coding: utf-8
 
-# # Preprocessing code to join all the tables 
+# In[ ]:
+
+
+import pandas as pd
+from IPython.display import display
+pd.set_option('display.float_format', lambda x: '%.5f' % x)
+
+
+# ## Loading all input files
 
 # In[ ]:
 
 
-#Credits to https://www.kaggle.com/robikscube/eda-of-women-s-ncaa-bracket-data-in-progress by Robert Mulla
+air_reserve = pd.read_csv('../input/air_reserve.csv',parse_dates=['visit_datetime','reserve_datetime'])
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.style.use('fivethirtyeight')
+hpg_reserve = pd.read_csv('../input/hpg_reserve.csv',parse_dates=['visit_datetime','reserve_datetime'])
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+air_store_info = pd.read_csv('../input/air_store_info.csv')
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+hpg_store_info = pd.read_csv('../input/hpg_store_info.csv')
 
-# Any results you write to the current directory are saved as output.
+store_relation = pd.read_csv('../input/store_id_relation.csv')
 
+date_info = pd.read_csv('../input/date_info.csv',parse_dates=['calendar_date'])
 
-# ## Load all the data as pandas Dataframes
+air_visit = pd.read_csv('../input/air_visit_data.csv',parse_dates=['visit_date'])
 
-# In[ ]:
+sample_submission = pd.read_csv('../input/sample_submission.csv')
 
 
-cities = pd.read_csv('../input/WCities.csv')
-gamecities = pd.read_csv('../input/WGameCities.csv')
-tourneycompactresults = pd.read_csv('../input/WNCAATourneyCompactResults.csv')
-tourneyseeds = pd.read_csv('../input/WNCAATourneySeeds.csv')
-tourneyslots = pd.read_csv('../input/WNCAATourneySlots.csv')
-regseasoncompactresults = pd.read_csv('../input/WRegularSeasonCompactResults.csv')
-seasons = pd.read_csv('../input/WSeasons.csv')
-teamspellings = pd.read_csv('../input/WTeamSpellings.csv', engine='python')
-teams = pd.read_csv('../input/WTeams.csv')
-
+# ## Snapshot
 
 # In[ ]:
 
 
-print(tourneycompactresults.shape)
-print(regseasoncompactresults.shape)
+air_reserve.head(2) #all the air stores booking data
 
 
 # In[ ]:
 
 
-# Convert Tourney Seed to a Number
-tourneyseeds['SeedNumber'] = tourneyseeds['Seed'].apply(lambda x: int(x[-2:]))
-
-
-# **Merge all the tables:**
-
-# In[ ]:
-
-
-gamecities = gamecities.merge(cities,how='left',on='CityID')
-
-tourneycompactresults['WSeed'] = tourneycompactresults[['Season','WTeamID']].merge(tourneyseeds,left_on = ['Season','WTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
-tourneycompactresults['LSeed'] = tourneycompactresults[['Season','LTeamID']].merge(tourneyseeds,left_on = ['Season','LTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
-
-tourneycompactresults = tourneycompactresults.merge(gamecities,how='left',on=['Season','DayNum','WTeamID','LTeamID'])
-
-regseasoncompactresults['WSeed'] = regseasoncompactresults[['Season','WTeamID']].merge(tourneyseeds,left_on = ['Season','WTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
-regseasoncompactresults['LSeed'] = regseasoncompactresults[['Season','LTeamID']].merge(tourneyseeds,left_on = ['Season','LTeamID'],right_on = ['Season','TeamID'],how='left')[['SeedNumber']]
-
-regseasoncompactresults = regseasoncompactresults.merge(gamecities,how='left',on=['Season','DayNum','WTeamID','LTeamID'])
+hpg_reserve.head(2) #all the hpg stores booking data
 
 
 # In[ ]:
 
 
-regseasoncompactresults = regseasoncompactresults.merge(seasons,how='left',on='Season')
-tourneycompactresults = tourneycompactresults.merge(seasons,how='left',on='Season')
+air_store_info.head(2) #description of air stores
 
 
 # In[ ]:
 
 
-regseasoncompactresults['WTeamName'] = regseasoncompactresults[['WTeamID']].merge(teams,how='left',left_on='WTeamID',right_on='TeamID')[['TeamName']]
-regseasoncompactresults['LTeamName'] = regseasoncompactresults[['LTeamID']].merge(teams,how='left',left_on='LTeamID',right_on='TeamID')[['TeamName']]
-
-tourneycompactresults['WTeamName'] = tourneycompactresults[['WTeamID']].merge(teams,how='left',left_on='WTeamID',right_on='TeamID')[['TeamName']]
-tourneycompactresults['LTeamName'] = tourneycompactresults[['LTeamID']].merge(teams,how='left',left_on='LTeamID',right_on='TeamID')[['TeamName']]
+hpg_store_info.head(2) #description of hpg stores
 
 
 # In[ ]:
 
 
-print(tourneycompactresults.shape)
-print(regseasoncompactresults.shape)
-
-
-# We have merged all the tables now, we can start working on exploring the data without having to worry about joining multiple table.
-# 
-# The data is present in regseasoncompactresults and tourneycompactresults tables.
-
-# In[ ]:
-
-
-fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
-ax1 = sns.countplot(x=tourneycompactresults['WSeed'],ax=ax1)
-ax1.set_title("Seed of Winners - Tourney")
-ax2 = sns.countplot(x=tourneycompactresults['LSeed'],ax=ax2);
-ax2.set_title("Seed of Losers - Tourney")
-
-plt.legend();
+air_visit.head(2) #historical visits for air stores
 
 
 # In[ ]:
 
 
-fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
-ax1 = sns.countplot(x=regseasoncompactresults['WSeed'],ax=ax1)
-ax1.set_title("Seed of Winners - Reg Season")
-ax2 = sns.countplot(x=regseasoncompactresults['LSeed'],ax=ax2)
-ax2.set_title("Seed of Losers - Reg Season")
-
-plt.legend();
-
-
-# Based on the visualizations, the top seeds won most of the matches and lost fewer matches relatively. So its safe to assume that this is a key feature for our model both in tourneys and regular seasons.
-
-# In[ ]:
-
-
-fig,(ax1,ax2) = plt.subplots(ncols=2, figsize=(12,4))
-ax1 = sns.countplot(x=regseasoncompactresults['WLoc'],ax=ax1)
-ax1.set_title("Reg Season")
-ax1.set_xlabel('Winning location')
-ax2 = sns.countplot(x=tourneycompactresults['WLoc'],ax=ax2)
-ax2.set_title("Tourneys")
-ax2.set_xlabel('Winning location')
-
-plt.legend();
+date_info.head(2) 
 
 
 # In[ ]:
 
 
-fig,(ax1,ax2) = plt.subplots(nrows=2, figsize=(12,10))
-a = sns.distplot(tourneycompactresults['WScore'],label='Winning Score',ax=ax1)
-a = sns.distplot(tourneycompactresults['LScore'],ax=a,label='Losing Score')
-a.set_xlabel("Score distribution-Tourney Results")
-
-b = sns.distplot(regseasoncompactresults['WScore'],label='Winning Score',ax=ax2)
-b = sns.distplot(regseasoncompactresults['LScore'],ax=b,label='Losing Score')
-b.set_xlabel("Score distribution-RegSeason Results")
-
-plt.legend();
+store_relation.head(2) #hpg store to air store mapping
 
 
-# Based on the distribution, the score tends to be higher in Tourney's than in regular seasons.
-# 
-# Clearly, the score of winners is higher than the score of losers both in tourneys and Regular seasons.
+# ---
+
+# ## Submission file treatment
+# We are only predicting on air stores which are in this file
 
 # In[ ]:
 
 
-# Calculate the Average Team Seed
-averageseed = tourneyseeds.groupby(['TeamID']).agg(np.mean).sort_values('SeedNumber')
-averageseed = averageseed.merge(teams, left_index=True, right_on='TeamID') #Add Teamnname
-averageseed.head(20).plot(x='TeamName',
-                          y='SeedNumber',
-                          kind='bar',
-                          figsize=(15,5),
-                         title='Top 20 Average Tournament Seed');
+sample_submission.head(2) #air id and date is merged together
 
+
+# **air id and date is merged together so we'll extract id and calendar date**
+
+# In[ ]:
+
+
+#https://www.kaggle.com/zeemeen/weighted-mean-running-10-sec-lb-0-509
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+
+
+# In[ ]:
+
+
+sample_submission.head(2) #air id and date is merged together
+
+
+# In[ ]:
+
+
+sample_submission.apply(lambda c: c.nunique()) 
+
+
+# **Unique number of stores to predict: 821**
+
+# ---
+
+# ## Data pre-processing
+
+# In[ ]:
+
+
+air_store_info.apply(lambda x: x.nunique())
+
+
+# In[ ]:
+
+
+air_reserve.apply(lambda x: x.nunique())
+
+
+# In[ ]:
+
+
+set(air_reserve.air_store_id) < set(air_store_info.air_store_id) 
+
+
+# ***All the store ids in air reserve data is a subset of ids in air store info data***
+
+# ### Combining different data sources
+
+# In[ ]:
+
+
+air_combine = pd.merge(air_reserve, air_store_info, on='air_store_id', how='outer') #joining reservation and store info data for air stores
+
+
+# In[ ]:
+
+
+air_combine.head(2)
+
+
+# In[ ]:
+
+
+hpg_combine = pd.merge(hpg_reserve, hpg_store_info, on='hpg_store_id', how='left') #joining reservation and store info data for hpg stores
+
+
+# In[ ]:
+
+
+hpg_combine.tail(2)
+
+
+# **I'm assuming that air stores which are also listed in hpg have mutually exclusive bookings through air and hpg portal. As we are forecasting on air stores only, we'll pull information for those specific stores from the hpg dataset. For that we'll first jpin hpg dataset with store relation dataset to pull corresponding air store ids**
+
+# In[ ]:
+
+
+hpg_combine = pd.merge(hpg_combine, store_relation, on='hpg_store_id', how='right') #right join as we want data for only air stores
+
+
+# In[ ]:
+
+
+hpg_combine.head(2)
+
+
+# In[ ]:
+
+
+hpg_combine = hpg_combine.drop(['hpg_store_id'],axis =1) #don't require hpg_id now
+
+
+# In[ ]:
+
+
+hpg_combine.rename(columns={'hpg_genre_name': 'air_genre_name', 'hpg_area_name': 'air_area_name'}, inplace=True)#renaming column names to match up with the air_combine dataset
+
+
+# In[ ]:
+
+
+hpg_combine.tail(2)
+
+
+# In[ ]:
+
+
+air_combine.head(2)
+
+
+# In[ ]:
+
+
+air_combine.shape,hpg_combine.shape
+
+
+# In[ ]:
+
+
+air_combine = pd.concat([air_combine,hpg_combine],axis = 0) #combining data for air stores from both datasets
+
+
+# In[ ]:
+
+
+air_combine.tail(2)
+
+
+# In[ ]:
+
+
+air_combine.shape
+
+
+# Now we need to extract the date from the datetime column to join it with date_info table
+
+# In[ ]:
+
+
+air_combine['visit_date'] = pd.to_datetime(air_combine['visit_datetime'].dt.date)
+
+
+# In[ ]:
+
+
+air_combine['reserve_date'] = pd.to_datetime(air_combine['reserve_datetime'].dt.date)
+
+
+# In[ ]:
+
+
+air_combine.head(2)
+
+
+# In[ ]:
+
+
+air_combine = pd.merge(air_combine, date_info, left_on='visit_date',right_on='calendar_date', how='left') #joining on visit_date column
+
+
+# In[ ]:
+
+
+air_combine.head(1)
+
+
+# In[ ]:
+
+
+air_combine = air_combine.drop(['visit_datetime','reserve_datetime'],axis = 1) #dropping unnecessary columns
+
+
+# In[ ]:
+
+
+air_combine.head(2)
+
+
+# ### Missing values treatment
+
+# In[ ]:
+
+
+air_combine.isnull().sum() #null values
+
+
+# Missing value:
+# * 'reserve_visitors':0
+# * 'visit_date':pd.to_datetime('01/01/2099')
+# * 'reserve_date':pd.to_datetime('01/01/2099')
+# * 'calendar_date':pd.to_datetime('01/01/2099')
+# * 'day_of_week':'unknown'
+# * 'holiday_flg':-99
+# * 'latitude':-99
+# * 'longitude':-99
+# * 'air_genre_name':'unknown'
+# * 'air_area_name':'unknown'
+
+# In[ ]:
+
+
+air_combine = air_combine.fillna({'reserve_visitors':0,'visit_date':pd.to_datetime('01/01/2099'),
+                                  'reserve_date':pd.to_datetime('01/01/2099'),'calendar_date':pd.to_datetime('01/01/2099'),
+                                  'day_of_week':'unknown','holiday_flg':-99,'latitude':-99,'longitude':-99,'air_genre_name':'unknown',
+                                 'air_area_name':'unknown'})
+
+
+# In[ ]:
+
+
+air_combine.isnull().sum() #no null values
+
+
+# ### Data type conversion
+
+# In[ ]:
+
+
+air_combine.dtypes
+
+
+# In[ ]:
+
+
+air_combine['holiday_flg'] = air_combine['holiday_flg'].astype('int8')
+
+air_combine['day_of_week'] = air_combine['day_of_week'].astype('category')
+
+air_combine['air_genre_name'] = air_combine['air_genre_name'].astype('category')
+
+air_combine['air_area_name'] = air_combine['air_area_name'].astype('category')
+
+air_combine['air_store_id'] = air_combine['air_store_id'].astype('category')
+
+air_combine['reserve_visitors'] = air_combine['reserve_visitors'].astype('int8')
+
+
+# In[ ]:
+
+
+air_combine.dtypes
+
+
+# ---
+
+# ***So for now the combined data look like this. I haven't joined the air visit historical data to this combined dataset for now***
+
+# In[ ]:
+
+
+air_combine.head()
+
+
+# In[ ]:
+
+
+air_visit.head()
+
+
+# In[ ]:
+
+
+air_combine.to_csv('air_combine.csv',index = False)
+
+
+# **Whenever you do some data processing on pandas especially when you're dealing with big datasets, you can store the intermediate pandas dataframe as feather format like this. It saves a lot of time while reading it back again. Much faster than pickle**
+
+# In[ ]:
+
+
+# air_combine.to_feather('air_combine_raw') 
+
+
+# In[ ]:
+
+
+# df_combine = pd.read_feather('air_combine_raw') #to read from feather format
+
+
+# In[ ]:
+
+
+# df_combine.head()
+
+
+# ##### Let me know if you have any questions or suggestions

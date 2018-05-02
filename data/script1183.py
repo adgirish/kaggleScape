@@ -1,174 +1,215 @@
 
 # coding: utf-8
 
-# In[1]:
+# # Advanced Feature Exploration
+
+# In[ ]:
 
 
-#Let's do the usual imports
-import pandas as pd
 import numpy as np
-import seaborn as sns
+import pandas as pd
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[2]:
-
-
-#Reading Our data
-df= pd.read_csv('../input/crypto-markets.csv', parse_dates=['date'], index_col='date')
-
-
-# In[3]:
-
-
-df.head()
-
-
-# In[4]:
-
-
-df.tail()
-
-
-# **We have a lot of cryptocurrencies. I'll just try to focus on Bitcoin here. Also notcie that there's no volume values. I wonder why?**
-
-# In[5]:
-
-
-btc=df[df['symbol']=='BTC']#Extracting the bitcoin data from the dataframe
-btc.drop(['volume','symbol','name','ranknow','market'],axis=1,inplace=True)#Just dropping columns here!
-
-
-# In[6]:
-
-
-btc.isnull().any()#We don't have any NaN values luckily
-
-
-# In[7]:
-
-
-btc.shape #We can see that we have 1696 observations for bitcoin here 
-
-
-# In[8]:
-
-
-btc.tail()#Our data is pretty up to date it seems! 
-
-
-# **Lets draw that famous stock market graph and get surprised of Bitcoin's huge growth**
-
-# In[9]:
-
-
-sns.set()
-sns.set_style('whitegrid')
-btc['close'].plot(figsize=(12,6),label='Close')
-btc['close'].rolling(window=30).mean().plot(label='30 Day Avg')# Plotting the 
-#rolling 30 day average against the Close Price
-plt.legend()
-
-
-# ![](http://)**Just because I'm a regression nerd, I will be using it to predict the behaviour of Bitcoin a month into the future. And to be honest, the graph of the last few months looks like a line to me! **
-
-# In[10]:
-
-
-#I will be adding a feature to improve the model.This feature is provided by Tafarel Yan in his Kernel
-
-btc['ohlc_average'] = (btc['open'] + btc['high'] + btc['low'] + btc['close']) / 4
-
-
-# In[11]:
-
-
-btc.head()
-
-
-# In[12]:
-
-
-btc['Price_After_Month']=btc['close'].shift(-30) #This will be our label
-
-
-# In[13]:
-
-
-btc.tail()#We basically moved all our values 30 lines up in our last cell
-
-
-# In[14]:
-
-
-#Preprocessing
-from sklearn import preprocessing
-btc.dropna(inplace=True)
-X=btc.drop('Price_After_Month',axis=1)
-X=preprocessing.scale(X)#We need to scale our values to input them in our model
-y=btc['Price_After_Month']
-
-
-
-# In[15]:
-
-
+from sklearn import cluster
+from sklearn import ensemble
 from sklearn import cross_validation
-X_train,X_test,y_train,y_test=cross_validation.train_test_split(X,y,test_size=0.3,random_state=101)
+from sklearn.metrics import roc_auc_score as auc
+import time
+
+plt.rcParams['figure.figsize'] = (10, 10)
+
+#%% load data and remove constant and duplicate columns  (taken from a kaggle script)
+
+trainDataFrame = pd.read_csv('../input/train.csv')
+
+# remove constant columns
+colsToRemove = []
+for col in trainDataFrame.columns:
+    if trainDataFrame[col].std() == 0:
+        colsToRemove.append(col)
+
+trainDataFrame.drop(colsToRemove, axis=1, inplace=True)
+
+# remove duplicate columns
+colsToRemove = []
+columns = trainDataFrame.columns
+for i in range(len(columns)-1):
+    v = trainDataFrame[columns[i]].values
+    for j in range(i+1,len(columns)):
+        if np.array_equal(v,trainDataFrame[columns[j]].values):
+            colsToRemove.append(columns[j])
+
+trainDataFrame.drop(colsToRemove, axis=1, inplace=True)
+
+trainLabels = trainDataFrame['TARGET']
+trainFeatures = trainDataFrame.drop(['ID','TARGET'], axis=1)
 
 
-# In[16]:
+#%% look at single feature performance
+
+X_train, X_valid, y_train, y_valid = cross_validation.train_test_split(trainFeatures, trainLabels, 
+                                                                       test_size=0.5, random_state=1)
+verySimpleLearner = ensemble.GradientBoostingClassifier(n_estimators=20, max_features=1, max_depth=3, 
+                                                        min_samples_leaf=100, learning_rate=0.1, 
+                                                        subsample=0.65, loss='deviance', random_state=1)
+
+startTime = time.time()
+singleFeatureTable = pd.DataFrame(index=range(len(X_train.columns)), columns=['feature','AUC'])
+for k,feature in enumerate(X_train.columns):
+    trainInputFeature = X_train[feature].values.reshape(-1,1)
+    validInputFeature = X_valid[feature].values.reshape(-1,1)
+    verySimpleLearner.fit(trainInputFeature, y_train)
+    
+    validAUC = auc(y_valid, verySimpleLearner.predict_proba(validInputFeature)[:,1])
+    singleFeatureTable.ix[k,'feature'] = feature
+    singleFeatureTable.ix[k,'AUC'] = validAUC
+        
+print("finished evaluating single features. took %.2f minutes" %((time.time()-startTime)/60))
 
 
-from sklearn.ensemble import RandomForestRegressor
-reg=RandomForestRegressor(n_estimators=200,random_state=101)
-reg.fit(X_train,y_train)
-accuracy=reg.score(X_test,y_test)
-accuracy=accuracy*100
-accuracy = float("{0:.4f}".format(accuracy))
-print('Accuracy is:',accuracy,'%')#This percentage shows how much our regression fits our data
+# ### Show single feature AUC performace
+# this is the same as in "Basic Feature Exploration" script, to be used later
+
+# In[ ]:
 
 
-# In[17]:
+#%% sort according to AUC and present the table
+singleFeatureTable = singleFeatureTable.sort_values(by='AUC', axis=0, ascending=False).reset_index(drop=True)
+
+singleFeatureTable.ix[:15,:]
 
 
-preds = reg.predict(X_test)
-print("The prediction is:",preds[1],"But the real value is:" ,y_test[1])
-#We can see that our predictions are kind of accurate but we still need to work on on them a lot. 
+# ### Generate 400 five-wise random feature combinations and calculate their AUC
+
+# In[ ]:
 
 
-# In[18]:
+#%% find interesting fivewise combinations
+
+numFeaturesInCombination = 5
+numCombinations = 400
+numBestSingleFeaturesToSelectFrom = 20
+
+X_train, X_valid, y_train, y_valid = cross_validation.train_test_split(trainFeatures, trainLabels, 
+                                                                       test_size=0.5, random_state=1)
+weakLearner = ensemble.GradientBoostingClassifier(n_estimators=30, max_features=2, max_depth=3, 
+                                                  min_samples_leaf=100,learning_rate=0.1, 
+                                                  subsample=0.65, loss='deviance', random_state=1)
+
+featuresToUse = singleFeatureTable.ix[0:numBestSingleFeaturesToSelectFrom-1,'feature']
+featureColumnNames = ['feature'+str(x+1) for x in range(numFeaturesInCombination)]
+featureCombinationsTable = pd.DataFrame(index=range(numCombinations), columns=featureColumnNames + ['combinedAUC'])
+
+# for numCombinations iterations 
+startTime = time.time()
+for combination in range(numCombinations):
+    # generate random feature combination
+    randomSelectionOfFeatures = sorted(np.random.choice(len(featuresToUse), numFeaturesInCombination, replace=False))
+
+    # store the feature names
+    combinationFeatureNames = [featuresToUse[x] for x in randomSelectionOfFeatures]
+    for i in range(len(randomSelectionOfFeatures)):
+        featureCombinationsTable.ix[combination,featureColumnNames[i]] = combinationFeatureNames[i]
+
+    # build features matrix to get the combination AUC
+    trainInputFeatures = X_train.ix[:,combinationFeatureNames]
+    validInputFeatures = X_valid.ix[:,combinationFeatureNames]
+    # train learner
+    weakLearner.fit(trainInputFeatures, y_train)
+    # store AUC results
+    validAUC = auc(y_valid, weakLearner.predict_proba(validInputFeatures)[:,1])        
+    featureCombinationsTable.ix[combination,'combinedAUC'] = validAUC
+
+validAUC = np.array(featureCombinationsTable.ix[:,'combinedAUC'])
+print("(min,max) AUC = (%.4f,%.4f). took %.1f minutes" % (validAUC.min(),validAUC.max(), (time.time()-startTime)/60))
+
+# show the histogram of the feature combinations performance 
+plt.figure(); plt.hist(validAUC, 100, facecolor='blue', alpha=0.75)
+plt.xlabel('AUC'); plt.ylabel('frequency'); plt.title('feature combination AUC histogram'); plt.show()
 
 
-#Apply our model and get our prediction
-X_30=X[-30:]#We'll take the last 30 elements to make our predictions on them
-forecast=reg.predict(X_30)
+# In[ ]:
 
 
-# In[19]:
+#%% sort according to combination AUC and look at the table
+
+featureCombinationsTable = featureCombinationsTable.sort_values(by='combinedAUC', axis=0, ascending=False).reset_index(drop=True)
+featureCombinationsTable.ix[:20,:]
 
 
-#creating a new column which contains the predictions! 
-#Proceed at your own risk!  
-from datetime import datetime, timedelta
-last_date=btc.iloc[-1].name
-modified_date = last_date + timedelta(days=1)
-date=pd.date_range(modified_date,periods=30,freq='D')
-df1=pd.DataFrame(forecast,columns=['Forecast'],index=date)
-btc=btc.append(df1)
-btc.tail()
+# it's easy to see that this table contains a lot of feature overlap
+# ### Visualize this by building a Pairwise Overlap Matrix
+
+# In[ ]:
 
 
-# In[20]:
+#%% visualize the overlap by building a pairwise overlap matrix
+
+combinationOverlapMatrix = np.zeros((numCombinations,numCombinations))
+for comb_i in range(numCombinations):
+    for comb_j in range(comb_i+1,numCombinations):
+        # get the features list for each combination        
+        featuresComb_i = [featureCombinationsTable.ix[comb_i,featureColumnNames[x]] for x in range(numFeaturesInCombination)]
+        featuresComb_j = [featureCombinationsTable.ix[comb_j,featureColumnNames[x]] for x in range(numFeaturesInCombination)]
+        # store the number of overlapping features
+        combinationOverlapMatrix[comb_i,comb_j] = 2*numFeaturesInCombination-len(set(featuresComb_i+featuresComb_j))
+        combinationOverlapMatrix[comb_j,comb_i] = combinationOverlapMatrix[comb_i,comb_j]
+
+plt.figure(); plt.imshow(combinationOverlapMatrix,cmap='autumn'); plt.title('combination overlap'); plt.colorbar()
 
 
-#Now we'll plot our forecast! 
-btc['close'].plot(figsize=(12,6),label='Close')
-btc['Forecast'].plot(label='forecast')
-plt.legend()
+# #### We would like to remove some of this redundancy
+# ### Perform k-means on the overlap patterns and reorder the matrix
+
+# In[ ]:
 
 
-# **Bitcoin was about 18000 USD on the 18th of December and our model predicted it to be 18945 USD! You can see the potential here!We've achieved this with just a basic model. Maybe I'll do a better predictive model in the future. I'll leave it here for now.**
+#%% we would like to get the top performing but most different feature combinations
 
-# **Thank you for you attention**
+numFeaturesToSelect = 15
+
+cluserer = cluster.KMeans(n_clusters=numFeaturesToSelect)
+clusterInds = cluserer.fit_predict(combinationOverlapMatrix)
+
+#%% reorder features according to their new clusters
+
+# group the rows into clusters
+clusteredRows = {}
+clusterMaxAUC = {}
+clusterMaxInd = {}
+for clusterInd in np.unique(clusterInds):
+    clusteredRows[clusterInd] = combinationOverlapMatrix[clusterInds == clusterInd,:]
+    clusterMaxAUC[clusterInd] = featureCombinationsTable.ix[clusterInds == clusterInd,'combinedAUC'].max(axis=0)
+    clusterMaxInd[clusterInd] = featureCombinationsTable.ix[clusterInds == clusterInd,'combinedAUC'].idxmax(axis=0)    
+    
+import operator    
+sortedClustersByMaxAUCTuple = sorted(clusterMaxAUC.items(), key=operator.itemgetter(1),reverse=True)
+
+# calculate the reordering vector
+finalFeaturesToKeep = []
+reorderedVector = None
+for k,item in enumerate(sortedClustersByMaxAUCTuple):
+    if k == 0:
+        reorderedVector = np.array((clusterInds == item[0]).nonzero())
+    else:
+        reorderedVector = np.hstack((reorderedVector,np.array((clusterInds == item[0]).nonzero())))
+    finalFeaturesToKeep.append(clusterMaxInd[item[0]])
+reorderedVector = reorderedVector.flatten()
+
+# reorder the matrix by rows and columns
+reorderedMatrix = combinationOverlapMatrix[reorderedVector,:]
+reorderedMatrix = reorderedMatrix[:,reorderedVector]
+
+# show the matrix
+plt.figure(); plt.imshow(reorderedMatrix,cmap='autumn'); plt.title('reordered combination overlap'); plt.colorbar()
+
+
+# # End Result
+# ### The 15 Best least redundent five-wise feature combinations
+
+# In[ ]:
+
+
+#%% show the final combinations
+
+featureCombinationsTable.ix[finalFeaturesToKeep,:]
+

@@ -1,196 +1,174 @@
 
 # coding: utf-8
 
-# **The Choice is Yours**
+# # Styling your plots
 # 
-# This Kernel demonstrates a few feature engineering options, lets get started by importing the python libraries that support comma delimited file data loads for analysis
+# ## Introduction
+# 
+# Whenever exposing your work to an external audience (like, say, the Kaggle userbase), styling your work is a must. The defaults in `pandas` (and other tools) are rarely exactly right for the message you want to communicate. Tweaking your plot can greatly enhance the communicative power of your visualizations, helping to make your work more impactful.
+# 
+# In this section we'll learn how to style the visualizations we've been creating. Because there are *so many* things you can tweak in your plot, it's impossible to cover everything, so we won't try to be comprehensive here. Instead this section will cover some of the most useful basics: changing figure sizes, colors, and font sizes; adding titles; and removing axis borders.
+# 
+# An important skill in plot styling is knowing how to look things up. Comments like "I have been using Matplotlib for a decade now, and I still have to look most things up" are [all too common](https://youtu.be/aRxahWy-ul8?t=2m42s). If you're styling a `seaborn` plot, the library's [gallery](http://seaborn.pydata.org/examples/) and [API documentation](https://seaborn.pydata.org/api.html) are a great place to find styling options. And for both `seaborn` and `pandas` there is a wealth of information that you can find by looking up "how to do X with Y" on [StackOverflow](https://stackoverflow.com/) (replacing X with what you want to do, and Y with `pandas` or `seaborn`). If you want to change your plot in some way not covered in this brief tutorial, and don't already know what function you need to do it, searching like this is the most efficient way of finding it.
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import glob
-
-datafiles = sorted(glob.glob('../input/donorschoose-application-screening/**.csv'))
-datafiles = {file.split('/')[-1].split('.')[0]: pd.read_csv(file, encoding='latin-1', low_memory=True) for file in datafiles}
-print([k for k in datafiles])
+reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
+reviews.head(3)
 
 
-# Lets review the file contents
+# ## Points on style
+# 
+# Recall our bar plot from earlier:
 
 # In[ ]:
 
 
-from IPython.display import display
-for key in datafiles:
-    print(key, len(datafiles[key]))
-    display(datafiles[key].head(2))
+reviews['points'].value_counts().sort_index().plot.bar()
 
 
-# Lets utilize a wordcloud to visualize the important keywords in approved project resources
+# Throughout this section we're going to work on making this plot look nicer.
+# 
+# This plot is kind of hard to see. So make it bigger! We can use the `figsize` parameter to do that.
+
+# In[ ]:
+
+
+reviews['points'].value_counts().sort_index().plot.bar(figsize=(12, 6))
+
+
+# `figsize` controls the size of the image, in inches. It expects a tuple of `(width, height)` values.
+# 
+# Next, we can change the color of the bars to be more thematic, using the `color` parameter.
+
+# In[ ]:
+
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    figsize=(12, 6),
+    color='mediumvioletred'
+)
+
+
+# The text labels are very hard to read at this size. They fit the plot when our plot was very small, but now that the plot is much bigger we need much bigger labels. We can used `fontsize` to adjust this.
+
+# In[ ]:
+
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    figsize=(12, 6),
+    color='mediumvioletred',
+    fontsize=16
+)
+
+
+# We also need a `title`.
+
+# In[ ]:
+
+
+reviews['points'].value_counts().sort_index().plot.bar(
+    figsize=(12, 6),
+    color='mediumvioletred',
+    fontsize=16,
+    title='Rankings Given by Wine Magazine',
+)
+
+
+# However, this title is too small. Unfortunately, `pandas` doesn't give us an easy way of adjusting the title size.
+# 
+# Under the hood, `pandas` data visualization tools are built on top of another, lower-level graphics library called `matplotlib`. Anything that you build in `pandas` can be built using `matplotlib` directly. `pandas` merely make it easier to get that work done.
+# 
+# `matplotlib` *does* provide a way of adjusting the title size. Let's go ahead and do it that way, and see what's different:
 
 # In[ ]:
 
 
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-from wordcloud import STOPWORDS
-wc = WordCloud(background_color='white', max_words=2000, width=1600, height=1000, stopwords=STOPWORDS)
-wc_string = pd.merge(datafiles['train'], datafiles['resources'], how='left', on='id')[['description','project_is_approved']]
-wc_string = wc_string[wc_string['project_is_approved']==1]['description'].astype(str).values
-wc_string = ' '.join(wc_string)
-wc.generate(wc_string)
-plt.imshow(wc)
+
+ax = reviews['points'].value_counts().sort_index().plot.bar(
+    figsize=(12, 6),
+    color='mediumvioletred',
+    fontsize=16
+)
+ax.set_title("Rankings Given by Wine Magazine", fontsize=20)
 
 
-# Here we create a few aggregate resource quantity and price sheet features and combine them with the train and test projects
-# * It is good practice to address NA values in left joins, an advance feature engineering option here can be to use sklearn.preprocessing.Imputer
-
-# In[ ]:
-
-
-print(datafiles['train'].shape, datafiles['test'].shape)
-datafiles['resources']['resources_total'] = datafiles['resources']['quantity'] * datafiles['resources']['price']
-dfr = datafiles['resources'].groupby(['id'], as_index=False)[['resources_total']].sum()
-datafiles['train'] = pd.merge(datafiles['train'], dfr, how='left', on='id').fillna(-1)
-datafiles['test'] = pd.merge(datafiles['test'], dfr, how='left', on='id').fillna(-1)
-
-dfr = datafiles['resources'].groupby(['id'], as_index=False)[['resources_total']].mean()
-dfr = dfr.rename(columns={'resources_total':'resources_total_mean'})
-datafiles['train'] = pd.merge(datafiles['train'], dfr, how='left', on='id').fillna(-1)
-datafiles['test'] = pd.merge(datafiles['test'], dfr, how='left', on='id').fillna(-1)
-
-dfr = datafiles['resources'].groupby(['id'], as_index=False)[['quantity']].count()
-dfr = dfr.rename(columns={'quantity':'resources_quantity_count'})
-datafiles['train'] = pd.merge(datafiles['train'], dfr, how='left', on='id').fillna(-1)
-datafiles['test'] = pd.merge(datafiles['test'], dfr, how='left', on='id').fillna(-1)
-
-dfr = datafiles['resources'].groupby(['id'], as_index=False)[['quantity']].sum()
-dfr = dfr.rename(columns={'quantity':'resources_quantity_sum'})
-datafiles['train'] = pd.merge(datafiles['train'], dfr, how='left', on='id').fillna(-1)
-datafiles['test'] = pd.merge(datafiles['test'], dfr, how='left', on='id').fillna(-1)
-print(datafiles['train'].shape, datafiles['test'].shape)
-
-
-# Here we encode categories
-# * Advanced encoding options include hashing and weighting
-
-# In[ ]:
-
-
-from sklearn import *
-
-for c in ['teacher_id','teacher_prefix','school_state', 'project_grade_category']:
-    lbl = preprocessing.LabelEncoder()
-    lbl.fit(list(datafiles['train'][c].unique())+list(datafiles['test'][c].unique()))
-    datafiles['train'][c] = lbl.fit_transform(datafiles['train'][c].astype(str))
-    datafiles['test'][c] = lbl.fit_transform(datafiles['test'][c].astype(str))
-    print(c)
-
-    for c in ['project_subject_categories', 'project_subject_subcategories']:
-        for i in range(4):
-            lbl = preprocessing.LabelEncoder()
-            labels = list(datafiles['train'][c].unique())+list(datafiles['test'][c].unique())
-            labels = [str(l).split(',')[i] if len(str(l).split(','))>i else '' for l in labels]
-            lbl.fit(labels)
-            datafiles['train'][c + str(i+1)] = lbl.fit_transform(datafiles['train'][c].map(lambda x: str(x).split(',')[i] if len(str(x).split(','))>i else '').astype(str))
-            datafiles['test'][c + str(i+1)] = lbl.fit_transform(datafiles['test'][c].map(lambda x: str(x).split(',')[i] if len(str(x).split(','))>i else '').astype(str))
-
-
-# In[ ]:
-
-
-datafiles['test'].head()
-
-
-# Here we add some date features
-# * Based on the data description note on essay data, a feature here can also include a value for when the paragraph responses where changed on February 18, 2010
-
-# In[ ]:
-
-
-import datetime
-
-for c in ['project_submitted_datetime']:
-    for t in ['train','test']:
-        datafiles[t][c] = pd.to_datetime(datafiles[t][c])
-        datafiles[t][c+'question_balance'] = (datafiles[t][c] < datetime.date(2010, 2, 18)).astype(np.int)
-        datafiles[t][c+'quarter'] = datafiles[t][c].dt.year
-        datafiles[t][c+'quarter'] = datafiles[t][c].dt.quarter
-        datafiles[t][c+'month'] = datafiles[t][c].dt.month
-        datafiles[t][c+'day'] = datafiles[t][c].dt.day
-        datafiles[t][c+'dow'] = datafiles[t][c].dt.dayofweek
-        datafiles[t][c+'wd'] = datafiles[t][c].dt.weekday
-        datafiles[t][c+'hr'] = datafiles[t][c].dt.hour
-        datafiles[t][c+'m'] = datafiles[t][c].dt.minute
-    print(c)
-
-
-# Here we add description features including:
-# * Word length and count features
-# * Term Frequency Inverse Document Frequency features (cutoff at 200 features for performance)
+# In the cell immediately above, all we've done is grabbed that object, assigned it to the variable `ax`, and then called `set_title` on `ax`. The `ax.set_title` method makes it easy to change the fontsize; the `title=` keyword parameter in the `pandas` library does not.
 # 
-# For advanced options you can explore Natural Language Toolkits which include stemming and tokenizing options
+# `seaborn`, covered in a separate section of the tutorial, *also* uses `matplotlib` under the hood. This means that the tricks above work there too. `seaborn` has its own tricks, too&mdash;for example, we can use the very convenient `sns.despine` method to turn off the ugly black border.
 
 # In[ ]:
 
 
-max_features_ = 200
-print(datafiles['train'].shape, datafiles['test'].shape)
-for c in ['project_resource_summary', 'project_title', 'project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4']:
-    tfidf = feature_extraction.text.TfidfVectorizer(ngram_range=(1, 2), stop_words='english', max_df=0.9, min_df=3, max_features=max_features_)
-    tfidf.fit(datafiles['train'][c].astype(str))
-    for t in ['train','test']:
-        datafiles[t][c+'_len'] = datafiles[t][c].map(lambda x: len(str(x)))
-        datafiles[t][c+'_wc'] = datafiles[t][c].map(lambda x: len(str(x).split(' ')))
-        features = pd.DataFrame(tfidf.transform(datafiles[t][c].astype(str)).toarray())
-        features.columns = [c + str(i) for i in range(max_features_)]
-        datafiles[t] = pd.concat((datafiles[t], pd.DataFrame(features)), axis=1, ignore_index=False).reset_index(drop=True)
-    print(c)
-print(datafiles['train'].shape, datafiles['test'].shape)
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+ax = reviews['points'].value_counts().sort_index().plot.bar(
+    figsize=(12, 6),
+    color='mediumvioletred',
+    fontsize=16
+)
+ax.set_title("Rankings Given by Wine Magazine", fontsize=20)
+sns.despine(bottom=True, left=True)
 
 
-# Below are the feature columns that will be used and excluded for training and testing
-
-# In[ ]:
-
-
-col = ['id', 'project_is_approved', 'project_resource_summary', 'project_title', 'project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4', 'project_submitted_datetime', 'project_subject_categories', 'project_subject_subcategories']
-col = [c for c in datafiles['train'].columns if c not in col]
-
-
-# Here we use the XGBoost supervised learning model with an AUC metric and Binary Logistic objective
-# * The training file is split as a best practice for better validation metric outputs
-# * The learning rate (eta) is set to a high 0.1 for performance with an early stopping option 20 rounds
-
-# Next we blend the results  of a LightGBM supervised learning model with an AUC metric and Binary Logistic objective
-# * The training file is split as a best practice for better validation metric outputs
-# * The learning rate is set to a high 0.1 for performance with an early stopping option 20 rounds
-
-# In[ ]:
-
-
-import lightgbm as lgb
-
-x1, x2, y1, y2 = model_selection.train_test_split(datafiles['train'][col],datafiles['train']['project_is_approved'], test_size=0.20, random_state=19)
-
-params = {'learning_rate': 0.1, 'max_depth': 7, 'boosting': 'gbdt', 'objective': 'binary', 'metric': 'auc', 'is_training_metric': True, 'seed': 19}
-model2 = lgb.train(params, lgb.Dataset(x1, label=y1), 450, lgb.Dataset(x2, label=y2), verbose_eval=10, early_stopping_rounds=20)
-datafiles['test']['project_is_approved'] = model2.predict(datafiles['test'][col], num_iteration=model2.best_iteration)
-datafiles['test']['project_is_approved'] = datafiles['test']['project_is_approved'].clip(0+1e12, 1-1e12)
-
-
-# Here we blend the results of a great [LightGBM and Tf-idf Starter](https://www.kaggle.com/opanichev/lightgbm-and-tf-idf-starter) by Oleg Panichev using the Add Data Source option of Kaggle Kernels for even better results
+# Prefect. This graph is more clearer than what we started with; it will do a much better job communicating the analysis to our readers.
 # 
+# There are many, many more things that you can do than just what we've shown here. Different plots provide different styling options: `color` is almost universal for example, while `s` (size) only makes sense in a scatterplot. For now, the operations we've shown here are enough to get you started.
+
+# # Exercises
+# 
+# To put your design skills to the test, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
 
 # In[ ]:
 
 
-df = pd.read_csv('../input/lightgbm-and-tf-idf-starter/submission.csv')
-df = pd.merge(datafiles['test'][['id','project_is_approved']], df, on='id')
-df['project_is_approved'] = (df['project_is_approved_x'] + df['project_is_approved_y']*3) / 4
-df[['id','project_is_approved']].to_csv('blend_submission.csv', index=False)
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+pokemon = pd.read_csv("../input/pokemon/Pokemon.csv")
+pokemon.head(3)
 
 
-# Enjoy the public leaderboard score and the journey of feature engineering!
+# In[ ]:
+
+
+pokemon.plot.scatter(x='Attack', y='Defense',
+                     figsize=(12, 6),
+                     title='Pokemon by Attack and Defense')
+
+
+# In[ ]:
+
+
+ax = pokemon['Total'].plot.hist(
+    figsize=(12, 6),
+    fontsize=14,
+    bins=50,
+    color='gray'
+)
+ax.set_title('Pokemon by Stat Total', fontsize=20)
+
+
+# In[ ]:
+
+
+ax = pokemon['Type 1'].value_counts().plot.bar(
+    figsize=(12, 6),
+    fontsize=14
+)
+ax.set_title("Pokemon by Primary Type", fontsize=20)
+sns.despine(bottom=True, left=True)
+
+
+# # Conclusion
+# 
+# In this section of the tutorial, we learned a few simple tricks for making our plots more visually appealing, and hence, more communicative. We also learned that there is another plotting library, `matplotlib`, which lies "underneath" the `pandas` data visualization tools, and which we can use to more finely manipulate our plots.
+# 
+# In the next section we will learn to compose plots together using a technique called subplotting.
+# 
+# [Click here to go to the next section, "Subplots"](https://www.kaggle.com/residentmario/subplots).

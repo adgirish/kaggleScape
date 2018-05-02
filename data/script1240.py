@@ -1,304 +1,314 @@
 
 # coding: utf-8
 
-# # INTRODUCTION
-# 1. Read datas
-# 1. Poverty rate of each state
-# 1. Most common 15 Name or Surname of killed people
-# 1. High school graduation rate of the population that is older than 25 in states
-# 1. Percentage of state's population according to races that are black,white,native american, asian and hispanic
-# 1. High school graduation rate vs Poverty rate of each state
-# 1. Kill properties
-#     * Manner of death
-#     * Kill weapon
-#     * Age of killed people
-#     * Race of killed people
-#     * Most dangerous cities
-#     * Most dangerous states
-#     * Having mental ilness or not for killed people
-#     * Threat types
-#     * Flee types
-#     * Having body cameras or not for police
-# 1. Race rates according to states in kill data 
-# 1. Kill numbers from states in kill data
-# 1. Plotly Visualization Tutorial: https://www.kaggle.com/kanncaa1/plotly-tutorial-for-beginners/editnb
-#     
+# # Exploratory data analysis (EDA)
+
+# This is the very first data analysis I do on my own. Please take the informations on this notebook with a grain of salt. I'm open to all improvements (even rewording), don't hesitate to leave me a comment or upvote if you found it useful. If I'm completely wrong somewhere or if my findings makes no sense don't hesitate to leave me a comment.
 # 
+# This work was influenced by some kernels of the same competition as well as the [Stanford: Statistical reasoning MOOC](https://lagunita.stanford.edu/courses/OLI/StatReasoning/Open/info)
+# 
+# The purpose of this EDA is to find insights which will serve us later in another notebook for Data cleaning/preparation/transformation which will ultimately be used into a machine learning algorithm.
+# We will proceed as follow:
+# 
+# <img src="http://sharpsightlabs.com/wp-content/uploads/2016/05/1_data-analysis-for-ML_how-we-use-dataAnalysis_2016-05-16.png" />
+# 
+# [Source](http://sharpsightlabs.com/blog/data-analysis-machine-learning-example-1/)
+# 
+# Where each steps (Data exploration, Data cleaning, Model building, Presenting results) will belongs to 1 notebook.
+# I will write down a lot of details in this notebook (even some which may seems obvious by nature), as a beginner it's important for me to do so.
+
+# ## Preparations
+
+# For the preparations lets first import the necessary libraries and load the files needed for our EDA
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import pandas as pd
 import seaborn as sns
-import numpy as np
 import matplotlib.pyplot as plt
-from collections import Counter
+
+# Comment this if the data visualisations doesn't work on your side
 get_ipython().run_line_magic('matplotlib', 'inline')
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+plt.style.use('bmh')
 
 
 # In[ ]:
 
 
-# Read datas
-median_house_hold_in_come = pd.read_csv('../input/MedianHouseholdIncome2015.csv', encoding="windows-1252")
-percentage_people_below_poverty_level = pd.read_csv('../input/PercentagePeopleBelowPovertyLevel.csv', encoding="windows-1252")
-percent_over_25_completed_highSchool = pd.read_csv('../input/PercentOver25CompletedHighSchool.csv', encoding="windows-1252")
-share_race_city = pd.read_csv('../input/ShareRaceByCity.csv', encoding="windows-1252")
-kill = pd.read_csv('../input/PoliceKillingsUS.csv', encoding="windows-1252")
+df = pd.read_csv('../input/train.csv')
+df.head()
 
 
 # In[ ]:
 
 
-# Poverty rate of each state
-percentage_people_below_poverty_level.poverty_rate.replace(['-'],0.0,inplace = True)
-percentage_people_below_poverty_level.poverty_rate = percentage_people_below_poverty_level.poverty_rate.astype(float)
-area_list = list(percentage_people_below_poverty_level['Geographic Area'].unique())
-area_poverty_ratio = []
-for i in area_list:
-    x = percentage_people_below_poverty_level[percentage_people_below_poverty_level['Geographic Area']==i]
-    area_poverty_rate = sum(x.poverty_rate)/len(x)
-    area_poverty_ratio.append(area_poverty_rate)
-data = pd.DataFrame({'area_list': area_list,'area_poverty_ratio':area_poverty_ratio})
-new_index = (data['area_poverty_ratio'].sort_values(ascending=False)).index.values
-sorted_data = data.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data['area_list'], y=sorted_data['area_poverty_ratio'])
-plt.xticks(rotation= 90)
-plt.xlabel('States')
-plt.ylabel('Poverty Rate')
-plt.title('Poverty Rate Given States')
+df.info()
+
+
+# From these informations we can already see that some features won't be relevant in our exploratory analysis as there are too much missing values (such as `Alley` and `PoolQC`). Plus there is so much features to analyse that it may be better to concentrate on the ones which can give us real insights. Let's just remove `Id` and the features with 30% or less `NaN` values.
+
+# In[ ]:
+
+
+# df.count() does not include NaN values
+df2 = df[[column for column in df if df[column].count() / len(df) >= 0.3]]
+del df2['Id']
+print("List of dropped columns:", end=" ")
+for c in df.columns:
+    if c not in df2.columns:
+        print(c, end=", ")
+print('\n')
+df = df2
+
+
+# <font color='chocolate'> Note: If we take the features we just removed and look at their description in the `data_description.txt` file we can deduct that these features may not be present on all houses (which explains the `NaN` values). In our next Data preparation/cleaning notebook we could tranform them into categorical dummy values.</font>
+
+# Now lets take a look at how the housing price is distributed
+
+# In[ ]:
+
+
+print(df['SalePrice'].describe())
+plt.figure(figsize=(9, 8))
+sns.distplot(df['SalePrice'], color='g', bins=100, hist_kws={'alpha': 0.4});
+
+
+# <font color='chocolate'>With this information we can see that the prices are skewed right and some outliers lies above ~500,000. We will eventually want to get rid of the them to get a normal distribution of the independent variable (`SalePrice`) for machine learning.</font>
+
+# Note: Apparently using the log function could also do the job but I have no experience with it
+
+# ## Numerical data distribution
+
+# For this part lets look at the distribution of all of the features by ploting them
+
+# To do so lets first list all the types of our data from our dataset and take only the numerical ones:
+
+# In[ ]:
+
+
+list(set(df.dtypes.tolist()))
 
 
 # In[ ]:
 
 
-# Most common 15 Name or Surname of killed people
-separate = kill.name[kill.name != 'TK TK'].str.split() 
-a,b = zip(*separate)                    
-name_list = a+b                         
-name_count = Counter(name_list)         
-most_common_names = name_count.most_common(15)  
-x,y = zip(*most_common_names)
-x,y = list(x),list(y)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=x, y=y,palette = sns.cubehelix_palette(len(x)))
-plt.xlabel('Name or Surname of killed people')
-plt.ylabel('Frequency')
-plt.title('Most common 15 Name or Surname of killed people')
+df_num = df.select_dtypes(include = ['float64', 'int64'])
+df_num.head()
 
+
+# Now lets plot them all:
 
 # In[ ]:
 
 
-# High school graduation rate of the population that is older than 25 in states
-percent_over_25_completed_highSchool.percent_completed_hs.replace(['-'],0.0,inplace = True)
-percent_over_25_completed_highSchool.percent_completed_hs = percent_over_25_completed_highSchool.percent_completed_hs.astype(float)
-area_list = list(percent_over_25_completed_highSchool['Geographic Area'].unique())
-area_highschool = []
-for i in area_list:
-    x = percent_over_25_completed_highSchool[percent_over_25_completed_highSchool['Geographic Area']==i]
-    area_highschool_rate = sum(x.percent_completed_hs)/len(x)
-    area_highschool.append(area_highschool_rate)
+df_num.hist(figsize=(16, 20), bins=50, xlabelsize=8, ylabelsize=8); # ; avoid having the matplotlib verbose informations
 
-data = pd.DataFrame({'area_list': area_list,'area_highschool_ratio':area_highschool})
-new_index = (data['area_highschool_ratio'].sort_values(ascending=True)).index.values
-sorted_data2 = data.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data2['area_list'], y=sorted_data2['area_highschool_ratio'])
-plt.xticks(rotation= 90)
-plt.xlabel('States')
-plt.ylabel('High School Graduate Rate')
-plt.title("Percentage of Given State's Population Above 25 that Has Graduated High School")
 
+# <font color='chocolate'>Features such as `1stFlrSF`, `TotalBsmtSF`, `LotFrontage`, `GrLiveArea`... seems to share a similar distribution to the one we have with `SalePrice`. Lets see if we can find new clues later.</font>
+
+# #### Correlation
+
+# Now we'll try to find which features are strongly correlated with `SalePrice`. We'll store them in a var called `golden_features_list`. We'll reuse our `df_num` dataset to do so.
 
 # In[ ]:
 
 
-# Percentage of state's population according to races that are black,white,native american, asian and hispanic
-share_race_city.replace(['-'],0.0,inplace = True)
-share_race_city.replace(['(X)'],0.0,inplace = True)
-share_race_city.loc[:,['share_white','share_black','share_native_american','share_asian','share_hispanic']] = share_race_city.loc[:,['share_white','share_black','share_native_american','share_asian','share_hispanic']].astype(float)
-area_list = list(share_race_city['Geographic area'].unique())
-share_white = []
-share_black = []
-share_native_american = []
-share_asian = []
-share_hispanic = []
-for i in area_list:
-    x = share_race_city[share_race_city['Geographic area']==i]
-    share_white.append(sum(x.share_white)/len(x))
-    share_black.append(sum(x.share_black) / len(x))
-    share_native_american.append(sum(x.share_native_american) / len(x))
-    share_asian.append(sum(x.share_asian) / len(x))
-    share_hispanic.append(sum(x.share_hispanic) / len(x))
+df_num_corr = df_num.corr()['SalePrice'][:-1] # -1 because the latest row is SalePrice
+golden_features_list = df_num_corr[abs(df_num_corr) > 0.5].sort_values(ascending=False)
+print("There is {} strongly correlated values with SalePrice:\n{}".format(len(golden_features_list), golden_features_list))
 
-f,ax = plt.subplots(figsize = (9,15))
-sns.barplot(x=share_white,y=area_list,color='green',alpha = 0.5,label='White' )
-sns.barplot(x=share_black,y=area_list,color='blue',alpha = 0.7,label='African American')
-sns.barplot(x=share_native_american,y=area_list,color='cyan',alpha = 0.6,label='Native American')
-sns.barplot(x=share_asian,y=area_list,color='yellow',alpha = 0.6,label='Asian')
-sns.barplot(x=share_hispanic,y=area_list,color='red',alpha = 0.6,label='Hispanic')
 
-ax.legend(loc='lower right',frameon = True)     # legendlarin gorunurlugu
-ax.set(xlabel='Percentage of Races', ylabel='States',title = "Percentage of State's Population According to Races ")
-
+# Perfect, we now have a list of strongly correlated values but this list is incomplete as we know that correlation is affected by outliers. So we could proceed as follow:
+# 
+# - Plot the numerical features and see which ones have very few or explainable outliers
+# - Remove the outliers from these features and see which one can have a good correlation without their outliers
+#     
+# Btw, correlation by itself does not always explain the relationship between data so ploting them could even lead us to new insights and in the same manner, check that our correlated values have a linear relationship to the `SalePrice`. 
+# 
+# For example, relationships such as curvilinear relationship cannot be guessed just by looking at the correlation value so lets take the features we excluded from our correlation table and plot them to see if they show some kind of pattern.
 
 # In[ ]:
 
 
-# high school graduation rate vs Poverty rate of each state
-sorted_data['area_poverty_ratio'] = sorted_data['area_poverty_ratio']/max( sorted_data['area_poverty_ratio'])
-sorted_data2['area_highschool_ratio'] = sorted_data2['area_highschool_ratio']/max( sorted_data2['area_highschool_ratio'])
-data = pd.concat([sorted_data,sorted_data2['area_highschool_ratio']],axis=1)
-data.sort_values('area_poverty_ratio',inplace=True)
-f,ax1 = plt.subplots(figsize =(20,10))
-sns.pointplot(x='area_list',y='area_poverty_ratio',data=data,color='lime',alpha=0.8)
-sns.pointplot(x='area_list',y='area_highschool_ratio',data=data,color='red',alpha=0.8)
-plt.text(40,0.6,'high school graduate ratio',color='red',fontsize = 17,style = 'italic')
-plt.text(40,0.55,'poverty ratio',color='lime',fontsize = 18,style = 'italic')
-plt.xlabel('States',fontsize = 15,color='blue')
-plt.ylabel('Values',fontsize = 15,color='blue')
-plt.title('High School Graduate  VS  Poverty Rate',fontsize = 20,color='blue')
-plt.grid()
+for i in range(0, len(df_num.columns), 5):
+    sns.pairplot(data=df_num,
+                x_vars=df_num.columns[i:i+5],
+                y_vars=['SalePrice'])
 
+
+# We can clearly identify some relationships. Most of them seems to have a linear relationship with the `SalePrice` and if we look closely at the data we can see that a lot of data points are located on `x = 0` which may indicate the absence of such feature in the house.
+# 
+# Take `OpenPorchSF`, I doubt that all houses have a porch (mine doesn't for instance but I don't lose hope that one day... yeah one day...).
+
+# So now lets remove these `0` values and repeat the process of finding correlated values: 
 
 # In[ ]:
 
 
-# kill properties
-# Manner of death
-sns.countplot(kill.gender)
-sns.countplot(kill.manner_of_death)
-plt.title('Manner of death',color = 'blue',fontsize=15)
+import operator
+
+individual_features_df = []
+for i in range(0, len(df_num.columns) - 1): # -1 because the last column is SalePrice
+    tmpDf = df_num[[df_num.columns[i], 'SalePrice']]
+    tmpDf = tmpDf[tmpDf[df_num.columns[i]] != 0]
+    individual_features_df.append(tmpDf)
+
+all_correlations = {feature.columns[0]: feature.corr()['SalePrice'][0] for feature in individual_features_df}
+all_correlations = sorted(all_correlations.items(), key=operator.itemgetter(1))
+for (key, value) in all_correlations:
+    print("{:>15}: {:>15}".format(key, value))
 
 
-# In[ ]:
-
-
-# kill weapon
-armed = kill.armed.value_counts()
-plt.figure(figsize=(10,7))
-sns.barplot(x=armed[:7].index,y=armed[:7].values)
-plt.ylabel('Number of Weapon')
-plt.xlabel('Weapon Types')
-plt.title('Kill weapon',color = 'blue',fontsize=15)
-
+# Very interesting! We found another strongly correlated value by cleaning up the data a bit. Now our `golden_features_list` var looks like this:
 
 # In[ ]:
 
 
-# age of killed people
-above25 =['above25' if i >= 25 else 'below25' for i in kill.age]
-df = pd.DataFrame({'age':above25})
-sns.countplot(x=df.age)
-plt.ylabel('Number of Killed People')
-plt.title('Age of killed people',color = 'blue',fontsize=15)
+golden_features_list = [key for key, value in all_correlations if abs(value) >= 0.5]
+print("There is {} strongly correlated values with SalePrice:\n{}".format(len(golden_features_list), golden_features_list))
 
+
+# <font color='chocolate'>We found strongly correlated predictors with `SalePrice`. Later with feature engineering we may add dummy values where value of a given feature > 0 would be 1 (precense of such feature) and 0 would be 0. 
+# <br />For `2ndFlrSF` for example, we could create a dummy value for its precense or non-precense and finally sum it up to `1stFlrSF`.</font>
+
+# ### Conclusion
+
+# <font color='chocolate'>By looking at correlation between numerical values we discovered 11 features which have a strong relationship to a house price. Besides correlation we didn't find any notable pattern on the datas which are not correlated.</font>
+
+# Notes: 
+# 
+# - There may be some patterns I wasn't able to identify due to my lack of expertise
+# - Some values such as `GarageCars` -> `SalePrice` or `Fireplaces` -> `SalePrice` shows a particular pattern with verticals lines roughly meaning that they are discrete variables with a short range but I don't know if they need some sort of "special treatment".
+
+# ## Feature to feature relationship
+
+# Trying to plot all the numerical features in a seaborn pairplot will take us too much time and will be hard to interpret. We can try to see if some variables are linked between each other and then explain their relation with common sense.
 
 # In[ ]:
 
 
-# Race of killed people
-sns.countplot(data=kill, x='race')
-plt.title('Race of killed people',color = 'blue',fontsize=15)
+corr = df_num.drop('SalePrice', axis=1).corr() # We already examined SalePrice correlations
+plt.figure(figsize=(12, 10))
 
+sns.heatmap(corr[(corr >= 0.5) | (corr <= -0.4)], 
+            cmap='viridis', vmax=1.0, vmin=-1.0, linewidths=0.1,
+            annot=True, annot_kws={"size": 8}, square=True);
+
+
+# A lot of features seems to be correlated between each other but some of them such as `YearBuild`/`GarageYrBlt` may just indicate a price inflation over the years. As for `1stFlrSF`/`TotalBsmtSF`, it is normal that the more the 1st floor is large (considering many houses have only 1 floor), the more the total basement will be large.
+# 
+# Now for the ones which are less obvious we can see that:
+# - There is a strong negative correlation between `BsmtUnfSF` (Unfinished square feet of basement area) and `BsmtFinSF2` (Type 2 finished square feet). There is a definition of unfinished square feet [here](http://www.homeadvisor.com/r/calculating-square-footage/) but as for a house of "Type 2", I can't tell what it really is.
+# - `HalfBath`/`2ndFlrSF` is interesting and may indicate that people gives an importance of not having to rush downstairs in case of urgently having to go to the bathroom (I'll consider that when I'll buy myself a house uh...)
+# 
+# There is of course a lot more to discover but I can't really explain the rest of the features except the most obvious ones.
+
+# <font color='chocolate'>We can conclude that, by essence, some of those features may be combined between each other in order to reduce the number of features (`1stFlrSF`/`TotalBsmtSF`, `GarageCars`/`GarageArea`) and others indicates that people expect multiples features to be packaged together.</font>
+
+# ## Q -> Q (Quantitative to Quantitative relationship)
+
+# Let's now examine the quantitative features of our dataframe and how they relate to the `SalePrice` which is also quantitative (hence the relation Q -> Q). I will conduct this analysis with the help of the [Q -> Q chapter of the Standford MOOC](https://lagunita.stanford.edu/courses/OLI/StatReasoning/Open/courseware/eda_er/_m5_case_III/)
+
+# Some of the features of our dataset are categorical. To separate the categorical from quantitative features lets refer ourselves to the `data_description.txt` file. According to this file we end up with the folowing columns:
 
 # In[ ]:
 
 
-# Most dangerous cities
-city = kill.city.value_counts()
-plt.figure(figsize=(10,7))
-sns.barplot(x=city[:12].index,y=city[:12].values)
+quantitative_features_list = ['LotFrontage', 'LotArea', 'MasVnrArea', 'BsmtFinSF1', 'BsmtFinSF2', 'TotalBsmtSF', '1stFlrSF',
+    '2ndFlrSF', 'LowQualFinSF', 'GrLivArea', 'BsmtFullBath', 'BsmtHalfBath', 'FullBath', 'HalfBath',
+    'BedroomAbvGr', 'KitchenAbvGr', 'TotRmsAbvGrd', 'Fireplaces', 'GarageCars', 'GarageArea', 'WoodDeckSF', 'OpenPorchSF', 
+    'EnclosedPorch', '3SsnPorch', 'ScreenPorch', 'PoolArea', 'MiscVal', 'SalePrice']
+df_quantitative_values = df[quantitative_features_list]
+df_quantitative_values.head()
+
+
+# Still, we have a lot of features to analyse here so let's take the *strongly correlated quantitative* features from this dataset and analyse them one by one
+
+# In[ ]:
+
+
+features_to_analyse = [x for x in quantitative_features_list if x in golden_features_list]
+features_to_analyse.append('SalePrice')
+features_to_analyse
+
+
+# Let's look at their distribution.
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(round(len(features_to_analyse) / 3), 3, figsize = (18, 12))
+
+for i, ax in enumerate(fig.axes):
+    if i < len(features_to_analyse) - 1:
+        sns.regplot(x=features_to_analyse[i],y='SalePrice', data=df[features_to_analyse], ax=ax)
+
+
+# We can see that features such as `TotalBsmtSF`, `1stFlrSF`, `GrLivArea` have a big spread but I cannot tell what insights this information gives us
+
+# ## C -> Q (Categorical to Quantitative relationship)
+
+# We will base this part of the exploration on the [C -> Q chapter of the Standford MOOC](https://lagunita.stanford.edu/courses/OLI/StatReasoning/Open/courseware/eda_er/_m3_case_I/)
+# 
+# 
+# Lets get all the categorical features of our dataset and see if we can find some insight in them.
+# Instead of opening back our `data_description.txt` file and checking which data are categorical, lets just remove `quantitative_features_list` from our entire dataframe.
+
+# In[ ]:
+
+
+# quantitative_features_list[:-1] as the last column is SalePrice and we want to keep it
+categorical_features = [a for a in quantitative_features_list[:-1] + df.columns.tolist() if (a not in quantitative_features_list[:-1]) or (a not in df.columns.tolist())]
+df_categ = df[categorical_features]
+df_categ.head()
+
+
+# And don't forget the non-numerical features
+
+# In[ ]:
+
+
+df_not_num = df_categ.select_dtypes(include = ['O'])
+print('There is {} non numerical features including:\n{}'.format(len(df_not_num.columns), df_not_num.columns.tolist()))
+
+
+# <font color='chocolate'>Looking at these features we can see that a lot of them are of the type `Object(O)`. In our data transformation notebook we could use [Pandas categorical functions](http://pandas.pydata.org/pandas-docs/stable/categorical.html) (equivalent to R's factor) to shape our data in a way that would be interpretable for our machine learning algorithm. `ExterQual` for instace could be transformed to an ordered categorical object.</font>
+
+# Now lets plot some of them
+
+# In[ ]:
+
+
+plt.figure(figsize = (10, 6))
+ax = sns.boxplot(x='BsmtExposure', y='SalePrice', data=df_categ)
+plt.setp(ax.artists, alpha=.5, linewidth=2, edgecolor="k")
 plt.xticks(rotation=45)
-plt.title('Most dangerous cities',color = 'blue',fontsize=15)
 
 
 # In[ ]:
 
 
-# most dangerous states
-state = kill.state.value_counts()
-plt.figure(figsize=(10,7))
-sns.barplot(x=state[:20].index,y=state[:20].values)
-plt.title('Most dangerous state',color = 'blue',fontsize=15)
+plt.figure(figsize = (12, 6))
+ax = sns.boxplot(x='SaleCondition', y='SalePrice', data=df_categ)
+plt.setp(ax.artists, alpha=.5, linewidth=2, edgecolor="k")
+plt.xticks(rotation=45)
 
 
-# In[ ]:
-
-
-# Having mental ilness or not for killed people
-sns.countplot(kill.signs_of_mental_illness)
-plt.xlabel('Mental illness')
-plt.ylabel('Number of Mental illness')
-plt.title('Having mental illness or not',color = 'blue', fontsize = 15)
-
+# And finally lets look at their distribution
 
 # In[ ]:
 
 
-# Threat types
-sns.countplot(kill.threat_level)
-plt.xlabel('Threat Types')
-plt.title('Threat types',color = 'blue', fontsize = 15)
+fig, axes = plt.subplots(round(len(df_not_num.columns) / 3), 3, figsize=(12, 30))
+
+for i, ax in enumerate(fig.axes):
+    if i < len(df_not_num.columns):
+        ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=45)
+        sns.countplot(x=df_not_num.columns[i], alpha=0.7, data=df_not_num, ax=ax)
+
+fig.tight_layout()
 
 
-# In[ ]:
-
-
-# Flee types
-sns.countplot(kill.flee)
-plt.xlabel('Flee Types')
-plt.title('Flee types',color = 'blue', fontsize = 15)
-
-
-# In[ ]:
-
-
-# Having body cameras or not for police
-sns.countplot(kill.body_camera)
-plt.xlabel('Having Body Cameras')
-plt.title('Having body cameras or not on Police',color = 'blue',fontsize = 15)
-
-
-# In[ ]:
-
-
-
-# Race rates according to states in kill data 
-kill.race.dropna(inplace = True)
-labels = kill.race.value_counts().index
-colors = ['grey','blue','red','yellow','green','brown']
-explode = [0,0,0,0,0,0]
-sizes = kill.race.value_counts().values
-plt.figure(figsize = (10,10))
-plt.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%')
-plt.title('Killed People According to Races',color = 'blue',fontsize = 15)
-
-
-# In[ ]:
-
-
-# Kill numbers from states in kill data
-sta = kill.state.value_counts().index[:10]
-sns.barplot(x=sta,y = kill.state.value_counts().values[:10])
-plt.title('Kill Numbers from States',color = 'blue',fontsize=15)
-
-
-# # CONCLUSION
-# **If you have any question, I will be happy to hear it!!!**
-# Thanks
+# <font color='chocolate'>We can see that some categories are predominant for some features such as `Utilities`, `Heating`, `GarageCond`, `Functional`... These features may not be relevant for our predictive model</font>

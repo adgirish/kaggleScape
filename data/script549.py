@@ -1,188 +1,216 @@
 
 # coding: utf-8
 
-# # Principal Component Analysis of Pokemon Data
-# This is a quick look at the Pokemon data, but instead at the variables themselves, we perform a PCA to get a reduced number of variables and examine the results. 
+# To get a feel for the data beyond [this analysis](https://www.kaggle.com/headsortails/be-my-guest-recruit-restaurant-eda), we'll plot some data for several random restaurants individually.
 
 # In[ ]:
 
 
 import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-import seaborn as sns
-import matplotlib.pyplot as plt
-from math import sqrt
-get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np
+
+AIR_RESERVE = 'air_reserve'
+AIR_STORE_INFO = 'air_store_info'
+AIR_VISIT_DATA = 'air_visit_data'
+DATE_INFO = 'date_info'
+HPG_RESERVE = 'hpg_reserve'
+HPG_STORE_INFO = 'hpg_store_info'
+STORE_ID_RELATION = 'store_id_relation'
+SAMPLE_SUBMISSION = 'sample_submission'
+
+data = {
+    AIR_VISIT_DATA: pd.read_csv('../input/air_visit_data.csv'),
+    AIR_STORE_INFO: pd.read_csv('../input/air_store_info.csv'),
+    HPG_STORE_INFO: pd.read_csv('../input/hpg_store_info.csv'),
+    AIR_RESERVE: pd.read_csv('../input/air_reserve.csv'),
+    HPG_RESERVE: pd.read_csv('../input/hpg_reserve.csv'),
+    STORE_ID_RELATION: pd.read_csv('../input/store_id_relation.csv'),
+    SAMPLE_SUBMISSION: pd.read_csv('../input/sample_submission.csv'),
+    DATE_INFO: pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date': 'visit_date'})
+}
 
 
 # In[ ]:
 
 
-# Loading data
-df = pd.read_csv('../input/Pokemon.csv')
+def plot_number_of_visitors_to_one_resaturant(daat, air_visit_data, air_id):
+  """Plots the number of visitors to this restaurant over time."""
+  x = air_visit_data['visit_date']
+  y = air_visit_data['visitors'] 
 
-# Renaming one column for clarity
-columns = df.columns.tolist()
-columns[0] = 'id'
-df.columns = columns
+  traces = []
+  traces.append(go.Scatter(x=x, y=y, mode='markers'))
+  rolling_mean = y.rolling(window=10, min_periods=1, center=True).mean()
+  traces.append(go.Scatter(x=x, y=rolling_mean, mode='lines'))
 
-# Selecting columns to consider
-cols = ['HP', 'Attack', 'Defense', 'Sp. Atk', 'Sp. Def', 'Speed']
-
-df.head()
-
-
-# Before performing the PCA, I scale the data so that the distribution of HP, Attack, etc is centered around 0 with a standard deviation of 1. I do not consider the Total column as it's a sum of the following ones.
-
-# In[ ]:
-
-
-scaler = StandardScaler().fit(df[cols])
-df_scaled = scaler.transform(df[cols])
-
-print(df_scaled[:,0].mean())  # zero (or very close)
-print(df_scaled[:,0].std())  # 1 (or very close)
-
-
-# I opt to use as many principal components as necessary to explain 80% of the variance in the original dataset.
-
-# In[ ]:
-
-
-pca = PCA(n_components=0.8)  # consider enough components to explain 80% of the variance
-pca.fit(df_scaled)
-pcscores = pd.DataFrame(pca.transform(df_scaled))
-pcscores.columns = ['PC'+str(i+1) for i in range(len(pcscores.columns))]
-loadings = pd.DataFrame(pca.components_, columns=cols)
-loadings.index = ['PC'+str(i+1) for i in range(len(pcscores.columns))]
-
-
-# What the PCA does is construct new variables (or principal components) that explain most of the variance or scatter of the original dataset. Each component is a linear combination of all the variables and is perpendicular to every other component. Each variable in each component is multiplied by set of factors, the loading factors, which transforms the original data into this new component space. These loading factors are constrained so that the square of the sum is equal to 1, hence they can serve as weights to see which parameters are most important for a particular principal component.
-# 
-# Let's look at that in more detail with some figures.
-
-# In[ ]:
-
-
-load_sqr = loadings**2
-ax = sns.heatmap(load_sqr.transpose(), linewidths=0.5, cmap="BuGn", annot=True)
-ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=0, fontsize=8)
-ax.set_yticklabels(ax.yaxis.get_majorticklabels(), rotation=0, fontsize=8)
-
-
-# The darkest shades in the plot above indicate which parameters are the most important. For example, the loading factors for PC4 show that HP is the most dominant parameter. That is, Pokemon with high HP will have high absolute values of PC4.
-# 
-# Let's look at the actual values of the loading factors now:
-
-# In[ ]:
-
-
-ax = sns.heatmap(loadings.transpose(), center=0, linewidths=0.5, 
-                 cmap="RdBu", vmin=-1, vmax=1, annot=True)
-ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=0, fontsize=8)
-ax.set_yticklabels(ax.yaxis.get_majorticklabels(), rotation=0, fontsize=8)
-
-
-# Here you can see some more trends. For example, a Pokemon with high Defense or low Speed will have a positive value of PC2. On the other hand, things like Attack or Sp. Defense will control what value a Pokemon will have for PC3.
-
-# Yet another way to look at this is to examine the data with a biplot, which is a scatter plot with vectors indicating what direction a datapoint will take in the PCA given its underlying parameters. For fun, I will color-code the Pokemon by Type to see if there is any obvious trends.
-
-# In[ ]:
-
-
-# Create labels based on Type 1
-labels = set(df['Type 1'])
-df['type'] = df['Type 1']
-lab_dict = dict()
-for i, elem in enumerate(labels):
-    lab_dict[elem] = i
-df = df.replace({'type' : lab_dict})
-
-pc_types = pcscores.copy()
-pc_types['Type'] = df['Type 1']
-
-# Biplots
-def make_plot(pcscores, loadings, xval=0, yval=1, max_arrow=0.2, alpha=0.4):
-    n = loadings.shape[1]
-    scalex = 1.0 / (pcscores.iloc[:, xval].max() - pcscores.iloc[:, xval].min())  # Rescaling to be from -1 to +1
-    scaley = 1.0 / (pcscores.iloc[:, yval].max() - pcscores.iloc[:, yval].min())
-
-    pcscores.iloc[:, xval] = pcscores.iloc[:, xval] * scalex
-    pcscores.iloc[:, yval] = pcscores.iloc[:, yval] * scaley
-
-    g = sns.lmplot(x='PC{}'.format(xval + 1), y='PC{}'.format(yval + 1), hue='Type', data=pcscores,
-                   fit_reg=False, size=6, palette='muted')
-
-    for i in range(n):
-        # Only plot the longer ones
-        length = sqrt(loadings.iloc[xval, i] ** 2 + loadings.iloc[yval, i] ** 2)
-        if length < max_arrow:
-            continue
-
-        plt.arrow(0, 0, loadings.iloc[xval, i], loadings.iloc[yval, i], color='k', alpha=0.9)
-        plt.text(loadings.iloc[xval, i] * 1.15, loadings.iloc[yval, i] * 1.15,
-                 loadings.columns.tolist()[i], color='k', ha='center', va='center')
-
-    g.set(ylim=(-1, 1))
-    g.set(xlim=(-1, 1))
+  layout = go.Layout(
+    title='Visitors to resaurant ' + air_id,
+    yaxis=dict(title='# Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
 
 
 # In[ ]:
 
 
-# Actually make a biplot (PC3 vs PC4)
-make_plot(pc_types, loadings, 2, 3, max_arrow=0.3)
+def plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id):
+  air_visit_and_date_info = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date', copy=True)
 
+  # Rainbow-ranked by median visitor over all restaurants.
+  COLORS = {
+    'Saturday': 'red',
+    'Sunday': 'orange',
+    'Friday': 'green',
+    'Thursday': 'blue',
+    'Wednesday': 'purple',
+    'Tuesday': 'brown',
+    'Monday': 'black',
+  }
 
-# Above, you can see that Pokemon are primarily centrally distributed; that is, their stats are fairly balanced. There don't appear to be any obvious trends with type. There are some outliers, for example, 2 normal type Pokemon with high values of PC4. If you recall, PC4's loading factors indicated that HP was the dominant parameter. 
+  traces = []
+  for day_of_week in COLORS:
+    # Plots the number of visitors to this restaurant over time.
+    x = air_visit_and_date_info['visit_date']
+    y = air_visit_and_date_info.loc[air_visit_and_date_info['day_of_week'] == day_of_week]['visitors']
+    # Adds points to the plot.
+    traces.append(go.Scatter(
+      x=x,
+      y=y,
+      mode='markers',
+      name=day_of_week,
+      line=dict(color=COLORS[day_of_week]),
+    ))
+    # Adds a rolling mean line.
+    traces.append(go.Scatter(
+      x=x,
+      y=y.rolling(7, min_periods=1, center=True).mean(),
+      mode='lines',
+      name=day_of_week,
+      line=dict(color=COLORS[day_of_week]),
+    ))
+
+  layout = go.Layout(
+    title='Visitors to resaurant ' + air_id + ' by day of week, with rolling averages',
+    yaxis=dict(title='# Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
+
 
 # In[ ]:
 
 
-best = pc_types.sort_values(by='PC4', ascending=False)[:2]
-df.loc[best.index]
+from scipy import stats
+
+def plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id):
+  air_reserve = data[AIR_RESERVE][data[AIR_RESERVE]['air_store_id'] == air_id]
+  # Some test restaurants have no AIR reservation data.
+  if air_reserve.shape[0] == 0:
+    print('There\'s no reservation data for ' + air_id + '.')
+  else:
+    df = air_reserve.copy()
+    # Converts datetimes to days. Also converts to np.datetime64 because the air_visit_data's date type np.datetime64[ns].
+    df['visit_date'] = df['visit_datetime'].map(lambda dt: np.datetime64(dt.date()))
+    # Groups reservations by visit day, and sums the # seats reserved
+    reserved_seats = df.groupby('visit_date')['reserve_visitors'].sum()
+    reserved_seats = reserved_seats.reset_index()  # Before the index consisted of dates. reset_index makes the index positions, and makes the dates a column
+    reserved_seats_and_visitors = pd.merge(reserved_seats, air_visit_data, how='inner', on='visit_date')
+
+    # Plots the number of visitors to this restaurant over time.
+    x = reserved_seats_and_visitors['reserve_visitors']
+    y = reserved_seats_and_visitors['visitors'] 
+
+    layout = go.Layout(
+      title='Visitors vs seats reserved for resaurant ' + air_id,
+      xaxis=dict(title='# Reserve Visitors'),
+      yaxis=dict(title='# Visitors')
+    )
+
+    traces = []
+    traces.append(go.Scatter(x=x, y=y, text=reserved_seats_and_visitors['visit_date'], mode='markers'))
+    # TODO: Size the point based on the average size of the requested reservation.
+    # Color the point based on how early the reservations for that day were ploced.
+
+    # Overlays the linear trend line of reserved seats vs visitors.
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    line = slope * x + intercept
+    traces.append(go.Scatter(x=x, y=line, mode='lines'))
+    
+    fig = go.Figure(data=traces, layout=layout)
+    iplot(fig)  
+    
+  if hpg_id:
+    # TODO: plot HPG reservation data.
+    pass
 
 
 # In[ ]:
 
 
-# Top HP Pokemon:
-df.sort_values(by='HP', ascending=False)[:2]
+def plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id):
+  air_visit_and_dates = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date')
+  days_of_week = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  air_visits_on_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 1]
+  air_visits_on_non_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 0]
+  holiday_data = {}
+  non_holiday_data = {}
+  for day in days_of_week:
+    holiday_data[day] = air_visits_on_holidays[air_visits_on_holidays['day_of_week'] == day]['visitors'].median()
+    non_holiday_data[day] = air_visits_on_non_holidays[air_visits_on_non_holidays['day_of_week'] == day]['visitors'].median()
 
+  traces = []
+  traces.append(go.Bar(
+    x=days_of_week,
+    y=[holiday_data[day] for day in days_of_week],
+    name='On a holiday',
+  ))
+  traces.append(go.Bar(
+    x=days_of_week,
+    y=[non_holiday_data[day] for day in days_of_week],
+    name='On a non-holiday',
+  ))
+  layout = go.Layout(
+    title='Median visitors to ' + air_id + ' on holidays and non-holidays',
+    yaxis=dict(title='Median # Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
 
-# Indeed, the Pokemons with the highest HP also have the highest PC4, as expected.
-
-# Let's have a look at all the PC combinations with a Seaborn pairplot:
 
 # In[ ]:
 
 
-g = sns.pairplot(pc_types, hue='Type', palette='muted')
+# Plots data for several random restaurants.
+NUM_RESTAURANTS = 7
 
+# We're using Plotly in offline mode
+# because it appears plotly the credentials on our GCE VM.
+from plotly.offline import init_notebook_mode, iplot
+import plotly.graph_objs as go
+import random
 
-# Again, we can't see a strong trend with Pokemon type. Out of curiosity, what's the Bug-type pokemon with high PC2 and PC3 values?
+init_notebook_mode(connected=True)
 
-# In[ ]:
+# Converts date strings to datetime objects.
+data[AIR_VISIT_DATA]['visit_date'] = pd.to_datetime(data[AIR_VISIT_DATA]['visit_date'])
+data[DATE_INFO]['visit_date'] = pd.to_datetime(data[DATE_INFO]['visit_date'])
+data[AIR_RESERVE]['visit_datetime'] = pd.to_datetime(data[AIR_RESERVE]['visit_datetime'])
+data[AIR_RESERVE]['reserve_datetime'] = pd.to_datetime(data[AIR_RESERVE]['reserve_datetime'])
 
+for i in range(NUM_RESTAURANTS):
+  random_index = random.randint(0, data[SAMPLE_SUBMISSION].shape[0])
+  air_id = data[SAMPLE_SUBMISSION]['id'][random_index][:len('air_00a91d42b08b08d9')]
+  
+  # Plots the number of visitors to this restaurant over time.
+  air_visit_data = data[AIR_VISIT_DATA][data[AIR_VISIT_DATA]['air_store_id'] == air_id]
+  
+  # The given air store may or may not be represented in the hgp store data.
+  air_ids = data[STORE_ID_RELATION]['air_store_id']
+  idx = air_ids[air_ids == air_id].index
+  hpg_id = ''
+  if len(idx) > 0:
+    hpg_id = data[STORE_ID_RELATION]['hpg_store_id'][idx[0]]
 
-print(pc_types.sort_values(by='PC2', ascending=False)[:1])
-print(pc_types.sort_values(by='PC3', ascending=False)[:1])
+  plot_number_of_visitors_to_one_resaturant(data, air_visit_data, air_id)
+  plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id)
+  plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id)
+  plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id)
 
-
-# In[ ]:
-
-
-df.loc[230]
-
-
-# This is Shuckle, a bug-type Pokemon with very high Defense and Sp. Def at the cost of Attack attributes. Indeed, the PC2-PC3 biplot reveals how it can be used to select high-defense Pokemon. These will be located towards the top right (high PC2 and PC3 values).
-
-# In[ ]:
-
-
-make_plot(pc_types, loadings, 1, 2, max_arrow=0.3)
-
-
-# # Concluding Remarks
-# One powerful thing of the PCA is the dimensionality reduction aspect of it. We went from having 6 variables to consider to only having 4. From this, it may be possible to examine fits or create classification models. That's something I'll look into in the future, but for now this concludes this notebook.

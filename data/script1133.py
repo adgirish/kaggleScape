@@ -1,985 +1,1262 @@
 
 # coding: utf-8
 
-# In[1]:
+# # **Film recommendation engine**
+# *Fabien Daniel (July 2017)*
+# ___
+# This notebook aims at building a recommendation engine from the content of the TMDB dataset that contains around 5000 movies and TV series.Basically, the engine will work as follows: after the user has provided the name of a film he liked, the engine should be able to select in the database a list of 5 films that the user will enjoy. In practice, recommendation engines are of three kinds:
+# - **popularity-based** engines: usually the most simple to implement be also the most impersonal
+# - **content-based** engines: the recommendations are based on the description of the products
+# - **collaborative filtering** engines: records from various users provide recommendations based on user similarities
+# 
+# In the current case, since the dataset only describe the content of the films and TV series, collaborative filtering is excluded and I will thus build an engine that uses both the content and the popularity of the entries.
+# ___
+# _**Acknowledgement**: many thanks to [J. Abécassis](https://www.kaggle.com/judithabk6) for the advices and help provided during the writing of this notebook_ <br>
+# _In september 2017, the original dataset used by this kernel was replaced. [Sohier Dane](https://www.kaggle.com/sohier) did all the job to adapt the original kernel to the new format and the modifications are described in [this kernel](https://www.kaggle.com/sohier/film-recommendation-engine-converted-to-use-tmdb). Many thanks to Sohier for doing this !_
+# ___
+# This notebook is organized as follows:
+# 
+# **1. Exploration**
+# - 1.1 Keywords
+# - 1.2 Filling factor: missing values
+# - 1.3 Number of films per year
+# - 1.4 Genres
+# 
+# ** 2. Cleaning**
+# - 2.1 Cleaning of the keywords
+#     * 2.1.1 Grouping by roots
+#     * 2.1.2 Groups of synonyms
+# - 2.2 Correlations
+# - 2.3 Missing values
+#     * 2.3.1 Setting missing title years
+#     * 2.3.2 Extracting keywords from the title
+#     * 2.3.3 Imputing from regressions
+#     
+# **3. Recommendation Engine**
+# - 3.1 Basic functioning of the engine 
+#     * 3.1.1 Similarity
+#     * 3.1.2 Popularity
+# - 3.2 Definition of the recommendation engine functions
+# - 3.3 Making meaningfull recommendations
+# - 3.4 Exemple of recommendation: test-case
+# 
+# **4. Conclusion: possible improvements and points to adress**
+# 
+# 
+
+# ___
+# ## 1. Exploration
+# 
+#  First, we define a few functions to create an interface with the new structure of the dataset.
+#  The code below is entirely taken from [Sohier's kernel](https://www.kaggle.com/sohier/film-recommendation-engine-converted-to-use-tmdb):
+
+# In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import json
+import pandas as pd
+#___________________________
+def load_tmdb_movies(path):
+    df = pd.read_csv(path)
+    df['release_date'] = pd.to_datetime(df['release_date']).apply(lambda x: x.date())
+    json_columns = ['genres', 'keywords', 'production_countries',
+                    'production_companies', 'spoken_languages']
+    for column in json_columns:
+        df[column] = df[column].apply(json.loads)
+    return df
+#___________________________
+def load_tmdb_credits(path):
+    df = pd.read_csv(path)
+    json_columns = ['cast', 'crew']
+    for column in json_columns:
+        df[column] = df[column].apply(json.loads)
+    return df
+#___________________
+LOST_COLUMNS = [
+    'actor_1_facebook_likes',
+    'actor_2_facebook_likes',
+    'actor_3_facebook_likes',
+    'aspect_ratio',
+    'cast_total_facebook_likes',
+    'color',
+    'content_rating',
+    'director_facebook_likes',
+    'facenumber_in_poster',
+    'movie_facebook_likes',
+    'movie_imdb_link',
+    'num_critic_for_reviews',
+    'num_user_for_reviews']
+#____________________________________
+TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES = {
+    'budget': 'budget',
+    'genres': 'genres',
+    'revenue': 'gross',
+    'title': 'movie_title',
+    'runtime': 'duration',
+    'original_language': 'language',
+    'keywords': 'plot_keywords',
+    'vote_count': 'num_voted_users'}
+#_____________________________________________________
+IMDB_COLUMNS_TO_REMAP = {'imdb_score': 'vote_average'}
+#_____________________________________________________
+def safe_access(container, index_values):
+    # return missing value rather than an error upon indexing/key failure
+    result = container
+    try:
+        for idx in index_values:
+            result = result[idx]
+        return result
+    except IndexError or KeyError:
+        return pd.np.nan
+#_____________________________________________________
+def get_director(crew_data):
+    directors = [x['name'] for x in crew_data if x['job'] == 'Director']
+    return safe_access(directors, [0])
+#_____________________________________________________
+def pipe_flatten_names(keywords):
+    return '|'.join([x['name'] for x in keywords])
+#_____________________________________________________
+def convert_to_original_format(movies, credits):
+    tmdb_movies = movies.copy()
+    tmdb_movies.rename(columns=TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES, inplace=True)
+    tmdb_movies['title_year'] = pd.to_datetime(tmdb_movies['release_date']).apply(lambda x: x.year)
+    # I'm assuming that the first production country is equivalent, but have not been able to validate this
+    tmdb_movies['country'] = tmdb_movies['production_countries'].apply(lambda x: safe_access(x, [0, 'name']))
+    tmdb_movies['language'] = tmdb_movies['spoken_languages'].apply(lambda x: safe_access(x, [0, 'name']))
+    tmdb_movies['director_name'] = credits['crew'].apply(get_director)
+    tmdb_movies['actor_1_name'] = credits['cast'].apply(lambda x: safe_access(x, [1, 'name']))
+    tmdb_movies['actor_2_name'] = credits['cast'].apply(lambda x: safe_access(x, [2, 'name']))
+    tmdb_movies['actor_3_name'] = credits['cast'].apply(lambda x: safe_access(x, [3, 'name']))
+    tmdb_movies['genres'] = tmdb_movies['genres'].apply(pipe_flatten_names)
+    tmdb_movies['plot_keywords'] = tmdb_movies['plot_keywords'].apply(pipe_flatten_names)
+    return tmdb_movies
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# Then, I load in a single place all the packages that will be used throughout the notebook and then load the dataset. Then, I give some information on the columns types and the number of missing values.
+
+# In[ ]:
+
 
 from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+print(check_output(["ls", "../input/tmdb-movie-metadata/"]).decode("utf8"))
 
 
-# In[2]:
+# In[ ]:
 
 
-#Importing the other necessary libraries
-import os
-import pathlib
-import seaborn as sns
+import numpy as np
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import seaborn as sns
+import math, nltk, warnings
+from nltk.corpus import wordnet
+from sklearn import linear_model
+from sklearn.neighbors import NearestNeighbors
+from fuzzywuzzy import fuzz
+from wordcloud import WordCloud, STOPWORDS
+plt.rcParams["patch.force_edgecolor"] = True
+plt.style.use('fivethirtyeight')
+mpl.rc('patch', edgecolor = 'dimgray', linewidth=1)
+from IPython.core.interactiveshell import InteractiveShell
+InteractiveShell.ast_node_interactivity = "last_expr"
+pd.options.display.max_columns = 50
 get_ipython().run_line_magic('matplotlib', 'inline')
-import warnings
 warnings.filterwarnings('ignore')
+PS = nltk.stem.PorterStemmer()
+#__________________
+# load the dataset
+credits = load_tmdb_credits("../input/tmdb-movie-metadata/tmdb_5000_credits.csv")
+movies = load_tmdb_movies("../input/tmdb-movie-metadata/tmdb_5000_movies.csv")
+df_initial = convert_to_original_format(movies, credits)
+print('Shape:',df_initial.shape)
+#__________________________________________
+# info on variable types and filling factor
+tab_info=pd.DataFrame(df_initial.dtypes).T.rename(index={0:'column type'})
+tab_info=tab_info.append(pd.DataFrame(df_initial.isnull().sum()).T.rename(index={0:'null values'}))
+tab_info=tab_info.append(pd.DataFrame(df_initial.isnull().sum()/df_initial.shape[0]*100).T.
+                         rename(index={0:'null values (%)'}))
+tab_info
 
 
-# **Reading the image**
+# ___
+# ### 1.1 Keywords
 
-# In[3]:
-
-
-#Importing OpenCV - the computer vision library
-import cv2
-
-
-# In[4]:
-
-
-# Glob the training data and load a single image path
-training_paths = pathlib.Path('../input/stage1_train').glob('*/images/*.png')
-training_sorted = sorted([x for x in training_paths])
-im_path = training_sorted[45]
-
-
-# In[5]:
-
-
-#To read the image 
-bgrimg = cv2.imread(str(im_path))
-plt.imshow(bgrimg)
-plt.xticks([]) #To get rid of the x-ticks and y-ticks on the image axis
-plt.yticks([])
-print('Original Image Shape',bgrimg.shape)
-
-
-# In[6]:
-
-
-#To see the structure of the image let's display one row of the image matrix
-print('The first row of the image matrix contains',len(bgrimg[1]),'pixels')
-print(bgrimg[1])
-
-
-# The image has been read in the BGR colorspace. We have a third dimension as every pixel is represented by it's B, G and R components. This is the default colorpsace in which images are read in OpenCV. A particular 
-# BGR/RGB color space is defined by the three chromaticities of the red, green, and blue additive primaries, and can produce any chromaticity that is the triangle defined by those primary colors. In simpler terms - An RGB color can be understood by thinking of it as all possible colors that can be made from three colored lights for red, green, and blue. For more information : https://en.wikipedia.org/wiki/RGB_color_space
-
-# ## Basic Solution
-
-# In this section, I've tried to break down Stephen Bailey's fantastic notebook ( https://www.kaggle.com/stkbailey/teaching-notebook-for-total-imaging-newbies) so as to make the concepts simpler to understand
-
-# In[7]:
-
-
-#To transfrom the colorspace from BGR to grayscale so as to make things simpler
-grayimg = cv2.cvtColor(bgrimg,cv2.COLOR_BGR2GRAY)
-
-
-# In[8]:
-
-
-#To plot the image
-plt.imshow(grayimg,cmap='gray') #cmap has been used as matplotlib uses some default colormap to plot grayscale images
-plt.xticks([]) #To get rid of the x-ticks and y-ticks on the image axis
-plt.yticks([])
-print('New Image Shape',grayimg.shape)
-
-
-# It is important to understand the structure of the image here. We reduced a dimension when we transformed from the BGR colorspace to grayscale. Why did this happen? This is because grayscale is a range of monochromatic shades from black to white. Therefore, a grayscale image contains only shades of gray and no color (i.e it primarily contains only black and white). Transforming the colorspace removes all color information, leaving only the luminance of each pixel. Since digital images are displayed using a combination of red, green, and blue (RGB) colors, each pixel has three separate luminance values. Therefore, these three values must be combined into a single value when removing color from an image. Luminance can also be described as brightness or intensity, which can be measured on a scale from black (zero intensity) to white (full intensity)
-
-# In[9]:
-
-
-#To understand this further, let's display one entire row of the image matrix
-print('The first row of the image matrix contains',len(grayimg[1]),'pixels')
-print(grayimg[1])
-
-
-# Thus this displays one entire row of the image matrix with the corresponding luminance or intensities of every pixel
-
-# **Removing the background**
-
-# In[10]:
-
-
-#Okay let's look at the distribution of the intensity values of all the pixels
-plt.figure(figsize=(10,5))
-
-plt.subplot(1,2,1)
-sns.distplot(grayimg.flatten(),kde=False)#This is to flatten the matrix and put the intensity values of all the pixels in one single row vector
-plt.title('Distribution of intensity values')
-
-#To zoom in on the distribution and see if there is more than one prominent peak 
-plt.subplot(1,2,2)
-sns.distplot(grayimg.flatten(),kde=False) 
-plt.ylim(0,30000) 
-plt.title('Distribution of intensity values (Zoomed In)')
-
-
-# We can see that there are 2 prominent peaks. The count of pixels with intensity values around 0 is extrememly high (250000). We would expect this to occur as the nuclei cover a smaller portion of the picture as compared to the background which is primarily black. Our job here is to seperate the two, that is, seperate the nuclei from the background. The optimal seperation value is somewhere around 20 but rather than relying on such descriptive statistics, we should take a more formal approach such as using Otsu's method.
-# Otsu's method, named after Nobuyuki Otsu is used to automatically perform clustering-based image thresholding, or, the reduction of a graylevel image to a binary image. The algorithm assumes that the image contains two classes of pixels following bi-modal histogram (foreground pixels and background pixels), it then calculates the optimum threshold separating the two classes so that their combined spread (intra-class variance) is minimal, or equivalently, so that their inter-class variance is maximal. Otsu’s method exhibits relatively good performance if the histogram can be assumed to have bimodal distribution and assumed to possess a deep and sharp valley between two peaks (source : https://en.wikipedia.org/wiki/Otsu%27s_method) 
-
-# In[11]:
-
-
-from skimage.filters import threshold_otsu
-thresh_val = threshold_otsu(grayimg)
-print('The optimal seperation value is',thresh_val)
-
-
-# Now we'll use the np.where function to encode all pixels with an intensity value > the threshold value as 1 and all other pixels as 0.  The result of this function will be stored in a variable called mask
+# To develop the recommendation engine, I plan to make an extensive use of the keywords that describe the films. Indeed, a basic assumption is that films described by similar keywords should have similar contents. Hence, I plan to have a close look at the way keywords are defined and as a first step, I quickly characterize what's already in there. To do so, I first list the keywords which are in the dataset:
 
 # In[ ]:
 
 
-mask=np.where(grayimg>thresh_val,1,0)
+set_keywords = set()
+for liste_keywords in df_initial['plot_keywords'].str.split('|').values:
+    if isinstance(liste_keywords, float): continue  # only happen if liste_keywords = NaN
+    set_keywords = set_keywords.union(liste_keywords)
+#_________________________
+# remove null chain entry
+set_keywords.remove('')
 
 
-# In[ ]:
-
-
-#To plot the original image and mask side by side
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(grayimg,cmap='gray')
-plt.title('Original Image')
-
-plt.subplot(1,2,2)
-maskimg = mask.copy()
-plt.imshow(maskimg, cmap='viridis')
-plt.title('Mask')
-
-
-# We see that the mask has done a decent job. If these images were to appear in a newspaper column titled 'Spot the difference between' (except the obvious colour difference), it would have had people scratch their heads in frustration. However a more careful look suggests that the mask hasn't found out all the nuclei, especially the two in the top right corner. Around the (500,400) mark, the three nuclei have been all combined together to form one cluster. The darker coloured nuclei are causing a problem as the pixels that represent these nuclei have intensity values lesser than Otsu's threshold value.
+# and then define a function that counts the number of times each of them appear:
 
 # In[ ]:
 
 
-#Let's see if K-Means does a good job on this data 
-from sklearn.cluster import KMeans
-kmeans=KMeans(n_clusters=2) #2 as we're still trying to seperate the lighter coloured nuclei from the darker coloured background 
-kmeans.fit(grayimg.reshape(grayimg.shape[0]*grayimg.shape[1],1))
+def count_word(df, ref_col, liste):
+    keyword_count = dict()
+    for s in liste: keyword_count[s] = 0
+    for liste_keywords in df[ref_col].str.split('|'):        
+        if type(liste_keywords) == float and pd.isnull(liste_keywords): continue        
+        for s in [s for s in liste_keywords if s in liste]: 
+            if pd.notnull(s): keyword_count[s] += 1
+    #______________________________________________________________________
+    # convert the dictionary in a list to sort the keywords by frequency
+    keyword_occurences = []
+    for k,v in keyword_count.items():
+        keyword_occurences.append([k,v])
+    keyword_occurences.sort(key = lambda x:x[1], reverse = True)
+    return keyword_occurences, keyword_count
 
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(kmeans.labels_.reshape(520,696),cmap='magma')
-plt.title('K-Means')
 
-plt.subplot(1,2,2)
-plt.imshow(maskimg, cmap='viridis')
-plt.title('Mask with Otsu Seperation')
-
-
-# It's extrememly hard to tell if there's a difference. Let's see if there is any difference by comparing the labels of Otsu and K-Means at a pixel level, summing over the booleans and dividing them by the total number of pixels in the image. If the result is 1, it means there is no difference at all
+# Note that this function will be used again in other sections of this notebook, when exploring the content of the *'genres'* variable and subsequently, when cleaning the keywords. Finally, calling this function gives access to a list of keywords which are sorted by decreasing frequency:
 
 # In[ ]:
 
 
-#To check if there's any difference
-sum((kmeans.labels_.reshape(520,696)==mask).flatten())/(mask.shape[0]*mask.shape[1])
+keyword_occurences, dum = count_word(df_initial, 'plot_keywords', set_keywords)
+keyword_occurences[:5]
 
 
-# There is no difference at all. For a deeper explanantion as to why this could have happened, one may read D Liu's paper (http://ieeexplore.ieee.org/document/5254345/?reload=true) where he has compared K-Means with Otsu's method 
+# At this stage, the list of keywords has been created and we know the number of times each of them appear in the dataset. In fact, this list can be used  to have a feeling of the content of the *most popular movies*. A fancy manner to give that information makes use of the *wordcloud* package. In this kind of representation, all the words are arranged in a figure with sizes that depend on their respective frequencies. Instead of a wordcloud, we can use histograms to give the same information. This allows to have a figure where the keywords are ordered by occurence and most importantly, this gives the number of times they appear, an information that can not be retrieved from the wordcloud representation. In the following figure, I compare both types of representations:
 
-# **Object identification**
+# In[ ]:
 
-# To get a count of the total number of nuclei, we can use the ndimage.label function which labels features (pixels) in an array based on their interconnectedness. So for example if [1 1 1 0 0 1 1] was our row vector, using ndimage.label on this would give us [1 1 1 0 0 2 2] signifying the fact that there are 2 distinct objects in the row vector. The function returns the labeled array and the number of distinct objects it found in the array.
+
+#_____________________________________________
+# Function that control the color of the words
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# WARNING: the scope of variables is used to get the value of the "tone" variable
+# I could not find the way to pass it as a parameter of "random_color_func()"
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+def random_color_func(word=None, font_size=None, position=None,
+                      orientation=None, font_path=None, random_state=None):
+    h = int(360.0 * tone / 255.0)
+    s = int(100.0 * 255.0 / 255.0)
+    l = int(100.0 * float(random_state.randint(70, 120)) / 255.0)
+    return "hsl({}, {}%, {}%)".format(h, s, l)
+#_____________________________________________
+# UPPER PANEL: WORDCLOUD
+fig = plt.figure(1, figsize=(18,13))
+ax1 = fig.add_subplot(2,1,1)
+#_______________________________________________________
+# I define the dictionary used to produce the wordcloud
+words = dict()
+trunc_occurences = keyword_occurences[0:50]
+for s in trunc_occurences:
+    words[s[0]] = s[1]
+tone = 55.0 # define the color of the words
+#________________________________________________________
+wordcloud = WordCloud(width=1000,height=300, background_color='black', 
+                      max_words=1628,relative_scaling=1,
+                      color_func = random_color_func,
+                      normalize_plurals=False)
+wordcloud.generate_from_frequencies(words)
+ax1.imshow(wordcloud, interpolation="bilinear")
+ax1.axis('off')
+#_____________________________________________
+# LOWER PANEL: HISTOGRAMS
+ax2 = fig.add_subplot(2,1,2)
+y_axis = [i[1] for i in trunc_occurences]
+x_axis = [k for k,i in enumerate(trunc_occurences)]
+x_label = [i[0] for i in trunc_occurences]
+plt.xticks(rotation=85, fontsize = 15)
+plt.yticks(fontsize = 15)
+plt.xticks(x_axis, x_label)
+plt.ylabel("Nb. of occurences", fontsize = 18, labelpad = 10)
+ax2.bar(x_axis, y_axis, align = 'center', color='g')
+#_______________________
+plt.title("Keywords popularity",bbox={'facecolor':'k', 'pad':5},color='w',fontsize = 25)
+plt.show()
+
+
+# ___
+# ### 1.2 Filling factor: missing values
 # 
-# For more information on connected components : http://aishack.in/tutorials/pixel-neighbourhoods-connectedness/ 
-
-# In[12]:
-
-
-from scipy import ndimage
-
+# The dataset consists in 5043 films or TV series which are described by 28 variables. As in every analysis, at some point, we will have to deal with the missing values and as a first step, I determine the amount of data which is missing in every variable:
 
 # In[ ]:
 
 
-#To see this at a matrix level
-matrix = np.array([[0,0,1,1,1,1],
-                  [0,0,0,0,1,1],
-                  [1,1,0,1,1,1],
-                  [1,1,0,1,1,1]])
-matrix
+missing_df = df_initial.isnull().sum(axis=0).reset_index()
+missing_df.columns = ['column_name', 'missing_count']
+missing_df['filling_factor'] = (df_initial.shape[0] 
+                                - missing_df['missing_count']) / df_initial.shape[0] * 100
+missing_df.sort_values('filling_factor').reset_index(drop = True)
 
+
+# We can see that most of the variables are well filled since only 2 of them have a filling factor below 93%.
+
+# ___
+# ### 1.3 Number of films per year
+
+# The **title_year** variable indicates when films were released. In order to have a global look at the way films are distributed according to this variable, I group the films by decades:
 
 # In[ ]:
 
 
-#Applying the ndimage.label function
-ndimage.label(matrix)
+df_initial['decade'] = df_initial['title_year'].apply(lambda x:((x-1900)//10)*10)
+#__________________________________________________________________
+# function that extract statistical parameters from a grouby objet:
+def get_stats(gr):
+    return {'min':gr.min(),'max':gr.max(),'count': gr.count(),'mean':gr.mean()}
+#______________________________________________________________
+# Creation of a dataframe with statitical infos on each decade:
+test = df_initial['title_year'].groupby(df_initial['decade']).apply(get_stats).unstack()
 
+
+# and represent the results in a pie chart:
 
 # In[ ]:
 
 
-labels,nlabels=ndimage.label(mask)
-print('There are',nlabels,'distinct nuclei in the mask.')
+sns.set_context("poster", font_scale=0.85)
+#_______________________________
+# funtion used to set the labels
+def label(s):
+    val = (1900 + s, s)[s < 100]
+    chaine = '' if s < 50 else "{}'s".format(int(val))
+    return chaine
+#____________________________________
+plt.rc('font', weight='bold')
+f, ax = plt.subplots(figsize=(11, 6))
+labels = [label(s) for s in  test.index]
+sizes  = test['count'].values
+explode = [0.2 if sizes[i] < 100 else 0.01 for i in range(11)]
+ax.pie(sizes, explode = explode, labels=labels,
+       autopct = lambda x:'{:1.0f}%'.format(x) if x > 1 else '',
+       shadow=False, startangle=0)
+ax.axis('equal')
+ax.set_title('% of films per decade',
+             bbox={'facecolor':'k', 'pad':5},color='w', fontsize=16);
+df_initial.drop('decade', axis=1, inplace = True)
 
 
-# Now, there could be more nuclei than that as some nuclei have been combined into one and our mask hasn't been able to identify all the nuclei, especially the ones in the top right corner. However the 2 seperate spots in the top right corner get labelled as 2 different objects.
+# ___
+# ### 1.4 Genres
+
+# The **genres** variable will surely be important while building the recommendation engines since it describes the content of the film (i.e. Drama, Comedy, Action, ...). To see exactly which genres are the most popular, I use the same approach than for the keywords (hence using similar lines of code), first making a census of the genres:
+
+# In[ ]:
+
+
+genre_labels = set()
+for s in df_initial['genres'].str.split('|').values:
+    genre_labels = genre_labels.union(set(s))
+
+
+# and then counting how many times each of them occur:
+
+# In[ ]:
+
+
+keyword_occurences, dum = count_word(df_initial, 'genres', genre_labels)
+keyword_occurences[:5]
+
+
+# Finally, the result is shown as a wordcloud:
+
+# In[ ]:
+
+
+words = dict()
+trunc_occurences = keyword_occurences[0:50]
+for s in trunc_occurences:
+    words[s[0]] = s[1]
+tone = 100 # define the color of the words
+f, ax = plt.subplots(figsize=(14, 6))
+wordcloud = WordCloud(width=550,height=300, background_color='black', 
+                      max_words=1628,relative_scaling=0.7,
+                      color_func = random_color_func,
+                      normalize_plurals=False)
+wordcloud.generate_from_frequencies(words)
+plt.imshow(wordcloud, interpolation="bilinear")
+plt.axis('off')
+plt.show()
+
+
+# ___
+# ## 2. Cleaning
+# ___
+
+# In[ ]:
+
+
+df_duplicate_cleaned = df_initial
+
+
+# ___
+# ### 2.1 Cleaning of the keywords
 # 
-# All in all the two major problems in this image are:
-# - Insignificant spots/dots being labelled as nuclei. These spots should have their labels (KMeans, Otsu) set to 0 if their sizes are too small. This problem has been caused by some nuclei that have pixels where the intensity values are lesser than Otsu's threshold value, thus causing only some pixels to have their label encoded as 1.
-# - The nuclei that are closer to one another get clustered to form one nuclei. So we need to seperate them using some edge detection algorithm (like convolution with a sobel filter or canny edge detector as suggested by Ramsu)
+# Keywords will play an important role in the functioning of the engine. Indeed, recommendations will be based on similarity between films and to gauge such similarities, I will look for films described by the same keywords. Hence, the content of the **plot_keywords** variable deserves some attention since it will be extensively used.
 # 
-# Now for this competition we need to have a seperate mask for every nucleus. In the file named 'stage1_train_labels.csv.zip', we have the image IDs in one column and the Run Length Encoded (RLE) vector for one such mask (i.e for one nucleus) in the other column.
 
-# In[ ]:
-
-
-#Since we need to create a seperate mask for every nucelus, let's store the masks in an iterable like a list 
-label_array=[]
-#We need to iterate from 1 as ndimage.label encodes every object starting from number 1
-for i in range(1,nlabels+1):
-    label_mask = np.where(labels==i,1,0)
-    label_array.append(label_mask)
-#To see one such mask
-label_array[68]
-
-
-# The 1s represent 1 such object (nucleus) in the entire picture.
-
-# **Run Length Encoding**
-
-#  Every mask for every nucleus requires an RLE vector. This is the format required by the competition. 
+# ___
+# #### 2.1.1 Grouping by *roots*
 # 
-# What is RLE?
-# 
-# RLE or Run Length Encoding converts a matrix into a vector and returns the position/starting point of the first pixel from where we observe an object (identified by a 1) and gives us a count of how many pixels from that pixel we see the series of 1s. In the ndimage.label function example of [1 1 1 0 0 1 1], running RLE would give us 1 3 6 2, which means 3 pixels from the zeroth pixel (inclusive) and 2 pixels from the 5th pixel we see a series of 1s
+# I collect the keywords that appear in the **plot\_keywords** variable. This list is then cleaned using the NLTK package. Finally, I look for the number of occurence of the various keywords.
 
 # In[ ]:
 
 
-#Function for rle encoding
-def rle(x):
-    '''
-    x: numpy array of shape (height, width), 1 - mask, 0 - background
-    Returns run length as list
-    '''
-    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
-    run_lengths = []
-    prev = -2
-    for b in dots:
-        if (b>prev+1): run_lengths.extend((b+1, 0))
-        run_lengths[-1] += 1
-        prev = b
-    return " ".join([str(i) for i in run_lengths])
-
-
-# Credit to Kaggle user rahlkin https://www.kaggle.com/rakhlin/fast-run-length-encoding-python for developing this function that has been used by many Kagglers for the purpose of this competition.
-
-# In[ ]:
-
-
-#Running RLE on the last label_mask in label_array gives us 
-rle(label_mask)
-
-
-# **Putting everything together**
-
-# In[ ]:
-
-
-#To take a look at the different parts
-im_path.parts
-
-
-# In[ ]:
-
-
-#Now defining a function that is applicable to all images
-def basic(im_path):
-    #Reading the image
-    im_id=im_path.parts[-3] #To extract the image ID
-    bgr = cv2.imread(str(im_path)) #Reading it in OpenCV
-    gray = cv2.cvtColor(bgr,cv2.COLOR_BGR2GRAY) #Converting everything to grayscale from BGR
-
-    #To remove the background
-    thresh_val = threshold_otsu(gray) #Using Otsu's method to seperate the foreground objects from the background
-    mask = np.where(gray > thresh_val, 1, 0) #Coding objects with intensity values higher than background as 1
+# Collect the keywords
+#----------------------
+def keywords_inventory(dataframe, colonne = 'plot_keywords'):
+    PS = nltk.stem.PorterStemmer()
+    keywords_roots  = dict()  # collect the words / root
+    keywords_select = dict()  # association: root <-> keyword
+    category_keys = []
+    icount = 0
+    for s in dataframe[colonne]:
+        if pd.isnull(s): continue
+        for t in s.split('|'):
+            t = t.lower() ; racine = PS.stem(t)
+            if racine in keywords_roots:                
+                keywords_roots[racine].add(t)
+            else:
+                keywords_roots[racine] = {t}
     
-    #Extracting connected objects
-    test_rle=pd.DataFrame()
-    labels, nlabels = ndimage.label(mask) #labels gives us the label of the different objects in every image starting from 1 and nlabels gives us the total number of objects in every image
-    for i in range(1,nlabels+1): #Iterating through every object/label
-        label_mask = np.where(labels==i,1,0) #Individual masks for every nucleus
-        RLE = rle(label_mask) #RLE for every mask
-        solution = pd.Series({'ImageId': im_id, 'EncodedPixels': RLE})
-        test_rle = test_rle.append(solution, ignore_index=True)
+    for s in keywords_roots.keys():
+        if len(keywords_roots[s]) > 1:  
+            min_length = 1000
+            for k in keywords_roots[s]:
+                if len(k) < min_length:
+                    clef = k ; min_length = len(k)            
+            category_keys.append(clef)
+            keywords_select[s] = clef
+        else:
+            category_keys.append(list(keywords_roots[s])[0])
+            keywords_select[s] = list(keywords_roots[s])[0]
+                   
+    print("Nb of keywords in variable '{}': {}".format(colonne,len(category_keys)))
+    return category_keys, keywords_roots, keywords_select
+
+
+# In[ ]:
+
+
+keywords, keywords_roots, keywords_select = keywords_inventory(df_duplicate_cleaned,
+                                                               colonne = 'plot_keywords')
+
+
+# In[ ]:
+
+
+# Plot of a sample of keywords that appear in close varieties 
+#------------------------------------------------------------
+icount = 0
+for s in keywords_roots.keys():
+    if len(keywords_roots[s]) > 1: 
+        icount += 1
+        if icount < 15: print(icount, keywords_roots[s], len(keywords_roots[s]))
+
+
+# In[ ]:
+
+
+# Replacement of the keywords by the main form
+#----------------------------------------------
+def remplacement_df_keywords(df, dico_remplacement, roots = False):
+    df_new = df.copy(deep = True)
+    for index, row in df_new.iterrows():
+        chaine = row['plot_keywords']
+        if pd.isnull(chaine): continue
+        nouvelle_liste = []
+        for s in chaine.split('|'): 
+            clef = PS.stem(s) if roots else s
+            if clef in dico_remplacement.keys():
+                nouvelle_liste.append(dico_remplacement[clef])
+            else:
+                nouvelle_liste.append(s)       
+        df_new.set_value(index, 'plot_keywords', '|'.join(nouvelle_liste)) 
+    return df_new
+
+
+# In[ ]:
+
+
+# Replacement of the keywords by the main keyword
+#-------------------------------------------------
+df_keywords_cleaned = remplacement_df_keywords(df_duplicate_cleaned, keywords_select,
+                                               roots = True)
+
+
+# In[ ]:
+
+
+# Count of the keywords occurences
+#----------------------------------
+keywords.remove('')
+keyword_occurences, keywords_count = count_word(df_keywords_cleaned,'plot_keywords',keywords)
+keyword_occurences[:5]
+
+
+# ___
+# #### 2.2.2 Groups of *synonyms*
+# 
+# I clean the list of keywords in two steps. As a first step, I suppress the keywords that appear less that 5 times and replace them by a synomym of higher frequency. As a second step, I suppress all the keywords that appear in less than 3 films
+
+# In[ ]:
+
+
+# get the synomyms of the word 'mot_cle'
+#--------------------------------------------------------------
+def get_synonymes(mot_cle):
+    lemma = set()
+    for ss in wordnet.synsets(mot_cle):
+        for w in ss.lemma_names():
+            #_______________________________
+            # We just get the 'nouns':
+            index = ss.name().find('.')+1
+            if ss.name()[index] == 'n': lemma.add(w.lower().replace('_',' '))
+    return lemma   
+
+
+# In[ ]:
+
+
+# Exemple of a list of synonyms given by NLTK
+#---------------------------------------------------
+mot_cle = 'alien'
+lemma = get_synonymes(mot_cle)
+for s in lemma:
+    print(' "{:<30}" in keywords list -> {} {}'.format(s, s in keywords,
+                                                keywords_count[s] if s in keywords else 0 ))
+
+
+# In[ ]:
+
+
+# check if 'mot' is a key of 'key_count' with a test on the number of occurences   
+#----------------------------------------------------------------------------------
+def test_keyword(mot, key_count, threshold):
+    return (False , True)[key_count.get(mot, 0) >= threshold]
+
+
+# In[ ]:
+
+
+keyword_occurences.sort(key = lambda x:x[1], reverse = False)
+key_count = dict()
+for s in keyword_occurences:
+    key_count[s[0]] = s[1]
+#__________________________________________________________________________
+# Creation of a dictionary to replace keywords by higher frequency keywords
+remplacement_mot = dict()
+icount = 0
+for index, [mot, nb_apparitions] in enumerate(keyword_occurences):
+    if nb_apparitions > 5: continue  # only the keywords that appear less than 5 times
+    lemma = get_synonymes(mot)
+    if len(lemma) == 0: continue     # case of the plurals
+    #_________________________________________________________________
+    liste_mots = [(s, key_count[s]) for s in lemma 
+                  if test_keyword(s, key_count, key_count[mot])]
+    liste_mots.sort(key = lambda x:(x[1],x[0]), reverse = True)    
+    if len(liste_mots) <= 1: continue       # no replacement
+    if mot == liste_mots[0][0]: continue    # replacement by himself
+    icount += 1
+    if  icount < 8:
+        print('{:<12} -> {:<12} (init: {})'.format(mot, liste_mots[0][0], liste_mots))    
+    remplacement_mot[mot] = liste_mots[0][0]
+
+print(90*'_'+'\n'+'The replacement concerns {}% of the keywords.'
+      .format(round(len(remplacement_mot)/len(keywords)*100,2)))
+
+
+# In[ ]:
+
+
+# 2 successive replacements
+#---------------------------
+print('Keywords that appear both in keys and values:'.upper()+'\n'+45*'-')
+icount = 0
+for s in remplacement_mot.values():
+    if s in remplacement_mot.keys():
+        icount += 1
+        if icount < 10: print('{:<20} -> {:<20}'.format(s, remplacement_mot[s]))
+
+for key, value in remplacement_mot.items():
+    if value in remplacement_mot.keys():
+        remplacement_mot[key] = remplacement_mot[value]                    
+
+
+# In[ ]:
+
+
+# replacement of keyword varieties by the main keyword
+#----------------------------------------------------------
+df_keywords_synonyms =             remplacement_df_keywords(df_keywords_cleaned, remplacement_mot, roots = False)   
+keywords, keywords_roots, keywords_select =             keywords_inventory(df_keywords_synonyms, colonne = 'plot_keywords')
+
+
+# In[ ]:
+
+
+# New count of keyword occurences
+#-------------------------------------
+keywords.remove('')
+new_keyword_occurences, keywords_count = count_word(df_keywords_synonyms,
+                                                    'plot_keywords',keywords)
+new_keyword_occurences[:5]
+
+
+# In[ ]:
+
+
+# deletion of keywords with low frequencies
+#-------------------------------------------
+def remplacement_df_low_frequency_keywords(df, keyword_occurences):
+    df_new = df.copy(deep = True)
+    key_count = dict()
+    for s in keyword_occurences: 
+        key_count[s[0]] = s[1]    
+    for index, row in df_new.iterrows():
+        chaine = row['plot_keywords']
+        if pd.isnull(chaine): continue
+        nouvelle_liste = []
+        for s in chaine.split('|'): 
+            if key_count.get(s, 4) > 3: nouvelle_liste.append(s)
+        df_new.set_value(index, 'plot_keywords', '|'.join(nouvelle_liste))
+    return df_new
+
+
+# In[ ]:
+
+
+# Creation of a dataframe where keywords of low frequencies are suppressed
+#-------------------------------------------------------------------------
+df_keywords_occurence =     remplacement_df_low_frequency_keywords(df_keywords_synonyms, new_keyword_occurences)
+keywords, keywords_roots, keywords_select =     keywords_inventory(df_keywords_occurence, colonne = 'plot_keywords')    
+
+
+# In[ ]:
+
+
+# New keywords count
+#-------------------
+keywords.remove('')
+new_keyword_occurences, keywords_count = count_word(df_keywords_occurence,
+                                                    'plot_keywords',keywords)
+new_keyword_occurences[:5]
+
+
+# In[ ]:
+
+
+# Graph of keyword occurences
+#----------------------------
+font = {'family' : 'fantasy', 'weight' : 'normal', 'size'   : 15}
+mpl.rc('font', **font)
+
+keyword_occurences.sort(key = lambda x:x[1], reverse = True)
+
+y_axis = [i[1] for i in keyword_occurences]
+x_axis = [k for k,i in enumerate(keyword_occurences)]
+
+new_y_axis = [i[1] for i in new_keyword_occurences]
+new_x_axis = [k for k,i in enumerate(new_keyword_occurences)]
+
+f, ax = plt.subplots(figsize=(9, 5))
+ax.plot(x_axis, y_axis, 'r-', label='before cleaning')
+ax.plot(new_x_axis, new_y_axis, 'b-', label='after cleaning')
+
+# Now add the legend with some customizations.
+legend = ax.legend(loc='upper right', shadow=True)
+frame = legend.get_frame()
+frame.set_facecolor('0.90')
+for label in legend.get_texts():
+    label.set_fontsize('medium')
+            
+plt.ylim((0,25))
+plt.axhline(y=3.5, linewidth=2, color = 'k')
+plt.xlabel("keywords index", family='fantasy', fontsize = 15)
+plt.ylabel("Nb. of occurences", family='fantasy', fontsize = 15)
+#plt.suptitle("Nombre d'occurences des mots clés", fontsize = 18, family='fantasy')
+plt.text(3500, 4.5, 'threshold for keyword delation', fontsize = 13)
+plt.show()
+
+
+# ___
+# ### 2.2 Correlations
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(12, 9))
+#_____________________________
+# calculations of correlations
+corrmat = df_keywords_occurence.dropna(how='any').corr()
+#________________________________________
+k = 17 # number of variables for heatmap
+cols = corrmat.nlargest(k, 'num_voted_users')['num_voted_users'].index
+cm = np.corrcoef(df_keywords_occurence[cols].dropna(how='any').values.T)
+sns.set(font_scale=1.25)
+hm = sns.heatmap(cm, cbar=True, annot=True, square=True,
+                 fmt='.2f', annot_kws={'size': 10}, linewidth = 0.1, cmap = 'coolwarm',
+                 yticklabels=cols.values, xticklabels=cols.values)
+f.text(0.5, 0.93, "Correlation coefficients", ha='center', fontsize = 18, family='fantasy')
+plt.show()
+
+
+# According to the values reported above, I delete a few variables from the dataframe and then re-order the columns.
+
+# In[ ]:
+
+
+df_var_cleaned = df_keywords_occurence.copy(deep = True)
+
+
+# ___
+# ###  2.3 Missing values
+# I examine the number of missing values in each variable and then choose a methodology to complete the dataset.
+
+# In[ ]:
+
+
+missing_df = df_var_cleaned.isnull().sum(axis=0).reset_index()
+missing_df.columns = ['column_name', 'missing_count']
+missing_df['filling_factor'] = (df_var_cleaned.shape[0] 
+                                - missing_df['missing_count']) / df_var_cleaned.shape[0] * 100
+missing_df = missing_df.sort_values('filling_factor').reset_index(drop = True)
+missing_df
+
+
+# The content of this table is now represented:
+
+# In[ ]:
+
+
+y_axis = missing_df['filling_factor'] 
+x_label = missing_df['column_name']
+x_axis = missing_df.index
+
+fig = plt.figure(figsize=(11, 4))
+plt.xticks(rotation=80, fontsize = 14)
+plt.yticks(fontsize = 13)
+
+N_thresh = 5
+plt.axvline(x=N_thresh-0.5, linewidth=2, color = 'r')
+plt.text(N_thresh-4.8, 30, 'filling factor \n < {}%'.format(round(y_axis[N_thresh],1)),
+         fontsize = 15, family = 'fantasy', bbox=dict(boxstyle="round",
+                   ec=(1.0, 0.5, 0.5),
+                   fc=(0.8, 0.5, 0.5)))
+N_thresh = 17
+plt.axvline(x=N_thresh-0.5, linewidth=2, color = 'g')
+plt.text(N_thresh, 30, 'filling factor \n = {}%'.format(round(y_axis[N_thresh],1)),
+         fontsize = 15, family = 'fantasy', bbox=dict(boxstyle="round",
+                   ec=(1., 0.5, 0.5),
+                   fc=(0.5, 0.8, 0.5)))
+
+plt.xticks(x_axis, x_label,family='fantasy', fontsize = 14 )
+plt.ylabel('Filling factor (%)', family='fantasy', fontsize = 16)
+plt.bar(x_axis, y_axis);
+
+
+# ___
+# #### 2.3.1 Setting missing title years
+# 
+#  To infer the title year, I use the list of actors and the director. For each of them, I determine the mean year of activity, using the current dataset. I then average the values obtained to estimate the title year.
+
+# In[ ]:
+
+
+df_filling = df_var_cleaned.copy(deep=True)
+missing_year_info = df_filling[df_filling['title_year'].isnull()][[
+            'director_name','actor_1_name', 'actor_2_name', 'actor_3_name']]
+missing_year_info[:10]
+
+
+# In[ ]:
+
+
+df_filling.iloc[4553]
+
+
+# In[ ]:
+
+
+def fill_year(df):
+    col = ['director_name', 'actor_1_name', 'actor_2_name', 'actor_3_name']
+    usual_year = [0 for _ in range(4)]
+    var        = [0 for _ in range(4)]
+    #_____________________________________________________________
+    # I get the mean years of activity for the actors and director
+    for i in range(4):
+        usual_year[i] = df.groupby(col[i])['title_year'].mean()
+    #_____________________________________________
+    # I create a dictionnary collectinf this info
+    actor_year = dict()
+    for i in range(4):
+        for s in usual_year[i].index:
+            if s in actor_year.keys():
+                if pd.notnull(usual_year[i][s]) and pd.notnull(actor_year[s]):
+                    actor_year[s] = (actor_year[s] + usual_year[i][s])/2
+                elif pd.isnull(actor_year[s]):
+                    actor_year[s] = usual_year[i][s]
+            else:
+                actor_year[s] = usual_year[i][s]
+        
+    #______________________________________
+    # identification of missing title years
+    missing_year_info = df[df['title_year'].isnull()]
+    #___________________________
+    # filling of missing values
+    icount_replaced = 0
+    for index, row in missing_year_info.iterrows():
+        value = [ np.NaN for _ in range(4)]
+        icount = 0 ; sum_year = 0
+        for i in range(4):            
+            var[i] = df.loc[index][col[i]]
+            if pd.notnull(var[i]): value[i] = actor_year[var[i]]
+            if pd.notnull(value[i]): icount += 1 ; sum_year += actor_year[var[i]]
+        if icount != 0: sum_year = sum_year / icount 
+
+        if int(sum_year) > 0:
+            icount_replaced += 1
+            df.set_value(index, 'title_year', int(sum_year))
+            if icount_replaced < 10: 
+                print("{:<45} -> {:<20}".format(df.loc[index]['movie_title'],int(sum_year)))
+    return 
+
+
+# In[ ]:
+
+
+fill_year(df_filling)
+
+
+# ___
+# #### 2.3.2 Extracting keywords from the title
+# 
+# As previously outlined, keywords will play an important role in the functioning of the engine. Hence, I try to fill missing values in the **plot_keywords** variable using the words of the title. To do so, I create the list of synonyms of all the words contained in the title and I check if any of these synonyms are already in the keyword list. When it is the case, I add this keyword to the entry:
+
+# In[ ]:
+
+
+icount = 0
+for index, row in df_filling[df_filling['plot_keywords'].isnull()].iterrows():
+    icount += 1
+    liste_mot = row['movie_title'].strip().split()
+    new_keyword = []
+    for s in liste_mot:
+        lemma = get_synonymes(s)
+        for t in list(lemma):
+            if t in keywords: 
+                new_keyword.append(t)                
+    if new_keyword and icount < 15: 
+        print('{:<50} -> {:<30}'.format(row['movie_title'], str(new_keyword)))
+    if new_keyword:
+        df_filling.set_value(index, 'plot_keywords', '|'.join(new_keyword)) 
+
+
+# #### 2.3.3 Imputing from regressions
+# 
+# In Section 2.4, I had a look at the correlation between variables and found that a few of them showed some degree of correlation, with a Pearson's coefficient > 0.5:
+
+# In[ ]:
+
+
+cols = corrmat.nlargest(9, 'num_voted_users')['num_voted_users'].index
+cm = np.corrcoef(df_keywords_occurence[cols].dropna(how='any').values.T)
+sns.set(font_scale=1.25)
+hm = sns.heatmap(cm, cbar=True, annot=True, square=True,
+                 fmt='.2f', annot_kws={'size': 10}, 
+                 yticklabels=cols.values, xticklabels=cols.values)
+plt.show()
+
+
+# I will use this finding to fill the missing values of the **gross**, **num_critic_for_reviews**, **num\_voted\_users** , and **num_user_for_reviews** variables. To do so, I will make regressions on pairs of correlated variables:
+
+# In[ ]:
+
+
+sns.set(font_scale=1.25)
+cols = ['gross', 'num_voted_users']
+sns.pairplot(df_filling.dropna(how='any')[cols],diag_kind='kde', size = 2.5)
+plt.show();
+
+
+# First, I define a function that impute the missing value from a linear fit of the data:
+
+# In[ ]:
+
+
+def variable_linreg_imputation(df, col_to_predict, ref_col):
+    regr = linear_model.LinearRegression()
+    test = df[[col_to_predict,ref_col]].dropna(how='any', axis = 0)
+    X = np.array(test[ref_col])
+    Y = np.array(test[col_to_predict])
+    X = X.reshape(len(X),1)
+    Y = Y.reshape(len(Y),1)
+    regr.fit(X, Y)
     
-    #Return the dataframe
-    return(test_rle)
-        
+    test = df[df[col_to_predict].isnull() & df[ref_col].notnull()]
+    for index, row in test.iterrows():
+        value = float(regr.predict(row[ref_col]))
+        df.set_value(index, col_to_predict, value)
 
+
+# This function takes the dataframe as input, as well as the names of two columns. A linear fit is performed between those two columns which is used to fill the holes in the first column that was given:
 
 # In[ ]:
 
 
-#Defining a function that takes a list of image paths (pathlib.Path objects), analyzes each and returns a submission ready DataFrame
-def list_of_images(im_path_list):
-    all_df = pd.DataFrame()
-    for im_path in im_path_list: #We'll use this for the test images
-        im_df = basic(im_path) #Creating one dataframe for every image 
-        all_df = all_df.append(im_df, ignore_index=True) #Appending all these dataframes
+variable_linreg_imputation(df_filling, 'gross', 'num_voted_users')
+
+
+# Finally, I examine which amount of data is still missing in the dataframe:
+
+# In[ ]:
+
+
+df = df_filling.copy(deep = True)
+missing_df = df.isnull().sum(axis=0).reset_index()
+missing_df.columns = ['column_name', 'missing_count']
+missing_df['filling_factor'] = (df.shape[0] 
+                                - missing_df['missing_count']) / df.shape[0] * 100
+missing_df = missing_df.sort_values('filling_factor').reset_index(drop = True)
+missing_df
+
+
+# and we can see that in the worst case, the filling factor is around 96% (excluding the **homepage** and **tagline** variables).
+
+# In[ ]:
+
+
+df = df_filling.copy(deep=True)
+df.reset_index(inplace = True, drop = True)
+
+
+# ___
+# ## 3. RECOMMENDATION ENGINE
+
+# ___
+# ### 3.1 Basic functioning of the engine 
+#  order to build the recommendation engine, I will basically proceed in two steps:
+# - 1/ determine $N$ films with a content similar to the entry provided by the user
+# - 2/ select the 5 most popular films among these $N$ films
+# 
+# #### 3.1.1 Similarity
+# When builing the engine, the first step thus consists in defining a criteria that would tell us how close two films are. To do so, I start from the description of the film that was selected by the user: from it, I get the director name, the names of the actors and a few keywords. I then build a matrix where each row corresponds to a film of the database and where the columns correspond to the previous quantities (director + actors + keywords) plus the *k* genres that were described in section 1.4:
+# 
+
+# |  movie title |director   |actor 1   |actor 2   |actor 3   | keyword 1  | keyword 2   | genre 1 | genre 2 | ... | genre k |
+# |:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+# |Film 1   | $a_{11}$  |  $a_{12}$ |   |   |  ... |   |   |   |   | $a_{1q}$  |
+# |...   |   |   |   |   | ...  |   |   |   |   |   |
+# |Film i   |  $a_{i1}$ | $a_{i2}$ |   |   | $a_{ij}$  |   |   |   |   |  $a_{iq}$ |
+# |...   |   |   |   |   | ...  |   |   |   |   |   |
+# | Film p   |$a_{p1}$   | $a_{p2}$  |   |   | ...  |   |   |   |   | $a_{pq}$  |
+
+# In this matrix, the $a_{ij}$ coefficients take either the value 0 or 1 depending on the correspondance between the significance of column $j$ and the content of film $i$. For exemple, if "keyword 1" is in film $i$, we will have $a_{ij}$ = 1 and 0 otherwise. Once this matrix has been defined, we determine the distance between two films according to:
+# 
+# \begin{eqnarray}
+# d_{m, n} = \sqrt{  \sum_{i = 1}^{N} \left( a_{m,i}  - a_{n,i} \right)^2  } 
+# \end{eqnarray}
+# 
+# At this stage, we just have to select the N films which are the closest from the entry selected by the user.
+# 
+# #### 3.1.2 Popularity
+# 
+# According to similarities between entries, we get a list of $N$ films. At this stage, I select 5 films from this list and, to do so, I give a score for every entry. I decide de compute the score according to 3 criteria:
+# - the IMDB score
+# - the number of votes the entry received
+# - the year of release
+# 
+# The two first criteria will be a direct measure of the popularity of the various entries in IMDB. For the third criterium, I introduce the release year since the database spans films from the early $XX^{th}$ century up to now. I assume that people's favorite films will be most of the time from the same epoch.
+# 
+# Then, I calculate the score according to the formula:
+
+# 
+# \begin{eqnarray}
+# \mathrm{score} = IMDB^2 \times \phi_{\sigma_1, c_1} \times  \phi_{\sigma_2, c_2}
+# \end{eqnarray}
+# 
+# where $\phi$ is a gaussian function:
+# 
+# \begin{eqnarray}
+# \phi_{\sigma, c}(x) \propto \mathrm{exp}\left(-\frac{(x-c)^2}{2 \, \sigma^2}\right)
+# \end{eqnarray}
+
+# For votes, I get the maximum number of votes among the $N$ films and I set $\sigma_1 = c_1 = m$. For years, I put $\sigma_1 = 20$ and I center the gaussian on the title year of the film selected by the user. With the gaussians, I put more weight to the entries with a large number of votes and to the films whose release year is close to the title selected by the user.
+
+# ___
+# ### 3.2 Definition of the engine functions
+
+# In[ ]:
+
+
+gaussian_filter = lambda x,y,sigma: math.exp(-(x-y)**2/(2*sigma**2))
+
+
+#  **Function collecting some variables content**: the *entry\_variables()* function returns the values taken by the variables *'director\_name', 'actor\_N\_name'* (N $\in$ [1:3]) and *'plot\_keywords'* for the film selected by the user.
+
+# In[ ]:
+
+
+def entry_variables(df, id_entry): 
+    col_labels = []    
+    if pd.notnull(df['director_name'].iloc[id_entry]):
+        for s in df['director_name'].iloc[id_entry].split('|'):
+            col_labels.append(s)
+            
+    for i in range(3):
+        column = 'actor_NUM_name'.replace('NUM', str(i+1))
+        if pd.notnull(df[column].iloc[id_entry]):
+            for s in df[column].iloc[id_entry].split('|'):
+                col_labels.append(s)
+                
+    if pd.notnull(df['plot_keywords'].iloc[id_entry]):
+        for s in df['plot_keywords'].iloc[id_entry].split('|'):
+            col_labels.append(s)
+    return col_labels
+
+
+#  **Function adding variables to the dataframe**: the function *add\_variables()* add a list of variables to the dataframe given in input and initialize these variables at 0 or 1 depending on the correspondance with the description of the films and the content of the REF_VAR variable given in input.
+
+# In[ ]:
+
+
+def add_variables(df, REF_VAR):    
+    for s in REF_VAR: df[s] = pd.Series([0 for _ in range(len(df))])
+    colonnes = ['genres', 'actor_1_name', 'actor_2_name',
+                'actor_3_name', 'director_name', 'plot_keywords']
+    for categorie in colonnes:
+        for index, row in df.iterrows():
+            if pd.isnull(row[categorie]): continue
+            for s in row[categorie].split('|'):
+                if s in REF_VAR: df.set_value(index, s, 1)            
+    return df
+
+
+#  **Function creating a list of films**: the *recommand()* function create a list of N (= 31) films similar to the film selected by the user.
+
+# In[ ]:
+
+
+def recommand(df, id_entry):    
+    df_copy = df.copy(deep = True)    
+    liste_genres = set()
+    for s in df['genres'].str.split('|').values:
+        liste_genres = liste_genres.union(set(s))    
+    #_____________________________________________________
+    # Create additional variables to check the similarity
+    variables = entry_variables(df_copy, id_entry)
+    variables += list(liste_genres)
+    df_new = add_variables(df_copy, variables)
+    #____________________________________________________________________________________
+    # determination of the closest neighbors: the distance is calculated / new variables
+    X = df_new.as_matrix(variables)
+    nbrs = NearestNeighbors(n_neighbors=31, algorithm='auto', metric='euclidean').fit(X)
+
+    distances, indices = nbrs.kneighbors(X)    
+    xtest = df_new.iloc[id_entry].as_matrix(variables)
+    xtest = xtest.reshape(1, -1)
+
+    distances, indices = nbrs.kneighbors(xtest)
+
+    return indices[0][:]
     
-    #Returing the submission ready dataframe
-    return (all_df)
 
+
+#  **Function extracting some parameters from a list of films**: the *create\_film\_selection()* function extracts some variables of the dataframe given in input and returns this list for a selection of N films. This list is ordered according to criteria established in the *critere\_selection()* function.
 
 # In[ ]:
 
 
-#Final submission
-test_images = pathlib.Path('../input/stage1_test/').glob('*/images/*.png')
-basic_solution = list_of_images(list(test_images))
-basic_solution.to_csv('basic_solution.csv', index=None)
+def extract_parameters(df, liste_films):     
+    parametres_films = ['_' for _ in range(31)]
+    i = 0
+    max_users = -1
+    for index in liste_films:
+        parametres_films[i] = list(df.iloc[index][['movie_title', 'title_year',
+                                        'imdb_score', 'num_user_for_reviews', 
+                                        'num_voted_users']])
+        parametres_films[i].append(index)
+        max_users = max(max_users, parametres_films[i][4] )
+        i += 1
+        
+    title_main = parametres_films[0][0]
+    annee_ref  = parametres_films[0][1]
+    parametres_films.sort(key = lambda x:critere_selection(title_main, max_users,
+                                    annee_ref, x[0], x[1], x[2], x[4]), reverse = True)
+
+    return parametres_films 
 
 
-# The submission scored 0.201 which gives us our baseline accuracy. Any layer of complexity that we add onto this should better this score, failing which it is absolutely useless.
+#  **Function comparing 2 film titles**: the sequel *sequel()* function compares the 2 titles passed in input and defines if these titles are similar or not.
+
+# In[ ]:
+
+
+def sequel(titre_1, titre_2):    
+    if fuzz.ratio(titre_1, titre_2) > 50 or fuzz.token_set_ratio(titre_1, titre_2) > 50:
+        return True
+    else:
+        return False
+
+
+#  **Function giving marks to films**: the *critere\_selection()* function gives a mark to a film depending on its IMDB score,  the title year and the number of users who have voted for this film.
+
+# In[ ]:
+
+
+def critere_selection(title_main, max_users, annee_ref, titre, annee, imdb_score, votes):    
+    if pd.notnull(annee_ref):
+        facteur_1 = gaussian_filter(annee_ref, annee, 20)
+    else:
+        facteur_1 = 1        
+
+    sigma = max_users * 1.0
+
+    if pd.notnull(votes):
+        facteur_2 = gaussian_filter(votes, max_users, sigma)
+    else:
+        facteur_2 = 0
+        
+    if sequel(title_main, titre):
+        note = 0
+    else:
+        note = imdb_score**2 * facteur_1 * facteur_2
+    
+    return note
+
+
+#  **Function adding films**: the *add\_to\_selection()* function complete the *film\_selection* list which contains 5 films that will be recommended to the user. The films are selected from the *parametres\_films* list and are taken into account only if the title is different enough from other film titles. 
+
+# In[ ]:
+
+
+def add_to_selection(film_selection, parametres_films):    
+    film_list = film_selection[:]
+    icount = len(film_list)    
+    for i in range(31):
+        already_in_list = False
+        for s in film_selection:
+            if s[0] == parametres_films[i][0]: already_in_list = True
+            if sequel(parametres_films[i][0], s[0]): already_in_list = True            
+        if already_in_list: continue
+        icount += 1
+        if icount <= 5:
+            film_list.append(parametres_films[i])
+    return film_list
+
+
+#  **Function filtering sequels**: the *remove\_sequels()* function remove sequels from the list if more that two films from a serie are present. The older one is kept.
+
+# In[ ]:
+
+
+def remove_sequels(film_selection):    
+    removed_from_selection = []
+    for i, film_1 in enumerate(film_selection):
+        for j, film_2 in enumerate(film_selection):
+            if j <= i: continue 
+            if sequel(film_1[0], film_2[0]): 
+                last_film = film_2[0] if film_1[1] < film_2[1] else film_1[0]
+                removed_from_selection.append(last_film)
+
+    film_list = [film for film in film_selection if film[0] not in removed_from_selection]
+
+    return film_list   
+
+
+# **Main function**: create a list of 5 films that will be recommended to the user.
+
+# In[ ]:
+
+
+def find_similarities(df, id_entry, del_sequels = True, verbose = False):    
+    if verbose: 
+        print(90*'_' + '\n' + "QUERY: films similar to id={} -> '{}'".format(id_entry,
+                                df.iloc[id_entry]['movie_title']))
+    #____________________________________
+    liste_films = recommand(df, id_entry)
+    #__________________________________
+    # Create a list of 31 films
+    parametres_films = extract_parameters(df, liste_films)
+    #_______________________________________
+    # Select 5 films from this list
+    film_selection = []
+    film_selection = add_to_selection(film_selection, parametres_films)
+    #__________________________________
+    # delation of the sequels
+    if del_sequels: film_selection = remove_sequels(film_selection)
+    #______________________________________________
+    # add new films to complete the list
+    film_selection = add_to_selection(film_selection, parametres_films)
+    #_____________________________________________
+    selection_titres = []
+    for i,s in enumerate(film_selection):
+        selection_titres.append([s[0].replace(u'\xa0', u''), s[5]])
+        if verbose: print("nº{:<2}     -> {:<30}".format(i+1, s[0]))
+
+    return selection_titres
+
+
+# ___
+# ### 3.3 Making meaningful recommendations
+
+# While building the recommendation engine, we are quickly faced to a big issue: the existence of sequels make that some recommendations may seem quite dumb ... As an exemple, somebody who enjoyed *"Pirates of the Caribbean: Dead Man's Chest"* would probably not like to be adviced to watch this: 
+
+# In[ ]:
+
+
+dum = find_similarities(df, 12, del_sequels = False, verbose = True)
+
+
+# Unfortunately, if we build the engine according to the functionalities described in Section 3.1, this is what we are told !!
 # 
-# Some important questions to ask are:
+# The origin of that issue is quite easily understood: many blockbusters have sequels that share the same director, actors and keywords ... Most of the time, the fact that sequels exist mean that it was a "fair" box-office success, which is a synonym of a good IMDB score. Usually, there's an inheritence of success among sequels which entail that according to the way the current engine is built, it is quite probable that if the engine matches one film of a serie, it will end recommending various of them. In the previous exemple, we see that the engine recommends the three films of the *"Lord of the ring"* trilogy, as well as *"Thor"* and *"Thor: the dark world"*. Well, I would personnaly not make that kind of recommendations to a friend ... 
 # 
-# - Will we achieve a satisfactory performance by converting all pictures to grayscale? What are the different types of pictures in the dataset?
-# - What are the numerous ways to seperate the background from objects of interest? Otsu's method requires computing a graylevel histogram for us to find the optimum seperation value. In that respect KMeans may work better on images that aren't particularly grayscale or on images where there is no sharp contrast in the intensity values between objects of interest and the background
-# - What are some useful edge detection algorithms to create boundaries between nuclei that are extremely close to one another?
-# - How do we as humans identify objects in an image? We indeed take it for granted but if we think of objects as anything that has a fixed shape and size and is prominent with respect to the background, what is the technical (or computer) definition of these terms?
+# Hence, I tried to find a way to prevent that kind of behaviour and I concluded that the quickest way to do it would be to work on the film's titles. To do so, I used the **fuzzywuzzy** package to build the *remove_sequels()* function. This function defines the degree of similarity of two film titles and if too close, the most recent film is removed from the list of recommendations. Using this function on the previous exemple, we end with the following recommendations:
 
-# ## Edge Detection 
+# In[ ]:
 
-# Some important videos to watch before beginning this section - https://www.youtube.com/watch?v=XuD4C8vJzEQ&index=2&list=PLkDaE6sCZn6Gl29AoE31iwdVwSG-KnDzF and https://www.youtube.com/watch?v=am36dePheDc&list=PLkDaE6sCZn6Gl29AoE31iwdVwSG-KnDzF&index=3F to get an idea of the underlying matrix algebra in edge detection. Credit to Andrew Ng for always explaining the intuition behind a particular method before going into the more complex math
+
+dum = find_similarities(df, 12, del_sequels = True, verbose = True)
+
+
+# which seems far more reasonable !! 
 # 
-# The first thing we'll be trying out is the Sobel Filter. A clear and concise explanation of the filter and its usage in Python (OpenCV) is given here : https://docs.opencv.org/3.2.0/d2/d2c/tutorial_sobel_derivatives.html
+# But, well, nothing is perfect. This way of discarding some recommendations assumes that there is a a continuity in the names of films pertaining to a serie. This is however not always the case:
+
+# In[ ]:
+
+
+dum = find_similarities(df, 2, del_sequels = True, verbose = True)
+
+
+# Here, the user selected a film from the James Bond serie, *'Spectre'*, and the engine recommends him two other James Bond films, *'Casino Royale'* and *'Skyfall'*. Well, I guess that people who enjoyed *'Spectre'* will know that there is not a unique film featuring James Bond, and the current recommendation thus looks a bit irrelevant ...
+
+# ___
+# ### 3.4 Exemple of recommendation: test-case
+
+# In[ ]:
+
+
+selection = dict()
+for i in range(0, 20, 3):
+    selection[i] = find_similarities(df, i, del_sequels = True, verbose = True)
+
+
+# ___
+# ## 4. Conclusion: possible improvements and points to adress
 # 
+# Finally a few things were not considered when building the engine and they should deserve some attention:
+# - the language of the film was not checked: in fact, this could be important to get sure that the films recommended are in the same language than the one choosen by the user
+# - another point concerns the replacement of the keywords by more frequent synonyms. In some cases, it was shown that the synonyms selected had a different meaning that the original word. Definitely, the whole process might deserve more attention and be improved.
+# - another improvement could be to create a list of connections between actors to see which are the actors that use to play in similar movies (I started an analysis in that direction in [another notebook](https://www.kaggle.com/fabiendaniel/categorizing-actors)). Hence, rather than only looking at the actors who are in the film selected by the user, we could enlarge this list by a few more people. Something similar could be done also with the directors.
+# - extend the detections of sequels to films that don't share similar titles (e.g. James Bond serie)
 
-# In[ ]:
-
-
-#cv2.Sobel arguments - the image, output depth, order of derivative of x, order of derivative of y, kernel/filter matrix size
-sobelx = cv2.Sobel(grayimg,int(cv2.CV_64F),1,0,ksize=3) #ksize=3 means we'll be using the 3x3 Sobel filter
-sobely = cv2.Sobel(grayimg,int(cv2.CV_64F),0,1,ksize=3)
-
-#To plot the vertical and horizontal edge detectors side by side
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(sobelx,cmap='gray')
-plt.title('Sobel X (vertical edges)')
-plt.xticks([])
-plt.yticks([])
-
-plt.subplot(1,2,2)
-plt.imshow(sobely,cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('Sobel Y (horizontal edges)')
-
-
-# In[ ]:
-
-
-#Plotting the original image
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(grayimg,cmap='gray')
-plt.title('Original image')
-
-#Now to combine the 2 sobel filters
-sobel = np.sqrt(np.square(sobelx) + np.square(sobely))
-plt.subplot(1,2,2)
-plt.imshow(sobel,cmap='gray')
-plt.title('Sobel Filter')
-
-
-# Aha! The Sobel filter has done better than Otsu/KMeans in identifying distinct objects in the image. The two nuclei in the top right corner, the two extremely small nuclei at the (530,410) mark (tentative) have been identified. However minor concerns remain as 2 of the 3 overlapping nuclei in the same region have been considered as 1, instead of all 3 before.
-
-# In[ ]:
-
-
-#To highlight the problem areas
-plt.figure(figsize=(12,6))
-plt.subplot(1,3,1)
-plt.imshow(grayimg[350:450,485:530],cmap='gray')
-plt.title('Original image (zoomed in)')
-plt.xticks([])
-plt.yticks([])
-
-plt.subplot(1,3,2)
-plt.imshow(sobel[350:450,485:530],cmap='gray')
-plt.title('Sobel Filter (zoomed in)')
-plt.xticks([])
-plt.yticks([])
-
-plt.subplot(1,3,3)
-plt.imshow(maskimg[350:450,485:530], cmap='gray')
-plt.title('Otsu/K-Means (zoomed in)')
-plt.xticks([])
-plt.yticks([])
-
-
-# So there is definitely an improvement. However as pointed out here (https://www.kaggle.com/c/data-science-bowl-2018/discussion/47864), this problem is an instance segmentation problem. Distinguishing foreground objects from background is not the primary objective. If we fail to include a mask for a particular nucleus (like in the above mentioned example of the 2 overlapping nuclei), our score goes down
-
-# Now, let's try the Canny edge detector which is a smarter Sobel Filter. The Canny edge detector is a multistage algorithm:-
-# - The first stage removes the background noise in the image using a Gaussian filter so that the algorithm detects real edges
-# - The second stage finds an intensity gradient in the image using a Sobel filter (using a combination of sobel-x and sobel-y)
-# - In the third stage unwanted pixels are removed so they will not be confused as edge. To do this, the entire image is analyzed, checking if each pixel is a local maximum in the direction of the gradient relative to its area. Finally the last stage is the application of the Hysteresis Thresholding
-# - In this final stage the algorithm determines which edges are real edge and and those who are not at all. For this you must determine two threshold values, the minVal the minimum threshold, and maxVal the maximum threshold. Any edge with an intensity gradient greater than maxval is sure to be an edge, and those with a value less than minVal will be discarded, because they are nor real edge. For all other edge that may be found in the range between these two threshold values, are subjected to a further analysis, establishing whether they are real edges through their connectivity
+# *Thanks a lot for reaching this point of the notebook !! <br>
+# If you see anything wrong or something that could be improved, please, tell me !!* <br>
 # 
-# Read more at http://www.meccanismocomplesso.org/en/opencv-python-canny-edge-detection/#RqetSzirOmJRYDup.99
-
-# In[13]:
-
-
-plt.figure(figsize=(12,6))
-
-plt.subplot(1,2,1)
-plt.imshow(grayimg,cmap='gray')
-plt.title('Original image')
-plt.xticks([])
-plt.yticks([])
-
-#Let's see how the Canny Edge Detector does on the image
-plt.subplot(1,2,2)
-canny = cv2.Canny(grayimg,0,21)
-plt.imshow(canny,cmap='gray')
-plt.title('Canny Edge Detection')
-plt.xticks([])
-plt.yticks([])
-
-
-# So the Canny Edge Detector has found gradient within the nuclei as well which gives an impression that it is an overkill. However if we were to retrieve the external contours only and create masks based on these external contours, then we may create masks that capture the region of interest. One point to note is that the same problems that we faced with Sobel filter are visible here, however the Canny Edge Detector has returned a modified image matrix where we only have binary values (0 and 255)
-
-# In[14]:
-
-
-#Using contouring to create the masks
-canny_cont=cv2.findContours(canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1] #Using an approximation function to obtain the contour points and retreiving only the external contours
-
-#To show the contour points
-plt.figure(figsize=(14,8))
-plt.imshow(canny,cmap='gray')
-plt.title('Canny Edge Detection with contours')
-plt.xticks([])
-plt.yticks([])
-
-for i in (range(len(canny_cont))):
-    plt.scatter(canny_cont[i].flatten().reshape(len(canny_cont[i]),2)[:,0],
-         canny_cont[i].flatten().reshape(len(canny_cont[i]),2)[:,1])
-
-
-# In[15]:
-
-
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(grayimg, cmap='gray')
-plt.title('Original Image')
-
-#Now to create masks with contours
-background=np.zeros(grayimg.shape)
-canny_mask=cv2.drawContours(background,canny_cont,-1,255,-1)
-
-plt.subplot(1,2,2)
-plt.imshow(canny_mask,cmap='gray')
-plt.title('Creating masks with contours')
-plt.xticks([])
-plt.yticks([])
-
-
-# Now, the Canny Edge Detector has been able to find out most of the nuclei, however we aren't getting complete masks for each of the nuclei. This could be changed by using different values for the minval and maxval parameters (in the cv2.Canny() function) which also depends on the kind of image that we are dealing with (as we will see later). The output of the canny_mask matrix is in the form that allows us to use ndimage.labels, the function used for finding connected components. However it is absolutely important that we make complete masks for each nuclei so that we don't find more objects than there are in this image. 
-
-# In[16]:
-
-
-canny_mask_copy=canny_mask.copy()
-canny_mask_clabels=ndimage.label(canny_mask_copy)[0]
-for label_ind, label_mat in enumerate(ndimage.find_objects(canny_mask_clabels)):
-    cell = canny_mask_clabels[label_mat]
-    #Toheck if the label size is too small
-    if np.product(cell.shape) < 100:
-        canny_mask_clabels[np.where(canny_mask_clabels==label_ind+1)]=1
-canny_mask_clabels=np.where(canny_mask_clabels>1,0,canny_mask_clabels)
-
-#To show the original mask
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-plt.imshow(canny_mask,cmap='gray')
-plt.title('Masks created with edge plus contour detection')
-plt.xticks([])
-plt.yticks([])
-
-#To plot the problem areas
-plt.subplot(1,2,2)
-plt.imshow(canny_mask_clabels,cmap='gray')
-plt.title('Incomplete Masks')
-plt.xticks([])
-plt.yticks([])
-
-
-# In[17]:
-
-
-#For convolving 2D arrays
-from scipy import signal
-
-
-# In[18]:
-
-
-plt.figure(figsize=(12,6))
-plt.subplot(1,2,1)
-sns.distplot(np.where(canny_mask==255,1,0).flatten())
-plt.title('Canny Mask')
-
-plt.subplot(1,2,2)
-#To smooth the canny_mask by convolving with a matrix that has all values = 1/9
-canny_mask_smooth=signal.convolve2d(np.where(canny_mask==255,1,0),np.full((3,3),1/9),'same')
-sns.distplot(canny_mask_smooth.flatten())
-canny_mask_smooth_thresh=threshold_otsu(canny_mask_smooth)
-plt.axvline(x=canny_mask_smooth_thresh)
-plt.title('Smoothened Canny Mask with Otsu threshold value')
-
-
-# The number of pixels with intensity values = 1 has reduced. Why has this happened? This is because of smoothing. We have convolved the canny mask with a local filter (a 3x3 matrix with all values = 1/9) and what this does is that it replaces the intensity values of the pixels by the average of the intensity values of the neighboring pixels. Now if a pixel has all neighbouring pixels with intensity values = 1, the intensity value of the pixel stays as 1 (as 1/9 x 9 =1). However the pixels at the edges of the objects and at the problem areas have reduced intensity values
-
-# In[19]:
-
-
-plt.figure(figsize=(12,6))
-plt.imshow(canny_mask_smooth,cmap='gray')
-plt.title('Smoothened canny mask')
-plt.xticks([])
-plt.yticks([])
-
-
-# In[20]:
-
-
-#Setting all values above otsu's threshold as 0 in the matrix and in this image matrix setting all values above 0 as 1 
-plt.figure(figsize=(12,6))
-canny_conv1=np.where(np.where(canny_mask_smooth>canny_mask_smooth_thresh,0,canny_mask_smooth)>0,1,0)
-plt.imshow(canny_conv1,cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('After 1 convolution')
-
-
-# In[21]:
-
-
-plt.figure(figsize=(12,6))
-canny_mask_smooth2=signal.convolve2d(canny_conv1,np.full((3,3),1/9),'same')
-canny_mask_smooth_thresh2=threshold_otsu(canny_mask_smooth2)
-canny_conv2=np.where(canny_mask_smooth2>canny_mask_smooth_thresh2,1,0)
-plt.imshow(canny_conv2,cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('After 2 convolutions')
-
-
-# In[22]:
-
-
-#Combing the 2 convolutions 
-canny_cont=cv2.findContours(cv2.convertScaleAbs(canny_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-background=np.zeros(grayimg.shape)
-canny_mask=cv2.drawContours(background,canny_cont,-1,255,-1)
-
-plt.figure(figsize=(12,6))
-plt.imshow(canny_mask,cmap='gray')
-plt.title('Contour detection after 2 convolutions')
-plt.xticks([])
-plt.yticks([])
-
-
-# So this looks good. Some of the earlier problems remain as some nuclei are still clustered together but the bottomline is that we have been able to identify all the nuclei in the original picture. Before we try any of this and end up overfitting to a well behaved image, it is important to see what values for MinVal and MaxVal parameters in the cv2.Canny() function work on other images.
-
-# In[ ]:
-
-
-#Let's try the same parameters for canny edge on other types of images - starting with another black background and white foreground image
-for i in range(len(training_sorted)):
-    if training_sorted[i].parts[-1]=='feffce59a1a3eb0a6a05992bb7423c39c7d52865846da36d89e2a72c379e5398.png':
-        bwimg=cv2.imread(str(training_sorted[i]))
-        bwimg=cv2.cvtColor(bwimg,cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(20,8))
-        plt.subplot(1,3,1)
-        plt.imshow(bwimg)
-        plt.title('Black background and white foreground')
-        
-        plt.subplot(1,3,2)
-        bwimg=cv2.cvtColor(bwimg,cv2.COLOR_RGB2GRAY)
-        bwimg_canny=cv2.Canny(bwimg,0,21)
-        plt.imshow(bwimg_canny,cmap='gray')
-        plt.title('Canny edge detection')
-        
-        plt.subplot(1,3,3)
-        bwimg_cont=cv2.findContours(bwimg_canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        #Now to create masks with contours
-        bwimg_bg=np.zeros(bwimg.shape)
-        bwimg_mask=cv2.drawContours(bwimg_bg,bwimg_cont,-1,255,-1)
-        
-        #Convolving once
-        bwimg_mask_smooth=signal.convolve2d(np.where(bwimg_mask==255,1,0),np.full((3,3),1/9),'same')
-        bwimg_mask_smooth_thresh=threshold_otsu(bwimg_mask_smooth)
-        bwimg_conv1=np.where(np.where(bwimg_mask_smooth>bwimg_mask_smooth_thresh,0,bwimg_mask_smooth)>0,1,0)
-        
-        #Convolving again
-        bwimg_mask_smooth2=signal.convolve2d(bwimg_conv1,np.full((3,3),1/9),'same')
-        bwimg_mask_smooth_thresh2=threshold_otsu(bwimg_mask_smooth2)
-        bwimg_conv2=np.where(bwimg_mask_smooth2>bwimg_mask_smooth_thresh2,1,0)
-        
-        #Now to create masks with contours after 2 convolutions
-        bwimg_cont=cv2.findContours(cv2.convertScaleAbs(bwimg_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        bwimg_bg=np.zeros(bwimg.shape)
-        bwimg_mask=cv2.drawContours(bwimg_bg,bwimg_cont,-1,255,-1)
-
-        plt.imshow(bwimg_mask,cmap='gray')
-        plt.title('Contour detection after 2 convolutions')
-
-
-# In[ ]:
-
-
-#Purple background and purple foreground
-for i in range(len(training_sorted)):
-    if training_sorted[i].parts[-1]=='0e21d7b3eea8cdbbed60d51d72f4f8c1974c5d76a8a3893a7d5835c85284132e.png':
-        ppimg=cv2.imread(str(training_sorted[i]))
-        ppimg=cv2.cvtColor(ppimg,cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(20,8))
-        plt.subplot(1,3,1)
-        plt.imshow(ppimg)
-        plt.title('Purple background and purple foreground')
-        
-        plt.subplot(1,3,2)
-        ppimg=cv2.cvtColor(ppimg,cv2.COLOR_RGB2GRAY)
-        ppimg_canny=cv2.Canny(ppimg,20,100)
-        plt.imshow(ppimg_canny,cmap='gray')
-        plt.title('Canny edge detection')
-        
-        plt.subplot(1,3,3)
-        ppimg_cont=cv2.findContours(ppimg_canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        #Now to create masks with contours
-        ppimg_bg=np.zeros(ppimg.shape)
-        ppimg_mask=cv2.drawContours(ppimg_bg,ppimg_cont,-1,255,-1)
-        
-        #Convolving once
-        ppimg_mask_smooth=signal.convolve2d(np.where(ppimg_mask==255,1,0),np.full((3,3),1/9),'same')
-        ppimg_mask_smooth_thresh=threshold_otsu(ppimg_mask_smooth)
-        ppimg_conv1=np.where(np.where(ppimg_mask_smooth>ppimg_mask_smooth_thresh,0,ppimg_mask_smooth)>0,1,0)
-        
-        #Convolving again
-        ppimg_mask_smooth2=signal.convolve2d(ppimg_conv1,np.full((3,3),1/9),'same')
-        ppimg_mask_smooth_thresh2=threshold_otsu(ppimg_mask_smooth2)
-        ppimg_conv2=np.where(ppimg_mask_smooth2>ppimg_mask_smooth_thresh2,1,0)
-        
-        #Now to create masks with contours after 2 convolutions
-        ppimg_cont=cv2.findContours(cv2.convertScaleAbs(ppimg_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        ppimg_bg=np.zeros(ppimg.shape)
-        ppimg_mask=cv2.drawContours(ppimg_bg,ppimg_cont,-1,255,-1)
-
-        plt.imshow(ppimg_mask,cmap='gray')
-        plt.title('Contour detection after 2 convolutions')
-
-
-# In[ ]:
-
-
-#White background and purple foreground
-for i in range(len(training_sorted)):
-    if training_sorted[i].parts[-1]=='0121d6759c5adb290c8e828fc882f37dfaf3663ec885c663859948c154a443ed.png':
-        wpimg=cv2.imread(str(training_sorted[i]))
-        wpimg=cv2.cvtColor(wpimg,cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(20,8))
-        plt.subplot(1,3,1)
-        plt.imshow(wpimg)
-        plt.title('White background and purple foreground')
-        
-        plt.subplot(1,3,2)
-        wpimg=cv2.cvtColor(wpimg,cv2.COLOR_RGB2GRAY)
-        wpimg_canny=cv2.Canny(wpimg,20,100)
-        plt.imshow(wpimg_canny,cmap='gray')
-        plt.title('Canny edge detection')
-        
-        plt.subplot(1,3,3)
-        wpimg_cont=cv2.findContours(wpimg_canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        #Now to create masks with contours
-        wpimg_bg=np.zeros(wpimg.shape)
-        wpimg_mask=cv2.drawContours(wpimg_bg,wpimg_cont,-1,255,-1)
-        
-        #Convolving once
-        wpimg_mask_smooth=signal.convolve2d(np.where(wpimg_mask==255,1,0),np.full((3,3),1/9),'same')
-        wpimg_mask_smooth_thresh=threshold_otsu(wpimg_mask_smooth)
-        wpimg_conv1=np.where(np.where(wpimg_mask_smooth>wpimg_mask_smooth_thresh,0,wpimg_mask_smooth)>0,1,0)
-        
-        #Convolving again
-        wpimg_mask_smooth2=signal.convolve2d(wpimg_conv1,np.full((3,3),1/9),'same')
-        wpimg_mask_smooth_thresh2=threshold_otsu(wpimg_mask_smooth2)
-        wpimg_conv2=np.where(wpimg_mask_smooth2>wpimg_mask_smooth_thresh2,1,0)
-        
-        #Now to create masks with contours after 2 convolutions
-        wpimg_cont=cv2.findContours(cv2.convertScaleAbs(wpimg_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        wpimg_bg=np.zeros(wpimg.shape)
-        wpimg_mask=cv2.drawContours(wpimg_bg,wpimg_cont,-1,255,-1)
-
-        plt.imshow(wpimg_mask,cmap='gray')
-        plt.title('Contour detection after 2 convolutions')
-
-
-# In[ ]:
-
-
-#White background and black foreground
-for i in range(len(training_sorted)):
-    if training_sorted[i].parts[-1]=='08275a5b1c2dfcd739e8c4888a5ee2d29f83eccfa75185404ced1dc0866ea992.png':
-        wbimg=cv2.imread(str(training_sorted[i]))
-        wbimg=cv2.cvtColor(wbimg,cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(20,8))
-        plt.subplot(1,3,1)
-        plt.imshow(wbimg)
-        plt.title('White background and black foreground')
-        
-        plt.subplot(1,3,2)
-        wbimg=cv2.cvtColor(wbimg,cv2.COLOR_RGB2GRAY)
-        wbimg_canny=cv2.Canny(wbimg,20,100)
-        plt.imshow(wbimg_canny,cmap='gray')
-        plt.title('Canny edge detection')
-        
-        plt.subplot(1,3,3)
-        wbimg_cont=cv2.findContours(wbimg_canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        #Now to create masks with contours
-        wbimg_bg=np.zeros(wbimg.shape)
-        wbimg_mask=cv2.drawContours(wbimg_bg,wbimg_cont,-1,255,-1)
-        
-        #Convolving once
-        wbimg_mask_smooth=signal.convolve2d(np.where(wbimg_mask==255,1,0),np.full((5,5),1/25),'same')
-        wbimg_mask_smooth_thresh=threshold_otsu(wbimg_mask_smooth)
-        wbimg_conv1=np.where(np.where(wbimg_mask_smooth>wbimg_mask_smooth_thresh,0,wbimg_mask_smooth)>0,1,0)
-        
-        #Convolving again
-        wbimg_mask_smooth2=signal.convolve2d(wbimg_conv1,np.full((5,5),1/25),'same')
-        wbimg_mask_smooth_thresh2=threshold_otsu(wbimg_mask_smooth2)
-        wbimg_conv2=np.where(wbimg_mask_smooth2>wbimg_mask_smooth_thresh2,1,0)
-        
-        #Now to create masks with contours after 2 convolutions
-        wbimg_cont=cv2.findContours(cv2.convertScaleAbs(wbimg_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        wbimg_bg=np.zeros(wbimg.shape)
-        wbimg_mask=cv2.drawContours(wbimg_bg,wbimg_cont,-1,255,-1)
-
-        plt.imshow(wbimg_conv2,cmap='gray')
-        plt.title('Contour detection after 2 convolutions')
-
-
-# In[ ]:
-
-
-#There are some images in the test set with a yellow background and purple foreground
-test_images = pathlib.Path('../input/stage1_test/').glob('*/images/*.png')
-testing_sorted=sorted([x for x in test_images])
-for i in range(len(testing_sorted)):
-    if testing_sorted[i].parts[-1]=='9f17aea854db13015d19b34cb2022cfdeda44133323fcd6bb3545f7b9404d8ab.png':
-        ypimg=cv2.imread(str(testing_sorted[i]))
-        ypimg=cv2.cvtColor(ypimg,cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(20,8))
-        plt.subplot(1,3,1)
-        plt.imshow(ypimg)
-        plt.title('Yellow background and purple foreground')
-        
-        plt.subplot(1,3,2)
-        ypimg=cv2.cvtColor(ypimg,cv2.COLOR_RGB2GRAY)
-        ypimg_canny=cv2.Canny(ypimg,100,200)
-        plt.imshow(ypimg_canny,cmap='gray')
-        plt.title('Canny edge detection')
-        
-        plt.subplot(1,3,3)
-        ypimg_cont=cv2.findContours(ypimg_canny,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        #Now to create masks with contours
-        ypimg_bg=np.zeros(ypimg.shape)
-        ypimg_mask=cv2.drawContours(ypimg_bg,ypimg_cont,-1,255,-1)
-        
-        #Convolving once
-        ypimg_mask_smooth=signal.convolve2d(np.where(ypimg_mask==255,1,0),np.full((3,3),1/9),'same')
-        ypimg_mask_smooth_thresh=threshold_otsu(ypimg_mask_smooth)
-        ypimg_conv1=np.where(np.where(ypimg_mask_smooth>ypimg_mask_smooth_thresh,0,ypimg_mask_smooth)>0,1,0)
-        
-        #Convolving again
-        ypimg_mask_smooth2=signal.convolve2d(ypimg_conv1,np.full((3,3),1/9),'same')
-        ypimg_mask_smooth_thresh2=threshold_otsu(ypimg_mask_smooth2)
-        ypimg_conv2=np.where(ypimg_mask_smooth2>ypimg_mask_smooth_thresh2,1,0)
-        
-        #Now to create masks with contours after 2 convolutions
-        ypimg_cont=cv2.findContours(cv2.convertScaleAbs(ypimg_conv2),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
-        ypimg_bg=np.zeros(ypimg.shape)
-        ypimg_mask=cv2.drawContours(ypimg_bg,ypimg_cont,-1,255,-1)
-
-        plt.imshow(ypimg_conv2,cmap='gray')
-        plt.title('Contour detection after 2 convolutions')
-
-
-# It is not hard to see that the same parameters as on the black background and white foreground images will fail miserably on other kinds of images. Can we define these parameters for every kind of image? If yes then we may need to first build a color classifier for us to identify the image before we apply Canny Edge Detection
-
-# ## Pixel Classifier
-
-# Right, so it's time to bring Machine Learning into the perspective. In this section, we'll try to build a pixel classifier that classifies pixels as 0 or 255 depending on the grayscale values of the pixel and its neighbors. 
-
-# In[23]:
-
-
-train_path = '../input/stage1_train/'
-test_path = '../input/stage1_test/'
-train_ids = os.listdir(train_path)
-def LabelMerge(imgpath):
-    #to get all the png files
-    png_files = [f for f in os.listdir(imgpath) if f.endswith('.png')]
-    #to load the image as a grayscale
-    img = cv2.imread(imgpath+'/'+png_files[0],0)
-    for i in png_files[1:]:
-        temp_img = cv2.imread(imgpath+'/'+i,0)
-        img = img+temp_img
-    return(img)
-
-
-# In[24]:
-
-
-path = train_path+training_sorted[45].parts[-3]+'/masks/'
-combined_mask=LabelMerge(path)
-plt.imshow(combined_mask,cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('Combined Mask')
-
-
-# We will use the bounding boxes of the nuclei that we find in our created mask to localize the nuclei in the original image (and use its grayscale values) and use the values of the pixels in the combined mask for that bounding box as labels. 
-# 
-# By using bounding boxes, we are trying to localize regions of interest. It's fine if we have 2-3 nuclei clustered together to form one bounding box (the performance will improve if we are able to sperate them but it shouldn't come at the cost of not detecting a few bounding boxes i.e false negatives) or if we have more bounding boxes than nuclei in the image (false positives). The job of classifying a pixel as 255 or 0 is left to the pixel classifier and in that sense the classifier is only dependent on the grayscale values in the original image and the corresponding labels in the combined mask. We are essentially only looking at those regions that interest us and everything outside these regions is classified as a 0. By including the grayscale values of the neighboring pixels in the dataframe, we are giving the pixel classifier some context. The intuition is that if we find a bounding box in our created mask where there is no nucleus at all, our pixel classifier should set the values of the pixels in that box to 0. What we can't afford though, is to not look at a region where there is a nucleus, because if we do that, then the pixel classifier won't have anything to classify and with our current pipeline, the pixels in that region will be set to 0. The pixel classifier is only as good as the features you define. 
-
-# In[25]:
-
-
-objects=ndimage.label(canny_mask)[0]
-plt.figure(figsize=(16,8))
-plt.subplot(1,3,1)
-plt.imshow(grayimg[ndimage.find_objects(objects)[20]],cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('Nuclei in the original image')
-
-plt.subplot(1,3,2)
-plt.imshow(canny_mask[ndimage.find_objects(objects)[20]],cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('Created mask')
-
-plt.subplot(1,3,3)
-plt.imshow(combined_mask[ndimage.find_objects(objects)[20]],cmap='gray')
-plt.xticks([])
-plt.yticks([])
-plt.title('Label from the combined mask')
-
-
-# In[63]:
-
-
-#To get one dataframe for all the pixels within all the bounding boxes in an image
-pixels_gs=pd.DataFrame()
-columns=[]
-for i in range(9):
-    columns.append('pixel-'+str(i))
-columns=columns+['label']
-bounding=ndimage.find_objects(objects)
-for bbox in bounding:
-    for i in range(1,canny_mask[bbox].shape[0]-1):
-        for j in range(1,canny_mask[bbox].shape[1]-1):
-            pixel0=grayimg[bbox][i][j] #center pixel
-            pixel1=grayimg[bbox][i-1][j-1] #top left pixel
-            pixel2=grayimg[bbox][i-1][j] #pixel above the center pixel
-            pixel3=grayimg[bbox][i-1][j+1] #top right pixel
-            pixel4=grayimg[bbox][i][j-1] #pixel to the left of center pixel
-            pixel5=grayimg[bbox][i][j+1] #pixel to the right of center pixel
-            pixel6=grayimg[bbox][i+1][j-1] #bottom left pixel
-            pixel7=grayimg[bbox][i+1][j] #pixel to the bottom of center pixel 
-            pixel8=grayimg[bbox][i+1][j+1] #bottom right pixel
-            label=combined_mask[i][j] #label of the center pixel
-            neighbors = pd.Series({a:b for (a,b) in zip(columns,[pixel0,pixel1,pixel2,pixel3,pixel4,pixel5,pixel6,pixel7,pixel8,label])})
-            pixels_gs = pixels_gs.append(neighbors, ignore_index=True)
-
-
-# In[27]:
-
-
-#To see the head of the dataframe
-pixels_gs.head()
-
-
-# In[28]:
-
-
-pixels_gs['label'].value_counts()
-
-
-# Seems like the classes are skewed in favor of 0, contrary to what one would expect when we are only considering pixels from within the bounding boxes. This is probably because our bounding boxes enclose a larger region than just one nuclei
-
-# In[29]:
-
-
-#To divide the data into training and testing sets
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-
-
-# In[30]:
-
-
-X_train,X_test,y_train,y_test=train_test_split(pixels_gs.drop('label',axis=1),pixels_gs['label'],test_size=0.3,random_state=101)
-rfc=RandomForestClassifier(n_estimators=100)
-rfc.fit(X_train,y_train)
-rfc_pred=rfc.predict(X_test)
-
-from sklearn.metrics import classification_report, confusion_matrix
-print(confusion_matrix(y_test,rfc_pred))
-print(classification_report(y_test,rfc_pred))
-
-
-# In[73]:
-
-
-predicted=np.zeros((canny_mask.shape))
-bbox=[]
-bbox_dim_prod=[0]
-rfc_pred = rfc.predict(pixels_gs.drop('label',axis=1))
-for i in range(len(bounding)):
-    bbox_dim=np.array(list(background[bounding[i]].shape))-2 #Since we are taking 1 to (n-1) rows and 1 to (n-1) columns
-    bbox_dim_prod.append(np.product(bbox_dim)) #for indexing
-    bbox_pred=rfc_pred[sum(bbox_dim_prod[0:i+1]):sum(bbox_dim_prod[0:i+1])+np.product(bbox_dim)].reshape(bbox_dim[0],bbox_dim[1]) #for reshaping the predicted labels into the reduced dimensions of the bounding box 
-    bbox.append(bbox_pred)
-    predicted[bounding[i]][1:predicted[bounding[i]].shape[0]-1,1:predicted[bounding[i]].shape[1]-1]=bbox[i]
-
-
-# In[75]:
-
-
-plt.figure(figsize=(13,7))
-plt.subplot(1,2,1)
-plt.imshow(combined_mask,cmap='gray')
-plt.title('Combined Mask')
-plt.xticks([])
-plt.yticks([])
-
-plt.subplot(1,2,2)
-plt.imshow(predicted,cmap='gray')
-plt.title('Predicted Mask')
-plt.xticks([])
-plt.yticks([])
-
-
-# Now the early signs may not be good but the pixel classifier is only as good as the features you define. Furthermore, we have only trained our classifier on the pixels within one image and tested it on the same image which means that there is a possibility that we have overfit. There is also a possibility that we may improve our performance by training the classifier on pixels within bounding boxes from all training images. Taking a 5x5 window may improve our results, distance between the pixel and the center of the nuclei (as defined while contouring) or the relative density of the white pixels (255 or 1s) in the window that we define (window on the canny mask) are some other interesting features. This is going to be the next part of our pipeline.
+# **If you found some interest in this notebook, thanks for upvoting !!**

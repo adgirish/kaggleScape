@@ -1,105 +1,126 @@
 
 # coding: utf-8
 
-# Time series forecast of only one page with Facebook Prophet library. I quickly put this together,  my Pandas skills are not very good, so it may be improved.
+# If I'm ever given a problem to solve, i start with the simplest and stupidest solutions :) 
+# Here's my crack at it -- no machine learning, plain old similarity matrices. Still better than word matching!
+# 
+# Given the question pair, i strip the stopwords, and calculate wordnet similarities between each word pair. Now each term has an array of similarities(with all terms in the other sentence) -- Get the maximum similarity value(for each term), average it across the terms, and BAM, you've got your duplicate score. 
+# 
+# *Pretty naive ;)*
+# 
+# Inspired from [this research paper][1]
+# 
+# 
+# ----------
+# 
+# 
+#   [1]: http://staffwww.dcs.shef.ac.uk/people/S.Fernando/pubs/clukPaper.pdf
+
+# Let's have a look at the code
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
 import pandas as pd
-import numpy as np
-from fbprophet import Prophet
 
-import matplotlib.pyplot as plt
-plt.style.use('fivethirtyeight')
+from nltk.corpus import wordnet as wn
 
+from nltk.corpus import stopwords
+stop = set(stopwords.words('english'))
 
-# In[ ]:
-
-
-N = 60 # number of days for test split
-i = 1800 # one example time series to train
+df_train = pd.read_csv('../input/train.csv')
 
 
 # In[ ]:
 
 
-all_data = pd.read_csv("../input/train_1.csv").T
-key = pd.read_csv("../input/key_1.csv")
+def get_terms(sentence):
+    return [i for i in sentence.lower().split() if i not in stop]
+
+
+# I'm leaving out the iterator for-loop, for better readability. 
+
+# In[ ]:
+
+
+row = df_train.iloc[0] #Just taking the first row, you can put a loopover 
+
+res = row["is_duplicate"]
+terms1 = get_terms(row["question1"])
+terms2 = get_terms(row["question2"])
+
+sims = []
 
 
 # In[ ]:
 
 
-#Handle N/A
-train, test = all_data.iloc[0:-N,:], all_data.iloc[-N:,:]
+for word1 in terms1:
+    word1_sim = []
 
-test_cleaned = test.T.fillna(method='ffill').T
-train_cleaned = train.T.iloc[:,1:].fillna(method='ffill').T
-
-
-# In[ ]:
-
-
-#fill outliers that are out of 1.5*std with rolling median of 56 days
-data=train_cleaned.iloc[:,i].to_frame()
-data.columns = ['visits']
-data['median'] = pd.rolling_median(data.visits,50,min_periods=1)
-std_mult = 1.5
-data.ix[np.abs(data.visits-data.visits.median())>=(std_mult*data.visits.std()),'visits'] = data.ix[np.abs(data.visits-data.visits.median())>=(std_mult*data.visits.std()),'median']
-data.index = pd.to_datetime(data.index)
-
-print(data.tail())
+    try:
+        syn1 = wn.synsets(word1)[0]
+    except:  #if wordnet is not able to find a synset for word1
+        sims.append([0 for i in range(0, len(terms2))])
+        continue
 
 
-# In[ ]:
+    for word2 in terms2:
+        try:
+            syn2 = wn.synsets(word2)[0]
+        except: #if wordnet is not able to find a synset for word2
+            word1_sim.append(0)
+            continue
+
+        word_similarity = syn1.wup_similarity(syn2)
+        word1_sim.append(word_similarity)
+
+    sims.append(word1_sim)
 
 
-#prophet expects the folllwing label names
-X = pd.DataFrame(index=range(0,len(data)))
-X['ds'] = data.index
-X['y'] = data['visits'].values
-X.tail()
+# Here, i loop over all word pairs, and write the similarities in a list of lists. Basically sims[i][j] represents the wordnet similarity between "Term i" of question1 and "Term j" of question2. 
+# 
+# In case wordnet doesn't have the definition, the similarity is considered as 0. (Possibly slang/non-english words)
 
+# Now that we have our similarity matrix, let's calculate the pair match score. 
 
 # In[ ]:
 
 
-m = Prophet(yearly_seasonality=True)
-m.fit(X)
-future = m.make_future_dataframe(periods=N)
-future.tail()
+word1_score = 0
+for i in range(0, len(terms1), 1):
+    try:
+        word1_score += max(sims[i])
+    except:
+        continue
+word1_score /= len(terms1) #Averaging over all terms
 
 
-# In[ ]:
-
-
-forecast = m.predict(future)
-forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail()
-
+# We have to do the similar score calculation for words in Question2. Since the matrix is row-wise(from Question1), the maximum score is calculated column-wise.
 
 # In[ ]:
 
 
-m.plot(forecast);
+word2_score = 0
+
+for i in range(0, len(terms2), 1):
+    try:
+        word2_score += max([j[i] for j in sims])
+    except:
+        continue
+word2_score /= len(terms2)
 
 
-# In[ ]:
-
-
-y_truth = test_cleaned.iloc[:,i].values
-y_forecasted = forecast.iloc[-N:,2].values
-
-
-denominator = (np.abs(y_truth) + np.abs(y_forecasted))
-diff = np.abs(y_truth - y_forecasted) / denominator
-diff[denominator == 0] = 0.0
-print(200 * np.mean(diff))
-
+# Taking the average of the two word scores, 
 
 # In[ ]:
 
 
-print(200 * np.median(diff))
+pair_score = (word1_score + word2_score)/2
 
+
+# The code is super-slow, and this was just a trial run. I ran this over around 4000 question pairs, and got an accuracy of 65%. 
+# 
+# Pretty good for a naive similarity test, eh?
+
+# *Hit the upvote, if you learned somthing out of this :)*

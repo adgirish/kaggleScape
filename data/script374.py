@@ -1,120 +1,51 @@
 
 # coding: utf-8
 
-# In[1]:
+# Regression, along with classification, is one of the core techniques for working with labeled data and must-have skill for any data scientist. This beginner-friendly challenge will guide you through learning five useful regression techniques with practical, hands-on exercises. 
+# 
+# # Before you begin...
+# ___
+# 
+# ### What will I learn?
+# 
+# The challenge was designed to be completed over five days by doing one exercise every day. We’ll work with real datasets to help develop an intuitive understanding of how different types of regression models work and how to interpret these models. The five big things we'll learn are:
+# 
+# * How to pick the right regression technique for your data & plot a regression model
+# * How to use diagnostic plots to check your model
+# * How to interpret and communicate your model
+# * Using multiple input variables to predict your output (AKA multiple regresison)
+# * How to pick which set of input variables to use (with Elastic Net)
+# 
+# ### What do I need to know to get started? 
+# 
+# This challenge will be taught in the R programming language, and should be accessible for R newbies. Some background in statistics (for example, knowing what a mean or standard deviation is) will be helpful but isn’t required.
+# 
+# #### Why R? Why not Python?
+# 
+# R is a programming language developed specifically for statistical computing. Regression is a part of its core functionality and, as a result, there are strong syntactic conventions for regression. This makes it very easy to move between different packages and techniques. While there are many Python libraries for regression, the syntactic differences between them make it more difficult to move between them. You are more than welcome to complete the challenge in other languages, like Python or Julia, I just won’t be providing instructional materials specifically for them.
+# 
+# 
 
+# # The Challenge!
+# ____
+# 
+# Each notebook linked below includes all the information and code you need to complete that day's exercise, as well as link to a video version of that day's notebook. All you need to do is fork the notebook to get started! :)
+# 
+# * [Day 1: Learn about different types of regression (Poisson, linear and logistic) and when to use them](https://www.kaggle.com/rtatman/regression-challenge-day-1)
+# * [Day 2: Learn how to fit &amp; evaluate a model with diagnostic plots](https://www.kaggle.com/rtatman/regression-challenge-day-2)
+# * [Day 3: Learn how to read and understand models](https://www.kaggle.com/rtatman/regression-challenge-day-3)
+# * [Day 4: Learn how to fit &amp; interpret a multiple regression model](https://www.kaggle.com/rtatman/regression-challenge-day-4)
+# * [Day 5: Learn how to use Elastic Net to select input variables](https://www.kaggle.com/rtatman/regression-challenge-day-5)
+# 
+# Feel free to ask questions, either on the notebooks or the forum and have fun regressing! :)
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-# Any results you write to the current directory are saved as output.
-
-
-# This notebook was inspired by @kilian's excellent notebook: https://www.kaggle.com/batzner/gini-coefficient-an-intuitive-explanation, especially the alternative way of computing gini at the end.  I simply implemented the computation directly.  The code uses Numba to make it run fast.
-
-# In[2]:
-
-
-from numba import jit
-
-@jit
-def eval_gini(y_true, y_prob):
-    y_true = np.asarray(y_true)
-    y_true = y_true[np.argsort(y_prob)]
-    ntrue = 0
-    gini = 0
-    delta = 0
-    n = len(y_true)
-    for i in range(n-1, -1, -1):
-        y_i = y_true[i]
-        ntrue += y_i
-        gini += y_i * delta
-        delta += 1 - y_i
-    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
-    return gini
-
-
-# How efficient is the above code?  Let's compare it with code taken from another excellent notebook by Mohsin Hasan: https://www.kaggle.com/tezdhar/faster-gini-calculation . His code is reproduced below.
-
-# In[3]:
-
-
-#Remove redundant calls
-def ginic(actual, pred):
-    actual = np.asarray(actual) #In case, someone passes Series or list
-    n = len(actual)
-    a_s = actual[np.argsort(pred)]
-    a_c = a_s.cumsum()
-    giniSum = a_c.sum() / a_s.sum() - (n + 1) / 2.0
-    return giniSum / n
- 
-def gini_normalizedc(a, p):
-    if p.ndim == 2:#Required for sklearn wrapper
-        p = p[:,1] #If proba array contains proba for both 0 and 1 classes, just pick class 1
-    return ginic(a, p) / ginic(a, a)
-
-
-# Let's create a random test set roughly as large as the train data set.
-
-# In[4]:
-
-
-a = np.random.randint(0,2,600000)
-p = np.random.rand(600000)
-print(a[10:15], p[10:15])
-
-
-# As sanity check, let's compare the output of the tow methods.
-
-# In[5]:
-
-
-gini_normalizedc(a, p)
-
-
-# In[6]:
-
-
-eval_gini(a, p)
-
-
-# In[7]:
-
-
-gini_normalizedc(a, p) - eval_gini(a, p)
-
-
-# Looks fine, difference is negligible.  Let's time them now.
-
-# In[8]:
-
-
-get_ipython().run_cell_magic('timeit', '', 'gini_normalizedc(a,p)')
-
-
-# In[9]:
-
-
-get_ipython().run_cell_magic('timeit', '', 'eval_gini(a,p)')
-
-
-# OK, the speedup is not that large, but there is a speedup still.  Note that my code only handles binary values for y_true while Mohsin's code is more general.
-
-# The speedup looks better if we factor the sorting time out.  Let's measure it.
-
-# In[10]:
-
-
-get_ipython().run_line_magic('timeit', 'np.argsort(p)')
-
-
-# Further improvements would have to come from the sort algorithm part.
-
-#  Motivation for writing this code was to understand what gini really is, but I'll be happy if some readers find it useful too.  Please upvote (button at top right) if this is the case.
+# # All done! What's next?
+# ___
+# 
+# Congrats on finishing! Now that you're a regression pro, why not try your hand at cleaning and analyzing a new dataset? These notebooks have collections of datasets hand-curated by Kaggle staff. Hopefully you should find it easy to discover a dataset you're  excited to analyze.
+# 
+# * [ML Friendly Public Datasets](https://www.kaggle.com/annavictoria/ml-friendly-public-datasets/)
+# * [Fun, Beginner-Friendly Datasets](https://www.kaggle.com/rtatman/fun-beginner-friendly-datasets?scriptVersionId=1648117)
+# * [Datasets for Regression Analysis](https://www.kaggle.com/rtatman/datasets-for-regression-analysis)
+# 
+# If you're prefer something more structured, why not try one of the [Getting Started competitions](https://www.kaggle.com/competitions?sortBy=grouped&group=general&page=1&pageSize=20&category=gettingStarted)? The [House Prices](https://www.kaggle.com/c/house-prices-advanced-regression-techniques) competition, in particular, is designed to help you put your regression skills to the test.

@@ -1,259 +1,198 @@
 
 # coding: utf-8
 
-# Keras + CV
+# As shown before, some features per id can be clustered intro groups that perform the same kind of time evolution.  Unfortunately a unique feature does not perform the same dynamics for different ids. But maybe there are groups of ids that have identical or similar features and perhaps this groups can give some insights into the "global" dynamics. 
 # 
-# Thanks @anokas for the starter code at https://www.kaggle.com/anokas/planet-understanding-the-amazon-from-space/simple-keras-starter/
+# ## Assumptions: ##
+# 
+#  - NaN values make sense. An id that has always NaNs for a specific feature has no relationship with it.  
+#  - Id's live in different time-zones (and have different lifetimes)
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc
-
-import keras as k
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten
-from keras.layers import Conv2D, MaxPooling2D
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-
-import cv2
-from tqdm import tqdm
-
-from sklearn.cross_validation import train_test_split
-from sklearn.cross_validation import KFold
-from sklearn.metrics import fbeta_score
-import time
-
-
-# Pre-processing the train and test data
-
-# In[ ]:
-
-
-x_train = []
-x_test = []
-y_train = []
-
-df_train = pd.read_csv('../input/train.csv')
-df_test = pd.read_csv('../input/sample_submission.csv')
-
-flatten = lambda l: [item for sublist in l for item in sublist]
-labels = list(set(flatten([l.split(' ') for l in df_train['tags'].values])))
-
-labels = ['blow_down',
- 'bare_ground',
- 'conventional_mine',
- 'blooming',
- 'cultivation',
- 'artisinal_mine',
- 'haze',
- 'primary',
- 'slash_burn',
- 'habitation',
- 'clear',
- 'road',
- 'selective_logging',
- 'partly_cloudy',
- 'agriculture',
- 'water',
- 'cloudy']
-
-label_map = {'agriculture': 14,
- 'artisinal_mine': 5,
- 'bare_ground': 1,
- 'blooming': 3,
- 'blow_down': 0,
- 'clear': 10,
- 'cloudy': 16,
- 'conventional_mine': 2,
- 'cultivation': 4,
- 'habitation': 9,
- 'haze': 6,
- 'partly_cloudy': 13,
- 'primary': 7,
- 'road': 11,
- 'selective_logging': 12,
- 'slash_burn': 8,
- 'water': 15}
-
-for f, tags in tqdm(df_train.values[:18000], miniters=1000):
-    img = cv2.imread('../input/train-jpg/{}.jpg'.format(f))
-    targets = np.zeros(17)
-    for t in tags.split(' '):
-        targets[label_map[t]] = 1 
-    x_train.append(cv2.resize(img, (32, 32)))
-    y_train.append(targets)
-
-for f, tags in tqdm(df_test.values, miniters=1000):
-    img = cv2.imread('../input/test-jpg/{}.jpg'.format(f))
-    x_test.append(cv2.resize(img, (32, 32)))
-    
-y_train = np.array(y_train, np.uint8)
-x_train = np.array(x_train, np.float32) / 255.
-x_test  = np.array(x_test, np.float32) / 255.
-
-print(x_train.shape)
-print(y_train.shape)
-
-
-# Transpose the data if use Theano
-
-# In[ ]:
-
-
-#x_train = x_train.transpose((0, 3, 1, 2))
-#x_test = x_test.transpose((0, 3, 1, 2))
-
-
-# Create n-folds cross-validation
-
-# In[ ]:
-
-
-# https://www.kaggle.com/c/planet-understanding-the-amazon-from-space/discussion/32475
 import numpy as np
-from sklearn.metrics import fbeta_score
+import pandas as pd
+import kagglegym
+import matplotlib.pyplot as plt
 
-def optimise_f2_thresholds(y, p, verbose=True, resolution=100):
-  def mf(x):
-    p2 = np.zeros_like(p)
-    for i in range(17):
-      p2[:, i] = (p[:, i] > x[i]).astype(np.int)
-    score = fbeta_score(y, p2, beta=2, average='samples')
-    return score
+with pd.HDFStore("../input/train.h5", "r") as train:
+    # Note that the "train" dataframe is the only dataframe in the file
+    df = train.get("train")
 
-  x = [0.2]*17
-  for i in range(17):
-    best_i2 = 0
-    best_score = 0
-    for i2 in range(resolution):
-      i2 /= resolution
-      x[i] = i2
-      score = mf(x)
-      if score > best_score:
-        best_i2 = i2
-        best_score = score
-    x[i] = best_i2
-    if verbose:
-      print(i, best_i2, best_score)
+# Create an environment
+env = kagglegym.make()
 
-  return x
+# Get first observation
+observation = env.reset()
+
+# Get the train dataframe
+train = observation.train
+
+
+# **Lifetimes** 
+# 
+# First, I will pick up the idea of Chase, to [look at id lifetimes][1]. There are a lot of ids having a large number of timestamps and maybe they could give more insights into the time evolution and dynamics of features. Perhaps one could also find id-groups of same lifetimes with similar behavior. 
+# 
+#   [1]: https://www.kaggle.com/chaseos/two-sigma-financial-modeling/understanding-id-and-timestamp
+
+# In[ ]:
+
+
+lifetimes = df.groupby('id').apply(len)
+lifetimes = lifetimes.sort_values(ascending=False)
+lifetimes = lifetimes.reset_index()
+lifetimes.columns = ["id", "duration"]
+lifetimes.head()
+
+
+# Let's collect all id's that have a lifetime of 1813.
+
+# In[ ]:
+
+
+long_lifetime_ids = lifetimes[lifetimes["duration"] == 1813]
+long_lifetime_ids.info()
+
+
+# **Select ids of same nan-structure**
+# 
+# There are 527 ids with a lifetime of 1813 timestamps. As I want to study the feature dynamics of id's that behave the same way, I need to find all those id's that share the same features (and nan-structures). Let's do this by a simple approach: Select one example id of the dataframe "long_lifetimes_ids" and find all ids in that frame that match its feature-presence (nan-structure). 
+# 
+# I will be careful with binary transformations because a nan-value may not be present all over the time of my selected id and perhaps 0.0 is the first value that occurs in the situation where "nan" changes to a value.  Instead, I will do the following:
+# 
+#  - Kick out features that have a permanent nan-structure over all 1813 timestamps
+#  - Keep features with partial present nan-structures, but collect their labels for safety 
+
+# In[ ]:
+
+
+long_lifetime_ids.head()
 
 
 # In[ ]:
 
 
-from keras.layers.normalization import BatchNormalization
-
-nfolds = 3
-
-num_fold = 0
-sum_score = 0
-
-yfull_test = []
-yfull_train =[]
-
-kf = KFold(len(y_train), n_folds=nfolds, shuffle=True, random_state=1)
-
-for train_index, test_index in kf:
-        start_time_model_fitting = time.time()
-        
-        X_train = x_train[train_index]
-        Y_train = y_train[train_index]
-        X_valid = x_train[test_index]
-        Y_valid = y_train[test_index]
-
-        num_fold += 1
-        print('Start KFold number {} from {}'.format(num_fold, nfolds))
-        print('Split train: ', len(X_train), len(Y_train))
-        print('Split valid: ', len(X_valid), len(Y_valid))
-        
-        kfold_weights_path = os.path.join('', 'weights_kfold_' + str(num_fold) + '.h5')
-        
-        model = Sequential()
-        model.add(BatchNormalization(input_shape=(32, 32, 3)))
-        model.add(Conv2D(8, 1, 1, activation='relu'))
-        model.add(Conv2D(16, 2, 2, activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Conv2D(32, 3, 3, activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-        model.add(Conv2D(64, 3, 3, activation='relu'))
-        model.add(MaxPooling2D(pool_size=(2, 2)))
-        model.add(Dropout(0.25))
-        model.add(Flatten())
-        model.add(Dense(256, activation='relu'))
-        model.add(Dropout(0.5))
-        model.add(Dense(17, activation='sigmoid'))
-
-        model.compile(loss='binary_crossentropy', 
-                      optimizer='adam',
-                      metrics=['accuracy'])
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=2, verbose=0),
-            ModelCheckpoint(kfold_weights_path, monitor='val_loss', save_best_only=True, verbose=0)]
-        
-        model.fit(x = X_train, y= Y_train, validation_data=(X_valid, Y_valid),
-                  batch_size=128,verbose=2, nb_epoch=10,callbacks=callbacks,
-                  shuffle=True)
-        
-        if os.path.isfile(kfold_weights_path):
-            model.load_weights(kfold_weights_path)
-        
-        p_valid = model.predict(X_valid, batch_size = 128, verbose=2)
-        print(fbeta_score(Y_valid, np.array(p_valid) > 0.2, beta=2, average='samples'))
-        print("Optimizing prediction threshold")
-        print(optimise_f2_thresholds(Y_valid, p_valid))
-        
-        p_test = model.predict(x_train, batch_size = 128, verbose=2)
-        yfull_train.append(p_test)
-        
-        p_test = model.predict(x_test, batch_size = 128, verbose=2)
-        yfull_test.append(p_test)
+def find_nan_structure(instrument, data):
+    data_id = data.loc[data["id"]==instrument,:]
+    no_nan_features = []
+    partial_nan_features = []
+    total_nan_features = [] 
+    for col in data_id.columns:
+        if col not in ["id", "timestamp", "y"]:
+            nr_nans = pd.isnull(data_id[col]).sum()
+            if (nr_nans == 0):
+                no_nan_features.append(col)
+            elif (nr_nans == len(data_id[col])):
+                total_nan_features.append(col)
+            else:
+                partial_nan_features.append(col)
+    return no_nan_features, total_nan_features, partial_nan_features
+    
 
 
-# Averaging the prediction from each fold
+# By playing around, I found out that id 711 belongs to a large group of ids that share the same features. 
 
 # In[ ]:
 
 
-result = np.array(yfull_test[0])
-for i in range(1, nfolds):
-    result += np.array(yfull_test[i])
-result /= nfolds
-result = pd.DataFrame(result, columns = labels)
-result
-
-
-# Output prediction for submission
-
-# In[ ]:
-
-
-from tqdm import tqdm
-thres = [0.07, 0.17, 0.2, 0.04, 0.23, 0.33, 0.24, 0.22, 0.1, 0.19, 0.23, 0.24, 0.12, 0.14, 0.25, 0.26, 0.16]
-preds = []
-for i in tqdm(range(result.shape[0]), miniters=1000):
-    a = result.ix[[i]]
-    a = a.apply(lambda x: x > thres, axis=1)
-    a = a.transpose()
-    a = a.loc[a[i] == True]
-    ' '.join(list(a.index))
-    preds.append(' '.join(list(a.index)))
+no_nan, total_nan, partial_nan = find_nan_structure(711, df)
 
 
 # In[ ]:
 
 
-df_test['tags'] = preds
-df_test
+def find_id_group(instrument, data, lifetime_ids):
+    strong_cluster = []
+    soft_cluster = []
+    no_nan, total_nan, partial_nan = find_nan_structure(instrument, data)
+    no_nan_soft = set(no_nan).union(partial_nan)
+    for element_id in lifetime_ids:
+        no_nan_e, total_nan_e, partial_nan_e = find_nan_structure(element_id, data)
+        no_nan_soft_e = set(no_nan_e).union(partial_nan_e)
+        if set(no_nan_soft_e) == set(no_nan_soft):
+            soft_cluster.append(element_id)
+        if set(no_nan_e) == set(no_nan):
+            strong_cluster.append(element_id)
+    return strong_cluster, soft_cluster
 
 
 # In[ ]:
 
 
-df_test.to_csv('submission_keras.csv', index=False)
+strong_cluster, soft_cluster = find_id_group(711, df, long_lifetime_ids.id)
 
+
+# In[ ]:
+
+
+strong_cluster
+
+
+# I will proceed with the strong-cluster group of id 711. Let's create a dataframe which contains only these ids and let's try to find correlated features or do some other stuff. ;-) 
+
+# In[ ]:
+
+
+cluster_data = df[df["id"].isin(strong_cluster)]
+cluster_data.head()
+
+
+# Let's select a feature, which does not contain nan-values, for playing around: 
+
+# In[ ]:
+
+
+test_feature = no_nan[1]
+plt.figure()
+for instrument in strong_cluster:
+    plt.plot(cluster_data[cluster_data["id"]==instrument].timestamp, cluster_data[cluster_data["id"]==instrument][test_feature].values, '.-')
+plt.xlabel("timestamp")
+plt.ylabel(test_feature)
+
+
+# In[ ]:
+
+
+def find_id_groups(data, idlist, feature, limit):
+    groups = []
+    singles = []
+    for list_instrument in idlist:
+        group = []
+        for next_instrument in idlist:
+            coeff = np.corrcoef(data.ix[data.id==list_instrument, feature].values, data.ix[data.id==next_instrument, feature].values)[0,1]
+            coeff = np.round(coeff, decimals=2)
+            if coeff >= limit:
+                group.append(next_instrument)
+        for member in group:
+            while member in idlist:
+                idlist.remove(member)
+        if len(group) > 1:
+            groups.append(group)
+        elif len(group) == 1:
+            singles.append(list_instrument)
+    return groups, singles
+
+
+# In[ ]:
+
+
+id_list = strong_cluster[:]
+groups, singles = find_id_groups(cluster_data, id_list, test_feature, 0.80)
+groups
+
+
+# Yeah! Found a pattern again! :-) Just by looking at "stupid" linear correlations, we can find that different features of one id are correlated but also that values of a specific feature of different ids are correlated in some cases. Let's have a look at those groups:  
+
+# In[ ]:
+
+
+for group in groups:
+    plt.figure()
+    for instrument in group:
+        plt.plot(cluster_data[cluster_data.id==instrument]["timestamp"].values, cluster_data[cluster_data.id==instrument][test_feature].values, '.-')
+    plt.xlabel("timestamp")
+    plt.ylabel(test_feature)
+
+
+# :-D

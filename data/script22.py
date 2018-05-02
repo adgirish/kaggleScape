@@ -1,191 +1,64 @@
 
 # coding: utf-8
 
-# In this notebook, we'll see if we can use some machine learning to classify whether a subject is relaxing, or doing math problems, using data from our dataset.
+# # Welcome to data visualization
 # 
-# Along the way, we'll learn how to get the subject data we want, and how to turn the raw EEG data into useable feature vectors.
+# Welcome to the Data Visualization tutorial!
 # 
-# Ready?
+# Data visualization is one of the core skills in data science. In order to start building useful models, we need to understand the underlying dataset. You will never be an expert on the data you are working with, and will always need to explore the variables in great depth before you can move on to building a model or doing something else with the data. Effective data visualization is the most important tool in your arsenal for getting this done, and hence an critical skill for you to master.
 # 
-# OK, first, we'll perform a few cleaning steps.
+# In this tutorial series, we will cover building effective data visualizations in Python. We will cover the `pandas` and `seaborn` plotting tools in depth. We will also touch upon `matplotlib`, and discuss `plotly` and `plotnine` in later (optional) sections. We still start with simple single-variable plots and work our way up to plots showing two, three, or even more dimensions. Upon completing this tutorial you should be well-equipped to start doing useful exploratory data analysis (EDA) with your own datasets!
 # 
-# - We'll convert all the timestamps from strings into Python datetimes.
-# - We'll convert the lists from strings into np arrays of floats.
-
-# In[ ]:
-
-
-import json
-import pandas as pd
-
-df = pd.read_csv("../input/eeg-data.csv")
-
-# convert to arrays from strings
-df.raw_values = df.raw_values.map(json.loads)
-df.eeg_power = df.eeg_power.map(json.loads)
-
-
-# Next, we'll grab some subject data. We're interested in the "relax" and "math" tasks, so we'll need to get the readings with those labels.
-
-# In[ ]:
-
-
-
-relax = df[df.label == 'relax']
-math = df[(df.label == 'math1') |
-          (df.label == 'math2') |
-          (df.label == 'math3') |
-          (df.label == 'math4') |
-          (df.label == 'math5') |
-          (df.label == 'math6') |
-          (df.label == 'math7') |
-          (df.label == 'math8') |
-          (df.label == 'math9') |
-          (df.label == 'math10') |
-          (df.label == 'math11') |
-          (df.label == 'math12') ]
-
-len(relax)
-len(math)
-
-
-# Now that we have our feature vectors, let's try to build a binary classifier!
+# ## Prerequisites
 # 
-# An SVM should do the trick for now. We'll make a `cross_val_svm` convenience method for doing n-fold cross-validation on the data.
-
-# In[ ]:
-
-
-from sklearn.model_selection import cross_val_score
-from sklearn import svm
-def cross_val_svm (X,y,n):
-    clf = svm.SVC()
-    scores = cross_val_score(clf, X, y, cv=n)
-    return scores                                              
-
-
-# We'll also make a `vectors_labels` convenience function to produce an `X` list of vectors and a `y` list of labels, given two lists of vectors as input.
-
-# In[ ]:
-
-
-def vectors_labels (list1, list2):
-    def label (l):
-        return lambda x: l
-    X = list1 + list2
-    y = list(map(label(0), list1)) + list(map(label(1), list2))
-    return X, y
-
-
-# OK! Now, let's try the simplest feature vectors that could possibly work: the EEG power arrays produced by the Neurosky device.
+# There's one thing to do before we get started, however: learn about `pandas`, the linchpin of the Python data science ecosystem. `pandas` contains all of the data reading, writing, and manipulation tools that you will need to probe your data, run your models, and of course, visualize. As a result, a working understanding of `pandas` is critical to being a sucessful builder of data visualizations.
 # 
-# To keep things from getting **too** crazy, let's just use data from just one (random) subject for these examples.
-
-# In[ ]:
-
-
-one_math = math[math['id']==12]
-one_relax = relax[relax['id']==12]
-X, y = vectors_labels(one_math.eeg_power.tolist(), one_relax.eeg_power.tolist())
-cross_val_svm(X,y,7)
-
-
-# Not so impressive, is it?
+# If you are totally unfamiliar with `pandas`, the following prerequisites will cover just enough `pandas` to get you started. These tutorial sections are targetted at total beginners; if you are already at least mildly familiar with the library, you should skip ahead to the next section.
 # 
-# Let's build some better feature vectors. Roughly, we take each group of 512 raw values produced by the device, and FFT them to produce a power spectrum. Then, we take groups of 3 power spectra, average them, and logarithmically bin the result to produce feature vectors of 100 values.
+# <table style="width:800px;">
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px; width:33%"><a href="https://www.kaggle.com/sohier/tutorial-accessing-data-with-pandas/">Accessing Data with Pandas</a></td>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px; width:33%"><a href="https://www.kaggle.com/dansbecker/selecting-and-filtering-in-pandas">Selecting and Filtering in Pandas</a></td>
+# <!--
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px; width:33%"><a href="https://www.kaggle.com/residentmario/just-enough-pandas-optional/">Prerequisite 3</a></td>
+# -->
+# </tr>
+# </table>
 # 
-# I wrote a [blog post](http://blog.cosmopol.is/eeg/2015/06/26/pre-processing-EEG-consumer-devices.html) about this technique, if you're interested in more depth about how these feature vectors work. There'a also a [paper about this](http://people.ischool.berkeley.edu/~chuang/pubs/MMJC15.pdf) if you're into that sort of thing.
+# ## Contents
 # 
-# Ok, feature vector time!
-
-# In[ ]:
-
-
-from scipy import stats
-from scipy.interpolate import interp1d
-import itertools
-import numpy as np
-
-def spectrum (vector):
-    '''get the power spectrum of a vector of raw EEG data'''
-    A = np.fft.fft(vector)
-    ps = np.abs(A)**2
-    ps = ps[:len(ps)//2]
-    return ps
-
-def binned (pspectra, n):
-    '''compress an array of power spectra into vectors of length n'''
-    l = len(pspectra)
-    array = np.zeros([l,n])
-    for i,ps in enumerate(pspectra):
-        x = np.arange(1,len(ps)+1)
-        f = interp1d(x,ps)#/np.sum(ps))
-        array[i] = f(np.arange(1, n+1))
-    index = np.argwhere(array[:,0]==-1)
-    array = np.delete(array,index,0)
-    return array
-
-def feature_vector (readings, bins=100): # A function we apply to each group of power spectra
-  '''
-  Create 100, log10-spaced bins for each power spectrum.
-  For more on how this particular implementation works, see:
-  http://coolworld.me/pre-processing-EEG-consumer-devices/
-  '''
-  bins = binned(list(map(spectrum, readings)), bins)
-  return np.log10(np.mean(bins, 0))
-
-ex_readings = one_relax.raw_values[:3]
-feature_vector(ex_readings)
-
-def grouper(n, iterable, fillvalue=None):
-    "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * n
-    return itertools.zip_longest(*args, fillvalue=fillvalue)
-
-def vectors (df):
-    return [feature_vector(group) for group in list(grouper(3, df.raw_values.tolist()))[:-1]]
-
-
-# In[ ]:
-
-
-X,y = vectors_labels(
-    vectors(one_math),
-    vectors(one_relax))
-
-cross_val_svm(X,y,7).mean()
-
-
-# Now that's more like it! I bet we can do even better if we scale the data:
-
-# In[ ]:
-
-
-from sklearn import preprocessing
-X = preprocessing.scale(X)
-cross_val_svm(X,y,7).mean()
-
-
-# Woohoo!
+# This tutorial consists of the following sections:
 # 
-# Let's see what kind of accuracy we get classifying relax and math readings for each subject
-#  in the dataset.
-
-# In[ ]:
-
-
-def estimated_accuracy (subject):
-    m = math[math['id']==subject]
-    r = relax[relax['id']==subject]
-    X,y = vectors_labels(vectors(m),vectors(r))
-    X=preprocessing.scale(X)
-    return cross_val_svm(X,y,7).mean()
-
-[('subject '+str(subj), estimated_accuracy(subj)) for subj in range(1,31)]
-
-
-# Not bad! 
+# <table style="width:800px">
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px;"><a href="https://www.kaggle.com/residentmario/univariate-plotting-with-pandas">Univariate plotting with pandas</a></td>
+# </tr>
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px;"><a href="https://www.kaggle.com/residentmario/bivariate-plotting-with-pandas">Bivariate plotting with pandas</a></td>
+# </tr>
+# <tr>
+# <td style="padding:25px; text-align:center; font-size:18px; width:50%"><a href="https://www.kaggle.com/residentmario/styling-your-plots/">Styling your plots</a>
+# </td>
+# <td style="padding:25px; text-align:center; font-size:18px; width:50%"><a href="https://www.kaggle.com/residentmario/plotting-with-seaborn">Plotting with seaborn</a>
+# </td>
+# </tr>
+# <tr>
+# <td style="padding:25px; text-align:center; font-size:18px; width:50%"><a href="https://www.kaggle.com/residentmario/subplots/">Subplots</a></td>
+# <td style="padding:25px; text-align:center; font-size:18px;width:50%"><a href="https://www.kaggle.com/residentmario/faceting-with-seaborn/">Faceting with seaborn</a></td>
+# </tr>
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px;"><a href="https://www.kaggle.com/residentmario/multivariate-plotting">Multivariate plotting</a></td>
+# </tr>
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px;"><a href="https://www.kaggle.com/residentmario/introduction-to-plotly-optional/">Plotting with plotly</a></td>
+# </tr>
+# <tr>
+# <td colspan=2 style="padding:25px; text-align:center; font-size:18px;"><a href="https://www.kaggle.com/residentmario/grammer-of-graphics-with-plotnine-optional/">Grammar of graphics with plotnine</a></td>
+# </tr>
+# </table>
 # 
-# I wonder why some people are easier to classify than others? Maybe not everyone was paying attention to the math (or not everyone was relaxing during the relax task).
+# .
 # 
-# Well, I trust this will be enough to make your own feature vectors, and explore the data yourself. Enjoy!
+# Each section will focus on one particular aspect of plotting in Python, relying on the knowledge you have aquired up until that point to get the job done.
+# 
+# Ready? [To start the tutorial, proceed to the next section, "Univariate plotting with pandas"](https://www.kaggle.com/residentmario/univariate-plotting-with-pandas/).

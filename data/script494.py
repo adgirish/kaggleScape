@@ -1,196 +1,148 @@
 
 # coding: utf-8
 
-# # LSTM + GloVe + Cross-validation + LearningRate changes + ...
-# 
-# # Notes
-# 1) GRU is very similar to LSTM and not better
-# 
-# 2) GloVe dimension is very important. I recommend to use GloVe 840b 300d if you can (it's very hard to use it in kaggle kernels)
-# 
-# 3) Cross Validation is interesting for hiperparameters tuning, but for higher score you shoudn't use validation_split
-# 
-# 4) First Epoch is very unstable. So I use small LR on first step
-# 
-# 5) Dataset size is small. So you may use some additional datasets and then finetune model
-# 
-# 6) It's hard not to overfit the model and I have n't found yet a good way to solve this problem. BatchNormalization/Dropout don't really help. 
-# https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/46494#263247
-# Maybe Reccurent Batch Normalization can help, but it is'not implemented in keras.
-# 
-# 7) Use Attention layer from here (AttLayer):
-# https://github.com/dem-esgal/textClassifier/blob/master/textClassifierHATT.py
-# 
-# Thanks to (https://www.kaggle.com/CVxTz/keras-bidirectional-lstm-baseline-lb-0-051)
-
-# In[1]:
-
-
-import sys, os, re, csv, codecs, numpy as np, pandas as pd
-
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, GRU, Embedding, Dropout, Activation, BatchNormalization
-from keras.layers import Bidirectional, GlobalMaxPool1D
-from keras.models import Model
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-print('hi')
-
-
-# Glove dimension 100
-
-# In[2]:
-
-
-path = '../input/'
-comp = 'jigsaw-toxic-comment-classification-challenge/'
-#EMBEDDING_FILE=f'{path}glove-vectors/glove.6B.100d.txt'
-EMBEDDING_FILE=f'{path}glove6b50d/glove.6B.50d.txt'
-
-TRAIN_DATA_FILE=f'{path}{comp}train.csv'
-TEST_DATA_FILE=f'{path}{comp}test.csv'
-
-
-# Set some basic config parameters:
+# # Getting a meaning of the score
+# In this notebook I will take the train masks and by using erode and dilate try to get a sense of what the different dice scores mean.
 
 # In[3]:
 
 
-embed_size = 50 # how big is each word vector
-max_features = 20000 # how many unique words to use (i.e num rows in embedding vector)
-maxlen = 100 # max number of words in a comment to use
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import os
+from tqdm import tqdm
+import cv2
+import glob
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# Read in our data and replace missing values:
-
-# In[4]:
-
-
-train = pd.read_csv(TRAIN_DATA_FILE)
-test = pd.read_csv(TEST_DATA_FILE)
-
-list_sentences_train = train["comment_text"].fillna("_na_").values
-list_classes = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
-y = train[list_classes].values
-list_sentences_test = test["comment_text"].fillna("_na_").values
-
-
-# Standard keras preprocessing, to turn each comment into a list of word indexes of equal length (with truncation or padding as needed).
-
-# In[5]:
-
-
-tokenizer = Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(list_sentences_train))
-list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
-list_tokenized_test = tokenizer.texts_to_sequences(list_sentences_test)
-X_t = pad_sequences(list_tokenized_train, maxlen=maxlen)
-X_te = pad_sequences(list_tokenized_test, maxlen=maxlen)
-
-
-# Read the glove word vectors (space delimited strings) into a dictionary from word->vector.
-
-# In[6]:
-
-
-def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-embeddings_index = dict(get_coefs(*o.strip().split()) for o in open(EMBEDDING_FILE))
-
-
-# Use these vectors to create our embedding matrix, with random initialization for words that aren't in GloVe. We'll use the same mean and stdev of embeddings the GloVe has when generating the random init.
+# Let's get the train images
 
 # In[7]:
 
 
-all_embs = np.stack(embeddings_index.values())
-emb_mean,emb_std = all_embs.mean(), all_embs.std()
-emb_mean,emb_std
+img_names = glob.glob(os.path.join('..','input', 'train_masks', '*.gif'))
 
-
-# In[8]:
-
-
-word_index = tokenizer.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-
-# ROC AUC for CV in Keras see for details: https://gist.github.com/smly/d29d079100f8d81b905e
-
-# In[15]:
-
-
-import logging
-from sklearn.metrics import roc_auc_score
-from keras.callbacks import Callback
-from sklearn.model_selection import train_test_split
-
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch, score))
-
-
-# Bidirectional LSTM with half-size embedding with two fully connected layers
-
-# In[10]:
-
-
-inp = Input(shape=(maxlen,))
-x = Embedding(max_features, embed_size, weights=[embedding_matrix], trainable=True)(inp)
-x = Bidirectional(LSTM(50, return_sequences=True,dropout=0.1, recurrent_dropout=0.1))(x)
-x = GlobalMaxPool1D()(x)
-x = BatchNormalization()(x)
-x = Dense(50, activation="relu")(x)
-#x = BatchNormalization()(x)
-x = Dropout(0.1)(x)
-x = Dense(6, activation="sigmoid")(x)
-model = Model(inputs=inp, outputs=x)
-
-import keras.backend as K
-def loss(y_true, y_pred):
-     return K.binary_crossentropy(y_true, y_pred)
-    
-model.compile(loss=loss, optimizer='nadam', metrics=['accuracy'])
-
-
-# Now we're ready to fit out model! Use `validation_split` when for hyperparams tuning
 
 # In[ ]:
 
 
-
-def schedule(ind):
-    a = [0.002,0.003, 0.000]
-    return a[ind]
-lr = callbacks.LearningRateScheduler(schedule)
-[X_train, X_val, y_train, y_val] = train_test_split(X_t, y, train_size=0.95)
-
-ra_val = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
-
-model.fit(X_train, y_train, batch_size=64, epochs=3, validation_data=(X_val, y_val), callbacks=[lr, ra_val])
-#model.fit(X_t, y, batch_size=64, epochs=3, callbacks=[lr])
+print(len(img_names))
 
 
-# And finally, get predictions for the test set and prepare a submission CSV:
+# On a first step create a visualization of what we are going to do.
+
+# In[13]:
+
+
+from PIL import Image 
+
+def read_gif_image(img_name):
+    img = Image.open(img_name).convert('RGB')
+    img_arr = np.asarray(img.getdata(), dtype=np.uint8)
+    img_arr = img_arr.reshape(img.size[1], img.size[0], 3)
+    return img_arr[:, :, 0]
+
 
 # In[14]:
 
 
-y_test = model.predict([X_te], batch_size=1024, verbose=1)
-sample_submission = pd.read_csv(f'{path}{comp}sample_submission.csv')
-sample_submission[list_classes] = y_test
-sample_submission.to_csv('LSTM-submission.csv', index=False)
+def visualize_erode_dilate(img_name, row, col, width=100):
+    img = read_gif_image(img_name)
+    vis = img.copy()/255
+    kernel = np.ones((3,3),np.uint8)
+    for i in range(1, 5):
+        vis += cv2.erode(img, kernel, iterations=i)/255
+        vis += cv2.dilate(img, kernel, iterations=i)/255
+    plt.figure(figsize=(12, 6))
+    plt.imshow(img)
+    plt.grid()
+    plt.figure(figsize=(12, 6))
+    plt.subplot(121)
+    plt.imshow(vis[row:row+width, col:col+width], cmap='viridis')
+    plt.grid()
+    plt.subplot(122)
+    plt.imshow(img[row:row+width, col:col+width], cmap='viridis')
+    plt.grid()
 
+
+# In[20]:
+
+
+visualize_erode_dilate(img_names[1], 1000, 1100, 100)
+
+
+# Above we can see a detail of the erodes and dilates that we are going to use for computing the dice score.
+
+# ## Computing dice score
+
+# In[21]:
+
+
+def get_dice_sums(img, n_iterations):
+    """
+    Erodes or dilates the img based on the number of iterations 
+    and computes the sum of the image and of the product
+    """
+    kernel = np.ones((3,3),np.uint8)
+    if n_iterations < 0:
+        pred = cv2.erode(img, kernel, iterations=(- n_iterations))/255
+    else:
+        pred = cv2.dilate(img, kernel, iterations=(n_iterations))/255
+    return np.sum(pred), np.sum(img*pred/255)
+
+
+# In[22]:
+
+
+def compute_img_dice_sums(img_name, n_iterations):
+    """
+    Returns the sum of original image, prediction and product of them 
+    for the number of required iterations
+    """
+    img = read_gif_image(img_name)
+    img_sum = np.sum(img/255)
+    sum_array = np.zeros((n_iterations*2+1, 3))
+    sum_array[:, 0] = img_sum
+    for i, n in enumerate(range(-n_iterations, n_iterations+1)):
+        ret = get_dice_sums(img, n)
+        sum_array[i, 1] = ret[0]
+        sum_array[i, 2] = ret[1]
+    
+    return sum_array
+
+
+# In[23]:
+
+
+def compute_images_dice(img_list, n_iterations):
+    """
+    Computes dice for all the images given and the number 
+    of erodes and dilates required
+    """
+    sum_array = np.zeros((n_iterations*2+1, 3))
+    for img_name in img_list:
+        sum_array += compute_img_dice_sums(img_name, n_iterations)
+    dice = sum_array[:,2]*2/(sum_array[:,1]+sum_array[:,0])
+    return dice
+
+
+# In[24]:
+
+
+n_iterations = 3
+plt.figure(figsize=(12, 6))
+for i in range(5):
+    dice = compute_images_dice(np.random.choice(img_names, 10), n_iterations)
+    x = np.arange(-n_iterations, n_iterations + 1)
+    plt.plot(x, dice)
+plt.xlabel('Erode/dilate iterations')
+plt.ylabel('Dice score');
+
+
+# So we can see that if the difference between masks is of 1 pixel the score drops to 0.996  
+# There is people already with that scores. 
+# 
+# I think that means that the data is extremely clean, otherwise it would be difficult to reach those scores.

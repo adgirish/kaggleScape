@@ -1,133 +1,453 @@
 
 # coding: utf-8
 
-# * **Introduction**
-# 
-# I am using RNN method to predict the BTC price. 
+# # 1. Import libraries
 
 # In[ ]:
 
 
-# First step, import libraries.
-import numpy as np 
-import pandas as pd 
-from matplotlib import pyplot as plt
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+import warnings
+warnings.filterwarnings('ignore')
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
 
 
-# *** Import the datasets.**
-# 
-# Second, import the dataset. After reviewing the dataset, I think I need to recode the datetime since it is better to use the dataset sorted by date not by minutes. Then I group the dataset by date and take the average price of all minutes in the day as the price of the day.
-
-# In[ ]:
-
-
-# Import the dataset and encode the date
-df = pd.read_csv('../input/coinbaseUSD_1-min_data_2014-12-01_to_2017-10-20.csv.csv')
-df['date'] = pd.to_datetime(df['Timestamp'],unit='s').dt.date
-group = df.groupby('date')
-Real_Price = group['Weighted_Price'].mean()
-
-
-# *** Split the dataset.** 
-# 
-# I want to predict the BTC price for a month, so I take the data of last 30 days as the test set
+# # 2. Import data
 
 # In[ ]:
 
 
-# split data
-prediction_days = 30
-df_train= Real_Price[:len(Real_Price)-prediction_days]
-df_test= Real_Price[len(Real_Price)-prediction_days:]
+data = pd.read_csv("../input/spam.csv",encoding='latin-1')
 
-
-# *** Process Data**
-# 
-# I feature scale the data and reshape it since I want to use Keras
 
 # In[ ]:
 
 
-# Data preprocess
-training_set = df_train.values
-training_set = np.reshape(training_set, (len(training_set), 1))
-from sklearn.preprocessing import MinMaxScaler
-sc = MinMaxScaler()
-training_set = sc.fit_transform(training_set)
-X_train = training_set[0:len(training_set)-1]
-y_train = training_set[1:len(training_set)]
-X_train = np.reshape(X_train, (len(X_train), 1, 1))
+data.head()
 
 
-# * **Building the model **
-# 
-# I build the RNN model using Keras. Choose some appropriate parameters
+# Let's drop the unwanted columns, and rename the column name appropriately.
 
 # In[ ]:
 
 
-# Importing the Keras libraries and packages
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import LSTM
+#Drop column and name change
+data = data.drop(["Unnamed: 2", "Unnamed: 3", "Unnamed: 4"], axis=1)
+data = data.rename(columns={"v1":"label", "v2":"text"})
 
-# Initialising the RNN
-regressor = Sequential()
-
-# Adding the input layer and the LSTM layer
-regressor.add(LSTM(units = 4, activation = 'sigmoid', input_shape = (None, 1)))
-
-# Adding the output layer
-regressor.add(Dense(units = 1))
-
-# Compiling the RNN
-regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
-
-# Fitting the RNN to the Training set
-regressor.fit(X_train, y_train, batch_size = 5, epochs = 100)
-
-
-# * **Prediction**
-# 
-# Notice that I only predict the price of the next day using the price today. Since there must be a lot of influence factors and it must have a lot of error when you predict a longer time.
 
 # In[ ]:
 
 
-# Making the predictions
-test_set = df_test.values
-inputs = np.reshape(test_set, (len(test_set), 1))
-inputs = sc.transform(inputs)
-inputs = np.reshape(inputs, (len(inputs), 1, 1))
-predicted_BTC_price = regressor.predict(inputs)
-predicted_BTC_price = sc.inverse_transform(predicted_BTC_price)
+data.tail()
 
-
-# * **Visualising**
-# 
-# Plot the predicted price and the real price. Compare the diference. The difference is larger when the time is further to the training set. That is why I only want to predict the price of one month
 
 # In[ ]:
 
 
-# Visualising the results
-plt.figure(figsize=(25,15), dpi=80, facecolor='w', edgecolor='k')
-ax = plt.gca()  
-plt.plot(test_set, color = 'red', label = 'Real BTC Price')
-plt.plot(predicted_BTC_price, color = 'blue', label = 'Predicted BTC Price')
-plt.title('BTC Price Prediction', fontsize=40)
-df_test = df_test.reset_index()
-x=df_test.index
-labels = df_test['date']
-plt.xticks(x, labels, rotation = 'vertical')
-for tick in ax.xaxis.get_major_ticks():
-    tick.label1.set_fontsize(18)
-for tick in ax.yaxis.get_major_ticks():
-    tick.label1.set_fontsize(18)
-plt.xlabel('Time', fontsize=40)
-plt.ylabel('BTC Price(USD)', fontsize=40)
-plt.legend(loc=2, prop={'size': 25})
+#Count observations in each label
+data.label.value_counts()
+
+
+# In[ ]:
+
+
+# convert label to a numerical variable
+data['label_num'] = data.label.map({'ham':0, 'spam':1})
+
+
+# In[ ]:
+
+
+data.head()
+
+
+# # 3. Train Test Split
+# Before performing text transformation, let us do train test split. Infact, we can perform k-Fold cross validation. However, due to simplicity, I am doing train test split.
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+
+
+# In[ ]:
+
+
+X_train,X_test,y_train,y_test = train_test_split(data["text"],data["label"], test_size = 0.2, random_state = 10)
+
+
+# In[ ]:
+
+
+print(X_train.shape)
+print(X_test.shape)
+print(y_train.shape)
+print(y_test.shape)
+
+
+# # 4.Text Transformation
+# Various text transformation techniques such as stop word removal, lowering the texts, tfidf transformations, prunning, stemming can be performed using sklearn.feature_extraction libraries. Then, the data can be convereted into bag-of-words. <br> <br>
+# For this problem, Let us see how our model performs without removing stop words.
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import CountVectorizer
+
+
+# In[ ]:
+
+
+vect = CountVectorizer()
+
+
+# Note : We can also perform tfidf transformation.
+
+# In[ ]:
+
+
+vect.fit(X_train)
+
+
+# vect.fit function learns the vocabulary. We can get all the feature names from vect.get_feature_names( ). <br> <br> Let us print first and last twenty features
+
+# In[ ]:
+
+
+print(vect.get_feature_names()[0:20])
+print(vect.get_feature_names()[-20:])
+
+
+# In[ ]:
+
+
+X_train_df = vect.transform(X_train)
+
+
+# Now, let's transform the Test data.
+
+# In[ ]:
+
+
+X_test_df = vect.transform(X_test)
+
+
+# In[ ]:
+
+
+type(X_test_df)
+
+
+# # 5. Visualisations 
+
+# In[ ]:
+
+
+ham_words = ''
+spam_words = ''
+spam = data[data.label_num == 1]
+ham = data[data.label_num ==0]
+
+
+# In[ ]:
+
+
+import nltk
+from nltk.corpus import stopwords
+
+
+# In[ ]:
+
+
+for val in spam.text:
+    text = val.lower()
+    tokens = nltk.word_tokenize(text)
+    #tokens = [word for word in tokens if word not in stopwords.words('english')]
+    for words in tokens:
+        spam_words = spam_words + words + ' '
+        
+for val in ham.text:
+    text = val.lower()
+    tokens = nltk.word_tokenize(text)
+    for words in tokens:
+        ham_words = ham_words + words + ' '
+
+
+# In[ ]:
+
+
+from wordcloud import WordCloud
+
+
+# In[ ]:
+
+
+# Generate a word cloud image
+spam_wordcloud = WordCloud(width=600, height=400).generate(spam_words)
+ham_wordcloud = WordCloud(width=600, height=400).generate(ham_words)
+
+
+# In[ ]:
+
+
+#Spam Word cloud
+plt.figure( figsize=(10,8), facecolor='k')
+plt.imshow(spam_wordcloud)
+plt.axis("off")
+plt.tight_layout(pad=0)
 plt.show()
 
 
-# **Thank you **
+# In[ ]:
+
+
+#Ham word cloud
+plt.figure( figsize=(10,8), facecolor='k')
+plt.imshow(ham_wordcloud)
+plt.axis("off")
+plt.tight_layout(pad=0)
+plt.show()
+
+
+# # 6. Machine Learning models:
+
+# ### 6.1 Multinomial Naive Bayes
+# Generally, Naive Bayes works well on text data. Multinomail Naive bayes is best suited for classification with discrete features. 
+
+# In[ ]:
+
+
+prediction = dict()
+from sklearn.naive_bayes import MultinomialNB
+model = MultinomialNB()
+model.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+prediction["Multinomial"] = model.predict(X_test_df)
+
+
+# In[ ]:
+
+
+from sklearn.metrics import accuracy_score,confusion_matrix,classification_report
+
+
+# In[ ]:
+
+
+accuracy_score(y_test,prediction["Multinomial"])
+
+
+# ### 6.2 Logistic Regression
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+model = LogisticRegression()
+model.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+prediction["Logistic"] = model.predict(X_test_df)
+
+
+# In[ ]:
+
+
+accuracy_score(y_test,prediction["Logistic"])
+
+
+# ### 6.3 $k$-NN classifier
+
+# In[ ]:
+
+
+from sklearn.neighbors import KNeighborsClassifier
+model = KNeighborsClassifier(n_neighbors=5)
+model.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+prediction["knn"] = model.predict(X_test_df)
+
+
+# In[ ]:
+
+
+accuracy_score(y_test,prediction["knn"])
+
+
+# ### 6.4 Ensemble classifier
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+model = RandomForestClassifier()
+model.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+prediction["random_forest"] = model.predict(X_test_df)
+
+
+# In[ ]:
+
+
+accuracy_score(y_test,prediction["random_forest"])
+
+
+# In[ ]:
+
+
+from sklearn.ensemble import AdaBoostClassifier
+model = AdaBoostClassifier()
+model.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+prediction["adaboost"] = model.predict(X_test_df)
+
+
+# In[ ]:
+
+
+accuracy_score(y_test,prediction["adaboost"])
+
+
+# # 7. Parameter Tuning using GridSearchCV
+
+# Based, on the above four ML models, Naive Bayes has given the best accuracy. However, Let's try to tune the parameters of $k$-NN using GridSearchCV
+
+# In[ ]:
+
+
+from sklearn.model_selection import GridSearchCV
+
+
+# In[ ]:
+
+
+k_range = np.arange(1,30)
+
+
+# In[ ]:
+
+
+k_range
+
+
+# In[ ]:
+
+
+param_grid = dict(n_neighbors=k_range)
+print(param_grid)
+
+
+# In[ ]:
+
+
+model = KNeighborsClassifier()
+grid = GridSearchCV(model,param_grid)
+grid.fit(X_train_df,y_train)
+
+
+# In[ ]:
+
+
+grid.best_estimator_
+
+
+# In[ ]:
+
+
+grid.best_params_
+
+
+# In[ ]:
+
+
+grid.best_score_
+
+
+# In[ ]:
+
+
+grid.grid_scores_
+
+
+# # 8. Model Evaluation
+
+# In[ ]:
+
+
+print(classification_report(y_test, prediction['Multinomial'], target_names = ["Ham", "Spam"]))
+
+
+# In[ ]:
+
+
+conf_mat = confusion_matrix(y_test, prediction['Multinomial'])
+conf_mat_normalized = conf_mat.astype('float') / conf_mat.sum(axis=1)[:, np.newaxis]
+
+
+# In[ ]:
+
+
+sns.heatmap(conf_mat_normalized)
+plt.ylabel('True label')
+plt.xlabel('Predicted label')
+
+
+# # 9. Future works
+
+# In[ ]:
+
+
+print(conf_mat)
+
+
+# By seeing the above confusion matrix, it is clear that 5 Ham are mis classified as Spam, and 8 Spam are misclassified as Ham. Let'see what are those misclassified text messages. Looking those messages may help us to come up with more advanced feature engineering.
+
+# In[ ]:
+
+
+pd.set_option('display.max_colwidth', -1)
+
+
+# I increased the pandas dataframe width to display the misclassified texts in full width. 
+
+# ### 9.1 Misclassified as Spam
+
+# In[ ]:
+
+
+X_test[y_test < prediction["Multinomial"] ]
+
+
+# ### 9.2 Misclassfied as Ham
+
+# In[ ]:
+
+
+X_test[y_test > prediction["Multinomial"] ]
+
+
+# It seems length of the spam text is much higher than the ham. Maybe we can include length as a feature.  In addition to unigram, we can also try bigram features. 

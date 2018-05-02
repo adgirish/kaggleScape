@@ -1,602 +1,380 @@
 
 # coding: utf-8
 
-# ###Airbnb New User Bookings Competition
-# *Author*: **Sandro Vega Pons** (sv.pons@gmail.com)
+# It seems like none of the Keras scripts published so far managed to get above 0.26. As written below, this script won't do much better either, but that is with 4 folds, and only two repeated runs and 3 epochs per fold. A proper version of this script with 5 folds and 3 repeated runs has out-of-fold CV of 0.274 and a leaderboard score of 0.270.
 # 
-# The main 3 points of this notebook are:
-# 
-#  1. Source code of the ensemble techniques I used in my solution.
-#  2. Example of how to use them in a 3-layer learning architecture.
-#  3. Analysis of the performance of the methods on problems with different number of classes. 
-#     Comparison with stack generalization based on LogisticRegression (sklearn implementation) and GradientBoosting (XGBoost implementation).
-
-# # 1- Ensemble techniques based on scipy.optimize package. 
-# 
-# ## Source code of the two ensemble techniques I used in my solution (EN_optA and EN_optB). 
-# Given a set of predictions (e.g. predictions obtained with different or the same classifier with different parameters values),
-# the two ensemblers define two different linear problems and find the optimal coefficients that minimize an objective function 
-# (in this case the multi-class logloss).
-# 
-# Useful ideas were taken from this [discussion](https://www.kaggle.com/c/otto-group-product-classification-challenge/forums/t/13868/ensamble-weights) 
-# on the *Otto Group Product Classification Challenge* forum. 
+# Keep on reading for suggestions how to get this script to score better.
 
 # In[ ]:
 
 
-import numpy as  np
-from sklearn.metrics import log_loss
-from sklearn.base import BaseEstimator
-from scipy.optimize import minimize
+import numpy as np
+np.random.seed()
+import pandas as pd
+from datetime import datetime
+from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
+
+from keras.models import load_model
+from keras.models import Sequential, Model
+from keras.layers import Input, Dense, Dropout, Activation
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, Callback
+from keras.wrappers.scikit_learn import KerasClassifier
 
 
-# ## First ensemble technique (EN_optA)
-# Given a set of predictions $X_1, X_2, ..., X_n$,  it computes the optimal set of weights
-# $w_1, w_2, ..., w_n$; such that minimizes $log\_loss(y_T, y_E)$, 
-# where $y_E = X_1*w_1 + X_2*w_2 +...+ X_n*w_n$ and $y_T$ is the true solution.
+# This callback is very important. It calculates roc_auc and gini values so they can be monitored during the run. Also, it creates a log of those parameters so that they can be used for early stopping. A tip of the hat to **[Roberto](https://www.kaggle.com/rspadim)** and **[this kernel](https://www.kaggle.com/rspadim/gini-keras-callback-earlystopping-validation)** for helping me figure out the latter.
+# 
+# *Note that this callback in combination with early stopping doesn't print well if you are using verbose=1 (moving arrow) during fitting. I recommend that you use verbose=2 in fitting.*
 
 # In[ ]:
 
 
-def objf_ens_optA(w, Xs, y, n_class=12):
-    """
-    Function to be minimized in the EN_optA ensembler.
-    
-    Parameters:
-    ----------
-    w: array-like, shape=(n_preds)
-       Candidate solution to the optimization problem (vector of weights).
-    Xs: list of predictions to combine
-       Each prediction is the solution of an individual classifier and has a
-       shape=(n_samples, n_classes).
-    y: array-like sahpe=(n_samples,)
-       Class labels
-    n_class: int
-       Number of classes in the problem (12 in Airbnb competition)
-    
-    Return:
-    ------
-    score: Score of the candidate solution.
-    """
-    w = np.abs(w)
-    sol = np.zeros(Xs[0].shape)
-    for i in range(len(w)):
-        sol += Xs[i] * w[i]
-    #Using log-loss as objective function (different objective functions can be used here). 
-    score = log_loss(y, sol)   
-    return score
-        
+class roc_auc_callback(Callback):
+    def __init__(self,training_data,validation_data):
+        self.x = training_data[0]
+        self.y = training_data[1]
+        self.x_val = validation_data[0]
+        self.y_val = validation_data[1]
 
-class EN_optA(BaseEstimator):
-    """
-    Given a set of predictions $X_1, X_2, ..., X_n$,  it computes the optimal set of weights
-    $w_1, w_2, ..., w_n$; such that minimizes $log\_loss(y_T, y_E)$, 
-    where $y_E = X_1*w_1 + X_2*w_2 +...+ X_n*w_n$ and $y_T$ is the true solution.
-    """
-    def __init__(self, n_class=12):
-        super(EN_optA, self).__init__()
-        self.n_class = n_class
-        
-    def fit(self, X, y):
-        """
-        Learn the optimal weights by solving an optimization problem.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-           Each prediction is the solution of an individual classifier and has 
-           shape=(n_samples, n_classes).
-        y: array-like
-           Class labels
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        #Initial solution has equal weight for all individual predictions.
-        x0 = np.ones(len(Xs)) / float(len(Xs)) 
-        #Weights must be bounded in [0, 1]
-        bounds = [(0,1)]*len(x0)   
-        #All weights must sum to 1
-        cons = ({'type':'eq','fun':lambda w: 1-sum(w)})
-        #Calling the solver
-        res = minimize(objf_ens_optA, x0, args=(Xs, y, self.n_class), 
-                       method='SLSQP', 
-                       bounds=bounds,
-                       constraints=cons
-                       )
-        self.w = res.x
-        return self
+    def on_train_begin(self, logs={}):
+        return
+
+    def on_train_end(self, logs={}):
+        return
+
+    def on_epoch_begin(self, epoch, logs={}):
+        return
+
+    def on_epoch_end(self, epoch, logs={}):
+        y_pred = self.model.predict_proba(self.x, verbose=0)
+        roc = roc_auc_score(self.y, y_pred)
+        logs['roc_auc'] = roc_auc_score(self.y, y_pred)
+        logs['norm_gini'] = ( roc_auc_score(self.y, y_pred) * 2 ) - 1
+
+        y_pred_val = self.model.predict_proba(self.x_val, verbose=0)
+        roc_val = roc_auc_score(self.y_val, y_pred_val)
+        logs['roc_auc_val'] = roc_auc_score(self.y_val, y_pred_val)
+        logs['norm_gini_val'] = ( roc_auc_score(self.y_val, y_pred_val) * 2 ) - 1
+
+        print('\rroc_auc: %s - roc_auc_val: %s - norm_gini: %s - norm_gini_val: %s' % (str(round(roc,5)),str(round(roc_val,5)),str(round((roc*2-1),5)),str(round((roc_val*2-1),5))), end=10*' '+'\n')
+        return
+
+    def on_batch_begin(self, batch, logs={}):
+        return
+
+    def on_batch_end(self, batch, logs={}):
+        return
+
+
+# Housekeeping utilities.
+
+# In[ ]:
+
+
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        thour, temp_sec = divmod(
+            (datetime.now() - start_time).total_seconds(), 3600)
+        tmin, tsec = divmod(temp_sec, 60)
+        print('\n Time taken: %i hours %i minutes and %s seconds.' %
+              (thour, tmin, round(tsec, 2)))
+
+def scale_data(X, scaler=None):
+    if not scaler:
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+
+# I never seem to be able to write a generic routine for data loading where one would just plug in file names and everything else would be done automatically. Still trying.
+
+# In[ ]:
+
+
+# train and test data path
+DATA_TRAIN_PATH = '../input/train.csv'
+DATA_TEST_PATH = '../input/test.csv'
+
+def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
+    train_loader = pd.read_csv(path_train, dtype={'target': np.int8, 'id': np.int32})
+    train = train_loader.drop(['target', 'id'], axis=1)
+    train_labels = train_loader['target'].values
+    train_ids = train_loader['id'].values
+    print('\n Shape of raw train data:', train.shape)
+
+    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
+    test = test_loader.drop(['id'], axis=1)
+    test_ids = test_loader['id'].values
+    print(' Shape of raw test data:', test.shape)
+
+    return train, train_labels, test, train_ids, test_ids
+
+
+# You can ignore most of the parameters below other than the top two. Obviously, more folds means longer running time, but I can tell you from experience that 10 folds with Keras will usually do better than 4. The number of "runs" should be in the 3-5 range. At a minimum, I suggest 5 folds and 3 independent runs per fold (which will eventually get averaged).  This is because of stochastic nature of neural networks, so one run per fold may or may not produce the best possible result.
+# 
+# **If you can afford it, 10 folds and 5 runs per fold would be my recommendation. Be warned that it may take a day or two, even if you have a GPU.**
+
+# In[ ]:
+
+
+folds = 4
+runs = 2
+
+cv_LL = 0
+cv_AUC = 0
+cv_gini = 0
+fpred = []
+avpred = []
+avreal = []
+avids = []
+
+
+# Loading data. Converting "categorical" variables, even though in this dataset they are actually numeric.
+
+# In[ ]:
+
+
+# Load data set and target values
+train, target, test, tr_ids, te_ids = load_data()
+n_train = train.shape[0]
+train_test = pd.concat((train, test)).reset_index(drop=True)
+col_to_drop = train.columns[train.columns.str.endswith('_cat')]
+col_to_dummify = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
+
+for col in col_to_dummify:
+    dummy = pd.get_dummies(train_test[col].astype('category'))
+    columns = dummy.columns.astype(str).tolist()
+    columns = [col + '_' + w for w in columns]
+    dummy.columns = columns
+    train_test = pd.concat((train_test, dummy), axis=1)
+
+train_test.drop(col_to_dummify, axis=1, inplace=True)
+train_test_scaled, scaler = scale_data(train_test)
+train = train_test_scaled[:n_train, :]
+test = train_test_scaled[n_train:, :]
+print('\n Shape of processed train data:', train.shape)
+print(' Shape of processed test data:', test.shape)
+
+
+# The two parameters below are worth playing with. Larger patience gives the network a better chance to find solutions when it gets close to the local/global minimum. It also means longer training times. Batch size is one of those parameters that can always be optimized for any given dataset. If you have a GPU, larger batch sizes translate to faster training, but that may or may not be better for the quality of training.
+
+# In[ ]:
+
+
+patience = 10
+batchsize = 128
+
+
+# There are lots of comments within the code below. I think the callback section is particularly import.
+
+# In[ ]:
+
+
+# Let's split the data into folds. I always use the same random number for reproducibility, 
+# and suggest that you do the same (you certainly don't have to use 1001).
+
+skf = StratifiedKFold(n_splits=folds, random_state=1001)
+starttime = timer(None)
+for i, (train_index, test_index) in enumerate(skf.split(train, target)):
+    start_time = timer(None)
+    X_train, X_val = train[train_index], train[test_index]
+    y_train, y_val = target[train_index], target[test_index]
+    train_ids, val_ids = tr_ids[train_index], tr_ids[test_index]
     
-    def predict_proba(self, X):
-        """
-        Use the weights learned in training to predict class probabilities.
+# This is where we define and compile the model. These parameters are not optimal, as they were chosen 
+# to get a notebook to complete in 60 minutes. Other than leaving BatchNormalization and last sigmoid 
+# activation alone, virtually everything else can be optimized: number of neurons, types of initializers, 
+# activation functions, dropout values. The same goes for the optimizer at the end.
+
+#########
+# Never move this model definition to the beginning of the file or anywhere else outside of this loop. 
+# The model needs to be initialized anew every time you run a different fold. If not, it will continue 
+# the training from a previous model, and that is not what you want.
+#########
+
+    # This definition must be within the for loop or else it will continue training previous model
+    def baseline_model():
+        model = Sequential()
+        model.add(
+            Dense(
+                200,
+                input_dim=X_train.shape[1],
+                kernel_initializer='glorot_normal',
+                ))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.5))
+        model.add(Dense(100, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.25))
+        model.add(Dense(50, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.15))
+        model.add(Dense(25, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.1))
+        model.add(Dense(1, activation='sigmoid'))
+
+        # Compile model
+        model.compile(optimizer='adam', metrics = ['accuracy'], loss='binary_crossentropy')
+
+        return model
+
+# This is where we repeat the runs for each fold. If you choose runs=1 above, it will run a 
+# regular N-fold procedure.
+
+#########
+# It is important to leave the call to random seed here, so each run starts with a different seed.
+#########
+
+    for run in range(runs):
+        print('\n Fold %d - Run %d\n' % ((i + 1), (run + 1)))
+        np.random.seed()
+
+# Lots to unpack here.
+
+# The first callback prints out roc_auc and gini values at the end of each epoch. It must be listed 
+# before the EarlyStopping callback, which monitors gini values saved in the previous callback. Make 
+# sure to set the mode to "max" because the default value ("auto") will not handle gini properly 
+# (it will act as if the model is not improving even when roc/gini go up).
+
+# CSVLogger creates a record of all iterations. Not really needed but it doesn't hurt to have it.
+
+# ModelCheckpoint saves a model each time gini improves. Its mode also must be set to "max" for reasons 
+# explained above.
+
+        callbacks = [
+            roc_auc_callback(training_data=(X_train, y_train),validation_data=(X_val, y_val)),  # call this before EarlyStopping
+            EarlyStopping(monitor='norm_gini_val', patience=patience, mode='max', verbose=1),
+            CSVLogger('keras-5fold-run-01-v1-epochs.log', separator=',', append=False),
+            ModelCheckpoint(
+                    'keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check',
+                    monitor='norm_gini_val', mode='max', # mode must be set to max or Keras will be confused
+                    save_best_only=True,
+                    verbose=1)
+        ]
+
+# The classifier is defined here. Epochs should be be set to a very large number (not 3 like below) which 
+# will never be reached anyway because of early stopping. I usually put 5000 there. Because why not.
+
+        nnet = KerasClassifier(
+            build_fn=baseline_model,
+# Epoch needs to be set to a very large number ; early stopping will prevent it from reaching
+#            epochs=5000,
+            epochs=3,
+            batch_size=batchsize,
+            validation_data=(X_val, y_val),
+            verbose=2,
+            shuffle=True,
+            callbacks=callbacks)
+
+        fit = nnet.fit(X_train, y_train)
         
-        Parameters:
-        ----------
-        Xs: list of predictions to be blended.
-            Each prediction is the solution of an individual classifier and has 
-            shape=(n_samples, n_classes).
+# We want the best saved model - not the last one where the training stopped. So we delete the old 
+# model instance and load the model from the last saved checkpoint. Next we predict values both for 
+# validation and test data, and create a summary of parameters for each run.
+
+        del nnet
+        nnet = load_model('keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check')
+        scores_val_run = nnet.predict_proba(X_val, verbose=0)
+        LL_run = log_loss(y_val, scores_val_run)
+        print('\n Fold %d Run %d Log-loss: %.5f' % ((i + 1), (run + 1), LL_run))
+        AUC_run = roc_auc_score(y_val, scores_val_run)
+        print(' Fold %d Run %d AUC: %.5f' % ((i + 1), (run + 1), AUC_run))
+        print(' Fold %d Run %d normalized gini: %.5f' % ((i + 1), (run + 1), AUC_run*2-1))
+        y_pred_run = nnet.predict_proba(test, verbose=0)
+        if run > 0:
+            scores_val = scores_val + scores_val_run
+            y_pred = y_pred + y_pred_run
+        else:
+            scores_val = scores_val_run
+            y_pred = y_pred_run
             
-        Return:
-        ------
-        y_pred: array_like, shape=(n_samples, n_class)
-                The blended prediction.
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        y_pred = np.zeros(Xs[0].shape)
-        for i in range(len(self.w)):
-            y_pred += Xs[i] * self.w[i] 
-        return y_pred  
+# We average all runs from the same fold and provide a parameter summary for each fold. Unless something 
+# is wrong, the numbers printed here should be better than any of the individual runs.
+
+    scores_val = scores_val / runs
+    y_pred = y_pred / runs
+    LL = log_loss(y_val, scores_val)
+    print('\n Fold %d Log-loss: %.5f' % ((i + 1), LL))
+    AUC = roc_auc_score(y_val, scores_val)
+    print(' Fold %d AUC: %.5f' % ((i + 1), AUC))
+    print(' Fold %d normalized gini: %.5f' % ((i + 1), AUC*2-1))
+    timer(start_time)
+    
+# We add up predictions on the test data for each fold. Create out-of-fold predictions for validation data.
+
+    if i > 0:
+        fpred = pred + y_pred
+        avreal = np.concatenate((avreal, y_val), axis=0)
+        avpred = np.concatenate((avpred, scores_val), axis=0)
+        avids = np.concatenate((avids, val_ids), axis=0)
+    else:
+        fpred = y_pred
+        avreal = y_val
+        avpred = scores_val
+        avids = val_ids
+    pred = fpred
+    cv_LL = cv_LL + LL
+    cv_AUC = cv_AUC + AUC
+    cv_gini = cv_gini + (AUC*2-1)
 
 
-# ## Second ensemble technique (EN_optB)
-# Given a set of predictions $X_1, X_2, ..., X_n$, where each $X_i$ has
-# $m=12$ clases, i.e. $X_i = X_{i1}, X_{i2},...,X_{im}$. The algorithm finds the optimal 
-# set of weights $w_{11}, w_{12}, ..., w_{nm}$; such that minimizes 
-# $log\_loss(y_T, y_E)$, where $y_E = X_{11}*w_{11} +... + X_{21}*w_{21} + ... + X_{nm}*w_{nm}$ 
-# and and $y_T$ is the true solution.
+# Here we average all the predictions and provide the final summary.
 
 # In[ ]:
 
 
-def objf_ens_optB(w, Xs, y, n_class=12):
-    """
-    Function to be minimized in the EN_optB ensembler.
-    
-    Parameters:
-    ----------
-    w: array-like, shape=(n_preds)
-       Candidate solution to the optimization problem (vector of weights).
-    Xs: list of predictions to combine
-       Each prediction is the solution of an individual classifier and has a
-       shape=(n_samples, n_classes).
-    y: array-like sahpe=(n_samples,)
-       Class labels
-    n_class: int
-       Number of classes in the problem, i.e. = 12
-    
-    Return:
-    ------
-    score: Score of the candidate solution.
-    """
-    #Constraining the weights for each class to sum up to 1.
-    #This constraint can be defined in the scipy.minimize function, but doing 
-    #it here gives more flexibility to the scipy.minimize function 
-    #(e.g. more solvers are allowed).
-    w_range = np.arange(len(w))%n_class 
-    for i in range(n_class): 
-        w[w_range==i] = w[w_range==i] / np.sum(w[w_range==i])
-        
-    sol = np.zeros(Xs[0].shape)
-    for i in range(len(w)):
-        sol[:, i % n_class] += Xs[int(i / n_class)][:, i % n_class] * w[i] 
-        
-    #Using log-loss as objective function (different objective functions can be used here). 
-    score = log_loss(y, sol)   
-    return score
-    
-
-class EN_optB(BaseEstimator):
-    """
-    Given a set of predictions $X_1, X_2, ..., X_n$, where each $X_i$ has
-    $m=12$ clases, i.e. $X_i = X_{i1}, X_{i2},...,X_{im}$. The algorithm finds the optimal 
-    set of weights $w_{11}, w_{12}, ..., w_{nm}$; such that minimizes 
-    $log\_loss(y_T, y_E)$, where $y_E = X_{11}*w_{11} +... + X_{21}*w_{21} + ... 
-    + X_{nm}*w_{nm}$ and and $y_T$ is the true solution.
-    """
-    def __init__(self, n_class=12):
-        super(EN_optB, self).__init__()
-        self.n_class = n_class
-        
-    def fit(self, X, y):
-        """
-        Learn the optimal weights by solving an optimization problem.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-           Each prediction is the solution of an individual classifier and has 
-           shape=(n_samples, n_classes).
-        y: array-like
-           Class labels
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        #Initial solution has equal weight for all individual predictions.
-        x0 = np.ones(self.n_class * len(Xs)) / float(len(Xs)) 
-        #Weights must be bounded in [0, 1]
-        bounds = [(0,1)]*len(x0)   
-        #Calling the solver (constraints are directly defined in the objective
-        #function)
-        res = minimize(objf_ens_optB, x0, args=(Xs, y, self.n_class), 
-                       method='L-BFGS-B', 
-                       bounds=bounds, 
-                       )
-        self.w = res.x
-        return self
-    
-    def predict_proba(self, X):
-        """
-        Use the weights learned in training to predict class probabilities.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-            Each prediction is the solution of an individual classifier and has 
-            shape=(n_samples, n_classes).
-            
-        Return:
-        ------
-        y_pred: array_like, shape=(n_samples, n_class)
-                The ensembled prediction.
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        y_pred = np.zeros(Xs[0].shape)
-        for i in range(len(self.w)):
-            y_pred[:, i % self.n_class] +=                    Xs[int(i / self.n_class)][:, i % self.n_class] * self.w[i]  
-        return y_pred      
+LL_oof = log_loss(avreal, avpred)
+print('\n Average Log-loss: %.5f' % (cv_LL/folds))
+print(' Out-of-fold Log-loss: %.5f' % LL_oof)
+AUC_oof = roc_auc_score(avreal, avpred)
+print('\n Average AUC: %.5f' % (cv_AUC/folds))
+print(' Out-of-fold AUC: %.5f' % AUC_oof)
+print('\n Average normalized gini: %.5f' % (cv_gini/folds))
+print(' Out-of-fold normalized gini: %.5f' % (AUC_oof*2-1))
+score = str(round((AUC_oof*2-1), 5))
+timer(starttime)
+mpred = pred / folds
 
 
-# # 2- How to use EN_optA and EN_optB in a 3-layers classification architecture.
-# 
-# Somehow similar 3-layers architectures have been previously used in Kaggle competitions
-# (e.g. [here](https://www.kaggle.com/c/otto-group-product-classification-challenge/forums/t/14335/1st-place-winner-solution-gilberto-titericz-stanislav-semenov))
-# 
-# ### Data
-# For simplicity I am using here synthetic data instead of the original data from Airbnb competition. 
-# All the feature engineering step is avoided and it is also easier to play with the number of classes.
-# Moreover, it is easier to change the parameters of the data generation function to study the performance of 
-# the algorithms on different types of data.
-# 
-# Once the data is generated it is splitted into:
-# 
-# - training set: (X_train, y_train)
-# - validation set: (X_valid, y_valid)
-# - test set: (X_test, y_test)
-# 
-# ### Learning architecture
-# 
-#  * First layer: I am using 6 classifiers from scikit-learn (Support_Vector_Machines, Logistic_Regression, 
-#    Random_Forest, Gradient_Boosting, Extra_Trees_Classifier, K_Nearest_Neighbors). All classifiers are used with 
-#    (almost) default parameters. At this level, many other classifiers can be used. 
-#    All classifiers are applied twice:
-#      1. Classifiers are trained on (X_train, y_train) and used to predict the class probabilities of (X_valid).
-#      2. Classifiers are trained on (X = (X_train + X_valid), y = (y_train + y_valid)) and used to predict 
-#         the class probabilities of (X_test)
-#  * Second layer: The predictions from the previous layer on X_valid are concatenated and used to create a new 
-#    training set (XV, y_valid). The predictions on X_test are concatenated to create a new test set (XT, y_test). 
-#    The two proposed ensemble methods (EN_optA and EN_optB) and their calibrated versions are trained on 
-#    (XV, y_valid) and used to predict the class probabilites of (XT).
-#  * Third layer: The four prediction from the previous layer are linearly combined using fixed weights.
+# Save the file with out-of-fold predictions. For easier book-keeping, file names have the out-of-fold gini score and are are tagged by date and time.
 
 # In[ ]:
 
 
-from sklearn.datasets import make_classification
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.cross_validation import train_test_split
-from sklearn.linear_model import LogisticRegressionCV
-from xgboost.sklearn import XGBClassifier
-
-#fixing random state
-random_state=1
+print('#\n Writing results')
+now = datetime.now()
+oof_result = pd.DataFrame(avreal, columns=['target'])
+oof_result['prediction'] = avpred
+oof_result['id'] = avids
+oof_result.sort_values('id', ascending=True, inplace=True)
+oof_result = oof_result.set_index('id')
+sub_file = 'train_5fold-keras-run-01-v1-oof_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
+print('\n Writing out-of-fold file:  %s' % sub_file)
+oof_result.to_csv(sub_file, index=True, index_label='id')
 
 
-# ## Generating dataset
-#     
-# Parameters can be changed to explore different types of synthetic data.
+# Save the final prediction. This is the one to submit.
 
 # In[ ]:
 
 
-n_classes = 12  # Same number of classes as in Airbnb competition.
-data, labels = make_classification(n_samples=2000, n_features=100, 
-                                   n_informative=50, n_classes=n_classes, 
-                                   random_state=random_state)
-
-#Spliting data into train and test sets.
-X, X_test, y, y_test = train_test_split(data, labels, test_size=0.2, 
-                                        random_state=random_state)
-    
-#Spliting train data into training and validation sets.
-X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.25, 
-                                                      random_state=random_state)
-
-print('Data shape:')
-print('X_train: %s, X_valid: %s, X_test: %s \n' %(X_train.shape, X_valid.shape, 
-                                                  X_test.shape))
-    
-
-
-# ## First layer (individual classifiers)
-# All classifiers are applied twice:
-# 
-#  - Training on (X_train, y_train) and predicting on (X_valid)
-#  - Training on (X, y) and predicting on (X_test)
-#     
-# You can add / remove classifiers or change parameter values to see the effect on final results.
-
-# In[ ]:
-
-
-#Defining the classifiers
-clfs = {'LR'  : LogisticRegression(random_state=random_state), 
-        'SVM' : SVC(probability=True, random_state=random_state), 
-        'RF'  : RandomForestClassifier(n_estimators=100, n_jobs=-1, 
-                                       random_state=random_state), 
-        'GBM' : GradientBoostingClassifier(n_estimators=50, 
-                                           random_state=random_state), 
-        'ETC' : ExtraTreesClassifier(n_estimators=100, n_jobs=-1, 
-                                     random_state=random_state),
-        'KNN' : KNeighborsClassifier(n_neighbors=30)}
-    
-#predictions on the validation and test sets
-p_valid = []
-p_test = []
-   
-print('Performance of individual classifiers (1st layer) on X_test')   
-print('------------------------------------------------------------')
-   
-for nm, clf in clfs.items():
-    #First run. Training on (X_train, y_train) and predicting on X_valid.
-    clf.fit(X_train, y_train)
-    yv = clf.predict_proba(X_valid)
-    p_valid.append(yv)
-        
-    #Second run. Training on (X, y) and predicting on X_test.
-    clf.fit(X, y)
-    yt = clf.predict_proba(X_test)
-    p_test.append(yt)
-       
-    #Printing out the performance of the classifier
-    print('{:10s} {:2s} {:1.7f}'.format('%s: ' %(nm), 'logloss  =>', log_loss(y_test, yt)))
-print('')
-
-
-# ## Second layer (optimization based ensembles)
-# Predictions on X_valid are used as training set (XV) and predictions on X_test are used as test set (XT). 
-# EN_optA, EN_optB and their calibrated versions are applied.
-
-# In[ ]:
-
-
-print('Performance of optimization based ensemblers (2nd layer) on X_test')   
-print('------------------------------------------------------------')
-    
-#Creating the data for the 2nd layer.
-XV = np.hstack(p_valid)
-XT = np.hstack(p_test)  
-        
-#EN_optA
-enA = EN_optA(n_classes)
-enA.fit(XV, y_valid)
-w_enA = enA.w
-y_enA = enA.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('EN_optA:', 'logloss  =>', log_loss(y_test, y_enA)))
-    
-#Calibrated version of EN_optA 
-cc_optA = CalibratedClassifierCV(enA, method='isotonic')
-cc_optA.fit(XV, y_valid)
-y_ccA = cc_optA.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('Calibrated_EN_optA:', 'logloss  =>', log_loss(y_test, y_ccA)))
-        
-#EN_optB
-enB = EN_optB(n_classes) 
-enB.fit(XV, y_valid)
-w_enB = enB.w
-y_enB = enB.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('EN_optB:', 'logloss  =>', log_loss(y_test, y_enB)))
-
-#Calibrated version of EN_optB
-cc_optB = CalibratedClassifierCV(enB, method='isotonic')
-cc_optB.fit(XV, y_valid)
-y_ccB = cc_optB.predict_proba(XT)  
-print('{:20s} {:2s} {:1.7f}'.format('Calibrated_EN_optB:', 'logloss  =>', log_loss(y_test, y_ccB)))
-print('')
-
-
-# ## Third layer (weighted average)
-# Simple weighted average of the previous 4 predictions.
-
-# In[ ]:
-
-
-y_3l = (y_enA * 4./9.) + (y_ccA * 2./9.) + (y_enB * 2./9.) + (y_ccB * 1./9.)
-print('{:20s} {:2s} {:1.7f}'.format('3rd_layer:', 'logloss  =>', log_loss(y_test, y_3l)))
-
-
-# ### Plotting the weights of each ensemble
-# In the case of EN_optA, there is a weight for each prediction and in the case of EN_optB there is 
-# a weight for each class for each prediction.
-
-# In[ ]:
-
-
-from tabulate import tabulate
-print('               Weights of EN_optA:')
-print('|---------------------------------------------|')
-wA = np.round(w_enA, decimals=2).reshape(1,-1)
-print(tabulate(wA, headers=clfs.keys(), tablefmt="orgtbl"))
-print('')
-print('                                    Weights of EN_optB:')
-print('|-------------------------------------------------------------------------------------------|')
-wB = np.round(w_enB.reshape((-1,n_classes)), decimals=2)
-wB = np.hstack((np.array(list(clfs.keys()), dtype=str).reshape(-1,1), wB))
-print(tabulate(wB, headers=['y%s'%(i) for i in range(n_classes)], tablefmt="orgtbl"))
-
-
-# ### Comparing our ensemble results with sklearn LogisticRegression based stacking of classifiers.
-# Both techniques *EN_optA* and *EN_optB* optimizes an objective function. In this experiment I am using the multi-class 
-# logloss as objective function. Therefore, the two proposed methods basically become implementations of LogisticRegression.
-# The following code allows to compare the results of sklearn implementation of LogisticRegression with the proposed ensembles.
-
-# In[ ]:
-
-
-#By default the best C parameter is obtained with a cross-validation approach, doing grid search with
-#10 values defined in a logarithmic scale between 1e-4 and 1e4.
-#Change parameters to see how they affect the final results.
-lr = LogisticRegressionCV(Cs=10, dual=False, fit_intercept=True, 
-                          intercept_scaling=1.0, max_iter=100,
-                          multi_class='ovr', n_jobs=1, penalty='l2', 
-                          random_state=random_state,
-                          solver='lbfgs', tol=0.0001)
-
-lr.fit(XV, y_valid)
-y_lr = lr.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('Log_Reg:', 'logloss  =>', log_loss(y_test, y_lr)))
-
-
-# ### Is there any parameters configuration for LogisticRegression that produces better results than the proposed ensemble techniques?
-# I wasn't able to find such parameter configuration for a problem with 12 number of classes.
-
-# # 3- Comparison of the ensemble techniques on problems with different number of classes
-# Let's explore how the different ensemble techniques perform according to the number of classes in the problem.
-# We generate different dataset with different number of classes (e.g. from 3 to 15 classes) and compare the result of 
-# the different ensembling methods.
-
-# In[ ]:
-
-
-#For each value in classes, a dataset with that number of classes will be created. 
-classes = range(3, 15)
-
-ll_sc = []  #to store logloss of individual classifiers
-ll_eA = []  #to store logloss of EN_optA ensembler
-ll_eB = []  #to store logloss of EN_optB ensembler
-ll_e3 = []  #to store logloss of the third-layer ensembler (method used for submission in the competition).
-ll_lr = []  #to store logloss of LogisticRegression as 2nd layer ensembler.
-ll_gb = []  #to store logloss of GradientBoosting as 2nd layer ensembler.
-
-#Same code as above for generating the dataset, applying the 3-layer learning architecture and copmparing with  
-#LogisticRegression and GradientBoosting based ensembles. 
-#The code is applied to each independent problem/dataset (each dataset with a different number of classes).
-for i in classes:
-    print('Working on dataset with n_classes: %s' %(i))
-    n_classes=i
-    
-    #Generating the data
-    data, labels = make_classification(n_samples=2000, n_features=100, 
-                                       n_informative=50, n_classes=n_classes,
-                                       random_state=random_state)
-    X, X_test, y, y_test = train_test_split(data, labels, test_size=0.2, 
-                                            random_state=random_state)
-    X_train, X_valid, y_train, y_valid = train_test_split(X, y, 
-                                              test_size=0.25, 
-                                              random_state=random_state)
-    
-    #First layer
-    clfs = [LogisticRegression(random_state=random_state), 
-            SVC(probability=True, random_state=random_state), 
-            RandomForestClassifier(n_estimators=100, n_jobs=-1, 
-                                   random_state=random_state), 
-            GradientBoostingClassifier(n_estimators=50, 
-                                       random_state=random_state), 
-            ExtraTreesClassifier(n_estimators=100, n_jobs=-1, 
-                                 random_state=random_state), 
-            KNeighborsClassifier(n_neighbors=30, n_jobs=-1)]
-    p_valid = []
-    p_test = []
-    for clf in clfs:
-        #First run
-        clf.fit(X_train, y_train)
-        yv = clf.predict_proba(X_valid)
-        p_valid.append(yv)
-        #Second run
-        clf.fit(X, y)
-        yt = clf.predict_proba(X_test)
-        p_test.append(yt)
-        #Saving the logloss score
-        ll_sc.append(log_loss(y_test, yt))
-
-    #Second layer
-    XV = np.hstack(p_valid)
-    XT = np.hstack(p_test)  
-    
-    enA = EN_optA(n_classes)   #EN_optA
-    enA.fit(XV, y_valid)
-    y_enA = enA.predict_proba(XT)    
-    ll_eA.append(log_loss(y_test, y_enA))  #Saving the logloss score
-    
-    cc_optA = CalibratedClassifierCV(enA, method='isotonic') #Calibrated version of EN_optA 
-    cc_optA.fit(XV, y_valid)
-    y_ccA = cc_optA.predict_proba(XT)
-    
-    enB = EN_optB(n_classes)   #EN_optB
-    enB.fit(XV, y_valid)
-    y_enB = enB.predict_proba(XT)   #Saving the logloss score
-    ll_eB.append(log_loss(y_test, y_enB))
-    
-    cc_optB = CalibratedClassifierCV(enB, method='isotonic') #Calibrated version of EN_optB 
-    cc_optB.fit(XV, y_valid)
-    y_ccB = cc_optB.predict_proba(XT) 
-    
-    #Third layer
-    y_3l = (y_enA * 4./9.) + (y_ccA * 2./9.) + (y_enB * 2./9.) + (y_ccB * 1./9.)
-    ll_e3.append(log_loss(y_test, y_3l))   #Saving the logloss score
-    
-    #Logistic regresson
-    lr = LogisticRegressionCV(Cs=10, dual=False, fit_intercept=True,
-                              intercept_scaling=1.0, max_iter=100,
-                              multi_class='ovr', n_jobs=1, penalty='l2',
-                              random_state=random_state,
-                              solver='lbfgs', tol=0.0001)
-    lr.fit(XV, y_valid)
-    y_lr = lr.predict_proba(XT)
-    ll_lr.append(log_loss(y_test, y_lr))   #Saving the logloss score
-    
-    #Gradient boosting
-    xgb = XGBClassifier(max_depth=5, learning_rate=0.1, 
-                        n_estimators=10000, objective='multi:softprob', 
-                        seed=random_state)
-    #Computing best number of iterations on an internal validation set
-    XV_train, XV_valid, yv_train, yv_valid = train_test_split(XV, y_valid,
-                                             test_size=0.15, random_state=random_state)
-    xgb.fit(XV_train, yv_train, eval_set=[(XV_valid, yv_valid)], 
-            eval_metric='mlogloss', 
-            early_stopping_rounds=15, verbose=False)
-    xgb.n_estimators = xgb.best_iteration
-    
-    xgb.fit(XV, y_valid)
-    y_gb = xgb.predict_proba(XT)
-    ll_gb.append(log_loss(y_test, y_gb)) #Saving the logloss score 
-
-ll_sc = np.array(ll_sc).reshape(-1, len(clfs)).T 
-ll_eA = np.array(ll_eA) 
-ll_eB = np.array(ll_eB) 
-ll_e3 = np.array(ll_e3)
-ll_lr = np.array(ll_lr) 
-ll_gb = np.array(ll_gb)
-
-
-# ## Plotting the results
-# Notice that sklearn LogisticRegression and XGBoost produce better results for problems with few classes, but as the number of classes increases
-# the proposed ensembling methods outperform LogisticRegression and XGBoost. Again the question here is whether it is possible to fine-tune
-# LogisticRegression (or XGBoost) to produce better (or comparable) results than the ones produced by EN_optA, EN_optB on problems with high number of clases.
-# It can also be noticed that the *3rd-layer* ensemble always produces better results than the 2nd-layer ensemblers
-# (e.g. EN_optA, EN_optB).
-
-# In[ ]:
-
-
-import matplotlib.pylab as plt
-plt.figure(figsize=(10,7))
-
-plt.plot(classes, ll_sc[0], color='black', label='Single_Classifiers')
-for i in range(1, 6):
-    plt.plot(classes, ll_sc[i], color='black')
-    
-plt.plot(classes, ll_lr, 'bo-', label='EN_LogisticRegression')
-plt.plot(classes, ll_gb, 'mo-', label='EN_XGBoost')
-plt.plot(classes, ll_eA, 'yo-', label='EN_optA')
-plt.plot(classes, ll_eB, 'go-', label='EN_optB')
-plt.plot(classes, ll_e3, 'ro-', label='EN_3rd_layer')
-
-plt.title('Log-loss of the different models for different number of classes.')
-plt.xlabel('Number of classes')
-plt.ylabel('Log-loss')
-plt.grid(True)
-plt.legend(loc=4)
-plt.show()
+result = pd.DataFrame(mpred, columns=['target'])
+result['id'] = te_ids
+result = result.set_index('id')
+print('\n First 10 lines of your 5-fold average prediction:\n')
+print(result.head(10))
+sub_file = 'submission_5fold-average-keras-run-01-v1_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
+print('\n Writing submission:  %s' % sub_file)
+result.to_csv(sub_file, index=True, index_label='id')
 

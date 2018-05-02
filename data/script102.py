@@ -1,388 +1,276 @@
 
 # coding: utf-8
 
-# # I am predicting reviews for null values in dataset using already given reviews.
+# # Introduction to the `kagglegym` API
+
+# Code Competitions are a new style of competition where you submit code rather than the predictions that your code creates. This allows for new types of competitions like this time-series competition hosted by Two Sigma. This notebook gives an overview of the API, `kagglegym`, which was heavily influenced by [OpenAI's Gym](https://gym.openai.com/docs) API for reinforcement learning challenges.
+
+# ## Data Overview
+# 
+# Another difference with this competition is that we're using an [HDF5 file](https://support.hdfgroup.org/HDF5/) instead of a CSV file due to the size of the data. You can still easily read it and manipulate it for exploration:
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# ## Importing Libraries
-
-# In[ ]:
-
-
+# Here's an example of loading the CSV using Pandas's built-in HDF5 support:
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-import nltk.classify.util
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
-from sklearn import metrics
-from sklearn.metrics import roc_curve, auc
-from nltk.classify import NaiveBayesClassifier
-import numpy as np
-import re
-import string
-import nltk
-get_ipython().run_line_magic('matplotlib', 'inline')
+
+with pd.HDFStore("../input/train.h5", "r") as train:
+    # Note that the "train" dataframe is the only dataframe in the file
+    df = train.get("train")
 
 
 # In[ ]:
 
 
-temp = pd.read_csv(r"../input/7817_1.csv")
-temp.head()
+# Let's see how many rows are in full training set
+len(df)
 
 
 # In[ ]:
 
 
-permanent = temp[['reviews.rating' , 'reviews.text' , 'reviews.title' , 'reviews.username']]
-print(permanent.isnull().any()) #Checking for null values
-permanent.head()
-
-
-# ## Filtering null values
-
-# In[ ]:
-
-
-check =  permanent[permanent["reviews.rating"].isnull()]
-check.head()
-
-
-# ## Filtering not null values
-
-# In[ ]:
-
-
-senti= permanent[permanent["reviews.rating"].notnull()]
-permanent.head()
-
-
-# ## Classifying text as postive and negative
-
-# In[ ]:
-
-
-senti["senti"] = senti["reviews.rating"]>=4
-senti["senti"] = senti["senti"].replace([True , False] , ["pos" , "neg"])
-
-
-# ## Count of reviews
-
-# In[ ]:
-
-
-senti["senti"].value_counts().plot.bar()
-
-
-# As we can see data is unbalanced so this will create problem for model but, will take this data as it is and will predict our reviews.
-
-# ## Cleaning text
-
-# In[ ]:
-
-
-import nltk.classify.util
-from nltk.classify import NaiveBayesClassifier
-import numpy as np
-import re
-import string
-import nltk
-
-cleanup_re = re.compile('[^a-z]+')
-def cleanup(sentence):
-    sentence = sentence.lower()
-    sentence = cleanup_re.sub(' ', sentence).strip()
-    #sentence = " ".join(nltk.word_tokenize(sentence))
-    return sentence
-
-senti["Summary_Clean"] = senti["reviews.text"].apply(cleanup)
-check["Summary_Clean"] = check["reviews.text"].apply(cleanup)
-
-
-# ## Splitting Train and Test Data
-
-# In[ ]:
-
-
-split = senti[["Summary_Clean" , "senti"]]
-train=split.sample(frac=0.8,random_state=200)
-test=split.drop(train.index)
-
-
-# ## Feature Extracter for NLTK Naive bayes classifier
-
-# In[ ]:
-
-
-def word_feats(words):
-    features = {}
-    for word in words:
-        features [word] = True
-    return features
+df.head()
 
 
 # In[ ]:
 
 
-train["words"] = train["Summary_Clean"].str.lower().str.split()
-test["words"] = test["Summary_Clean"].str.lower().str.split()
-check["words"] = check["Summary_Clean"].str.lower().str.split()
-
-train.index = range(train.shape[0])
-test.index = range(test.shape[0])
-check.index = range(check.shape[0])
-prediction =  {} ## For storing results of different classifiers
-
-train_naive = []
-test_naive = []
-check_naive = []
-
-for i in range(train.shape[0]):
-    train_naive = train_naive +[[word_feats(train["words"][i]) , train["senti"][i]]]
-for i in range(test.shape[0]):
-    test_naive = test_naive +[[word_feats(test["words"][i]) , test["senti"][i]]]
-for i in range(check.shape[0]):
-    check_naive = check_naive +[word_feats(check["words"][i])]
+# How many timestamps are in the full training set?
+len(df["timestamp"].unique())
 
 
-classifier = NaiveBayesClassifier.train(train_naive)
-print("NLTK Naive bayes Accuracy : {}".format(nltk.classify.util.accuracy(classifier , test_naive)))
-classifier.show_most_informative_features(5)
+# **Important Note**: the raw training file is only available for exploration kernels. It will not be available when you make a competition submission. You should only use the raw training file for exploration purposes.
 
+# ## API Overview
 
-# ## predicting result of nltk classifier
-
-# In[ ]:
-
-
-y =[]
-only_words= [test_naive[i][0] for i in range(test.shape[0])]
-for i in range(test.shape[0]):
-    y = y + [classifier.classify(only_words[i] )]
-prediction["Naive"]= np.asarray(y)
-
-y1 = []
-for i in range(check.shape[0]):
-    y1 = y1 + [classifier.classify(check_naive[i] )]
-
-check["Naive"] = y1
-
-
-# ## Now we are bulding Countvector and Tfidf vector for train , test ,check data
-
-# In[ ]:
-
-
-from wordcloud import STOPWORDS
-
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.feature_extraction.text import CountVectorizer
-stopwords = set(STOPWORDS)
-stopwords.remove("not")
-
-count_vect = CountVectorizer(min_df=2 ,stop_words=stopwords , ngram_range=(1,3))
-tfidf_transformer = TfidfTransformer()
-
-X_train_counts = count_vect.fit_transform(train["Summary_Clean"])        
-X_train_tfidf = tfidf_transformer.fit_transform(X_train_counts)
-
-
-X_new_counts = count_vect.transform(test["Summary_Clean"])
-X_test_tfidf = tfidf_transformer.transform(X_new_counts)
-
-checkcounts = count_vect.transform(check["Summary_Clean"])
-checktfidf = tfidf_transformer.transform(checkcounts)
-
-
-
-
-# ## Fitiing Multinomial NB
+# The "kagglegym" API is based on OpenAI's Gym API, a toolkit for developing and comparing reinforcement learning algorithms. Read OpenAI's Gym API [documentation](https://gym.openai.com/docs) for more details. Note that ours is named "kagglegym" and not "gym" to prevent possible conflicts with OpenAI's "gym" library. This section will give an overview of the concepts to get you started on this competition.
 # 
+# The API is exposed through a `kagglegym` library. Let's import it to get started:
 
 # In[ ]:
 
 
-from sklearn.naive_bayes import MultinomialNB
-model1 = MultinomialNB().fit(X_train_tfidf , train["senti"])
-prediction['Multinomial'] = model1.predict(X_test_tfidf)
-print("Multinomial Accuracy : {}".format(model1.score(X_test_tfidf , test["senti"])))
-
-check["multi"] = model1.predict(checktfidf)## Predicting Sentiment for Check which was Null values for rating
+import kagglegym
 
 
-# ## Fitiing Bernouli NB
-# 
+# Now, we need to create an "environment". This will be our primary interface to the API. The `kagglegym` API has the concept of a default environment name for a competition, so just calling `make()` will create the appropriate one for this competition.
 
 # In[ ]:
 
 
-from sklearn.naive_bayes import BernoulliNB
-model2 = BernoulliNB().fit(X_train_tfidf,train["senti"])
-prediction['Bernoulli'] = model2.predict(X_test_tfidf)
-print("Bernoulli Accuracy : {}".format(model2.score(X_test_tfidf , test["senti"])))
-
-check["Bill"] = model2.predict(checktfidf)## Predicting Sentiment for Check which was Null values for rating
+# Create environment
+env = kagglegym.make()
 
 
-# ## Fitiing LogisticRegression
+# To properly initialize things, we need to "reset" the environment. This will also give us our first "observation":
 
 # In[ ]:
 
 
-from sklearn import linear_model
-logreg = linear_model.LogisticRegression(solver='lbfgs' , C=10000)
-logistic = logreg.fit(X_train_tfidf, train["senti"])
-prediction['LogisticRegression'] = logreg.predict(X_test_tfidf)
-print("Logistic Regression Accuracy : {}".format(logreg.score(X_test_tfidf , test["senti"])))
-
-check["log"] = logreg.predict(checktfidf)## Predicting Sentiment for Check which was Null values for rating
+# Get first observation
+observation = env.reset()
 
 
-# ## Getting most occuring words in train set
-# 
+# Observations are the means by which our code "observes" the world. The very first observation has a special property called "train" which is a dataframe which we can use to train our model:
 
 # In[ ]:
 
 
-words = count_vect.get_feature_names()
-feature_coefs = pd.DataFrame(
-    data = list(zip(words, logistic.coef_[0])),
-    columns = ['feature', 'coef'])
-feature_coefs.sort_values(by="coef")
+# Look at first few rows of the train dataframe
+observation.train.head()
 
 
-# ## Lets find out which classifier is doing what
+# Note that this "train" is about half the size of the full training dataframe. This is because we're in an exploratory mode where we simulate the full environment by reserving the first half of timestamps for training and the second half for simulating the public leaderboard.
 
 # In[ ]:
 
 
-def formatt(x):
-    if x == 'neg':
-        return 0
-    return 1
-vfunc = np.vectorize(formatt)
-
-cmp = 0
-colors = ['b', 'g', 'y', 'm', 'k']
-for model, predicted in prediction.items():
-    false_positive_rate, true_positive_rate, thresholds = roc_curve(test["senti"].map(formatt), vfunc(predicted))
-    roc_auc = auc(false_positive_rate, true_positive_rate)
-    plt.plot(false_positive_rate, true_positive_rate, colors[cmp], label='%s: AUC %0.2f'% (model,roc_auc))
-    cmp += 1
-
-plt.title('Classifiers comparaison with ROC')
-plt.legend(loc='lower right')
-plt.plot([0,1],[0,1],'r--')
-plt.xlim([-0.1,1.2])
-plt.ylim([-0.1,1.2])
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-plt.show()
-
-
-# ## Lets see precision  and recall  of  different  classifiers
-# 
-
-# ![Precision_Recall](https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Precisionrecall.svg/525px-Precisionrecall.svg.png)
-
-# In[ ]:
-
-
-keys = prediction.keys()
-for key in keys:
-    print(" {}:".format(key))
-    print(metrics.classification_report(test["senti"], prediction.get(key), target_names = ["positive", "negative"]))
-    print("\n")
-
-
-# ## Let test our classifiers with some handwritten samples
-# 
-
-# In[ ]:
-
-
-def test_sample(model, sample):
-    sample_counts = count_vect.transform([sample])
-    sample_tfidf = tfidf_transformer.transform(sample_counts)
-    result = model.predict(sample_tfidf)[0]
-    prob = model.predict_proba(sample_tfidf)[0]
-    print("Sample estimated as %s: negative prob %f, positive prob %f" % (result.upper(), prob[0], prob[1]))
-
-test_sample(logreg, "The product was good and easy to  use")
-test_sample(logreg, "the whole experience was horrible and product is worst")
-test_sample(logreg, "product is not good")
-
-
-# ## Here is predicted valuesof classifiers for check on the basis of review text
-
-# In[ ]:
-
-
-check.head(10)
+# Get length of the train dataframe
+len(observation.train)
 
 
 # In[ ]:
 
 
-from wordcloud import WordCloud, STOPWORDS
-stopwords = set(STOPWORDS)
-
-
-mpl.rcParams['font.size']=12                #10 
-mpl.rcParams['savefig.dpi']=100             #72 
-mpl.rcParams['figure.subplot.bottom']=.1 
-
-
-def show_wordcloud(data, title = None):
-    wordcloud = WordCloud(
-        background_color='white',
-        stopwords=stopwords,
-        max_words=300,
-        max_font_size=40, 
-        scale=3,
-        random_state=1 # chosen at random by flipping a coin; it was heads
-        
-    ).generate(str(data))
-    
-    fig = plt.figure(1, figsize=(15, 15))
-    plt.axis('off')
-    if title: 
-        fig.suptitle(title, fontsize=20)
-        fig.subplots_adjust(top=2.3)
-
-    plt.imshow(wordcloud)
-    plt.show()
-    
-show_wordcloud(senti["Summary_Clean"])
+# Get number of unique timestamps in train
+len(observation.train["timestamp"].unique())
 
 
 # In[ ]:
 
 
-show_wordcloud(senti["Summary_Clean"][senti.senti == "pos"] , title="Postive Words")
+# Note that this is half of all timestamps:
+len(df["timestamp"].unique())
 
 
 # In[ ]:
 
 
-show_wordcloud(senti["Summary_Clean"][senti.senti == "neg"] , title="Negitive words")
+# Here's proof that it's the first half:
+unique_times = list(observation.train["timestamp"].unique())
+(min(unique_times), max(unique_times))
 
+
+# Each observation also has a "features" dataframe which contains features for the timestamp you'll be asked to predict in the next "step." Note that these features are for timestamp 906 which is just passed the last training timestamp. Also, note that the "features" dataframe does *not* have the target "y" column:
+
+# In[ ]:
+
+
+# Look at the first few rows of the features dataframe
+observation.features.head()
+
+
+# The final part of observation is the "target" dataframe which is what we're asking you to fill in. It includes the "id"s for the timestamp next step.
+
+# In[ ]:
+
+
+# Look at the first few rows of the target dataframe
+observation.target.head()
+
+
+# This target is a valid submission for the step. The OpenAI Gym calls each step an "action". Each step of the environment returns four things: "observation", "reward", "done", and "info".
+
+# In[ ]:
+
+
+# Each step is an "action"
+action = observation.target
+
+# Each "step" of the environment returns four things:
+observation, reward, done, info = env.step(action)
+
+
+# The "done" variable tells us if we're done. In this case, we still have plenty of timestamps to go, so it returns "False".
+
+# In[ ]:
+
+
+# Print done
+done
+
+
+# The "info" variable is just a dictionary used for debugging. In this particular environment, we only make use of it at the end (when "done" is True).
+
+# In[ ]:
+
+
+# Print info
+info
+
+
+# We see that "observation" has the same properties as the one we get in "reset". However, notice that it's for the next "timestamp":
+
+# In[ ]:
+
+
+# Look at the first few rows of the observation dataframe for the next timestamp
+observation.features.head()
+
+
+# In[ ]:
+
+
+# Note that this timestamp has more id's/rows
+len(observation.features)
+
+
+# Perhaps most interesting is the "reward" variable. This tells you how well you're doing. The goal in reinforcement contexts is that you want to maximize the reward. In this competition, we're using the R value that ranges from -1 to 1 (higher is better). Note that we submitted all 0's, so we got a score that's below 0. If we had correctly predicted the true mean value, we would have gotten all zeros. If we had made extreme predictions (e.g. all `-1000`'s) then our score would have been capped to -1.
+
+# In[ ]:
+
+
+# Print reward
+reward
+
+
+# Since we're in exploratory mode, we have access to the ground truth (obviously not available in submit mode):
+
+# In[ ]:
+
+
+
+perfect_action = df[df["timestamp"] == observation.features["timestamp"][0]][["id", "y"]].reset_index(drop=True)
+
+
+# In[ ]:
+
+
+# Look at the first few rows of perfect action
+perfect_action.head()
+
+
+# Let's see what happens when we submit a "perfect" action:
+
+# In[ ]:
+
+
+# Submit a perfect action
+observation, reward, done, info = env.step(perfect_action)
+
+
+# As expected, we get the maximum reward of 1 by submitting the perfect value:
+
+# In[ ]:
+
+
+# Print reward
+reward
+
+
+# ## Making a complete submission
+
+# We've covered all of the basic components of the `kagglegym` API. You now know how to create an environment for the competition, get observations, examine features, and submit target values for a reward. But, we're still not done as there are more observations/timestamps left.
+
+# In[ ]:
+
+
+# Print done ... still more timestamps remaining
+done
+
+
+# Now that we've gotten the basics out of the way, we can create a basic loop until we're "done". That is, we'll make a prediction for the remaining timestamp in the data:
+
+# In[ ]:
+
+
+while True:
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+
+    observation, reward, done, info = env.step(target)
+    if done:        
+        break
+
+
+# Now we can confirm that we're done:
+
+# In[ ]:
+
+
+# Print done
+done
+
+
+# And since we're "done", we can take a look at at "info", our dictionary used for debugging. Recall that in this environment, we only make use of it when "done" is True.
+
+# In[ ]:
+
+
+# Print info
+info
+
+
+# Our score is better than 0 because we had that one submission that was perfect.
+
+# In[ ]:
+
+
+# Print "public score" from info
+info["public_score"]
+
+
+# This concludes our overview of the `kagglegym` API. We encourage you to ask questions in the competition forums or share public kernels for feedback on your approach. Good luck!

@@ -1,108 +1,226 @@
 
 # coding: utf-8
 
-# For this kind of NLP problem, word means a lot for it, but there are some abbreviation in some sentence, such as 'What's' and 'What is',  literally, they are the same thing, but they will cause some problem when you do some statistics method, so let's replace them.
+# # Summary:#
+# 
+#    This notebook uses elementary math methods to detect linear recurrence sequences.  Machine learning methods are *not* used here. 
+#     
+#    Among the 113,849 sequenes in the test set, we found more than 5000 of them satify recurrence relations of order 2,3 or 4. For those sequences, we computed the recurrence relations and predict the next terms. Moreover, we found recurrence relations that are not described in the OEIS. 
+# 
+# ## Linear Recurrence Relations ##
+# 
+# (Remark: This notebook only considers homogeneous linear recurrence relations with constant coefficients. Nonlinear or non-homogeneous relations are not investigated here.)
+# 
+# ### 2nd order recurrence relation ###   
+# A second order recurrence relation is of the form:  $$ a_{n+2} = c_{0}a_{n}+ c_{1}a_{n+1}, $$
+# where the coefficients $c_{0}$ and $c_{1}$ are constant.
+# 
+# For example, the Fibonacci sequence $a_{n+2}= a_{n}+a_{n+1}$ is a second order recurrence sequence with coefficients $(1,1)$.
+# 
+# ### 3rd order recurrence relation ###   
+# A second order recurrence relation is of the form:  $$ a_{n+3} = c_{0}a_{n}+ c_{1}a_{n+1}+c_{2}a_{n+2}, $$
+# where the coefficients $c_{0},c_{1},c_{2}$ are constant.
+# 
+# 
+# ## Detect Recurrence Relations ##
+# 
+# Given a sequence $a_{n}$, let's say we want to verify whether it's given by a 3rd order recurrence relation. In other words, we check if it's possible to find constants $c_{0},c_{1},c_{2}$ so that $$a_{n+3} = c_{0}a_{n}+ c_{1}a_{n+1}+c_{2}a_{n+2}$$ is satified. To find possible $c_{0},c_{1},c_{2}$, since there are 3 unknowns, we need at least 3 equations. Let's set the equations using $a_{3},a_{4},a_{5}$ as follows:
+# 
+# $$ a_{3} = c_{0}a_{0}+ c_{1}a_{1}+c_{2}a_{2} $$
+# $$ a_{4} = c_{0}a_{1}+ c_{1}a_{2}+c_{2}a_{3} $$
+# $$ a_{5} = c_{0}a_{2}+ c_{1}a_{3}+c_{2}a_{4}. $$
+# 
+# Writting these equations in matrix form, we obtain
+# 
+# $$\begin{bmatrix}
+# a_{0} & a_{1} & a_{2} \\ 
+# a_{1} & a_{2} & a_{3} \\
+# a_{2} & a_{3} & a_{4}
+# \end{bmatrix}
+# \begin{bmatrix}
+# c_{0} \\ 
+# c_{1}\\
+# c_{2}
+# \end{bmatrix}=
+# \begin{bmatrix}
+# a_{3} \\ 
+# a_{4}\\
+# a_{5}
+# \end{bmatrix},
+# $$ 
+# then we solve for $(c_{0},c_{1},c_{2})$. Once the coefficients $(c_{0},c_{1},c_{2})$ are found, we check whether the next terms $a_{6},a_{7},\cdots$ satisfy the recurrence relation.
+# 
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-from IPython.display import display
-pd.set_option('display.max_colwidth',-1) # set max col width in order we can some more content
+import numpy as np
 
+testfile='../input/test.csv'
+data = open(testfile).readlines()
 
-# First, let define some replace words, and maybe I missed some other abbreviations, if you have some more, please add it in the comment.
-
-# In[ ]:
-
-
-punctuation='["\'?,\.]' # I will replace all these punctuation with ''
-abbr_dict={
-    "what's":"what is",
-    "what're":"what are",
-    "who's":"who is",
-    "who're":"who are",
-    "where's":"where is",
-    "where're":"where are",
-    "when's":"when is",
-    "when're":"when are",
-    "how's":"how is",
-    "how're":"how are",
-
-    "i'm":"i am",
-    "we're":"we are",
-    "you're":"you are",
-    "they're":"they are",
-    "it's":"it is",
-    "he's":"he is",
-    "she's":"she is",
-    "that's":"that is",
-    "there's":"there is",
-    "there're":"there are",
-
-    "i've":"i have",
-    "we've":"we have",
-    "you've":"you have",
-    "they've":"they have",
-    "who've":"who have",
-    "would've":"would have",
-    "not've":"not have",
-
-    "i'll":"i will",
-    "we'll":"we will",
-    "you'll":"you will",
-    "he'll":"he will",
-    "she'll":"she will",
-    "it'll":"it will",
-    "they'll":"they will",
-
-    "isn't":"is not",
-    "wasn't":"was not",
-    "aren't":"are not",
-    "weren't":"were not",
-    "can't":"can not",
-    "couldn't":"could not",
-    "don't":"do not",
-    "didn't":"did not",
-    "shouldn't":"should not",
-    "wouldn't":"would not",
-    "doesn't":"does not",
-    "haven't":"have not",
-    "hasn't":"has not",
-    "hadn't":"had not",
-    "won't":"will not",
-    punctuation:'',
-    '\s+':' ', # replace multi space with one single space
-}
-
-
-# I define a function in order can be reused
-
-# In[ ]:
-
-
-def process_data(file_name):
-    data=pd.read_csv(file_name)
-    data.question1=data.question1.str.lower() # conver to lower case
-    data.question2=data.question2.str.lower()
-    data.question1=data.question1.astype(str)
-    data.question2=data.question2.astype(str)
-    data.replace(abbr_dict,regex=True,inplace=True)
-    display(data.head(2))
-    return data
+sequences={}   #(key, value) = (id , sequence)
+for i in range(1,len(data)): 
+    line=data[i]
+    line =line.replace('"','')
+    line = line[:-1].split(',')
+    id = int(line[0])
+    sequence=[int(x) for x in line[1:]];
+    sequences[id]=sequence
 
 
 # In[ ]:
 
 
-train_df=process_data('../input/train.csv')
+def checkRecurrence(seq, order= 2, minlength = 7):
+    """
+    :type seq: List[int]
+    :type order: int
+    :type minlength: int 
+    :rtype: List[int]
+    
+    Check whether the input sequence is a recurrence sequence with given order.
+    If it is, return the coefficients for the recurrenec relation.
+    If not, return None.
+    """     
+    if len(seq)< max((2*order+1), minlength):
+        return None
+    
+    ################ Set up the system of equations 
+    A,b = [], []
+    for i in range(order):
+        A.append(seq[i:i+order])
+        b.append(seq[i+order])
+    A,b =np.array(A), np.array(b)
+    try: 
+        if np.linalg.det(A)==0:
+            return None
+    except TypeError:
+        return None
+   
+    #############  Solve for the coefficients (c0, c1, c2, ...)
+    coeffs = np.linalg.inv(A).dot(b)  
+    
+    ############  Check if the next terms satisfy recurrence relation
+    for i in range(2*order, len(seq)):
+        predict = np.sum(coeffs*np.array(seq[i-order:i]))
+        if abs(predict-seq[i])>10**(-2):
+            return None
+    
+    return list(coeffs)
 
 
-# Let's check the result.
+def predictNextTerm(seq, coeffs):
+    """
+    :type seq: List[int]
+    :type coeffs: List[int]
+    :rtype: int
+    
+    Given a sequence and coefficienes, compute the next term for the sequence.
+    """
+    
+    order = len(coeffs)
+    predict = np.sum(coeffs*np.array(seq[-order:]))
+    return int(round(predict))
+
+
+# ## Example: ##
+# * Given a sequence [1,5,11,21,39,73,139,269,527].
+# * We verify if it's 3rd order recurrence sequence and find the coefficients (2,-5,4).
+# * We then predict the next term using the last 3 terms and the relation $a_{n+3} = 2a_{n}-5a_{n+1}+4a_{n+2}$. 
 
 # In[ ]:
 
 
-train_df.head()
+seq = [1,5,11,21,39,73,139,269,527]
+print (checkRecurrence(seq,3))
+print (predictNextTerm(seq, [2,-5,4]))
+
+
+# # Find 2nd order sequeneces in the test set #
+
+# In[ ]:
+
+
+order2Seq={}   #(key, value) = (sequence id, [prediction, coefficients])
+for id in sequences:  
+    seq = sequences[id]
+    coeff = checkRecurrence(seq,2)
+    if coeff!=None:
+        predict = predictNextTerm(seq, coeff)
+        order2Seq[id]=(predict,coeff)
+
+print ("We found %d sequences\n" %len(order2Seq))
+
+print  ("Some examples\n")
+print ("ID,  Prediction,  Coefficients")
+for key in sorted(order2Seq)[0:5]:
+    value = order2Seq[key]
+    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
+
+
+# # Find 3rd order sequeneces in the test set #
+
+# In[ ]:
+
+
+order3Seq={}
+for id in sequences:
+    if id in order2Seq:
+        continue
+    seq = sequences[id]
+    coeff = checkRecurrence(seq,3)
+    if coeff!=None:
+        predict = predictNextTerm(seq, coeff)
+        order3Seq[id]=(predict,coeff)
+
+print ("We found %d sequences\n" %len(order3Seq))
+
+print  ("Some examples\n")
+print ("ID,  Prediction,  Coefficients")
+for key in sorted(order3Seq)[0:5]:
+    value = order3Seq[key]
+    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
+
+
+# # Find 4th order sequeneces in the test set #
+
+# In[ ]:
+
+
+order4Seq={}
+for id in sequences:  
+    if id in order2Seq or id in order3Seq:
+        continue
+    seq = sequences[id]
+    coeff = checkRecurrence(seq,4)
+    if coeff!=None:
+        predict = predictNextTerm(seq, coeff)
+        order4Seq[id]=(predict,coeff)
+
+print ("We found %d sequences \n" %len(order4Seq))
+print  ("Some examples\n")
+print ("ID,  Prediction,  Coefficients")
+for key in sorted(order4Seq)[4:5]:
+    value = order4Seq[key]
+    print ("%s, %s, %s" %(key, value[0], [int(round(x)) for x in value[1]]))
+
+print (sequences[239][0:17])
+
+
+# ## Recurrence relations not included in OEIS ##
+# In the previous cells,
+#     * We find that Sequence 239 is a 4th order sequence and predict the next term as 5662052980.
+#     * We check OEIS https://oeis.org/A000773, which confirms the prediction is correct.
+#     * We observe that this recurrence relation is not described in OEIS. (There are more such sequences.)
+
+# In[ ]:
+
+
+print("Conclusion:")
+print("Number of sequences in the test set:", len(sequences))
+print("Number of 2nd order sequences:", len(order2Seq))
+print("Number of 3rd order sequences:", len(order3Seq))
+print("Number of 4th order sequences:", len(order4Seq))
 

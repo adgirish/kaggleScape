@@ -1,362 +1,130 @@
-import gc
-import numpy as np
-import pandas as pd
-import xgboost as xgb
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.metrics import matthews_corrcoef
+###
+#  from https://www.kaggle.com/lopuhin/mercari-golf-0-3875-cv-in-75-loc-1900-s
+#  with some modifications
+###
+
+import os; os.environ['OMP_NUM_THREADS'] = '1'
+from contextlib import contextmanager
+from functools import partial
 from operator import itemgetter
+from multiprocessing.pool import ThreadPool
+import time
+from typing import List, Dict
 
-# per raddar, all date features except for stations 24+25 are identical
+import keras as ks
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer as Tfidf
+from sklearn.pipeline import make_pipeline, make_union, Pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import KFold
 
-def get_date_features():
-    directory = '../input/'
-    trainfile = 'train_date.csv'
-    
-    for i, chunk in enumerate(pd.read_csv(directory + trainfile,
-                                          chunksize=1,
-                                          low_memory=False)):
-        features = list(chunk.columns)
-        break
+@contextmanager
+def timer(name):
+    t0 = time.time()
+    yield
+    print(f'[{name}] done in {time.time() - t0:.0f} s')
+def preprocess(df: pd.DataFrame) -> pd.DataFrame:
+    df['comment_text'] = df['comment_text'].fillna('fillna')
+    return df[['comment_text']]
 
-    seen = np.zeros(52)
-    rv = []
-    for f in features:
-        if f == 'Id' or 'S24' in f or 'S25' in f:
-            rv.append(f)
-            continue
-            
-        station = int(f.split('_')[1][1:])
-#        print(station)
-        
-        if seen[station]:
-            continue
-        
-        seen[station] = 1
-        rv.append(f)
-        
-    return rv
-        
-usefuldatefeatures = get_date_features()
+def on_field(f: str, *vec) -> Pipeline:
+    return make_pipeline(FunctionTransformer(itemgetter(f), validate=False), *vec)
 
-def get_mindate():
-    directory = '../input/'
-    trainfile = 'train_date.csv'
-    testfile = 'test_date.csv'
-    
-    features = None
-    subset = None
-    
-    for i, chunk in enumerate(pd.read_csv(directory + trainfile,
-                                          usecols=usefuldatefeatures,
-                                          chunksize=50000,
-                                          low_memory=False)):
-        print(i)
-        
-        if features is None:
-            features = list(chunk.columns)
-            features.remove('Id')
-        
-        df_mindate_chunk = chunk[['Id']].copy()
-        df_mindate_chunk['mindate'] = chunk[features].min(axis=1).values
-        
-        if subset is None:
-            subset = df_mindate_chunk.copy()
-        else:
-            subset = pd.concat([subset, df_mindate_chunk])
-            
-        del chunk
-        gc.collect()
+def to_records(df: pd.DataFrame) -> List[Dict]:
+    return df.to_dict(orient='records')
 
-    for i, chunk in enumerate(pd.read_csv(directory + testfile,
-                                          usecols=usefuldatefeatures,
-                                          chunksize=50000,
-                                          low_memory=False)):
-        print(i)
-        
-        df_mindate_chunk = chunk[['Id']].copy()
-        df_mindate_chunk['mindate'] = chunk[features].min(axis=1).values
-        subset = pd.concat([subset, df_mindate_chunk])
-        
-        del chunk
-        gc.collect()      
-        
-    return subset
+def fit_valid_predict(xs, ys) -> np.ndarray:
+    X_train, X_valid, X_test = xs
+    y_train, y_valid = ys
+    config = tf.ConfigProto(
+        intra_op_parallelism_threads=1, use_per_session_threads=1, inter_op_parallelism_threads=1)
+    with tf.Session(graph=tf.Graph(), config=config) as sess, timer('fit_valid_predict'):
+        ks.backend.set_session(sess)
+        model_in = ks.Input(shape=(X_train.shape[1],), dtype='float32', sparse=True)
+        out = ks.layers.Dense(256, activation='relu')(model_in)
+        out = ks.layers.Dense(128, activation='relu')(out)
+        out = ks.layers.Dense(64, activation='relu')(out)
+        out = ks.layers.Dense(6, activation="sigmoid")(out)
+        model = ks.Model(model_in, out)
+        lr_init = 1e-3
+        model.compile(loss='binary_crossentropy', optimizer=ks.optimizers.Adam(lr=lr_init))
+        cv_score = -1
+        pred_valid_best = None
+        best_model = None
+        #for i in range(10):
+        for i in range(3):
+            if i < 7:
+                batch_size = 2**(7 + i)
+            with timer(f'epoch {i + 1}'):
+                ks.backend.set_value(model.optimizer.lr, lr_init/(i+1))
+                model.fit(x=X_train, y=y_train, batch_size=batch_size, epochs=1, verbose=0)
+                pred_valid=model.predict(X_valid)
+                cv_i = np.mean(roc_auc_score(y_valid, pred_valid, average=None))
+                if cv_i > cv_score: 
+                    cv_score = cv_i
+                    print('best_score', cv_score, '@', f'epoch {i + 1}')
+                    pred_valid_best = pred_valid.copy()
+                    best_model = ks.models.clone_model(model)
+                    best_model.set_weights(model.get_weights())
+        res = dict(pred_valid=pred_valid_best, 
+                   pred_test=best_model.predict(X_test))
+        return res
 
+class_names = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
 
-df_mindate = get_mindate()
+## from https://www.kaggle.com/tunguz/logistic-regression-with-words-and-char-n-grams
+word_vectorizer = Tfidf(
+    sublinear_tf=True,
+    strip_accents='unicode',
+    analyzer='word',
+    token_pattern=r'\w{1,}',
+    stop_words='english',
+    ngram_range=(1, 2),
+    max_features=20000)
+char_vectorizer = Tfidf(
+    sublinear_tf=True,
+    strip_accents='unicode',
+    analyzer='char',
+    stop_words='english',
+    ngram_range=(2, 6),
+    max_features=30000)
+vectorizer = make_union(
+    on_field('comment_text', word_vectorizer),
+    on_field('comment_text', char_vectorizer),
+    n_jobs=4)
+with timer('process train'):
+    train = pd.read_csv('../input/train.csv')
+    cv = KFold(n_splits=20, shuffle=True, random_state=42)
+    train_ids, valid_ids = next(cv.split(train))
+    train, valid = train.iloc[train_ids], train.iloc[valid_ids]
+    y_train = train[class_names].values
+    y_valid = valid[class_names].values
+    X_train = vectorizer.fit_transform(preprocess(train)).astype(np.float32)
+    print(f'X_train: {X_train.shape} of {X_train.dtype}')
+    del train
+with timer('process valid'):
+    X_valid = vectorizer.transform(preprocess(valid)).astype(np.float32)
+    del valid
+with timer('process test'):
+    test = pd.read_csv('../input/test.csv')
+    X_test = vectorizer.transform(preprocess(test)).astype(np.float32)
+    del test
 
-df_mindate.sort_values(by=['mindate', 'Id'], inplace=True)
+with ThreadPool(processes=4) as pool:
+    Xb_train, Xb_valid, Xb_test = [x.astype(np.bool).astype(np.float32) \
+                          for x in [X_train, X_valid, X_test]]
+    xs = [[Xb_train, Xb_valid, Xb_test], [X_train, X_valid, X_test]]
+    ys = [y_train, y_valid]
+    res_li = pool.map(partial(fit_valid_predict, ys=ys), xs)
+    pred_valid_avg = np.mean([res['pred_valid'] for res in res_li], axis=0)
+    pred_test_avg = np.mean([res['pred_test'] for res in res_li], axis=0)
+    auc_valid = np.mean(roc_auc_score(y_valid, pred_valid_avg, average=None))
+print('Valid auc: {:.6f}'.format(auc_valid))
 
-df_mindate['mindate_id_diff'] = df_mindate.Id.diff()
-
-midr = np.full_like(df_mindate.mindate_id_diff.values, np.nan)
-midr[0:-1] = -df_mindate.mindate_id_diff.values[1:]
-
-df_mindate['mindate_id_diff_reverse'] = midr
-
-def mcc(tp, tn, fp, fn):
-    sup = tp * tn - fp * fn
-    inf = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
-    if inf == 0:
-        return 0
-    else:
-        return sup / np.sqrt(inf)
-
-
-def eval_mcc(y_true, y_prob, show=False):
-    idx = np.argsort(y_prob)
-    y_true_sort = y_true[idx]
-    n = y_true.shape[0]
-    nump = 1.0 * np.sum(y_true)  # number of positive
-    numn = n - nump  # number of negative
-    tp = nump
-    tn = 0.0
-    fp = numn
-    fn = 0.0
-    best_mcc = 0.0
-    best_id = -1
-    mccs = np.zeros(n)
-    for i in range(n):
-        if y_true_sort[i] == 1:
-            tp -= 1.0
-            fn += 1.0
-        else:
-            fp -= 1.0
-            tn += 1.0
-        new_mcc = mcc(tp, tn, fp, fn)
-        mccs[i] = new_mcc
-        if new_mcc >= best_mcc:
-            best_mcc = new_mcc
-            best_id = i
-    if show:
-        best_proba = y_prob[idx[best_id]]
-        y_pred = (y_prob > best_proba).astype(int)
-        return best_proba, best_mcc, y_pred
-    else:
-        return best_mcc
-
-
-def mcc_eval(y_prob, dtrain):
-    y_true = dtrain.get_label()
-    best_mcc = eval_mcc(y_true, y_prob)
-    return 'MCC', best_mcc
-
-
-def create_feature_map(features):
-    outfile = open('xgb.fmap', 'w')
-    for i, feat in enumerate(features):
-        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
-    outfile.close()
-
-
-def get_importance(gbm, features):
-    create_feature_map(features)
-    importance = gbm.get_fscore(fmap='xgb.fmap')
-    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
-    return importance
-
-
-def LeaveOneOut(data1, data2, columnName, useLOO=False):
-    grpOutcomes = data1.groupby(columnName)['Response'].mean().reset_index()
-    grpCount = data1.groupby(columnName)['Response'].count().reset_index()
-    grpOutcomes['cnt'] = grpCount.Response
-    if(useLOO):
-        grpOutcomes = grpOutcomes[grpOutcomes.cnt > 1]
-    grpOutcomes.drop('cnt', inplace=True, axis=1)
-    outcomes = data2['Response'].values
-    x = pd.merge(data2[[columnName, 'Response']], grpOutcomes,
-                 suffixes=('x_', ''),
-                 how='left',
-                 on=columnName,
-                 left_index=True)['Response']
-    if(useLOO):
-        x = ((x*x.shape[0])-outcomes)/(x.shape[0]-1)
-        #  x = x + np.random.normal(0, .01, x.shape[0])
-    return x.fillna(x.mean())
-
-
-def GrabData():
-    directory = '../input/'
-    trainfiles = ['train_categorical.csv',
-                  'train_date.csv',
-                  'train_numeric.csv']
-    testfiles = ['test_categorical.csv',
-                 'test_date.csv',
-                 'test_numeric.csv']
-
-    cols = [['Id',
-             'L1_S24_F1559', 'L3_S32_F3851',
-             'L1_S24_F1827', 'L1_S24_F1582',
-             'L3_S32_F3854', 'L1_S24_F1510',
-             'L1_S24_F1525'],
-            ['Id',
-             'L3_S30_D3496', 'L3_S30_D3506',
-             'L3_S30_D3501', 'L3_S30_D3516',
-             'L3_S30_D3511'],
-            ['Id',
-             'L1_S24_F1846', 'L3_S32_F3850',
-             'L1_S24_F1695', 'L1_S24_F1632',
-             'L3_S33_F3855', 'L1_S24_F1604',
-             'L3_S29_F3407', 'L3_S33_F3865',
-             'L3_S38_F3952', 'L1_S24_F1723',
-             'Response']]
-    traindata = None
-    testdata = None
-    for i, f in enumerate(trainfiles):
-        print(f)
-        subset = None
-        for i, chunk in enumerate(pd.read_csv(directory + f,
-                                              usecols=cols[i],
-                                              chunksize=50000,
-                                              low_memory=False)):
-            print(i)
-            if subset is None:
-                subset = chunk.copy()
-            else:
-                subset = pd.concat([subset, chunk])
-            del chunk
-            gc.collect()
-        if traindata is None:
-            traindata = subset.copy()
-        else:
-            traindata = pd.merge(traindata, subset.copy(), on="Id")
-        del subset
-        gc.collect()
-    del cols[2][-1]  # Test doesn't have response!
-    for i, f in enumerate(testfiles):
-        print(f)
-        subset = None
-        for i, chunk in enumerate(pd.read_csv(directory + f,
-                                              usecols=cols[i],
-                                              chunksize=50000,
-                                              low_memory=False)):
-            print(i)
-            if subset is None:
-                subset = chunk.copy()
-            else:
-                subset = pd.concat([subset, chunk])
-            del chunk
-            gc.collect()
-        if testdata is None:
-            testdata = subset.copy()
-        else:
-            testdata = pd.merge(testdata, subset.copy(), on="Id")
-        del subset
-        gc.collect()
-        
-    traindata = traindata.merge(df_mindate, on='Id')
-    testdata = testdata.merge(df_mindate, on='Id')
-        
-    testdata['Response'] = 0  # Add Dummy Value
-    visibletraindata = traindata[::2]
-    blindtraindata = traindata[1::2]
-    print(blindtraindata.columns)
-    for i in range(2):
-        for col in cols[i][1:]:
-            print(col)
-            blindtraindata.loc[:, col] = LeaveOneOut(visibletraindata,
-                                                     blindtraindata,
-                                                     col, False).values
-            testdata.loc[:, col] = LeaveOneOut(visibletraindata,
-                                               testdata, col, False).values
-    del visibletraindata
-    gc.collect()
-    testdata.drop('Response', inplace=True, axis=1)
-    return blindtraindata, testdata
-
-
-def Train():
-    train, test = GrabData()
-    print('Train:', train.shape)
-    print('Test', test.shape)
-    features = list(train.columns)
-    features.remove('Response')
-    features.remove('Id')
-    print(features)
-    num_rounds = 50
-    params = {}
-    params['objective'] = "binary:logistic"
-    params['eta'] = 0.021
-    params['max_depth'] = 7
-    params['colsample_bytree'] = 0.82
-    params['min_child_weight'] = 3
-    params['base_score'] = 0.005
-    params['silent'] = True
-
-    print('Fitting')
-    trainpredictions = None
-    testpredictions = None
-
-    dvisibletrain = \
-        xgb.DMatrix(train[features],
-                    train.Response,
-                    silent=True)
-    dtest = \
-        xgb.DMatrix(test[features],
-                    silent=True)
-
-    folds = 1
-    for i in range(folds):
-        print('Fold:', i)
-        params['seed'] = i
-        watchlist = [(dvisibletrain, 'train'), (dvisibletrain, 'val')]
-        clf = xgb.train(params, dvisibletrain,
-                        num_boost_round=num_rounds,
-                        evals=watchlist,
-                        early_stopping_rounds=20,
-                        feval=mcc_eval,
-                        maximize=True
-                        )
-        limit = clf.best_iteration+1
-        # limit = clf.best_ntree_limit
-        predictions = \
-            clf.predict(dvisibletrain, ntree_limit=limit)
-
-        best_proba, best_mcc, y_pred = eval_mcc(train.Response,
-                                                predictions,
-                                                True)
-        print('tree limit:', limit)
-        print('mcc:', best_mcc)
-        print(matthews_corrcoef(train.Response,
-                                y_pred))
-        if(trainpredictions is None):
-            trainpredictions = predictions
-        else:
-            trainpredictions += predictions
-        predictions = clf.predict(dtest, ntree_limit=limit)
-        if(testpredictions is None):
-            testpredictions = predictions
-        else:
-            testpredictions += predictions
-        imp = get_importance(clf, features)
-        print('Importance array: ', imp)
-
-    best_proba, best_mcc, y_pred = eval_mcc(train.Response,
-                                            trainpredictions/folds,
-                                            True)
-    print(matthews_corrcoef(train.Response,
-                            y_pred))
-
-    submission = pd.DataFrame({"Id": train.Id,
-                               "Prediction": trainpredictions/folds,
-                               "Response": train.Response})
-    submission[['Id',
-                'Prediction',
-                'Response']].to_csv('rawtrainxgbsubmission'+str(folds)+'.csv',
-                                    index=False)
-
-    submission = pd.DataFrame({"Id": test.Id.values,
-                               "Response": testpredictions/folds})
-    submission[['Id', 'Response']].to_csv('rawxgbsubmission'+str(folds)+'.csv',
-                                          index=False)
-    y_pred = (testpredictions/folds > .08).astype(int)
-    submission = pd.DataFrame({"Id": test.Id.values,
-                               "Response": y_pred})
-    submission[['Id', 'Response']].to_csv('xgbsubmission'+str(folds)+'.csv',
-                                          index=False)
-
-if __name__ == "__main__":
-    print('Started')
-    Train()
-    print('Finished')
-
+sub = pd.read_csv('../input/sample_submission.csv')
+sub[class_names] = pred_test_avg.copy()
+sub.to_csv('auc-valid_{:.6f}.csv'.format(auc_valid), index=False)

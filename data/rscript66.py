@@ -1,67 +1,149 @@
-import numpy as np
-import pandas as pd
-from sklearn.metrics import mean_absolute_error
+# coding: utf-8
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-data_path = '../input/'
-train = pd.read_csv(data_path + 'train_2016.csv')
-ss = pd.read_csv(data_path + 'sample_submission.csv')
+import datetime
+from heapq import nlargest
+from operator import itemgetter
+from collections import defaultdict
 
-subm = ss.copy()
-n = 4
 
-# Simple mean
-mu = round(train.logerror.mean(), n)
-ans = [mu] * len(train['logerror'])
-errs = mean_absolute_error(train['logerror'].values, ans)
-print('mu = ' + str(mu) + ', mae = ' + str(errs) + ', LB = 0.0652995')
+def run_solution():
+    print('Preparing arrays...')
+    f = open("../input/train.csv", "r")
+    f.readline()
+    best_hotels_od_ulc = defaultdict(lambda: defaultdict(int))
+    best_hotels_search_dest = defaultdict(lambda: defaultdict(int))
+    best_hotels_search_dest1 = defaultdict(lambda: defaultdict(int))
+    best_hotel_country = defaultdict(lambda: defaultdict(int))
+    popular_hotel_cluster = defaultdict(int)
+    total = 0
 
-# subm['201610'] = mu
-# subm['201611'] = mu
-# subm['201612'] = mu
+    # Calc counts
+    while 1:
+        line = f.readline().strip()
+        total += 1
 
-# subm['201710'] = mu
-# subm['201711'] = mu
-# subm['201712'] = mu
+        if total % 10000000 == 0:
+            print('Read {} lines...'.format(total))
 
-# Brute force
-start_val = -0.02
-step = 0.0001
-iters = 400
+        if line == '':
+            break
 
-mu_vals = np.array([start_val + step*i for i in range(iters)])
-errs = np.empty(len(mu_vals))
-for i, mu in enumerate(mu_vals):
-    ans = [mu] * len(train['logerror'])
-    errs[i] = mean_absolute_error(train['logerror'].values, ans)
-mu = mu_vals[np.argmin(errs)]
-print('mu = ' + str(mu) + ', mae = ' + str(np.min(errs)) + ', LB = 0.0656439')
+        arr = line.split(",")
+        book_year = int(arr[0][:4])
+        user_location_city = arr[5]
+        orig_destination_distance = arr[6]
+        srch_destination_id = arr[16]
+        is_booking = int(arr[18])
+        hotel_country = arr[21]
+        hotel_market = arr[22]
+        hotel_cluster = arr[23]
 
-# subm['201610'] = mu
-# subm['201611'] = mu
-# subm['201612'] = mu
+        append_1 = 3 + 17*is_booking
+        append_2 = 1 + 5*is_booking
 
-# subm['201710'] = mu
-# subm['201711'] = mu
-# subm['201712'] = mu
+        if user_location_city != '' and orig_destination_distance != '':
+            best_hotels_od_ulc[(user_location_city, orig_destination_distance)][hotel_cluster] += 1
 
-# Month-specific brute force
-train['month'] = train.transactiondate.apply(lambda x: int(x.split('-')[1]))
-mu_vals = np.array([start_val + step*i for i in range(iters)])
-mu_buf = np.zeros(3)
-for m_i, m in enumerate(range(10, 13)):
-    errs = np.empty(len(mu_vals))
-    for i, mu in enumerate(mu_vals):
-        ans = [mu] * len(train[train['month'] >= m]['logerror'].values)
-        errs[i] = mean_absolute_error(train[train['month'] >= m]['logerror'].values, ans)
-    mu_buf[m_i] = mu_vals[np.argmin(errs)]
-print('mu = ' + str(mu_buf) + ', LB = 0.0653038')
+        if srch_destination_id != '' and hotel_country != '' and hotel_market != '' and book_year == 2014:
+            best_hotels_search_dest[(srch_destination_id, hotel_country, hotel_market)][hotel_cluster] += append_1
+        
+        if srch_destination_id != '':
+            best_hotels_search_dest1[srch_destination_id][hotel_cluster] += append_1
+        
+        if hotel_country != '':
+            best_hotel_country[hotel_country][hotel_cluster] += append_2
+        
+        popular_hotel_cluster[hotel_cluster] += 1
+    
+    f.close()
 
-subm['201610'] = mu_buf[0]
-subm['201611'] = mu_buf[1]
-subm['201612'] = mu_buf[2]
+    print('Generate submission...')
+    now = datetime.datetime.now()
+    path = 'submission_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    out = open(path, "w")
+    f = open("../input/test.csv", "r")
+    f.readline()
+    total = 0
+    out.write("id,hotel_cluster\n")
+    topclasters = nlargest(5, sorted(popular_hotel_cluster.items()), key=itemgetter(1))
 
-subm['201710'] = mu_buf[2]
-subm['201711'] = mu_buf[2]
-subm['201712'] = mu_buf[2]
+    while 1:
+        line = f.readline().strip()
+        total += 1
 
-subm.to_csv('submission.csv', index=False, float_format=('%.' + str(n) + 'f'))
+        if total % 1000000 == 0:
+            print('Write {} lines...'.format(total))
+
+        if line == '':
+            break
+
+        arr = line.split(",")
+        id = arr[0]
+        user_location_city = arr[6]
+        orig_destination_distance = arr[7]
+        srch_destination_id = arr[17]
+        hotel_country = arr[20]
+        hotel_market = arr[21]
+
+        out.write(str(id) + ',')
+        filled = []
+
+        s1 = (user_location_city, orig_destination_distance)
+        if s1 in best_hotels_od_ulc:
+            d = best_hotels_od_ulc[s1]
+            topitems = nlargest(5, sorted(d.items()), key=itemgetter(1))
+            for i in range(len(topitems)):
+                if topitems[i][0] in filled:
+                    continue
+                if len(filled) == 5:
+                    break
+                out.write(' ' + topitems[i][0])
+                filled.append(topitems[i][0])
+
+        s2 = (srch_destination_id, hotel_country, hotel_market)
+        if s2 in best_hotels_search_dest:
+            d = best_hotels_search_dest[s2]
+            topitems = nlargest(5, d.items(), key=itemgetter(1))
+            for i in range(len(topitems)):
+                if topitems[i][0] in filled:
+                    continue
+                if len(filled) == 5:
+                    break
+                out.write(' ' + topitems[i][0])
+                filled.append(topitems[i][0])
+        elif srch_destination_id in best_hotels_search_dest1:
+            d = best_hotels_search_dest1[srch_destination_id]
+            topitems = nlargest(5, d.items(), key=itemgetter(1))
+            for i in range(len(topitems)):
+                if topitems[i][0] in filled:
+                    continue
+                if len(filled) == 5:
+                    break
+                out.write(' ' + topitems[i][0])
+                filled.append(topitems[i][0])
+
+        if hotel_country in best_hotel_country:
+            d = best_hotel_country[hotel_country]
+            topitems = nlargest(5, d.items(), key=itemgetter(1))
+            for i in range(len(topitems)):
+                if topitems[i][0] in filled:
+                    continue
+                if len(filled) == 5:
+                    break
+                out.write(' ' + topitems[i][0])
+                filled.append(topitems[i][0])
+
+        for i in range(len(topclasters)):
+            if topclasters[i][0] in filled:
+                continue
+            if len(filled) == 5:
+                break
+            out.write(' ' + topclasters[i][0])
+            filled.append(topclasters[i][0])
+
+        out.write("\n")
+    out.close()
+    print('Completed!')
+
+run_solution()

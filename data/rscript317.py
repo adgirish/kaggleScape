@@ -1,87 +1,93 @@
-import pandas as pd
+import kagglegym
 import numpy as np
+import pandas as pd
+# from sklearn import linear_model as lm
+from sklearn.linear_model import Ridge
 
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import roc_auc_score
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.feature_selection import SelectFromModel
+target = 'y'
 
-import xgboost as xgb
-import matplotlib.pyplot as plt
+# The "environment" is our interface for code competitions
+env = kagglegym.make()
 
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
+# We get our initial observation by calling "reset"
+observation = env.reset()
 
-# clean and split data
+# Get the train dataframe
+train = observation.train
+mean_values = train.mean(axis=0)
+train.fillna(mean_values, inplace=True)
 
-# remove constant columns (std = 0)
-remove = []
-for col in train.columns:
-    if train[col].std() == 0:
-        remove.append(col)
+# cols_to_use = ['technical_30', 'technical_20', 'fundamental_11']
 
-train.drop(remove, axis=1, inplace=True)
-test.drop(remove, axis=1, inplace=True)
+# Observed with histograns:
+low_y_cut = -0.086093
+high_y_cut = 0.093497
 
-# remove duplicated columns
-remove = []
-cols = train.columns
-for i in range(len(cols)-1):
-    v = train[cols[i]].values
-    for j in range(i+1,len(cols)):
-        if np.array_equal(v,train[cols[j]].values):
-            remove.append(cols[j])
+y_is_above_cut = (train.y > high_y_cut)
+y_is_below_cut = (train.y < low_y_cut)
+y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)
 
-train.drop(remove, axis=1, inplace=True)
-test.drop(remove, axis=1, inplace=True)
+ridge1 = Ridge() ## f11 only
+ridge2 = Ridge() ## t30 and f11
+ridge3 = Ridge() ## t20 and f11
+ridge4 = Ridge() ## t30, t20, f11
 
-# split data into train and test
-test_id = test.ID
-test = test.drop(["ID"],axis=1)
+train = train.loc[y_is_within_cut]
 
-X = train.drop(["TARGET","ID"],axis=1)
-y = train.TARGET.values
+index1 = train.query("technical_30 == 0.0 & technical_20 == 0.0").index
+index2 = train.query("technical_30 != 0.0 & technical_20 == 0.0").index
+index3 = train.query("technical_30 == 0.0 & technical_20 != 0.0").index
+index4 = train.query("technical_30 != 0.0 & technical_20 != 0.0").index
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=1729)
-print(X_train.shape, X_test.shape, test.shape)
-
-## # Feature selection
-clf = ExtraTreesClassifier(random_state=1729)
-selector = clf.fit(X_train, y_train)
-
-# plot most important features
-feat_imp = pd.Series(clf.feature_importances_, index = X_train.columns.values).sort_values(ascending=False)
-feat_imp[:40].plot(kind='bar', title='Feature Importances according to ExtraTreesClassifier', figsize=(12, 8))
-plt.ylabel('Feature Importance Score')
-plt.subplots_adjust(bottom=0.3)
-plt.savefig('1.png')
-plt.show()
-
-# clf.feature_importances_ 
-fs = SelectFromModel(selector, prefit=True)
-
-X_train = fs.transform(X_train)
-X_test = fs.transform(X_test)
-test = fs.transform(test)
-
-print(X_train.shape, X_test.shape, test.shape)
-
-## # Train Model
-# classifier from xgboost
-m2_xgb = xgb.XGBClassifier(n_estimators=110, nthread=-1, max_depth = 4, \
-seed=1729)
-m2_xgb.fit(X_train, y_train, eval_metric="auc", verbose = False,
-           eval_set=[(X_test, y_test)])
-
-# calculate the auc score
-print("Roc AUC: ", roc_auc_score(y_test, m2_xgb.predict_proba(X_test)[:,1],
-              average='macro'))
-              
-## # Submission
-probs = m2_xgb.predict_proba(test)
-
-submission = pd.DataFrame({"ID":test_id, "TARGET": probs[:,1]})
-submission.to_csv("submission.csv", index=False)
+ridge1.fit(train.loc[index1, ["fundamental_11"]].values, train.loc[index1].y)
+ridge2.fit(train.loc[index2, ['technical_30', 'fundamental_11']].values, train.loc[index2].y)
+ridge3.fit(train.loc[index3, ['technical_20', 'fundamental_11']].values, train.loc[index3].y)
+ridge4.fit(train.loc[index4, ['technical_30', 'technical_20', 'fundamental_11']].values, train.loc[index4].y)
 
 
+# model = Ridge()
+# model.fit(np.array(train.loc[y_is_within_cut, cols_to_use].values), train.loc[y_is_within_cut, target])
 
+# ymean_dict = dict(train.groupby(["id"])["y"].mean())
+ymedian_dict = dict(train.groupby(["id"])["y"].median())
+
+
+def get_weighted_y(series):
+    id, y = series["id"], series["y"]
+    # return 0.95 * y + 0.05 * ymean_dict[id] if id in ymean_dict else y
+    return 0.95 * y + 0.05 * ymedian_dict[id] if id in ymedian_dict else y
+
+
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    # test_x = np.array(observation.features[cols_to_use].values)
+    # observation.target.y = model.predict(test_x).clip(low_y_cut, high_y_cut)
+    
+    index1 = observation.features.query("technical_30 == 0.0 & technical_20 == 0.0").index
+    index2 = observation.features.query("technical_30 != 0.0 & technical_20 == 0.0").index
+    index3 = observation.features.query("technical_30 == 0.0 & technical_20 != 0.0").index
+    index4 = observation.features.query("technical_30 != 0.0 & technical_20 != 0.0").index
+    
+    if len(index1) > 0:
+        observation.target.loc[index1, 'y'] = ridge1.predict(observation.features.loc[index1, ["fundamental_11"]].values).clip(low_y_cut, high_y_cut)
+    if len(index2) > 0:
+        observation.target.loc[index2, 'y'] = ridge2.predict(observation.features.loc[index2, ['technical_30', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
+    if len(index3) > 0:
+        observation.target.loc[index3, 'y'] = ridge3.predict(observation.features.loc[index3, ['technical_20', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
+    if len(index4) > 0:
+        observation.target.loc[index4, 'y'] = ridge4.predict(observation.features.loc[index4, ['technical_30', 'technical_20', 'fundamental_11']].values).clip(low_y_cut, high_y_cut)
+
+    ## weighted y using average value
+    observation.target.y = observation.target.apply(get_weighted_y, axis = 1)
+    
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+    
+print(info)

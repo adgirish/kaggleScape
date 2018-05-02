@@ -1,733 +1,768 @@
 
 # coding: utf-8
 
-# # Introduction
-# In this competition, we are challenged to build a model that predicts the total ride duration of taxi trips in New York City. There are quite a few EDA kernels and some of them are excellent. Here I try to focus more on the feature extraction. In this Kernel you could find a few general kaggle related tips and a some modeling improvement ideas as well.
+# Thank you for opening this script!
 # 
-# **My main goal is to craft the best possible feature set for XGB with the given Kernel limitations.**
+# I have made all efforts to document each and every step involved in the prediction process so that this notebook acts as a good starting point for new Kagglers and new machine learning enthusiasts.
 # 
-# My current best submission is still based on this script. My best single model with these features reached LB 0.371. Linear combination of several models gave LB 0.368. Stacking added marginal improvement to 0.367.
+# Please **upvote** this kernel so that it reaches the top of the chart and is easily locatable by new users. Your comments on how we can improve this kernel is welcome. Thanks.
 # 
-# Please feel free to fork and use the features and search better parameters.
+# My other exploratory studies can be accessed here :
+# https://www.kaggle.com/sharmasanthosh/kernels
+# ***
+# ## Layout of the document
+# The prediction process is divided into two notebooks.
 # 
-# With this simple notebook we 
+# This notebook : Covers data statistics, data visualization, and feature selection
 # 
-#  - Explore the dataset
-#  - Extract 59 useful features
-#  - Create simple 80-20 train - validation set
-#  - Train XGBregressor
-#  - Analyze Feature Importance
-#  - Score test set and submit
-#  - Check XGB parameter search result for further improvements
+# Part 2 : Covers prediction using various algorithms : https://www.kaggle.com/sharmasanthosh/forest-cover-type-prediction/exploratory-study-of-ml-algorithms
+# ***
+# ## Data statistics
+# * Shape
+# * Datatypes
+# * Description
+# * Skew
+# * Class distribution
 # 
-# **References**
+# ## Data Interaction
+# * Correlation
+# * Scatter plot
 # 
-#  - I used a few feature extraction ideas from Nir Malbin's [Kernel](https://www.kaggle.com/donniedarko/darktaxi-tripdurationprediction-lb-0-385)
-#  - Thanks for oscarleo for this external [dataset](https://www.kaggle.com/oscarleo/new-york-city-taxi-with-osrm)
+# ## Data Visualization
+# * Box and density plots
+# * Grouping of one hot encoded attributes
 # 
+# ## Data Cleaning
+# * Remove unnecessary columns
 # 
+# ## Data Preparation
+# * Original
+# * Delete rows or impute values in case of missing
+# * StandardScaler
+# * MinMaxScaler
+# * Normalizer
+# 
+# ## Feature selection
+# * ExtraTreesClassifier
+# * GradientBoostingClassifier
+# * RandomForestClassifier
+# * XGBClassifier
+# * RFE
+# * SelectPercentile
+# * PCA
+# * PCA + SelectPercentile
+# * Feature Engineering
+# 
+# ## Evaluation, prediction, and analysis
+# * LDA (Linear algo)
+# * LR (Linear algo)
+# * KNN (Non-linear algo)
+# * CART (Non-linear algo)
+# * Naive Bayes (Non-linear algo)
+# * SVC (Non-linear algo)
+# * Bagged Decision Trees (Bagging)
+# * Random Forest (Bagging)
+# * Extra Trees (Bagging)
+# * AdaBoost (Boosting)
+# * Stochastic Gradient Boosting (Boosting)
+# * Voting Classifier (Voting)
+# * MLP (Deep Learning)
+# * XGBoost
+# 
+# ***
+
+# ## Load raw data:
+# 
+# Information about all the attributes can be found here:
+# 
+# https://www.kaggle.com/c/forest-cover-type-prediction/data
+# 
+# Learning: 
+# We need to predict the 'Cover_Type' based on the other attributes. Hence, this is a classification problem where the target could belong to any of the seven classes.
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from datetime import timedelta
-import datetime as dt
-import matplotlib.pyplot as plt
-plt.rcParams['figure.figsize'] = [16, 10]
-import seaborn as sns
-import xgboost as xgb
-from sklearn.model_selection import train_test_split
-from sklearn.decomposition import PCA
-from sklearn.cluster import MiniBatchKMeans
+# Supress unnecessary warnings so that presentation looks clean
 import warnings
 warnings.filterwarnings('ignore')
 
+# Read raw data from the file
 
-# # First week progress
+import pandas #provides data structures to quickly analyze data
+#Since this code runs on Kaggle server, train data can be accessed directly in the 'input' folder
+dataset = pandas.read_csv("../input/train.csv") 
+
+#Drop the first column 'Id' since it just has serial numbers. Not useful in the prediction process.
+dataset = dataset.iloc[:,1:]
+
+
+# ## Data statistics
+# * Shape
 
 # In[ ]:
 
 
-beluga = pd.DataFrame({'since_start_hour': [8.0, 8.0, 20.0, 28.0, 37.0, 45.0, 85.0, 85.0, 100.0, 134.0, 134.0, 143.0, 148.0],
-                       'Score': [ 0.400,  0.398,  0.393,  0.390,  0.383,  0.380,  0.379,  0.377,  0.376,  0.376,  0.375,  0.371,  0.368]})
-others = pd.DataFrame({'since_start_hour': [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,68,69,70,71,72,73,74,75,76,77,78,79,80,81,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148],
-                        'BestScore': [.452,.452,.452,.452,.452,.452,.421,.421,.421,.406,.398,.398,.398,.398,.394,.394,.394,.394,.391,.391,.390,.390,.390,.390,.389,.389,.389,.389,.389,.389,.389,.385,.385,.385,.385,.385,.385,.385,.385,.385,.385,.385,.385,.383,.383,.383,.383,.383,.383,.383,.383,.383,.383,.383,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.378,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.377,.373,.373,.373]}) 
-with plt.xkcd():
-    # This figure will be in XKCD-style
+# Size of the dataframe
+
+print(dataset.shape)
+
+# We can see that there are 15120 instances having 55 attributes
+
+#Learning : Data is loaded successfully as dimensions match the data description
+
+
+# ## Data statistics
+# * Datatypes
+
+# In[ ]:
+
+
+# Datatypes of the attributes
+
+print(dataset.dtypes)
+
+# Learning : Data types of all attributes has been inferred as int64
+
+
+# ## Data statistics
+# * Description
+
+# In[ ]:
+
+
+# Statistical description
+
+pandas.set_option('display.max_columns', None)
+print(dataset.describe())
+
+# Learning :
+# No attribute is missing as count is 15120 for all attributes. Hence, all rows can be used
+# Negative value(s) present in Vertical_Distance_To_Hydrology. Hence, some tests such as chi-sq cant be used.
+# Wilderness_Area and Soil_Type are one hot encoded. Hence, they could be converted back for some analysis
+# Attributes Soil_Type7 and Soil_Type15 can be removed as they are constant
+# Scales are not the same for all. Hence, rescaling and standardization may be necessary for some algos
+
+
+# ## Data statistics
+# * Skew
+
+# In[ ]:
+
+
+# Skewness of the distribution
+
+print(dataset.skew())
+
+# Values close to 0 show less skew
+# Several attributes in Soil_Type show a large skew. Hence, some algos may benefit if skew is corrected
+
+
+# ## Data statistics
+# * Class distribution
+
+# In[ ]:
+
+
+# Number of instances belonging to each class
+
+dataset.groupby('Cover_Type').size()
+
+# We see that all classes have an equal presence. No class re-balancing is necessary
+
+
+# ## Data Interaction
+# * Correlation
+
+# In[ ]:
+
+
+import numpy
+
+# Correlation tells relation between two attributes.
+# Correlation requires continous data. Hence, ignore Wilderness_Area and Soil_Type as they are binary
+
+#sets the number of features considered
+size = 10 
+
+#create a dataframe with only 'size' features
+data=dataset.iloc[:,:size] 
+
+#get the names of all the columns
+cols=data.columns 
+
+# Calculates pearson co-efficient for all combinations
+data_corr = data.corr()
+
+# Set the threshold to select only only highly correlated attributes
+threshold = 0.5
+
+# List of pairs along with correlation above threshold
+corr_list = []
+
+#Search for the highly correlated pairs
+for i in range(0,size): #for 'size' features
+    for j in range(i+1,size): #avoid repetition
+        if (data_corr.iloc[i,j] >= threshold and data_corr.iloc[i,j] < 1) or (data_corr.iloc[i,j] < 0 and data_corr.iloc[i,j] <= -threshold):
+            corr_list.append([data_corr.iloc[i,j],i,j]) #store correlation and columns index
+
+#Sort to show higher ones first            
+s_corr_list = sorted(corr_list,key=lambda x: -abs(x[0]))
+
+#Print correlations and column names
+for v,i,j in s_corr_list:
+    print ("%s and %s = %.2f" % (cols[i],cols[j],v))
+
+# Strong correlation is observed between the following pairs
+# This represents an opportunity to reduce the feature set through transformations such as PCA
+
+
+# ## Data Interaction
+# * Scatter plot
+
+# In[ ]:
+
+
+#import plotting libraries
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Scatter plot of only the highly correlated pairs
+for v,i,j in s_corr_list:
+    sns.pairplot(dataset, hue="Cover_Type", size=6, x_vars=cols[i],y_vars=cols[j] )
+    plt.show()
+
+#The plots show to which class does a point belong to. The class distribution overlaps in the plots.    
+#Hillshade patterns give a nice ellipsoid patterns with each other
+#Aspect and Hillshades attributes form a sigmoid pattern
+#Horizontal and vertical distance to hydrology give an almost linear pattern.
+
+
+# ## Data Visualization
+# * Box and density plots
+
+# In[ ]:
+
+
+# We will visualize all the attributes using Violin Plot - a combination of box and density plots
+
+#names of all the attributes 
+cols = dataset.columns
+
+#number of attributes (exclude target)
+size = len(cols)-1
+
+#x-axis has target attribute to distinguish between classes
+x = cols[size]
+
+#y-axis shows values of an attribute
+y = cols[0:size]
+
+#Plot violin for all attributes
+for i in range(0,size):
+    sns.violinplot(data=dataset,x=x,y=y[i])  
+    plt.show()
+
+#Elevation is has a separate distribution for most classes. Highly correlated with the target and hence an important attribute
+#Aspect contains a couple of normal distribution for several classes
+#Horizontal distance to road and hydrology have similar distribution
+#Hillshade 9am and 12pm display left skew
+#Hillshade 3pm is normal
+#Lots of 0s in vertical distance to hydrology
+#Wilderness_Area3 gives no class distinction. As values are not present, others gives some scope to distinguish
+#Soil_Type, 1,5,8,9,12,14,18-22, 25-30 and 35-40 offer class distinction as values are not present for many classes
+
+
+# ## Data Visualization
+# * Grouping of One hot encoded attributes
+
+# In[ ]:
+
+
+# Group one-hot encoded variables of a category into one single variable
+
+#names of all the columns
+cols = dataset.columns
+
+#number of rows=r , number of columns=c
+r,c = dataset.shape
+
+#Create a new dataframe with r rows, one column for each encoded category, and target in the end
+data = pandas.DataFrame(index=numpy.arange(0, r),columns=['Wilderness_Area','Soil_Type','Cover_Type'])
+
+#Make an entry in 'data' for each r as category_id, target value
+for i in range(0,r):
+    w=0;
+    s=0;
+    # Category1 range
+    for j in range(10,14):
+        if (dataset.iloc[i,j] == 1):
+            w=j-9  #category class
+            break
+    # Category2 range        
+    for k in range(14,54):
+        if (dataset.iloc[i,k] == 1):
+            s=k-13 #category class
+            break
+    #Make an entry in 'data' for each r as category_id, target value        
+    data.iloc[i]=[w,s,dataset.iloc[i,c-1]]
+
+#Plot for Category1    
+sns.countplot(x="Wilderness_Area", hue="Cover_Type", data=data)
+plt.show()
+#Plot for Category2
+plt.rc("figure", figsize=(25, 10))
+sns.countplot(x="Soil_Type", hue="Cover_Type", data=data)
+plt.show()
+
+#(right-click and open the image in a new window for larger size)
+#WildernessArea_4 has a lot of presence for cover_type 4. Good class distinction
+#WildernessArea_3 has not much class distinction
+#SoilType 1-6,10-14,17, 22-23, 29-33,35,38-40 offer lot of class distinction as counts for some are very high
+
+
+# ## Data Cleaning
+# * Remove unnecessary columns
+
+# In[ ]:
+
+
+#Removal list initialize
+rem = []
+
+#Add constant columns as they don't help in prediction process
+for c in dataset.columns:
+    if dataset[c].std() == 0: #standard deviation is zero
+        rem.append(c)
+
+#drop the columns        
+dataset.drop(rem,axis=1,inplace=True)
+
+print(rem)
+
+#Following columns are dropped
+
+
+# ## Data Preparation
+# * Original
+# * Delete rows or impute values in case of missing
+# * StandardScaler
+# * MinMaxScaler
+# * Normalizer
+
+# In[ ]:
+
+
+#get the number of rows and columns
+r, c = dataset.shape
+
+#get the list of columns
+cols = dataset.columns
+#create an array which has indexes of columns
+i_cols = []
+for i in range(0,c-1):
+    i_cols.append(i)
+#array of importance rank of all features  
+ranks = []
+
+#Extract only the values
+array = dataset.values
+
+#Y is the target column, X has the rest
+X = array[:,0:(c-1)]
+Y = array[:,(c-1)]
+
+#Validation chunk size
+val_size = 0.1
+
+#Use a common seed in all experiments so that same chunk is used for validation
+seed = 0
+
+#Split the data into chunks
+from sklearn import cross_validation
+X_train, X_val, Y_train, Y_val = cross_validation.train_test_split(X, Y, test_size=val_size, random_state=seed)
+
+#Import libraries for data transformations
+from sklearn.preprocessing import Imputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import Normalizer
+
+#All features
+X_all = []
+#Additionally we will make a list of subsets
+X_all_add =[]
+
+#columns to be dropped
+rem = []
+#indexes of columns to be dropped
+i_rem = []
+
+#List of combinations
+comb = []
+comb.append("All+1.0")
+
+#Add this version of X to the list 
+X_all.append(['Orig','All', X_train,X_val,1.0,cols[:c-1],rem,ranks,i_cols,i_rem])
+
+#point where categorical data begins
+size=10
+
+#Standardized
+#Apply transform only for non-categorical data
+X_temp = StandardScaler().fit_transform(X_train[:,0:size])
+X_val_temp = StandardScaler().fit_transform(X_val[:,0:size])
+#Concatenate non-categorical data and categorical
+X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
+X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
+#Add this version of X to the list 
+X_all.append(['StdSca','All', X_con,X_val_con,1.0,cols,rem,ranks,i_cols,i_rem])
+
+#MinMax
+#Apply transform only for non-categorical data
+X_temp = MinMaxScaler().fit_transform(X_train[:,0:size])
+X_val_temp = MinMaxScaler().fit_transform(X_val[:,0:size])
+#Concatenate non-categorical data and categorical
+X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
+X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
+#Add this version of X to the list 
+X_all.append(['MinMax', 'All', X_con,X_val_con,1.0,cols,rem,ranks,i_cols,i_rem])
+
+#Normalize
+#Apply transform only for non-categorical data
+X_temp = Normalizer().fit_transform(X_train[:,0:size])
+X_val_temp = Normalizer().fit_transform(X_val[:,0:size])
+#Concatenate non-categorical data and categorical
+X_con = numpy.concatenate((X_temp,X_train[:,size:]),axis=1)
+X_val_con = numpy.concatenate((X_val_temp,X_val[:,size:]),axis=1)
+#Add this version of X to the list 
+X_all.append(['Norm', 'All', X_con,X_val_con,1.0,cols,rem,ranks,i_cols,i_rem])
+
+#Impute
+#Imputer is not used as no data is missing
+
+#List of transformations
+trans_list = []
+
+for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all:
+    trans_list.append(trans)
+
+
+# ## Feature selection
+# * ExtraTreesClassifier
+# * GradientBoostingClassifier
+# * RandomForestClassifier
+# * XGBoostClassifier
+
+# In[ ]:
+
+
+#Select top 75%,50%,25%
+ratio_list = [0.75,0.50,0.25]
+
+
+# In[ ]:
+
+
+#List of feature selection models
+feat = []
+
+#List of names of feature selection models
+feat_list =[]
+
+#Import the libraries
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+
+#Add ExtraTreeClassifiers to the list
+n = 'ExTree'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,ExtraTreesClassifier(n_estimators=c-1,max_features=val,n_jobs=-1,random_state=seed)])      
+
+#Add GradientBoostingClassifiers to the list 
+n = 'GraBst'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,GradientBoostingClassifier(n_estimators=c-1,max_features=val,random_state=seed)])   
+
+#Add RandomForestClassifiers to the list 
+n = 'RndFst'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,RandomForestClassifier(n_estimators=c-1,max_features=val,n_jobs=-1,random_state=seed)])   
+
+#Add XGBClassifier to the list 
+n = 'XGB'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,XGBClassifier(n_estimators=c-1,seed=seed)])   
+        
+#For all transformations of X
+for trans,s, X, X_val, d, cols, rem, ra, i_cols, i_rem in X_all:
+    #For all feature selection models
+    for name,v, model in feat:
+        #Train the model against Y
+        model.fit(X,Y_train)
+        #Combine importance and index of the column in the array joined
+        joined = []
+        for i, pred in enumerate(list(model.feature_importances_)):
+            joined.append([i,cols[i],pred])
+        #Sort in descending order    
+        joined_sorted = sorted(joined, key=lambda x: -x[2])
+        #Starting point of the columns to be dropped
+        rem_start = int((v*(c-1)))
+        #List of names of columns selected
+        cols_list = []
+        #Indexes of columns selected
+        i_cols_list = []
+        #Ranking of all the columns
+        rank_list =[]
+        #List of columns not selected
+        rem_list = []
+        #Indexes of columns not selected
+        i_rem_list = []
+        #Split the array. Store selected columns in cols_list and removed in rem_list
+        for j, (i, col, x) in enumerate(list(joined_sorted)):
+            #Store the rank
+            rank_list.append([i,j])
+            #Store selected columns in cols_list and indexes in i_cols_list
+            if(j < rem_start):
+                cols_list.append(col)
+                i_cols_list.append(i)
+            #Store not selected columns in rem_list and indexes in i_rem_list    
+            else:
+                rem_list.append(col)
+                i_rem_list.append(i)    
+        #Sort the rank_list and store only the ranks. Drop the index 
+        #Append model name, array, columns selected and columns to be removed to the additional list        
+        X_all_add.append([trans,name,X,X_val,v,cols_list,rem_list,[x[1] for x in sorted(rank_list,key=lambda x:x[0])],i_cols_list,i_rem_list])    
+
+#Set figure size
+plt.rc("figure", figsize=(25, 10))
+
+#Plot a graph for different feature selectors        
+for f_name in feat_list:
+    #Array to store the list of combinations
+    leg=[]
     fig, ax = plt.subplots()
-    ax.plot(others.since_start_hour.values, others.BestScore.values, 'b', alpha=0.8, lw=5, label='others')
-    ax.plot(beluga.since_start_hour.values, beluga.Score.values, 'k', alpha=0.8, lw=5, label='beluga')
-    ax.set_ylim(0.36, 0.4)
-    ax.legend(loc=0)
-    ax.set_xlabel('hours since start')
-    ax.set_ylabel('RMSLE')
-    ax.set_title('Race for the top')
+    #Plot each combination
+    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
+        if(name==f_name):
+            plt.plot(rank_list)
+            leg.append(trans+"+"+name+"+%s"% v)
+    #Set the tick names to names of columns
+    ax.set_xticks(range(c-1))
+    ax.set_xticklabels(cols[:c-1],rotation='vertical')
+    #Display the plot
+    plt.legend(leg,loc='best')    
+    #Plot the rankings of all the features for all combinations
     plt.show()
 
 
-# # Data understanding
+# ## Feature selection
+# * RFE
 
 # In[ ]:
 
 
-np.random.seed(1987)
-N = 100000 # number of sample rows in plots
-t0 = dt.datetime.now()
-train = pd.read_csv('../input/nyc-taxi-trip-duration/train.csv')
-test = pd.read_csv('../input/nyc-taxi-trip-duration/test.csv')
-sample_submission = pd.read_csv('../input/nyc-taxi-trip-duration/sample_submission.csv')
-
-
-# Let's check the data files! According the data description we should find the following columns:
-# 
-#  - **id** - a unique identifier for each trip
-#  - **vendor_id** - a code indicating the provider associated with the trip record
-#  - **pickup_datetime** - date and time when the meter was engaged
-#  - **dropoff_datetime** - date and time when the meter was disengaged
-#  - **passenger_count** - the number of passengers in the vehicle (driver entered value)
-#  - **pickup_longitude** - the longitude where the meter was engaged
-#  - **pickup_latitude** - the latitude where the meter was engaged
-#  - **dropoff_longitude** - the longitude where the meter was disengaged
-#  - **dropoff_latitude** - the latitude where the meter was disengaged
-#  - **store_and_fwd_flag** - This flag indicates whether the trip record was held in vehicle memory before sending to the vendor because the vehicle did not have a connection to the server (Y=store and forward; N=not a store and forward trip)
-#  - **trip_duration** - duration of the trip in seconds
-# 
-# Obviously dropoff_datetime and trip_duration are only available for the train set.
-
-# In[ ]:
-
-
-print('We have {} training rows and {} test rows.'.format(train.shape[0], test.shape[0]))
-print('We have {} training columns and {} test columns.'.format(train.shape[1], test.shape[1]))
-train.head(2)
-
-
-# In[ ]:
-
-
-print('Id is unique.') if train.id.nunique() == train.shape[0] else print('oops')
-print('Train and test sets are distinct.') if len(np.intersect1d(train.id.values, test.id.values))== 0 else print('oops')
-print('We do not need to worry about missing values.') if train.count().min() == train.shape[0] and test.count().min() == test.shape[0] else print('oops')
-print('The store_and_fwd_flag has only two values {}.'.format(str(set(train.store_and_fwd_flag.unique()) | set(test.store_and_fwd_flag.unique()))))
-
-
-# In[ ]:
-
-
-train['pickup_datetime'] = pd.to_datetime(train.pickup_datetime)
-test['pickup_datetime'] = pd.to_datetime(test.pickup_datetime)
-train.loc[:, 'pickup_date'] = train['pickup_datetime'].dt.date
-test.loc[:, 'pickup_date'] = test['pickup_datetime'].dt.date
-train['dropoff_datetime'] = pd.to_datetime(train.dropoff_datetime)
-train['store_and_fwd_flag'] = 1 * (train.store_and_fwd_flag.values == 'Y')
-test['store_and_fwd_flag'] = 1 * (test.store_and_fwd_flag.values == 'Y')
-train['check_trip_duration'] = (train['dropoff_datetime'] - train['pickup_datetime']).map(lambda x: x.total_seconds())
-duration_difference = train[np.abs(train['check_trip_duration'].values  - train['trip_duration'].values) > 1]
-print('Trip_duration and datetimes are ok.') if len(duration_difference[['pickup_datetime', 'dropoff_datetime', 'trip_duration', 'check_trip_duration']]) == 0 else print('Ooops.')
-
-
-# In[ ]:
-
-
-train['trip_duration'].max() // 3600
-
-
-# We can see that the max trip_duration is ~ 1000 hours. Fortunately the evaluation metric is RMSLE and not RMSE . Outliers will cause less trouble. We could logtransform our target label and use RMSE during training.
-
-# In[ ]:
-
-
-train['log_trip_duration'] = np.log(train['trip_duration'].values + 1)
-plt.hist(train['log_trip_duration'].values, bins=100)
-plt.xlabel('log(trip_duration)')
-plt.ylabel('number of train records')
-plt.show()
-
-
-# ## Validation Strategy
-# First let's check the train test split. It helps to decide our validation strategy and gives ideas about feature engineering.
-
-# In[ ]:
-
-
-plt.plot(train.groupby('pickup_date').count()[['id']], 'o-', label='train')
-plt.plot(test.groupby('pickup_date').count()[['id']], 'o-', label='test')
-plt.title('Train and test period complete overlap.')
-plt.legend(loc=0)
-plt.ylabel('number of records')
-plt.show()
-
-
-# In[ ]:
-
-
-city_long_border = (-74.03, -73.75)
-city_lat_border = (40.63, 40.85)
-fig, ax = plt.subplots(ncols=2, sharex=True, sharey=True)
-ax[0].scatter(train['pickup_longitude'].values[:N], train['pickup_latitude'].values[:N],
-              color='blue', s=1, label='train', alpha=0.1)
-ax[1].scatter(test['pickup_longitude'].values[:N], test['pickup_latitude'].values[:N],
-              color='green', s=1, label='test', alpha=0.1)
-fig.suptitle('Train and test area complete overlap.')
-ax[0].legend(loc=0)
-ax[0].set_ylabel('latitude')
-ax[0].set_xlabel('longitude')
-ax[1].set_xlabel('longitude')
-ax[1].legend(loc=0)
-plt.ylim(city_lat_border)
-plt.xlim(city_long_border)
-plt.show()
-
-
-# In this case the train and test split seems to be random. This allows us to use unsupervised learning and feature extraction to be applied on the full data set.
-
-# # Feature Extraction
-# 
-# ## PCA
-# We use PCA to transform longitude and latitude coordinates. In this case it is not about dimension reduction since we transform 2D-> 2D. The rotation could help for decision tree splits.
-
-# In[ ]:
-
-
-coords = np.vstack((train[['pickup_latitude', 'pickup_longitude']].values,
-                    train[['dropoff_latitude', 'dropoff_longitude']].values,
-                    test[['pickup_latitude', 'pickup_longitude']].values,
-                    test[['dropoff_latitude', 'dropoff_longitude']].values))
-
-pca = PCA().fit(coords)
-train['pickup_pca0'] = pca.transform(train[['pickup_latitude', 'pickup_longitude']])[:, 0]
-train['pickup_pca1'] = pca.transform(train[['pickup_latitude', 'pickup_longitude']])[:, 1]
-train['dropoff_pca0'] = pca.transform(train[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
-train['dropoff_pca1'] = pca.transform(train[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
-test['pickup_pca0'] = pca.transform(test[['pickup_latitude', 'pickup_longitude']])[:, 0]
-test['pickup_pca1'] = pca.transform(test[['pickup_latitude', 'pickup_longitude']])[:, 1]
-test['dropoff_pca0'] = pca.transform(test[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
-test['dropoff_pca1'] = pca.transform(test[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(ncols=2)
-ax[0].scatter(train['pickup_longitude'].values[:N], train['pickup_latitude'].values[:N],
-              color='blue', s=1, alpha=0.1)
-ax[1].scatter(train['pickup_pca0'].values[:N], train['pickup_pca1'].values[:N],
-              color='green', s=1, alpha=0.1)
-fig.suptitle('Pickup lat long coords and PCA transformed coords.')
-ax[0].set_ylabel('latitude')
-ax[0].set_xlabel('longitude')
-ax[1].set_xlabel('pca0')
-ax[1].set_ylabel('pca1')
-ax[0].set_xlim(city_long_border)
-ax[0].set_ylim(city_lat_border)
-pca_borders = pca.transform([[x, y] for x in city_lat_border for y in city_long_border])
-ax[1].set_xlim(pca_borders[:, 0].min(), pca_borders[:, 0].max())
-ax[1].set_ylim(pca_borders[:, 1].min(), pca_borders[:, 1].max())
-plt.show()
-
-
-# ## Distance
-# Let's calculate the distance (km) between pickup and dropoff points. Currently Haversine is used, geopy has another heuristics (vincenty() or great_circle()) if you prefer.
-# The cabs are not flying and we are in New York so we could check the Manhattan (L1) distance too :) 
-# 
-# pd.DataFrame.apply() would be too slow so the haversine function is rewritten to handle arrays.
-# We extraxt the middle of the path as a feature as well.
-
-# In[ ]:
-
-
-def haversine_array(lat1, lng1, lat2, lng2):
-    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
-    AVG_EARTH_RADIUS = 6371  # in km
-    lat = lat2 - lat1
-    lng = lng2 - lng1
-    d = np.sin(lat * 0.5) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(lng * 0.5) ** 2
-    h = 2 * AVG_EARTH_RADIUS * np.arcsin(np.sqrt(d))
-    return h
-
-def dummy_manhattan_distance(lat1, lng1, lat2, lng2):
-    a = haversine_array(lat1, lng1, lat1, lng2)
-    b = haversine_array(lat1, lng1, lat2, lng1)
-    return a + b
-
-def bearing_array(lat1, lng1, lat2, lng2):
-    AVG_EARTH_RADIUS = 6371  # in km
-    lng_delta_rad = np.radians(lng2 - lng1)
-    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
-    y = np.sin(lng_delta_rad) * np.cos(lat2)
-    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
-    return np.degrees(np.arctan2(y, x))
-
-train.loc[:, 'distance_haversine'] = haversine_array(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
-train.loc[:, 'distance_dummy_manhattan'] = dummy_manhattan_distance(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
-train.loc[:, 'direction'] = bearing_array(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
-train.loc[:, 'pca_manhattan'] = np.abs(train['dropoff_pca1'] - train['pickup_pca1']) + np.abs(train['dropoff_pca0'] - train['pickup_pca0'])
-
-test.loc[:, 'distance_haversine'] = haversine_array(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)
-test.loc[:, 'distance_dummy_manhattan'] = dummy_manhattan_distance(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)
-test.loc[:, 'direction'] = bearing_array(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)
-test.loc[:, 'pca_manhattan'] = np.abs(test['dropoff_pca1'] - test['pickup_pca1']) + np.abs(test['dropoff_pca0'] - test['pickup_pca0'])
-
-train.loc[:, 'center_latitude'] = (train['pickup_latitude'].values + train['dropoff_latitude'].values) / 2
-train.loc[:, 'center_longitude'] = (train['pickup_longitude'].values + train['dropoff_longitude'].values) / 2
-test.loc[:, 'center_latitude'] = (test['pickup_latitude'].values + test['dropoff_latitude'].values) / 2
-test.loc[:, 'center_longitude'] = (test['pickup_longitude'].values + test['dropoff_longitude'].values) / 2
-
-
-# ## Datetime features
-
-# In[ ]:
-
-
-train.loc[:, 'pickup_weekday'] = train['pickup_datetime'].dt.weekday
-train.loc[:, 'pickup_hour_weekofyear'] = train['pickup_datetime'].dt.weekofyear
-train.loc[:, 'pickup_hour'] = train['pickup_datetime'].dt.hour
-train.loc[:, 'pickup_minute'] = train['pickup_datetime'].dt.minute
-train.loc[:, 'pickup_dt'] = (train['pickup_datetime'] - train['pickup_datetime'].min()).dt.total_seconds()
-train.loc[:, 'pickup_week_hour'] = train['pickup_weekday'] * 24 + train['pickup_hour']
-
-test.loc[:, 'pickup_weekday'] = test['pickup_datetime'].dt.weekday
-test.loc[:, 'pickup_hour_weekofyear'] = test['pickup_datetime'].dt.weekofyear
-test.loc[:, 'pickup_hour'] = test['pickup_datetime'].dt.hour
-test.loc[:, 'pickup_minute'] = test['pickup_datetime'].dt.minute
-test.loc[:, 'pickup_dt'] = (test['pickup_datetime'] - train['pickup_datetime'].min()).dt.total_seconds()
-test.loc[:, 'pickup_week_hour'] = test['pickup_weekday'] * 24 + test['pickup_hour']
-
-
-# ##Speed
-
-# In[ ]:
-
-
-train.loc[:, 'avg_speed_h'] = 1000 * train['distance_haversine'] / train['trip_duration']
-train.loc[:, 'avg_speed_m'] = 1000 * train['distance_dummy_manhattan'] / train['trip_duration']
-fig, ax = plt.subplots(ncols=3, sharey=True)
-ax[0].plot(train.groupby('pickup_hour').mean()['avg_speed_h'], 'bo-', lw=2, alpha=0.7)
-ax[1].plot(train.groupby('pickup_weekday').mean()['avg_speed_h'], 'go-', lw=2, alpha=0.7)
-ax[2].plot(train.groupby('pickup_week_hour').mean()['avg_speed_h'], 'ro-', lw=2, alpha=0.7)
-ax[0].set_xlabel('hour')
-ax[1].set_xlabel('weekday')
-ax[2].set_xlabel('weekhour')
-ax[0].set_ylabel('average speed')
-fig.suptitle('Rush hour average traffic speed')
-plt.show()
-
-
-# In[ ]:
-
-
-train.loc[:, 'pickup_lat_bin'] = np.round(train['pickup_latitude'], 3)
-train.loc[:, 'pickup_long_bin'] = np.round(train['pickup_longitude'], 3)
-# Average speed for regions
-gby_cols = ['pickup_lat_bin', 'pickup_long_bin']
-coord_speed = train.groupby(gby_cols).mean()[['avg_speed_h']].reset_index()
-coord_count = train.groupby(gby_cols).count()[['id']].reset_index()
-coord_stats = pd.merge(coord_speed, coord_count, on=gby_cols)
-coord_stats = coord_stats[coord_stats['id'] > 100]
-fig, ax = plt.subplots(ncols=1, nrows=1)
-ax.scatter(train.pickup_longitude.values[:N], train.pickup_latitude.values[:N],
-           color='black', s=1, alpha=0.5)
-ax.scatter(coord_stats.pickup_long_bin.values, coord_stats.pickup_lat_bin.values,
-           c=coord_stats.avg_speed_h.values,
-           cmap='RdYlGn', s=20, alpha=0.5, vmin=1, vmax=8)
-ax.set_xlim(city_long_border)
-ax.set_ylim(city_lat_border)
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-plt.title('Average speed')
-plt.show()
-
-train.loc[:, 'pickup_lat_bin'] = np.round(train['pickup_latitude'], 2)
-train.loc[:, 'pickup_long_bin'] = np.round(train['pickup_longitude'], 2)
-train.loc[:, 'center_lat_bin'] = np.round(train['center_latitude'], 2)
-train.loc[:, 'center_long_bin'] = np.round(train['center_longitude'], 2)
-train.loc[:, 'pickup_dt_bin'] = (train['pickup_dt'] // (3 * 3600))
-test.loc[:, 'pickup_lat_bin'] = np.round(test['pickup_latitude'], 2)
-test.loc[:, 'pickup_long_bin'] = np.round(test['pickup_longitude'], 2)
-test.loc[:, 'center_lat_bin'] = np.round(test['center_latitude'], 2)
-test.loc[:, 'center_long_bin'] = np.round(test['center_longitude'], 2)
-test.loc[:, 'pickup_dt_bin'] = (test['pickup_dt'] // (3 * 3600))
-
-
-# ## Clustering
-
-# In[ ]:
-
-
-sample_ind = np.random.permutation(len(coords))[:500000]
-kmeans = MiniBatchKMeans(n_clusters=100, batch_size=10000).fit(coords[sample_ind])
-
-
-# In[ ]:
-
-
-train.loc[:, 'pickup_cluster'] = kmeans.predict(train[['pickup_latitude', 'pickup_longitude']])
-train.loc[:, 'dropoff_cluster'] = kmeans.predict(train[['dropoff_latitude', 'dropoff_longitude']])
-test.loc[:, 'pickup_cluster'] = kmeans.predict(test[['pickup_latitude', 'pickup_longitude']])
-test.loc[:, 'dropoff_cluster'] = kmeans.predict(test[['dropoff_latitude', 'dropoff_longitude']])
-t1 = dt.datetime.now()
-print('Time till clustering: %i seconds' % (t1 - t0).seconds)
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(ncols=1, nrows=1)
-ax.scatter(train.pickup_longitude.values[:N], train.pickup_latitude.values[:N], s=10, lw=0,
-           c=train.pickup_cluster[:N].values, cmap='tab20', alpha=0.2)
-ax.set_xlim(city_long_border)
-ax.set_ylim(city_lat_border)
-ax.set_xlabel('Longitude')
-ax.set_ylabel('Latitude')
-plt.show()
-
-
-# ## Temporal and geospatial aggregation
-# Add a few average traffic speed features. Note that if the train/test split would be time based then we could not use as much temporal features. In this competition we do not need to predict the future.
-
-# In[ ]:
-
-
-for gby_col in ['pickup_hour', 'pickup_date', 'pickup_dt_bin',
-               'pickup_week_hour', 'pickup_cluster', 'dropoff_cluster']:
-    gby = train.groupby(gby_col).mean()[['avg_speed_h', 'avg_speed_m', 'log_trip_duration']]
-    gby.columns = ['%s_gby_%s' % (col, gby_col) for col in gby.columns]
-    train = pd.merge(train, gby, how='left', left_on=gby_col, right_index=True)
-    test = pd.merge(test, gby, how='left', left_on=gby_col, right_index=True)
-
-for gby_cols in [['center_lat_bin', 'center_long_bin'],
-                 ['pickup_hour', 'center_lat_bin', 'center_long_bin'],
-                 ['pickup_hour', 'pickup_cluster'],  ['pickup_hour', 'dropoff_cluster'],
-                 ['pickup_cluster', 'dropoff_cluster']]:
-    coord_speed = train.groupby(gby_cols).mean()[['avg_speed_h']].reset_index()
-    coord_count = train.groupby(gby_cols).count()[['id']].reset_index()
-    coord_stats = pd.merge(coord_speed, coord_count, on=gby_cols)
-    coord_stats = coord_stats[coord_stats['id'] > 100]
-    coord_stats.columns = gby_cols + ['avg_speed_h_%s' % '_'.join(gby_cols), 'cnt_%s' %  '_'.join(gby_cols)]
-    train = pd.merge(train, coord_stats, how='left', on=gby_cols)
-    test = pd.merge(test, coord_stats, how='left', on=gby_cols)
-
-
-# In[ ]:
-
-
-group_freq = '60min'
-df_all = pd.concat((train, test))[['id', 'pickup_datetime', 'pickup_cluster', 'dropoff_cluster']]
-train.loc[:, 'pickup_datetime_group'] = train['pickup_datetime'].dt.round(group_freq)
-test.loc[:, 'pickup_datetime_group'] = test['pickup_datetime'].dt.round(group_freq)
-
-# Count trips over 60min
-df_counts = df_all.set_index('pickup_datetime')[['id']].sort_index()
-df_counts['count_60min'] = df_counts.isnull().rolling(group_freq).count()['id']
-train = train.merge(df_counts, on='id', how='left')
-test = test.merge(df_counts, on='id', how='left')
-
-# Count how many trips are going to each cluster over time
-dropoff_counts = df_all     .set_index('pickup_datetime')     .groupby([pd.TimeGrouper(group_freq), 'dropoff_cluster'])     .agg({'id': 'count'})     .reset_index().set_index('pickup_datetime')     .groupby('dropoff_cluster').rolling('240min').mean()     .drop('dropoff_cluster', axis=1)     .reset_index().set_index('pickup_datetime').shift(freq='-120min').reset_index()     .rename(columns={'pickup_datetime': 'pickup_datetime_group', 'id': 'dropoff_cluster_count'})
-
-train['dropoff_cluster_count'] = train[['pickup_datetime_group', 'dropoff_cluster']].merge(dropoff_counts, on=['pickup_datetime_group', 'dropoff_cluster'], how='left')['dropoff_cluster_count'].fillna(0)
-test['dropoff_cluster_count'] = test[['pickup_datetime_group', 'dropoff_cluster']].merge(dropoff_counts, on=['pickup_datetime_group', 'dropoff_cluster'], how='left')['dropoff_cluster_count'].fillna(0)
-
-
-# In[ ]:
-
-
-# Count how many trips are going from each cluster over time
-df_all = pd.concat((train, test))[['id', 'pickup_datetime', 'pickup_cluster', 'dropoff_cluster']]
-pickup_counts = df_all     .set_index('pickup_datetime')     .groupby([pd.TimeGrouper(group_freq), 'pickup_cluster'])     .agg({'id': 'count'})     .reset_index().set_index('pickup_datetime')     .groupby('pickup_cluster').rolling('240min').mean()     .drop('pickup_cluster', axis=1)     .reset_index().set_index('pickup_datetime').shift(freq='-120min').reset_index()     .rename(columns={'pickup_datetime': 'pickup_datetime_group', 'id': 'pickup_cluster_count'})
-
-train['pickup_cluster_count'] = train[['pickup_datetime_group', 'pickup_cluster']].merge(pickup_counts, on=['pickup_datetime_group', 'pickup_cluster'], how='left')['pickup_cluster_count'].fillna(0)
-test['pickup_cluster_count'] = test[['pickup_datetime_group', 'pickup_cluster']].merge(pickup_counts, on=['pickup_datetime_group', 'pickup_cluster'], how='left')['pickup_cluster_count'].fillna(0)
-
-
-# ## OSRM Features
-# 
-# We had only rough distance estimates in the previous versions. Now we use better fastest route distance estimates between pickup and dropoff.
-
-# In[ ]:
-
-
-fr1 = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_train_part_1.csv',
-                  usecols=['id', 'total_distance', 'total_travel_time',  'number_of_steps'])
-fr2 = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_train_part_2.csv',
-                  usecols=['id', 'total_distance', 'total_travel_time', 'number_of_steps'])
-test_street_info = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_test.csv',
-                               usecols=['id', 'total_distance', 'total_travel_time', 'number_of_steps'])
-train_street_info = pd.concat((fr1, fr2))
-train = train.merge(train_street_info, how='left', on='id')
-test = test.merge(test_street_info, how='left', on='id')
-train_street_info.head()
-
-
-# In[ ]:
-
-
-feature_names = list(train.columns)
-print(np.setdiff1d(train.columns, test.columns))
-do_not_use_for_training = ['id', 'log_trip_duration', 'pickup_datetime', 'dropoff_datetime',
-                           'trip_duration', 'check_trip_duration',
-                           'pickup_date', 'avg_speed_h', 'avg_speed_m',
-                           'pickup_lat_bin', 'pickup_long_bin',
-                           'center_lat_bin', 'center_long_bin',
-                           'pickup_dt_bin', 'pickup_datetime_group']
-feature_names = [f for f in train.columns if f not in do_not_use_for_training]
-# print(feature_names)
-print('We have %i features.' % len(feature_names))
-train[feature_names].count()
-y = np.log(train['trip_duration'].values + 1)
-
-t1 = dt.datetime.now()
-print('Feature extraction time: %i seconds' % (t1 - t0).seconds)
-
-
-# ## Feature check before modeling
-# It might save you some headache to check your train and test feature distributions before modeling. Usually in kaggle competitions train and test sets are iid. If there is huge differenc between train and test set than probably you have a bug in your feature extraction pipeline.
-
-# In[ ]:
-
-
-feature_stats = pd.DataFrame({'feature': feature_names})
-feature_stats.loc[:, 'train_mean'] = np.nanmean(train[feature_names].values, axis=0).round(4)
-feature_stats.loc[:, 'test_mean'] = np.nanmean(test[feature_names].values, axis=0).round(4)
-feature_stats.loc[:, 'train_std'] = np.nanstd(train[feature_names].values, axis=0).round(4)
-feature_stats.loc[:, 'test_std'] = np.nanstd(test[feature_names].values, axis=0).round(4)
-feature_stats.loc[:, 'train_nan'] = np.mean(np.isnan(train[feature_names].values), axis=0).round(3)
-feature_stats.loc[:, 'test_nan'] = np.mean(np.isnan(test[feature_names].values), axis=0).round(3)
-feature_stats.loc[:, 'train_test_mean_diff'] = np.abs(feature_stats['train_mean'] - feature_stats['test_mean']) / np.abs(feature_stats['train_std'] + feature_stats['test_std'])  * 2
-feature_stats.loc[:, 'train_test_nan_diff'] = np.abs(feature_stats['train_nan'] - feature_stats['test_nan'])
-feature_stats = feature_stats.sort_values(by='train_test_mean_diff')
-feature_stats[['feature', 'train_test_mean_diff']].tail()
-
-
-# In[ ]:
-
-
-feature_stats = feature_stats.sort_values(by='train_test_nan_diff')
-feature_stats[['feature', 'train_nan', 'test_nan', 'train_test_nan_diff']].tail()
-
-
-# Even the top mean difference is less than 1% of the standard deviation. We have a few missing values but the missing rates are the same. Fortunately xgboost can handle missing values.
-
-# # Modeling
-
-# In[ ]:
-
-
-Xtr, Xv, ytr, yv = train_test_split(train[feature_names].values, y, test_size=0.2, random_state=1987)
-dtrain = xgb.DMatrix(Xtr, label=ytr)
-dvalid = xgb.DMatrix(Xv, label=yv)
-dtest = xgb.DMatrix(test[feature_names].values)
-watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
-
-# Try different parameters! My favorite is random search :)
-xgb_pars = {'min_child_weight': 50, 'eta': 0.3, 'colsample_bytree': 0.3, 'max_depth': 10,
-            'subsample': 0.8, 'lambda': 1., 'nthread': 4, 'booster' : 'gbtree', 'silent': 1,
-            'eval_metric': 'rmse', 'objective': 'reg:linear'}
-
-
-# In[ ]:
-
-
-# You could try to train with more epoch
-model = xgb.train(xgb_pars, dtrain, 60, watchlist, early_stopping_rounds=50,
-                  maximize=False, verbose_eval=10)
-
-
-# In[ ]:
-
-
-print('Modeling RMSLE %.5f' % model.best_score)
-t1 = dt.datetime.now()
-print('Training time: %i seconds' % (t1 - t0).seconds)
-
-
-# ## Feature importance analysis
-# 
-# Xgboost models has feature importance score which is often used. Please note that it does not necessary means that the feature is really important, higher score means that the feature was used in more tree splits. Features with strong correlation or with high cardinality bias the result.
-# 
-# I tried a simple backward feature elimination round. For each feature a new model was trained without that feature. It helps to understand what are the essential features which we should not remove. Since it would take a few hours to train 56 models I use my offline validation result.
-# 
-# *Please note the OSRM features were added later so they are not included in the following section. Trust me they are important ;)*
-
-# In[ ]:
-
-
-rmse_wo_feature = [0.39224, 0.38816, 0.38726, 0.38780, 0.38773, 0.38792, 0.38753, 0.38745, 0.38710, 0.38767, 0.38738, 0.38750, 0.38678, 0.39359, 0.38672, 0.38794, 0.38694, 0.38750, 0.38742, 0.38673, 0.38754, 0.38705, 0.38736, 0.38741, 0.38764, 0.38730, 0.38676, 0.38696, 0.38750, 0.38705, 0.38746, 0.38727, 0.38750, 0.38771, 0.38747, 0.38907, 0.38719, 0.38756, 0.38701, 0.38734, 0.38782, 0.38673, 0.38797, 0.38720, 0.38709, 0.38704, 0.38809, 0.38768, 0.38798, 0.38849, 0.38690, 0.38753, 0.38721, 0.38807, 0.38830, 0.38750, np.nan, np.nan, np.nan]
-feature_importance_dict = model.get_fscore()
-fs = ['f%i' % i for i in range(len(feature_names))]
-f1 = pd.DataFrame({'f': list(feature_importance_dict.keys()),
-                   'importance': list(feature_importance_dict.values())})
-f2 = pd.DataFrame({'f': fs, 'feature_name': feature_names, 'rmse_wo_feature': rmse_wo_feature})
-feature_importance = pd.merge(f1, f2, how='right', on='f')
-feature_importance = feature_importance.fillna(0)
-
-feature_importance[['feature_name', 'importance', 'rmse_wo_feature']].sort_values(by='importance', ascending=False)
-
-
-# The following plot shows the feature elimination result and the xgboost importance.
-# A few observations:
-# 
-#  - We had quite a few location related feature with high feature importance score although removing just one of them does not really increase the error.
-#  - Vendor_id is the second least used feature according to feature importance plot but removing it increases the rmse significantly. It is binary value, even a few decision trees using it captures its information.
-#  - Direction is important from both aspect. It does not have many correlated feature and removing it would hurt the model.
-#  - There are lots of different features which could be removed without really breaking a leg.
-# 
-# In real world projects I prefer models with less variables however in kaggle competitions I err on having more even if they only give marginal improvent.
-
-# In[ ]:
-
-
-feature_importance = feature_importance.sort_values(by='rmse_wo_feature', ascending=False)
-feature_importance = feature_importance[feature_importance['rmse_wo_feature'] > 0]
-with sns.axes_style("whitegrid"):
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.scatter(feature_importance['importance'].values, feature_importance['rmse_wo_feature'].values,
-               c=feature_importance['rmse_wo_feature'].values, s=500, cmap='RdYlGn_r', alpha=0.7)
-    for _, row in feature_importance.head(5).iterrows():
-        ax.text(row['importance'], row['rmse_wo_feature'], row['feature_name'],
-                verticalalignment='center', horizontalalignment='center')
-    ax.set_xlabel('xgb feature importance')
-    ax.set_ylabel('rmse without feature')
-    ax.set_ylim(np.min(feature_importance['rmse_wo_feature']) - 0.001,
-                np.max(feature_importance['rmse_wo_feature']) + 0.001)
+#List of feature selection models
+feat = []
+
+#List of names of feature selection models
+feat_list =[]
+
+#Libraries for feature selection
+from sklearn.feature_selection import RFE
+from sklearn.linear_model import LogisticRegression
+
+#Add RFE to the list 
+model = LogisticRegression(random_state=seed,n_jobs=-1)
+n = 'RFE'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,RFE(model,val*(c-1))])   
+        
+#For all transformations of X
+for trans,s, X, X_val, d, cols, rem, ra, i_cols, i_rem in X_all:
+    #For all feature selection models
+    for name,v, model in feat:
+        #Train the model against Y
+        model.fit(X,Y_train)
+        #Combine importance and index of the column in the array joined
+        joined = []
+        for i, pred in enumerate(list(model.ranking_)):
+            joined.append([i,cols[i],pred])
+        #Sort in ascending order    
+        joined_sorted = sorted(joined, key=lambda x: x[2])
+        #Starting point of the columns to be dropped
+        rem_start = int((v*(c-1)))
+        #List of names of columns selected
+        cols_list = []
+        #Indexes of columns selected
+        i_cols_list = []
+        #Ranking of all the columns
+        rank_list =[]
+        #List of columns not selected
+        rem_list = []
+        #Indexes of columns not selected
+        i_rem_list = []
+        #Split the array. Store selected columns in cols_list and removed in rem_list
+        for i, col, j in joined_sorted:
+            #Store the rank
+            rank_list.append([i,j-1])
+            #Store selected columns in cols_list and indexes in i_cols_list
+            if((j-1) < rem_start):
+                cols_list.append(col)
+                i_cols_list.append(i)
+            #Store not selected columns in rem_list and indexes in i_rem_list    
+            else:
+                rem_list.append(col)
+                i_rem_list.append(i)    
+        #Sort the rank_list and store only the ranks. Drop the index 
+        #Append model name, array, columns selected and columns to be removed to the additional list        
+        X_all_add.append([trans,name,X,X_val,v,cols_list,rem_list,[x[1] for x in sorted(rank_list,key=lambda x:x[0])],i_cols_list,i_rem_list])    
+
+#Set figure size
+plt.rc("figure", figsize=(25, 10))
+
+#Plot a graph for different feature selectors        
+for f_name in feat_list:
+    #Array to store the list of combinations
+    leg=[]
+    fig, ax = plt.subplots()
+    #Plot each combination
+    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
+        if(name==f_name):
+            plt.plot(rank_list)
+            leg.append(trans+"+"+name+"+%s"% v)
+    #Set the tick names to names of columns
+    ax.set_xticks(range(c-1))
+    ax.set_xticklabels(cols[:c-1],rotation='vertical')
+    #Display the plot
+    plt.legend(leg,loc='best')    
+    #Plot the rankings of all the features for all combinations
     plt.show()
 
 
-# In[ ]:
-
-
-ypred = model.predict(dvalid)
-fig,ax = plt.subplots(ncols=2)
-ax[0].scatter(ypred, yv, s=0.1, alpha=0.1)
-ax[0].set_xlabel('log(prediction)')
-ax[0].set_ylabel('log(ground truth)')
-ax[1].scatter(np.exp(ypred), np.exp(yv), s=0.1, alpha=0.1)
-ax[1].set_xlabel('prediction')
-ax[1].set_ylabel('ground truth')
-plt.show()
-
-
-# # Submission
-# We need to transform back the log duration and save the submission file. 
-# 
-# Most of the time the five daily submission slots should me more than enough since you could (and should) validate your experiments locally. If you are working in team  or the competition is near to its end then you would like to avoid bugs before submission. Here we check the valid and test prediction distribution. Due to the iid split they should look like the same. Checking correlation with previous submissions could give you more confidence.
+# #Feature Selection
+# * SelectPercentile
 
 # In[ ]:
 
 
-ytest = model.predict(dtest)
-print('Test shape OK.') if test.shape[0] == ytest.shape[0] else print('Oops')
-test['trip_duration'] = np.exp(ytest) - 1
-test[['id', 'trip_duration']].to_csv('beluga_xgb_submission.csv.gz', index=False, compression='gzip')
+#List of feature selection models
+feat = []
 
-print('Valid prediction mean: %.3f' % ypred.mean())
-print('Test prediction mean: %.3f' % ytest.mean())
+#List of names of feature selection models
+feat_list =[]
 
-fig, ax = plt.subplots(nrows=2, sharex=True, sharey=True)
-sns.distplot(ypred, ax=ax[0], color='blue', label='validation prediction')
-sns.distplot(ytest, ax=ax[1], color='green', label='test prediction')
-ax[0].legend(loc=0)
-ax[1].legend(loc=0)
-plt.show()
+#Libraries for SelectPercentile    
+from sklearn.feature_selection import SelectPercentile
+from sklearn.feature_selection import f_classif        
 
-t1 = dt.datetime.now()
-print('Total time: %i seconds' % (t1 - t0).seconds)
+n = 'SelK'
+feat_list.append(n)
+for val in ratio_list:
+    comb.append("%s+%s" % (n,val))
+    feat.append([n,val,SelectPercentile(score_func=f_classif,percentile=val*100)])   
 
-
-# The distributions look like identical. We are ready for submission.
-
-# # XGB Parameter Search Result
-# 
-# For parameter tuning I prefer random search.  Usually I try different values for the following parameters
-# 
-#  - min_child_weight
-#  - eta
-#  - colsample_bytree
-#  - max_depth
-#  - subsample
-#  - lambda
-# 
-# I like sklearn CV options (RandomizedSearchCV or GridSearchCV) however for usual competitions the training for a single model could take hours and I like to save the intermediate results (performance metric, oof predictions etc.) so I use custom search. Based on the results I like to set the grid searchpoints manually. A simple random parameter search would be
-
-# In[ ]:
-
-
-FOREVER_COMPUTING_FLAG = False
-xgb_pars = []
-for MCW in [10, 20, 50, 75, 100]:
-    for ETA in [0.05, 0.1, 0.15]:
-        for CS in [0.3, 0.4, 0.5]:
-            for MD in [6, 8, 10, 12, 15]:
-                for SS in [0.5, 0.6, 0.7, 0.8, 0.9]:
-                    for LAMBDA in [0.5, 1., 1.5,  2., 3.]:
-                        xgb_pars.append({'min_child_weight': MCW, 'eta': ETA, 
-                                         'colsample_bytree': CS, 'max_depth': MD,
-                                         'subsample': SS, 'lambda': LAMBDA, 
-                                         'nthread': -1, 'booster' : 'gbtree', 'eval_metric': 'rmse',
-                                         'silent': 1, 'objective': 'reg:linear'})
-
-while FOREVER_COMPUTING_FLAG:
-    xgb_par = np.random.choice(xgb_pars, 1)[0]
-    print(xgb_par)
-    model = xgb.train(xgb_par, dtrain, 2000, watchlist, early_stopping_rounds=50,
-                      maximize=False, verbose_eval=100)
-    print('Modeling RMSLE %.5f' % model.best_score)
+#For all transformations of X
+for trans,s, X, X_val, d, cols, rem, ra, i_cols, i_rem in X_all:
+    #For all feature selection models
+    for name,v, model in feat:
+        #Train the model against Y
+        model.fit(X,Y_train)
+        #Combine importance and index of the column in the array joined
+        joined = []
+        for i, pred in enumerate(list(model.scores_)):
+            joined.append([i,cols[i],pred])
+        #Sort in descending order    
+        joined_sorted = sorted(joined, key=lambda x: -x[2])
+        #Starting point of the columns to be dropped
+        rem_start = int((v*(c-1)))
+        #List of names of columns selected
+        cols_list = []
+        #Indexes of columns selected
+        i_cols_list = []
+        #Ranking of all the columns
+        rank_list =[]
+        #List of columns not selected
+        rem_list = []
+        #Indexes of columns not selected
+        i_rem_list = []
+        #Split the array. Store selected columns in cols_list and removed in rem_list
+        for j, (i, col, x) in enumerate(list(joined_sorted)):
+            #Store the rank
+            rank_list.append([i,j])
+            #Store selected columns in cols_list and indexes in i_cols_list
+            if(j < rem_start):
+                cols_list.append(col)
+                i_cols_list.append(i)
+            #Store not selected columns in rem_list and indexes in i_rem_list    
+            else:
+                rem_list.append(col)
+                i_rem_list.append(i)    
+        #Sort the rank_list and store only the ranks. Drop the index 
+        #Append model name, array, columns selected and columns to be removed to the additional list        
+        X_all_add.append([trans,name,X,X_val,v,cols_list,rem_list,[x[1] for x in sorted(rank_list,key=lambda x:x[0])],i_cols_list,i_rem_list])    
 
 
-# These experiments would take much more than the Kernel limitation so a subset of the result is copied here.
+#Set figure size
+plt.rc("figure", figsize=(25, 10))
 
-# In[ ]:
-
-
-paropt = pd.DataFrame({'lambda':[1.5,1.0,1.0,1.5,1.5,1.0,1.5,1.0,1.5,2.0,0.5,1.0,0.5,1.5,1.5,0.5,1.0,1.5,0.5,2.0,1.0,2.0,2.0,1.5,1.5,2.0,1.5,2.0,1.5,0.5,1.0,1.0,2.0,1.5,1.0,1.0,0.5,2.0,1.0,0.5,0.5,2.0,1.0,1.0,0.5,0.5,1.5,0.5,1.5,2.0,2.0,2.0,2.0,0.5,1.5,1.0,1.5,2.0,2.0,0.5,1.5,1.0,0.5,1.0,1.5,2.0,1.0,1.0,2.0,2.0,1.0,0.5,0.5,1.0,1.5,2.0,0.5,1.0,1.5,1.0,1.0,1.5,1.5,1.5,0.5,1.5,1.0,1.5,2.0,2.0,2.0,1.0,2.0,0.5,2.0,0.5,1.5,0.5,2.0,0.5,1.0,1.5,1.5,1.5,2.0,0.5,0.5,1.0,2.0],
-                       'eta':[.1,.1,.05,.05,.05,.15,.15,.1,.1,.05,.15,.15,.15,.1,.1,.1,.1,.05,.15,.05,.05,.05,.15,.15,.05,.05,.05,.05,.15,.15,.15,.15,.1,.05,.05,.1,.1,.1,.1,.1,.05,.15,.15,.15,.1,.1,.05,.05,.15,.15,.15,.1,.1,.05,.05,.05,.05,.05,.15,.1,.1,.15,.1,.1,.05,.15,.15,.15,.1,.05,.05,.05,.05,.15,.1,.1,.1,.1,.05,.05,.05,.15,.15,.1,.1,.1,.1,.05,.15,.15,.1,.1,.1,.05,.05,.1,.1,.1,.1,.1,.05,.15,.15,.15,.15,.05,.05,.15,.15],
-                       'min_child_weight': [50,50,20,100,10,50,100,100,75,10,10,50,50,100,75,100,50,10,20,10,75,20,50,75,100,100,10,20,75,75,75,20,10,75,10,100,100,10,20,20,50,50,100,20,50,100,100,75,20,75,20,50,20,10,20,20,20,75,20,75,100,10,10,20,10,20,100,75,75,10,100,50,100,100,50,10,75,75,50,10,75,75,50,75,20,100,100,50,20,20,50,50,75,20,50,100,75,75,100,75,10,10,20,20,10,10,75,50,20],
-                       'subsample':[.8,.9,.8,.6,.6,.6,.9,.6,.5,.9,.8,.9,.7,.5,.5,.9,.7,.7,.5,.8,.5,.9,.6,.6,.8,.8,.8,.7,.5,.5,.9,.9,.5,.6,.7,.8,.8,.6,.9,.7,.8,.6,.6,.9,.7,.7,.8,.6,.6,.5,.9,.8,.7,.6,.6,.6,.5,.9,.8,.5,.7,.6,.8,.6,.8,.8,.6,.7,.9,.5,.7,.5,.9,.7,.8,.9,.9,.7,.8,.5,.7,.8,.6,.8,.8,.5,.9,.5,.5,.7,.8,.6,.6,.8,.7,.6,.6,.6,.7,.7,.8,.6,.5,.9,.7,.6,.9,.5,.5],
-                       'rmse': [.380,.380,.377,.378,.378,.386,.382,.382,.383,.374,.386,.381,.385,.383,.383,.379,.381,.376,.389,.375,.381,.374,.385,.385,.378,.377,.375,.376,.385,.386,.382,.384,.384,.379,.376,.380,.380,.382,.380,.382,.378,.385,.384,.383,.383,.383,.379,.381,.386,.387,.381,.380,.380,.377,.377,.377,.379,.376,.382,.385,.382,.386,.380,.382,.375,.383,.385,.384,.379,.378,.380,.381,.378,.384,.380,.377,.379,.383,.380,.380,.380,.383,.385,.381,.379,.386,.380,.383,.387,.383,.382,.384,.385,.377,.380,.383,.383,.383,.382,.382,.377,.386,.388,.382,.384,.379,.378,.387,.388]
-                       })
-
-
-# In[ ]:
-
-
-for i, par in enumerate(['lambda', 'min_child_weight', 'subsample', 'eta']):
+#Plot a graph for different feature selectors        
+for f_name in feat_list:
+    #Array to store the list of combinations
+    leg=[]
     fig, ax = plt.subplots()
-    ax = sns.boxplot(x=par, y="rmse", data=paropt)
+    #Plot each combination
+    for trans,name,X,X_val,v,cols_list,rem_list,rank_list,i_cols_list,i_rem_list in X_all_add:
+        if(name==f_name):
+            plt.plot(rank_list)
+            leg.append(trans+"+"+name+"+%s"% v)
+    #Set the tick names to names of columns
+    ax.set_xticks(range(c-1))
+    ax.set_xticklabels(cols[:c-1],rotation='vertical')
+    #Display the plot
+    plt.legend(leg,loc='best')    
+    #Plot the rankings of all the features for all combinations
+    plt.show()
 
 
-# In[ ]:
-
-
-with sns.axes_style("whitegrid"):
-    fig, axs = plt.subplots(ncols=4, sharey=True, figsize=(12, 3))
-    for i, par in enumerate(['lambda', 'min_child_weight', 'subsample', 'eta']):
-        mean_rmse = paropt.groupby(par).mean()[['rmse']].reset_index()
-        axs[i].scatter(mean_rmse[par].values, mean_rmse['rmse'].values, c=mean_rmse['rmse'].values,
-                       s=300, cmap='viridis_r', vmin=.377, vmax=.385, )
-        axs[i].set_xlabel(par)
-        axs[i].set_xticks(mean_rmse[par].values)
-        axs[i].set_ylim(paropt.rmse.min(), paropt.rmse.max())
-
-
-# We can see that lower eta could improve the performance significantly. Higher subsample and smaller child limit leads to better results too. Lambda does not really matter.
-
-# # Cross Validation test
-# 
-# We saw lower (better) RMSLE in our train validation than the LB submission. We could check all our submissions.
+# #Feature Selection
+# Ranking summary
 
 # In[ ]:
 
 
-cv_lb = pd.DataFrame({'cv': [0.3604,0.36056,0.3614,0.3618,0.3623,0.3626,0.3646,0.3696,0.3702,0.3706,0.372,0.3738,0.37477,0.37691,0.3824,0.3868,0.3904],
-                      'lb': [0.367,0.367,0.368,0.368,0.368,0.368,0.371,0.375,0.376,0.376,0.377,0.377,0.379,0.381,0.387,0.39,0.393]})
-ax = sns.regplot(x="cv", y="lb", data=cv_lb, scatter_kws={'s': 200})
-ax.set_xlabel('Local validation (RMSLE)')
-ax.set_ylabel('Leaderboard (RMSLE)')
-ax.set_title('Local validation and Leaderboard consistency')
-print('CV - LB Diff: %.3f' % np.mean(cv_lb['lb'] - cv_lb['cv']))
+rank_df = pandas.DataFrame(data=[x[7] for x in X_all_add],columns=cols[:c-1])
+_ = rank_df.boxplot(rot=90)
+#Below plot summarizes the rankings according to the standard feature selection techniques
+#Top ranked attributes are ... first 10 attributes, Wilderness_Area1,4 ...Soil_Type 3,4,10,38-40
 
 
-# We can see that our local validation scores are usually lower (by ~0.005). Consistent difference is not problem in most kaggle competitions however if the gap starts to increase you should check your training pipeline looking for leaks or cause of overfitting.
+# #Feature Selection
+# Rank features based on median
+
+# In[ ]:
+
+
+rank_df = pandas.DataFrame(data=[x[7] for x in X_all_add],columns=cols[:c-1])
+med = rank_df.median()
+print(med)
+#Write medians to output file for exploratory study on ML algorithms
+with open("median.csv", "w") as subfile:
+       subfile.write("Column,Median\n")
+       subfile.write(med.to_string())
+
+
+# ##Part 2 of the Notebook:
+# https://www.kaggle.com/sharmasanthosh/forest-cover-type-prediction/exploratory-study-of-ml-algorithms

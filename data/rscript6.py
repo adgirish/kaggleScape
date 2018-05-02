@@ -1,124 +1,119 @@
-__author__ = 'Nick Sarris (ngs5st)'
+# Note: Kaggle only runs Python 3, not Python 2
 
+#code skeleton for feature engineering and hyperparameter search for xgboost
+#now I give out the optimal parameters for passing the KS test
+
+#do you know you can 'pip install xgboost'? 
+#if you have problem pip install, go https://github.com/dmlc/xgboost and raise an issue.
+
+import numpy as np
 import pandas as pd
-import operator
+import xgboost as xgb
+import sys
 
-# reading data
-prior_orders = pd.read_csv('../input/order_products__prior.csv')
-train_orders = pd.read_csv('../input/order_products__train.csv')
-orders = pd.read_csv('../input/orders.csv')
+#import evaluation
+exec(open("../input/evaluation.py").read())
 
-# removing all user_ids not in the test set
-test  = orders[orders['eval_set'] == 'test' ]
-user_ids = test['user_id'].values
-orders = orders[orders['user_id'].isin(user_ids)]
+from sklearn.cross_validation import *
+from sklearn.grid_search import GridSearchCV
 
-# combine prior rows by user_id, add product_ids to a list
-prior_products = pd.DataFrame(prior_orders.groupby(
-    'order_id')['product_id'].apply(list))
-prior_products.reset_index(level=['order_id'], inplace=True)
-prior_products.columns = ['order_id','products_list']
+import math
 
-# combine train rows by user_id, add product_ids to a list
-train_products = pd.DataFrame(train_orders.groupby(
-    'order_id')['product_id'].apply(list))
-train_products.reset_index(level=['order_id'], inplace=True)
-train_products.columns = ['order_id','products_list']
+""" Implemented Scikit- style grid search to find optimal XGBoost params"""
+""" Use this module to identify optimal hyperparameters for XGBoost"""
 
-# seperate orders into prior/train sets
-# turns out there are no test user_ids in the training set so train will be empty
-prior = orders[orders['eval_set'] == 'prior']
-train = orders[orders['eval_set'] == 'train']
+#have some feature engineering work for better rank
+def add_features(df):
+    #significance of flight distance
+    df['flight_dist_sig'] = df['FlightDistance']/df['FlightDistanceError']
+    #Stepan Obraztsov's magic features
+    df['NEW_FD_SUMP']=df['FlightDistance']/(df['p0_p']+df['p1_p']+df['p2_p'])
+    df['NEW5_lt']=df['LifeTime']*(df['p0_IP']+df['p1_IP']+df['p2_IP'])/3
+    df['p_track_Chi2Dof_MAX'] = df.loc[:, ['p0_track_Chi2Dof', 'p1_track_Chi2Dof', 'p2_track_Chi2Dof']].max(axis=1)
+    #some more magic features
+    df['p0p2_ip_ratio']=df['IP']/df['IP_p0p2']
+    df['p1p2_ip_ratio']=df['IP']/df['IP_p1p2']
+    df['DCA_MAX'] = df.loc[:, ['DOCAone', 'DOCAtwo', 'DOCAthree']].max(axis=1)
+    df['iso_bdt_min'] = df.loc[:, ['p0_IsoBDT', 'p1_IsoBDT', 'p2_IsoBDT']].min(axis=1)
+    df['iso_min'] = df.loc[:, ['isolationa', 'isolationb', 'isolationc','isolationd', 'isolatione', 'isolationf']].min(axis=1)
 
-# find the number of the last order placed
-prior['num_orders'] = prior.groupby(['user_id'])['order_number'].transform(max)
-train['num_orders'] = train.groupby(['user_id'])['order_number'].transform(max)
+    return df
 
-# merge everything into one dataframe
-prior = pd.merge(prior, prior_products, on='order_id', how='left')
-train = pd.merge(train, train_products, on='order_id', how='left')
-comb = pd.concat([prior, train], axis=0).reset_index(drop=True)
+print("Load the training/test data using pandas")
+train = pd.read_csv("../input/training.csv")
+test = pd.read_csv("../input/test.csv")
 
-test_cols = ['order_id','user_id']
-cols = ['order_id','user_id','order_number','num_orders','products_list']
+print("Adding features to both training and testing")
+train = add_features(train)
+test = add_features(test)
 
-comb = comb[cols]
-test = test[test_cols]
+print("Loading check agreement for KS test evaluation")
+check_agreement = pd.read_csv('../input/check_agreement.csv')
+check_correlation = pd.read_csv('../input/check_correlation.csv')
+check_agreement = add_features(check_agreement)
+check_correlation = add_features(check_correlation)
+train_eval = train[train['min_ANNmuon'] > 0.4]
 
-# iterate through dataframe, adding data to dictionary
-# data added is in the form of a list:
-    # list[0] = weight of the data: (1 + current order number / final order number), thus later data is weighted more
-    # list[1] = how important the item is to the buyer: (order in the cart / number of items bought), thus items bought first are weighted more
+print("Eliminate SPDhits, which makes the agreement check fail")
+filter_out = ['id', 'min_ANNmuon', 'production', 'mass', 'signal','SPDhits','p0_track_Chi2Dof','CDF1', 'CDF2', 'CDF3','isolationb', 'isolationc','p0_pt', 'p1_pt', 'p2_pt', 'p0_p', 'p1_p', 'p2_p', 'p0_eta', 'p1_eta', 'p2_eta','DOCAone', 'DOCAtwo', 'DOCAthree']
+features = list(f for f in train.columns if f not in filter_out)
+print("features:",features)
 
-# also used the average amount of items bought every order as a benchmark for how many items to add per user in the final submission
+print("Train a XGBoost model")
 
-product_dict = {}
-for i, row in comb.iterrows():
-    if i % 100000 == 0:
-        print('Iterated Through {} Rows...'.format(i))
+xgb_model = xgb.XGBClassifier()
 
-    if row['user_id'] in product_dict:
-        index = 1
-        list.append(product_dict[row['user_id']]['len_products'], len(row['products_list']))
-        for val in row['products_list']:
-            if val in product_dict[row['user_id']]:
-                product_dict[row['user_id']][val][0] += 1 + int(row['order_number']) / int(row['num_orders'])
-                list.append(product_dict[row['user_id']][val][1], index / len(row['products_list']))
-            else:
-                product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
-                                              [index / len(row['products_list'])]]
-            index += 1
-    else:
-        index = 1
-        product_dict[row['user_id']] = {'len_products': [
-            len(row['products_list'])]}
-        for val in row['products_list']:
-            product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
-                                          [index / len(row['products_list'])]]
-            index += 1
+#when in doubt, use xgboost
+parameters = {'nthread':[4], #when use hyperthread, xgboost may become slower
+              'objective':['binary:logistic'],
+              'learning_rate': [0.15], #so called `eta` value
+              'max_depth': [8],
+              'min_child_weight': [3,11],
+              'silent': [1],
+              'subsample': [0.9],
+              'colsample_bytree': [0.5],
+              'n_estimators': [300], #number of trees
+              'seed': [1337]}
 
-final_data = {}
-for user_id in product_dict:
-    final_data[user_id] = {}
-    for product_id in product_dict[user_id]:
-        if product_id == 'len_products':
-            final_data[user_id][product_id] = \
-                round(sum(product_dict[user_id][product_id])/
-                    len(product_dict[user_id][product_id]))
-        else:
-            final_data[user_id][product_id] = \
-                [product_dict[user_id][product_id][0],1/
-                 (sum(product_dict[user_id][product_id][1])/
-                len(product_dict[user_id][product_id][1]))]
+#evaluate with roc_auc_truncated
+def _score_func(estimator, X, y):
+    pred_probs = estimator.predict_proba(X)[:, 1]
+    return roc_auc_truncated(y, pred_probs)
+    
+#should evaluate by train_eval instead of the full dataset
+clf = GridSearchCV(xgb_model, parameters, n_jobs=4, 
+                   cv=StratifiedKFold(train_eval['signal'], n_folds=5, shuffle=True), 
+                    scoring=_score_func,
+                   verbose=2, refit=True)
 
-# iterate through testing dataframe
-# every user_id in test corresponds to a dictionary entry
-# call the dictionary with every row, products by weight, combine them into a string, and append them to products
+clf.fit(train[features], train["signal"])
 
-products = []
-for i, row in test.iterrows():
-    if i % 100000 == 0:
-        print('Iterated Through {} Rows...'.format(i))
+best_parameters, score, _ = max(clf.grid_scores_, key=lambda x: x[1])
+print('Raw AUC score:', score)
+for param_name in sorted(best_parameters.keys()):
+    print("%s: %r" % (param_name, best_parameters[param_name]))
 
-    final_products = []
-    len_products = None
-    total_products = final_data[row['user_id']].items()
-    for product in total_products:
-        if product[0] == 'len_products':
-            len_products = product[1]
-        else:
-            list.append(final_products, product)
+test_agreement_ = True
+if test_agreement_:
+    agreement_probs= (clf.predict_proba(check_agreement[features])[:,1])
 
-    output = []
-    product_list = sorted(final_products,
-        key=operator.itemgetter(1), reverse=True)
-    for val in product_list[:len_products]:
-        list.append(output, str(val[0]))
-    final_output = ' '.join(output)
-    list.append(products, final_output)
+    ks = compute_ks(
+            agreement_probs[check_agreement['signal'].values == 0],
+            agreement_probs[check_agreement['signal'].values == 1],
+            check_agreement[check_agreement['signal'] == 0]['weight'].values,
+            check_agreement[check_agreement['signal'] == 1]['weight'].values)
+    print ('KS metric', ks, ks < 0.09)
 
-# create submission
-submission = pd.DataFrame()
-submission['order_id'] = test['order_id']
-submission['products'] = products
-submission.to_csv('submission.csv', index=False)
+    correlation_probs = clf.predict_proba(check_correlation[features])[:,1]
+    print ('Checking correlation...')
+    cvm = compute_cvm(correlation_probs, check_correlation['mass'])
+    print ('CvM metric', cvm, cvm < 0.002)
+
+    train_eval_probs = clf.predict_proba(train_eval[features])[:,1]
+    print ('Calculating AUC...')
+    AUC = roc_auc_truncated(train_eval['signal'], train_eval_probs)
+    print ('AUC', AUC)
+
+test_probs = clf.predict_proba(test[features])[:,1]
+submission = pd.DataFrame({"id": test["id"], "prediction": test_probs})
+submission.to_csv("xgboost_best_parameter_submission.csv", index=False)

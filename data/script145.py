@@ -1,349 +1,294 @@
 
 # coding: utf-8
 
-# The following notebook introduces ML-Ensemble, a Python library for memory-efficient parallel ensemble learning with a Scikit-learn API. 
+# <table>
+#     <tr>
+#         <td>
+#         <center>
+#         <font size="+1">If you haven't used BigQuery datasets on Kaggle previously, check out the <a href = "https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/">Scavenger Hunt Handbook</a> kernel to get started.</font>
+#         </center>
+#         </td>
+#     </tr>
+# </table>
 # 
-# ML-Ensemble also deploys a neural network-like API for building ensembles of several layers, and can accomodate a great variety of ensemble architectures. 
+# ___ 
 # 
-# For more information, see [ml-ensemble.com](http://ml-ensemble.com) or visit the [github](https://github.com/flennerhag/mlens) repository.
-
-# In[ ]:
-
-
-import gc
-import numpy as np
-import pandas as pd
-
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import train_test_split
-
-# Inputs
-from xgboost import XGBRegressor
-from sklearn.linear_model import Lasso, ElasticNet
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-
-# Data viz
-from mlens.visualization import corr_X_y, corrmat
-
-# Model evaluation
-from mlens.metrics import make_scorer
-from mlens.model_selection import Evaluator
-
-# Ensemble
-from mlens.ensemble import SuperLearner
-
-from scipy.stats import uniform, randint
-
-from matplotlib.pyplot import show
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-SEED = 148
-np.random.seed(SEED)
-
-
-# # 1. Getting a good baseline for ensemble learning
+# ## Previous days:
 # 
-# It's always good to check how inputs play along with the output.
-# Here, we highlight one example functionality of the Ml-Ensemble's
-# visualization library.
-
-# In[ ]:
-
-
-def build_train():
-    """Read in training data and return input, output, columns tuple."""
-
-    # This is a version of Anovas minimally prepared dataset
-    # for the xgbstarter script
-    # https://www.kaggle.com/anokas/simple-xgboost-starter-0-0655
-
-    df = pd.read_csv('../input/train_2016_v2.csv')
-
-    prop = pd.read_csv('../input/properties_2016.csv')
-    convert = prop.dtypes == 'float64'
-    prop.loc[:, convert] =         prop.loc[:, convert].apply(lambda x: x.astype(np.float32))
-
-    df = df.merge(prop, how='left', on='parcelid')
-
-    y = df.logerror
-    df = df.drop(['parcelid',
-                  'logerror',
-                  'transactiondate',
-                  'propertyzoningdesc',
-                  'taxdelinquencyflag',
-                  'propertycountylandusecode'], axis=1)
-
-    convert = df.dtypes == 'object'
-    df.loc[:, convert] =         df.loc[:, convert].apply(lambda x: 1 * (x == True))
-
-    df.fillna(0, inplace=True)
-
-    return df, y, df.columns
-
-
-# In[ ]:
-
-
-xtrain, ytrain, columns = build_train()
-xtrain, xtest, ytrain, ytest = train_test_split(
-    xtrain, ytrain, test_size=0.5, random_state=SEED)
-
-
-# In[ ]:
-
-
-corr_X_y(xtrain, ytrain, figsize=(16, 10), label_rotation=80, hspace=1, fontsize=14)
-
-
-# A few features seems to be (first-order) uncorrelated with the output, suggesting estimators with inherent
-# feature selection should be preferred.
-
-# Now, consider how set of base learners (estimators) perform as they are.
-
-# In[ ]:
-
-
-# We consider the following models (or base learners)
-gb = XGBRegressor(n_jobs=1, random_state=SEED)
-ls = Lasso(alpha=1e-6, normalize=True)
-el = ElasticNet(alpha=1e-6, normalize=True)
-rf = RandomForestRegressor(random_state=SEED)
-
-base_learners = [
-    ('ls', ls), ('el', el), ('rf', rf), ('gb', gb)
-]
-
-
-# In[ ]:
-
-
-P = np.zeros((xtest.shape[0], len(base_learners)))
-P = pd.DataFrame(P, columns=[e for e, _ in base_learners])
-
-for est_name, est in base_learners:
-    est.fit(xtrain, ytrain)
-    p = est.predict(xtest)
-    P.loc[:, est_name] = p
-    print("%3s : %.4f" % (est_name, mean_absolute_error(ytest, p)))
-
-
-# So they all score relatively close. However, they seem to capture different aspects of the feature space, as shown by the low correlation of their predictions:
-
-# In[ ]:
-
-
-ax = corrmat(P.corr())
-show()
-
-
-# They are in fact not particularly correlated in their scoring (except the linear models), and hence
-# an ensemble may be able to outperform any single model by learning to combine their respective strength.
-
-# ## 2. Comparing base learners
+# * [**Day 1:** SELECT, FROM & WHERE](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1/)
+# * [**Day 2:** GROUP BY, HAVING & COUNT()](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2/)
 # 
-# *emphasized text*To facilitate base learner comparison, ML-Ensemble implements a randomized grid search
-# class that allows specification of several estimators (and preprocessing pipelines) in
-# one grid search.
-
-# In[ ]:
-
-
-# Put their parameter dictionaries in a dictionary with the
-# estimator names as keys
-param_dicts = {
-    'ls':
-    {'alpha': uniform(1e-6, 1e-5)},
-    'el':
-    {'alpha': uniform(1e-6, 1e-5),
-     'l1_ratio': uniform(0, 1)
-    },
-    'gb':
-    {'learning_rate': uniform(0.02, 0.04),
-     'colsample_bytree': uniform(0.55, 0.66),
-     'min_child_weight': randint(30, 60),
-     'max_depth': randint(3, 7),
-     'subsample': uniform(0.4, 0.2),
-     'n_estimators': randint(150, 200),
-     'colsample_bytree': uniform(0.6, 0.4),
-     'reg_lambda': uniform(1, 2),
-     'reg_alpha': uniform(1, 2),
-    },
-    'rf':
-    {'max_depth': randint(2, 5),
-     'min_samples_split': randint(5, 20),
-     'min_samples_leaf': randint(10, 20),
-     'n_estimators': randint(50, 100),
-     'max_features': uniform(0.6, 0.3)
-    }
-}
-
-
-# In[ ]:
-
-
-scorer = make_scorer(mean_absolute_error, greater_is_better=False)
-
-evl = Evaluator(
-    scorer,
-    cv=2,
-    random_state=SEED,
-    verbose=5,
-)
-
-
-# In[ ]:
-
-
-evl.fit(
-    xtrain, ytrain,
-    estimators=base_learners,
-    param_dicts=param_dicts,
-    preprocessing={'sc': [StandardScaler()], 'none': []},
-    n_iter=2  # bump this up to do a larger grid search
-)
-
-
-# In[ ]:
-
-
-pd.DataFrame(evl.results)
-
-
-# There you have it, a comparison of tuned models in one grid search!
+# ____
 # 
-# Optimal parameters are then easily accessed.
 
-# In[ ]:
-
-
-evl.results["params"]['sc.gb']
-
-
-# # 3. Comparing meta learners
+# # ORDER BY (and Dates!)
 # 
-# Running an entire ensemble several times just to compare different meta learners can be prohibitvely expensive. ML-Ensemble implements a class that acts as a transformer, allowing you to use ingoing layers as a "preprocessing" step, so that you need only evaluate the meta learners iteratively.
-
-# In[ ]:
-
-
-for case_name, params in evl.results["params"].items():
-    case, case_est = case_name.split('.')
-    for est_name, est in base_learners:
-        if est_name == case_est:
-            est.set_params(**params)
-
-
-# In[ ]:
-
-
-# We will compare a GBM and an elastic net as the meta learner
-# These are cloned internally so we can go ahead and grab the fitted ones
-meta_learners = [
-    ('gb', gb), ('el', el)
-]
-
-# Note that when we have a preprocessing pipeline,
-# keys are in the (prep_name, est_name) format
-param_dicts = {
-    'el':
-    {'alpha': uniform(1e-5, 1),
-     'l1_ratio': uniform(0, 1)
-    },
-    'gb':
-    {'learning_rate': uniform(0.01, 0.2),
-     'subsample': uniform(0.5, 0.5),
-     'reg_lambda': uniform(0.1, 1),
-     'n_estimators': randint(10, 100)
-    },
-}
-
-
-# In[ ]:
-
-
-# Put the layers you don't want to tune into an ensemble with model selection turned on
-# Just remember to turn it off when you're done!
-in_layer = SuperLearner(model_selection=True)
-in_layer.add(base_learners)
-
-preprocess = [in_layer]
-
-
-# In[ ]:
-
-
-evl.fit(
-    xtrain, ytrain,
-    meta_learners,
-    param_dicts,
-    preprocessing={'meta': preprocess},
-    n_iter=4                            # bump this up to do a larger grid search
-)
-
-
-# In[ ]:
-
-
-pd.DataFrame(evl.results)
-
-
-# # 4. Ensemble learning
+# So far in our scavenger hunt, we've learned how to use the following clauses: 
+#     
+#     SELECT ... 
+#     FROM ...
+#     (WHERE) ...
+#     GROUP BY ...
+#     (HAVING) ...
+# We also learned how to use the COUNT() aggregate function and, if you did the optional extra credit, possibly other aggregate functions as well. (If any of this is sounds unfamiliar to you, you can check out the earlier two days using the links above.)
 # 
-# With these results in mind, we now turn to building an ensemble estimator.
+# Today we're going to learn how change the order that data is returned to us using the ORDER BY clause. We're also going to talk a little bit about how to work with dates in SQL, because they're sort of their own thing and can lead to headaches if you're unfamiliar with them.
 # 
-# ML-Ensemble uses a neural network-like API to specify layers of base learners to be
-# fitted sequentially on the previous layer's predictions (or the raw input for the
-# first layer). An ensemble is built as a Scikit-learn estimator, and can be used as
-# any other Scikit-learn class.
+# 
+# ### ORDER BY
+# ___
+# 
+# First, let's learn how to use ORDER BY. ORDER BY is usually the last clause you'll put in your query, since you're going to want to use it to sort the results returned by the rest of your query.
+# 
+# We're going to be making queries against this version of the table we've been using an example over the past few days. 
+# 
+# > **Why would the order of a table change?** This can actually happen to active BigQuery datasets, since if your table is being added to regularly [it may be coalesced every so often and that will change the order of the data in your table](https://stackoverflow.com/questions/16854116/the-order-of-records-in-a-regularly-updated-bigquery-databaseg). 
+# 
+# You'll notice that, unlike in earlier days, our table is no longer sorted by the ID column. 
+# 
+# ![](https://i.imgur.com/QRgb4iL.png). 
+# 
+# ** Ordering by a numeric column**
+# 
+# When you ORDER BY a numeric column, by default the column will be sorted from the lowest to highest number. So this query will return the ID, Name and Animal columns, all sorted by the number in the ID column. The row with the lowest number in the ID column will be returned first.
+# 
+#     SELECT ID, Name, Animal
+#     FROM `bigquery-public-data.pet_records.pets`
+#     ORDER BY ID
+# Visually, this looks something like this:
+# 
+# ![](https://i.imgur.com/zEXDTKS.png)
+# 
+#     
+# ** Ordering by a text column**
+# 
+# You can also order by columns that have text in them. By default, the column you sort on will be sorted alphabetically from the beginning to the end of the alphabet.
+# 
+#     SELECT ID, Name, Animal
+#     FROM `bigquery-public-data.pet_records.pets`
+#     ORDER BY Animal
+# ![](https://i.imgur.com/E7qjnf9.png)
+# 
+# ** Reversing the order**
+# 
+# You can reverse the sort order (reverse alphabetical order for text columns or high to low for numeric columns) using the DESC argument. 
+# 
+# > ** DESC** is short for "descending", or high-to-low.
+# 
+# So this query will sort the selected columns by the Animal column, but the values that are last in alphabetic order will be returned first.
+# 
+#     SELECT ID, Name, Animal
+#     FROM `bigquery-public-data.pet_records.pets`
+#     ORDER BY Animal DESC
+# ![](https://i.imgur.com/DREYNFF.png)
+#  
+# ### Dates
+# ____
+# 
+# Finally, let's talk about dates. I'm including these because they are something that I found particularly confusing when I first learned SQL, and I ended up having to use them all. the. time. 
+# 
+# There are two different ways that a date can be stored in BigQuery: as a DATE or as a DATETIME. Here's a quick summary:
+# 
+# **DATE format**
+# 
+# The DATE format has the year first, then the month, and then the day. It looks like this:
+# 
+#     YYYY-[M]M-[D]D
+# * YYYY: Four-digit year
+# * [M]M: One or two digit month
+# * [D]D: One or two digit day
+# 
+# **DATETIME/TIMESTAMP format**
+# 
+# The DATETIME format is just like the date format... but with time added at the end. (The difference between DATETIME and TIMESTAMP is that the date and time information in a DATETIME is based on a specific timezone. On the other hand, a TIMESTAMP will be the same in all time zones, except for the time zone) . Both formats look like this:
+# 
+#     YYYY-[M]M-[D]D[( |T)[H]H:[M]M:[S]S[.DDDDDD]][time zone]
+# * YYYY: Four-digit year
+# * [M]M: One or two digit month
+# * [D]D: One or two digit day
+# * ( |T): A space or a T separator
+# * [H]H: One or two digit hour (valid values from 00 to 23)
+# * [M]M: One or two digit minutes (valid values from 00 to 59)
+# * [S]S: One or two digit seconds (valid values from 00 to 59)
+# * [.DDDDDD]: Up to six fractional digits (i.e. up to microsecond precision)
+# * (TIMESTAMP only) [time zone]: String representing the time zone
+# 
+# ** Getting only part of a date **
+# 
+# Often, though, you'll only want to look at part of a date, like the year or the day. You can do this using the EXTRACT function and specifying what part of the date you'd like to extract. 
+# 
+# So this query will return one column with just the day of each date in the column_with_timestamp column: 
+# 
+#             SELECT EXTRACT(DAY FROM column_with_timestamp)
+#             FROM `bigquery-public-data.imaginary_dataset.imaginary_table`
+# One of the nice things about SQL is that it's very smart about dates and we can ask for information beyond just extracting part of the cell. For example, this query will return one column with just the week in the year (between 1 and 53) of each date in the column_with_timestamp column: 
+# 
+#             SELECT EXTRACT(WEEK FROM column_with_timestamp)
+#             FROM `bigquery-public-data.imaginary_dataset.imaginary_table`
+# SQL has a lot of power when it comes to dates, and that lets you ask very specific questions using this information. You can find all the functions you can use with dates in BigQuery [on this page](https://cloud.google.com/bigquery/docs/reference/legacy-sql), under "Date and time functions".  
+
+# ## Example: Which day of the week do the most fatal motor accidents happen on?
+# ___
+# 
+# Now we're ready to work through an example. Today, we're going to be using the US Traffic Fatality Records database, which contains information on traffic accidents in the US where at least one person died. (It's definitely a sad topic, but if we can understand this data and the trends in it we can use that information to help prevent additional accidents.)
+# 
+# First, just like yesterday, we need to get our environment set up. Since you already know how to look at schema information at this point, I'm going to let you do that on your own. 
+# 
+# > **Important note:** Make sure that you add the BigQuery dataset you're querying to your kernel. Otherwise you'll get 
 
 # In[ ]:
 
 
-# Let's pick the linear meta learner with the above tuned
-# hyper-parameters. Note that ideally, you'd want to tune
-# the ensemble as a whole, not each estimator at a time
-meta_learner = meta_learners[1][1]
-meta_learner.set_params(**evl.results["params"]["meta.el"])
+# import package with helper functions 
+import bq_helper
 
-# We can grab the preprocessing layer and turn model selection off
-ens = in_layer
-ens.model_selection = False
-ens.add_meta(meta_learner)
+# create a helper object for this dataset
+accidents = bq_helper.BigQueryHelper(active_project="bigquery-public-data",
+                                   dataset_name="nhtsa_traffic_fatalities")
 
 
-# The ensemble we will implement is the Super Learner, also known as a stacking ensemble. There are several alternatives, see the documentation for further info.
 
-# Once instantiated, the ensemble will behave like any other Scikit-learn estimator.
+# We're going to look at which day of the week the most fatal traffic accidents happen on. I'm going to get the count of the unique id's (in this table they're called "consecutive_number") as well as the day of the week for each accident. Then I'm going sort my table so that the days with the most accidents are  returned first.
 
 # In[ ]:
 
 
-ens.fit(xtrain, ytrain)
+# query to find out the number of accidents which 
+# happen on each day of the week
+query = """SELECT COUNT(consecutive_number), 
+                  EXTRACT(DAYOFWEEK FROM timestamp_of_crash)
+            FROM `bigquery-public-data.nhtsa_traffic_fatalities.accident_2015`
+            GROUP BY EXTRACT(DAYOFWEEK FROM timestamp_of_crash)
+            ORDER BY COUNT(consecutive_number) DESC
+        """
 
 
-# Predictions are generated as usual:
+# Now that our query is ready, let's run it (safely!) and store the results in a dataframe: 
 
 # In[ ]:
 
 
-pred = ens.predict(xtest)
+# the query_to_pandas_safe method will cancel the query if
+# it would use too much of your quota, with the limit set 
+# to 1 GB by default
+accidents_by_day = accidents.query_to_pandas_safe(query)
+accidents_by_day.head()
+
+
+# And that gives us a dataframe! Let's quickly plot our data to make sure that it's actually been sorted:
+
+# In[ ]:
+
+
+# library for plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# make a plot to show that our data is, actually, sorted:
+plt.plot(accidents_by_day.f0_)
+plt.title("Number of Accidents by Rank of Day \n (Most to least dangerous)")
+
+
+# Yep, our query was, in fact, returned sorted! Now let's take a quick peek to figure out which days are the most dangerous:
+
+# In[ ]:
+
+
+print(accidents_by_day)
+
+
+# To map from the numbers returned for the day of the week (the second column) to the actual day, I consulted [the BigQuery documentation on the DAYOFWEEK function](https://cloud.google.com/bigquery/docs/reference/legacy-sql#dayofweek), which says that it returns "an integer between 1 (Sunday) and 7 (Saturday), inclusively". So we can tell, based on our query, that in 2015 most fatal motor accidents occur on Sunday and Saturday, while the fewest happen on Tuesday.
+
+# # Scavenger hunt
+# ___
+# 
+# Now it's your turn! Here are the questions I would like you to get the data to answer:
+# 
+# * Which hours of the day do the most accidents occur during?
+#     * Return a table that has information on how many accidents occurred in each hour of the day in 2015, sorted by the the number of accidents which occurred each hour. Use either the accident_2015 or accident_2016 table for this, and the timestamp_of_crash column. (Yes, there is an hour_of_crash column, but if you use that one you won't get a chance to practice with dates. :P)
+#     * **Hint:** You will probably want to use the [EXTRACT() function](https://cloud.google.com/bigquery/docs/reference/standard-sql/functions-and-operators#extract_1) for this.
+# * Which state has the most hit and runs?
+#     * Return a table with the number of vehicles registered in each state that were involved in hit-and-run accidents, sorted by the number of hit and runs. Use either the vehicle_2015 or vehicle_2016 table for this, especially the registration_state_name and hit_and_run columns.
+# 
+# In order to answer these questions, you can fork this notebook by hitting the blue "Fork Notebook" at the very top of this page (you may have to scroll up). "Forking" something is making a copy of it that you can edit on your own without changing the original.
+
+# In[ ]:
+
+
+# Your code goes here :)
+# query to find out the number of accidents which 
+# happen on which hours of the day 
+query2 = """SELECT COUNT(consecutive_number), 
+                  EXTRACT(HOUR FROM timestamp_of_crash)
+            FROM `bigquery-public-data.nhtsa_traffic_fatalities.accident_2015`
+            GROUP BY EXTRACT(HOUR FROM timestamp_of_crash)
+            ORDER BY COUNT(consecutive_number) DESC
+        """
 
 
 # In[ ]:
 
 
-print("ensemble score: %.4f" % mean_absolute_error(ytest, pred))
+# the query_to_pandas_safe method will cancel the query if
+# it would use too much of your quota, with the limit set 
+# to 1 GB by default
+accidents_by_hour = accidents.query_to_pandas_safe(query2)
+accidents_by_hour
 
 
-# And that's it for this tutorial!
+# In[ ]:
+
+
+accidents_by_hour.to_csv("accdents_by_hours.csv")
+
+
+# In[ ]:
+
+
+
+sns.set_style("whitegrid") 
+ax = sns.barplot(x="f1_", y="f0_", data=accidents_by_hour,palette='coolwarm')
+
+
+# In[ ]:
+
+
+# Your code goes here :)
+# query to find out the number of accidents which 
+# happen on which hours of the day 
+query3 = """SELECT registration_state_name, COUNT(hit_and_run)
+            FROM `bigquery-public-data.nhtsa_traffic_fatalities.vehicle_2015`
+            WHERE hit_and_run = "Yes"
+            GROUP BY registration_state_name
+            ORDER BY COUNT(hit_and_run) DESC
+            """
+    
+
+
+# In[ ]:
+
+
+# the query_to_pandas_safe method will cancel the query if
+# it would use too much of your quota, with the limit set 
+# to 1 GB by default
+hit_run_by_state = accidents.query_to_pandas_safe(query3)
+hit_run_by_state
+
+
+# In[ ]:
+
+
+hit_run_by_state.to_csv("hit_and_run_by_state.csv")
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(6, 15))
+sns.set_style("whitegrid") 
+ax = sns.barplot(x="f0_", y="registration_state_name", data=hit_run_by_state,palette='coolwarm',dodge=False)
+
+
+# \Please feel free to ask any questions you have in this notebook or in the [Q&A forums](https://www.kaggle.com/questions-and-answers)! 
 # 
-# You might have noticed that the ensemble did not achieve an increase in performance. This is partly due to the lack of proper hyper parameter tuning, but more importantly because the base learners are not sufficiently accurate for there to be anything meaningful for the meta learner to learn from (note that predicting the average gets you about 0.07) 
-# 
-# In these cases, unless the meta learner is underfitting, the ensemble will at least be on par with the best base learner.  Good features are always the primary source of predictive power. Once you have them, combining different estimators in an ensemble is a powerful way of learning as much of the signal in the data as possible.
-# 
-# If you decide to give ML-Ensemble a try, note that the library is in beta testing so you may run into some unexpected behavior or see opportunities for improvements. Feel free to contribute to the project via the [github](https://github.com/flennerhag/mlens) repository! 
+# Also, if you want to share or get comments on your kernel, remember you need to make it public first! You can change the visibility of your kernel under the "Settings" tab, on the right half of your screen.

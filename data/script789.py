@@ -1,313 +1,173 @@
 
 # coding: utf-8
 
-# In[ ]:
+# In this notebook, let us try and explore the price history of different cryptocurrencies.
+# 
+# We shall first import the necessary modules and then list the input files.
+
+# In[1]:
 
 
-import numpy as np
-import pandas as pd
-
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
-from sklearn.cross_validation import train_test_split
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
+import seaborn as sns
+color = sns.color_palette()
+
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-import math
+pd.options.mode.chained_assignment = None
+pd.options.display.max_columns = 999
 
-
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# In[ ]:
+# **Bitcoin**
+# 
+# We shall first explore the "bitcoin" as it is the market leader in this space.
 
+# In[5]:
 
-def rmsle(y, y_pred):
-    assert len(y) == len(y_pred)
-    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
-    return (sum(to_sum) * (1.0/len(y))) ** 0.5
-#Source: https://www.kaggle.com/marknagelberg/rmsle-function
 
+df = pd.read_csv("../input/bitcoin_price.csv", parse_dates=['Date'])
+df.head()
 
-# In[ ]:
 
+# First let us plot the closing value of Bitcoin and observe how the price has changed over time.
 
-#LOAD DATA
-print("Loading data...")
-train = pd.read_table("../input/train.tsv")
-test = pd.read_table("../input/test.tsv")
-print(train.shape)
-print(test.shape)
+# In[26]:
 
 
-# In[ ]:
+import matplotlib.dates as mdates
+df['Date_mpl'] = df['Date'].apply(lambda x: mdates.date2num(x))
 
+fig, ax = plt.subplots(figsize=(12,8))
+sns.tsplot(df.Close.values, time=df.Date_mpl.values, alpha=0.8, color=color[3], ax=ax)
+ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y.%m.%d'))
+fig.autofmt_xdate()
+plt.xlabel('Date', fontsize=12)
+plt.ylabel('Price in USD', fontsize=12)
+plt.title("Closing price distribution of bitcoin", fontsize=15)
+plt.show()
 
-#HANDLE MISSING VALUES
-print("Handling missing values...")
-def handle_missing(dataset):
-    dataset.category_name.fillna(value="missing", inplace=True)
-    dataset.brand_name.fillna(value="missing", inplace=True)
-    dataset.item_description.fillna(value="missing", inplace=True)
-    return (dataset)
 
-train = handle_missing(train)
-test = handle_missing(test)
-print(train.shape)
-print(test.shape)
+# Looks like there seems to be a spike in early 2014 and then there is a huge raise this year from 1000 USD to more than 3000 USD.
+# 
+# Candlestick charts are very famous in financial world. So let us try and plot the bicoin price using that.
 
+# In[25]:
 
-# In[ ]:
 
+import matplotlib.ticker as mticker
+from matplotlib.finance import candlestick_ohlc
 
-train.head(3)
+fig = plt.figure(figsize=(12,8))
+ax1 = plt.subplot2grid((1,1), (0,0))
 
-
-# In[ ]:
-
-
-#PROCESS CATEGORICAL DATA
-print("Handling categorical variables...")
-le = LabelEncoder()
-
-le.fit(np.hstack([train.category_name, test.category_name]))
-train.category_name = le.transform(train.category_name)
-test.category_name = le.transform(test.category_name)
-
-le.fit(np.hstack([train.brand_name, test.brand_name]))
-train.brand_name = le.transform(train.brand_name)
-test.brand_name = le.transform(test.brand_name)
-del le
-
-train.head(3)
-
-
-# In[ ]:
-
-
-#PROCESS TEXT: RAW
-print("Text to seq process...")
-from keras.preprocessing.text import Tokenizer
-raw_text = np.hstack([train.item_description.str.lower(), train.name.str.lower()])
-
-print("   Fitting tokenizer...")
-tok_raw = Tokenizer()
-tok_raw.fit_on_texts(raw_text)
-print("   Transforming text to seq...")
-
-train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
-test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
-train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
-test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
-train.head(3)
-
-
-# In[ ]:
-
-
-#SEQUENCES VARIABLES ANALYSIS
-max_name_seq = np.max([np.max(train.seq_name.apply(lambda x: len(x))), np.max(test.seq_name.apply(lambda x: len(x)))])
-max_seq_item_description = np.max([np.max(train.seq_item_description.apply(lambda x: len(x)))
-                                   , np.max(test.seq_item_description.apply(lambda x: len(x)))])
-print("max name seq "+str(max_name_seq))
-print("max item desc seq "+str(max_seq_item_description))
-
-
-# In[ ]:
-
-
-train.seq_name.apply(lambda x: len(x)).hist()
-
-
-# In[ ]:
-
-
-train.seq_item_description.apply(lambda x: len(x)).hist()
-
-
-# In[ ]:
-
-
-#EMBEDDINGS MAX VALUE
-#Base on the histograms, we select the next lengths
-MAX_NAME_SEQ = 10
-MAX_ITEM_DESC_SEQ = 75
-MAX_TEXT = np.max([np.max(train.seq_name.max())
-                   , np.max(test.seq_name.max())
-                  , np.max(train.seq_item_description.max())
-                  , np.max(test.seq_item_description.max())])+2
-MAX_CATEGORY = np.max([train.category_name.max(), test.category_name.max()])+1
-MAX_BRAND = np.max([train.brand_name.max(), test.brand_name.max()])+1
-MAX_CONDITION = np.max([train.item_condition_id.max(), test.item_condition_id.max()])+1
-
-
-# In[ ]:
-
-
-#SCALE target variable
-train["target"] = np.log(train.price+1)
-target_scaler = MinMaxScaler(feature_range=(-1, 1))
-train["target"] = target_scaler.fit_transform(train.target.reshape(-1,1))
-pd.DataFrame(train.target).hist()
-
-
-# In[ ]:
-
-
-#EXTRACT DEVELOPTMENT TEST
-dtrain, dvalid = train_test_split(train, random_state=123, train_size=0.99)
-print(dtrain.shape)
-print(dvalid.shape)
-
-
-# In[ ]:
-
-
-#KERAS DATA DEFINITION
-from keras.preprocessing.sequence import pad_sequences
-
-def get_keras_data(dataset):
-    X = {
-        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
-        ,'item_desc': pad_sequences(dataset.seq_item_description, maxlen=MAX_ITEM_DESC_SEQ)
-        ,'brand_name': np.array(dataset.brand_name)
-        ,'category_name': np.array(dataset.category_name)
-        ,'item_condition': np.array(dataset.item_condition_id)
-        ,'num_vars': np.array(dataset[["shipping"]])
-    }
-    return X
-
-X_train = get_keras_data(dtrain)
-X_valid = get_keras_data(dvalid)
-X_test = get_keras_data(test)
-
-
-# In[ ]:
-
-
-#KERAS MODEL DEFINITION
-from keras.layers import Input, Dropout, Dense, BatchNormalization, Activation, concatenate, GRU, Embedding, Flatten, BatchNormalization
-from keras.models import Model
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
-from keras import backend as K
-
-def get_callbacks(filepath, patience=2):
-    es = EarlyStopping('val_loss', patience=patience, mode="min")
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [es, msave]
-
-def rmsle_cust(y_true, y_pred):
-    first_log = K.log(K.clip(y_pred, K.epsilon(), None) + 1.)
-    second_log = K.log(K.clip(y_true, K.epsilon(), None) + 1.)
-    return K.sqrt(K.mean(K.square(first_log - second_log), axis=-1))
-
-def get_model():
-    #params
-    dr_r = 0.1
+temp_df = df[df['Date']>'2017-05-01']
+ohlc = []
+for ind, row in temp_df.iterrows():
+    ol = [row['Date_mpl'],row['Open'], row['High'], row['Low'], row['Close'], row['Volume']]
+    ohlc.append(ol)
     
-    #Inputs
-    name = Input(shape=[X_train["name"].shape[1]], name="name")
-    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
-    brand_name = Input(shape=[1], name="brand_name")
-    category_name = Input(shape=[1], name="category_name")
-    item_condition = Input(shape=[1], name="item_condition")
-    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
-    
-    #Embeddings layers
-    emb_name = Embedding(MAX_TEXT, 50)(name)
-    emb_item_desc = Embedding(MAX_TEXT, 50)(item_desc)
-    emb_brand_name = Embedding(MAX_BRAND, 10)(brand_name)
-    emb_category_name = Embedding(MAX_CATEGORY, 10)(category_name)
-    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
-    
-    #rnn layer
-    rnn_layer1 = GRU(16) (emb_item_desc)
-    rnn_layer2 = GRU(8) (emb_name)
-    
-    #main layer
-    main_l = concatenate([
-        Flatten() (emb_brand_name)
-        , Flatten() (emb_category_name)
-        , Flatten() (emb_item_condition)
-        , rnn_layer1
-        , rnn_layer2
-        , num_vars
-    ])
-    main_l = Dropout(dr_r) (Dense(128) (main_l))
-    main_l = Dropout(dr_r) (Dense(64) (main_l))
-    
-    #output
-    output = Dense(1, activation="linear") (main_l)
-    
-    #model
-    model = Model([name, item_desc, brand_name
-                   , category_name, item_condition, num_vars], output)
-    model.compile(loss="mse", optimizer="adam", metrics=["mae", rmsle_cust])
-    
-    return model
+candlestick_ohlc(ax1, ohlc, width=0.4, colorup='#77d879', colordown='#db3f3f')
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+ax1.xaxis.set_major_locator(mticker.MaxNLocator(10))
 
-    
-model = get_model()
-model.summary()
-    
+plt.xlabel("Date", fontsize=12)
+plt.ylabel("Price in USD", fontsize=12)
+plt.title("Candlestick chart for Bitcoin", fontsize=15)
+plt.subplots_adjust(left=0.09, bottom=0.20, right=0.94, top=0.90, wspace=0.2, hspace=0)
+plt.show()
 
 
-# In[ ]:
+# Now we can make a generic code to create charts when given an input file. Please change the "INPUT_FILE" variable and get the historical price charts for the currency of your choice.
+
+# In[32]:
 
 
-#FITTING THE MODEL
-BATCH_SIZE = 20000
-epochs = 5
+INPUT_FILE = "ethereum_price.csv"
 
-model = get_model()
-model.fit(X_train, dtrain.target, epochs=epochs, batch_size=BATCH_SIZE
-          , validation_data=(X_valid, dvalid.target)
-          , verbose=1)
-
-
-# In[ ]:
-
-
-#EVLUEATE THE MODEL ON DEV TEST: What is it doing?
-val_preds = model.predict(X_valid)
-val_preds = target_scaler.inverse_transform(val_preds)
-val_preds = np.exp(val_preds)+1
-
-#mean_absolute_error, mean_squared_log_error
-y_true = np.array(dvalid.price.values)
-y_pred = val_preds[:,0]
-v_rmsle = rmsle(y_true, y_pred)
-print(" RMSLE error on dev test: "+str(v_rmsle))
+currency_name = INPUT_FILE.split("_")[0]
+df = pd.read_csv("../input/" + INPUT_FILE, parse_dates=['Date'])
+df['Date_mpl'] = df['Date'].apply(lambda x: mdates.date2num(x))
+fig, ax = plt.subplots(figsize=(12,8))
+sns.tsplot(df.Close.values, time=df.Date_mpl.values, alpha=0.8, color=color[2], ax=ax)
+ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y.%m.%d'))
+fig.autofmt_xdate()
+plt.xlabel('Date', fontsize=12)
+plt.ylabel('Price in USD', fontsize=12)
+plt.title("Closing price distribution of "+currency_name, fontsize=15)
+plt.show()
 
 
-# In[ ]:
+# Now let us build a heat map using correlation to see how the price of different currencies change with respect to each other.
+# 
+# Please add / delete the file names in "files_to_use" variable to check the correlation of different crypto currencies.
+
+# In[37]:
 
 
-#CREATE PREDICTIONS
-preds = model.predict(X_test, batch_size=BATCH_SIZE)
-preds = target_scaler.inverse_transform(preds)
-preds = np.exp(preds)-1
+files_to_use = ["bitcoin_price.csv", "ethereum_price.csv", "ripple_price.csv", "litecoin_price.csv"]
 
-submission = test[["test_id"]]
-submission["price"] = preds
+cols_to_use = []
+for ind, file_name in enumerate(files_to_use):
+    currency_name = file_name.split("_")[0]
+    if ind == 0:
+        df = pd.read_csv("../input/"+file_name, usecols=["Date", "Close"], parse_dates=["Date"])
+        df.columns = ["Date", currency_name]
+    else:
+        temp_df = pd.read_csv("../input/"+file_name, usecols=["Date", "Close"], parse_dates=["Date"])
+        temp_df.columns = ["Date", currency_name]
+        df = pd.merge(df, temp_df, on="Date")
+    cols_to_use.append(currency_name)
+df.head()
+        
+temp_df = df[cols_to_use]
+corrmat = temp_df.corr(method='spearman')
+fig, ax = plt.subplots(figsize=(10, 10))
+sns.heatmap(corrmat, vmax=1., square=True)
+plt.title("Cryptocurrency correlation map", fontsize=15)
+plt.show()
 
 
-# In[ ]:
+# **Future Price Prediction:**
+# 
+# Now that we have explored the dataset, one possible next step could be to predict the future price of the currency. We could use the Propher library of facebook here to do the predictions. 
+# 
+# Please modify the "INPUT_FILE" variable to make predictions for other currencies.
+
+# In[9]:
 
 
-submission.to_csv("./myNNsubmission.csv", index=False)
-submission.price.hist()
+INPUT_FILE = "bitcoin_price.csv"
+
+from fbprophet import Prophet
+df = pd.read_csv("../input/" + INPUT_FILE, parse_dates=['Date'], usecols=["Date", "Close"])
+df.columns = ["ds", "y"]
+
+m = Prophet()
+m.fit(df);
+future = m.make_future_dataframe(periods=30)
+forecast = m.predict(future)
+forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail()
 
 
-# This was just an example how nn can solve this problems. Potencial improvements of the kernel:
-#     - Increase the embeddings factos
-#     - Decrease the batch size
-#     - Add Batch Normalization
-#     - Try LSTM, Bidirectional RNN, stack RNN
-#     - Try with more dense layers or more rnn outputs
-#     -  etc. Or even try a new architecture!
-#     
-# Any comment will be welcome. Thanks!
-#  
-#     
+# In[7]:
+
+
+m.plot(forecast)
+
+
+# In[8]:
+
+
+m.plot_components(forecast)
+
+
+# Hope this is helpful.!

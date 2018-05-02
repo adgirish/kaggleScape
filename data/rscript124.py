@@ -1,119 +1,103 @@
-import pickle
-from io import BytesIO
-import logging
-
-import ujson as json
-import pandas as pd
-import numpy as np
-from scipy.spatial import distance
-
-from requests import Session
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util import Retry
-from PIL import Image, ImageStat, ImageOps
-
-from keras.applications.resnet50 import ResNet50, preprocess_input
-from keras.applications.vgg19 import VGG19, decode_predictions
-
-import pytesseract
-
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    datefmt='%H:%M:%S', )
-logger = logging.getLogger(__name__)
-
-ses = Session()
-ses.mount('https://', HTTPAdapter(max_retries=Retry(total=5)))
-
-resnet = ResNet50(include_top=False, input_shape=(210, 266, 3))
-vgg = VGG19()
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.preprocessing import LabelEncoder
 
 
-def get_data(train=True):
-    if train:
-        with open('train.json', 'r') as raw_data:
-            data = json.load(raw_data)
-    else:
-        with open('test.json', 'r') as raw_data:
-            data = json.load(raw_data)
+# read datasets
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
-    df = pd.DataFrame(data)
-    return df['photos']
+# process columns, apply LabelEncoder to categorical features
+for c in train.columns:
+    if train[c].dtype == 'object':
+        lbl = LabelEncoder() 
+        lbl.fit(list(train[c].values) + list(test[c].values)) 
+        train[c] = lbl.transform(list(train[c].values))
+        test[c] = lbl.transform(list(test[c].values))
 
-
-def _parse(pic):
-    pic = ses.get(pic)
-    img = Image.open(BytesIO(pic.content))
-    t = pytesseract.image_to_string(img)
-    has_text = 1 if len(t) else 0
-
-    img = ImageOps.fit(img, (266, 210), Image.ANTIALIAS)
-    img_for_clf = ImageOps.fit(img, (224, 224), Image.ANTIALIAS)
-    img_for_clf = preprocess_input(np.array(img_for_clf.convert("RGB")).reshape(1, 224, 224, 3).astype(np.float64))
-
-    preds = decode_predictions(vgg.predict(img_for_clf), top=3)
-    objects = [x[1] for x in preds[0]]
-    logger.info('There are {} on the picture'.format(objects))
-
-    stats = ImageStat.Stat(img, mask=None)
-    if len(stats.mean) == 3:
-        r_mean, g_mean, b_mean = stats.mean
-        r_var, g_var, b_var = stats.var
-    else:
-        # grayscale image happened
-        r_mean, g_mean, b_mean = stats.mean[0], stats.mean[0], stats.mean[0]
-        r_var, g_var, b_var = stats.var[0], stats.var[0], stats.var[0]
-
-    img = preprocess_input(np.array(img.convert("RGB")).reshape(1, 210, 266, 3).astype(np.float64))
-    features = resnet.predict(img)
-    return (r_mean, g_mean, b_mean, r_var, g_var, b_var, has_text), features.reshape(2048), objects
+# shape        
+print('Shape train: {}\nShape test: {}'.format(train.shape, test.shape))
 
 
-default_values = (255, 255, 255, 0, 0, 0, 0), np.zeros(2048), []
+##Add decomposed components: PCA / ICA etc.
+from sklearn.decomposition import PCA, FastICA
+from sklearn.decomposition import TruncatedSVD
+n_comp = 12
+
+# tSVD
+tsvd = TruncatedSVD(n_components=n_comp, random_state=42)
+tsvd_results_train = tsvd.fit_transform(train.drop(["y"], axis=1))
+tsvd_results_test = tsvd.transform(test)
+
+# PCA
+pca = PCA(n_components=n_comp, random_state=42)
+pca2_results_train = pca.fit_transform(train.drop(["y"], axis=1))
+pca2_results_test = pca.transform(test)
+
+# ICA
+ica = FastICA(n_components=n_comp, random_state=42)
+ica2_results_train = ica.fit_transform(train.drop(["y"], axis=1))
+ica2_results_test = ica.transform(test)
+
+# Append decomposition components to datasets
+for i in range(1, n_comp+1):
+    train['pca_' + str(i)] = pca2_results_train[:,i-1]
+    test['pca_' + str(i)] = pca2_results_test[:, i-1]
+    
+    train['ica_' + str(i)] = ica2_results_train[:,i-1]
+    test['ica_' + str(i)] = ica2_results_test[:, i-1]
+    
+#    train['tsvd_' + str(i)] = tsvd_results_train[:,i-1]
+#    test['tsvd_' + str(i)] = tsvd_results_test[:, i-1]
+    
+y_train = train["y"]
+y_mean = np.mean(y_train)
 
 
-def parse(pic):
-    try:
-        return _parse(pic)
-    except KeyboardInterrupt:
-        raise SystemExit()
-    except:
-        logger.exception('Parsing failed: {}')
-        return default_values
+
+### Regressor
+import xgboost as xgb
+
+# prepare dict of params for xgboost to run with
+xgb_params = {
+    'n_trees': 500, 
+    'eta': 0.005,
+    'max_depth': 4,
+    'subsample': 0.95,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'base_score': y_mean, # base prediction = mean(target)
+    'silent': 1
+}
 
 
-def process_photo(photo):
-    # two pics are used because preview at website contains two first photos
-    if not len(photo):
-        m1, e1, objects1 = default_values
-        m2, e2, objects2 = default_values
-        dist = 0
-        objects_set = {}
-    elif len(photo) == 1:
-        m1, e1, objects1 = parse(photo[0])
-        m2, e2, objects2 = default_values
-        dist = distance.euclidean(e1, e2)
-        objects_set = set(objects1)
-    else:
-        m1, e1, objects1 = parse(photo[0])
-        m2, e2, objects2 = parse(photo[1])
-        dist = distance.euclidean(e1, e2)
-        objects_set = set(objects1 + objects2)
+# form DMatrices for Xgboost training
+dtrain = xgb.DMatrix(train.drop('y', axis=1), y_train)
+dtest = xgb.DMatrix(test)
 
-    return [m1, m2], [e1, e2], dist, objects_set
+# xgboost, cross-validation
+#cv_result = xgb.cv(xgb_params, 
+#                   dtrain, 
+#                   num_boost_round=1000, # increase to have better results (~700)
+#                   early_stopping_rounds=50,
+#                   verbose_eval=10, 
+#                   show_stdv=False
+#                  )
 
+#num_boost_rounds = len(cv_result)
+#print('num_boost_rounds=' + str(num_boost_rounds))
 
-def main(train=True):
-    photos = get_data(train=train)
-
-    processed = map(process_photo, photos)
-    manual, extracted, distances, objects = zip(*processed)
-
-    fname = 'pics_train.bin' if train else 'pics_test.bin'
-    with open(fname, 'wb') as out:
-        pickle.dump((manual, extracted, distances, objects), out)
+num_boost_rounds = 1500
+# train model
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
 
 
-if __name__ == '__main__':
-    main()
-    main(False)
+# check f2-score (to get higher score - increase num_boost_round in previous cell)
+from sklearn.metrics import r2_score
+print(r2_score(model.predict(dtrain), dtrain.get_label()))
+
+# make predictions and save results
+y_pred = model.predict(dtest)
+
+output = pd.DataFrame({'id': test['ID'].astype(np.int32), 'y': y_pred})
+output.to_csv('submission_baseLine.csv', index=False)

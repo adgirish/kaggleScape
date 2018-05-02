@@ -1,242 +1,333 @@
 
 # coding: utf-8
 
-# # Plant Seedlings Segmentation with pure Computer Vision
-
-# First of all, thanks for the popularity of this kernel. I hope it will help for you to create more accurate predictions
+# Once you've gotten your feet wet in basic sklearn modeling, you might find yourself doing the same few steps over and over again in the same anaysis. To get to the next level, pipelines are your friend!
+# 
+# Pipelines are a way to streamline a lot of the routine processes, encapsulating little pieces of logic into one function call, which makes it easier to actually do modeling instead just writing a bunch of code. Pipelines allow for experiments, and for a dataset like this that only has the text as a feature, you're going to need to do a lot of experiments. Plus, when your modeling gets really complicated, it's sometimes hard to see if you have any data leakage hiding somewhere. Pipelines are set up with the fit/transform/predict functionality, so you can fit a whole pipeline to the training data and transform to the test data, without having to do it individually for each thing you do. Super convenienent, right??
+# 
+# This notebook is going to break down the pipeline process to make it easier to see how they all fit together. While not exhaustive, it should get you started on building your own pipelines so you can spend more time on the good stuff, thinking.
+# 
+# But first, we get the data:
 
 # In[1]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import os
-import matplotlib
-import matplotlib.pyplot as plt
-import pandas as pd
-import cv2
-import numpy as np
-from glob import glob
-import seaborn as sns
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
+df = pd.read_csv('../input/train.csv')
+
+df.dropna(axis=0)
+df.set_index('id', inplace = True)
+
+df.head()
+
+
+# ## Preprocessing and Feature Engineering
+# 
+# To begin, let's do some basic feature engineering. To make it easier to replicate on the submission data, we will encapsulate the logic into a function.
+# 
+# Note, all of this preprocessing is standard stuff, and does not depend on the data it's processing on, so it's ok to do this now. Things like count vectorization and numeric scaling depend on the data it's run on, so that part must be done differently. We will get to that later.
+# 
+# For now, we will count the number of words in each row, the number of characters, the number of non stop words, and the number of commas, since who knows, maybe using commas helps build suspense??
 
 # In[2]:
 
 
-BASE_DATA_FOLDER = "../input"
-TRAin_DATA_FOLDER = os.path.join(BASE_DATA_FOLDER, "train")
+import re
+from nltk.corpus import stopwords
+
+stopWords = set(stopwords.words('english'))
+
+#creating a function to encapsulate preprocessing, to mkae it easy to replicate on  submission data
+def processing(df):
+    #lowering and removing punctuation
+    df['processed'] = df['text'].apply(lambda x: re.sub(r'[^\w\s]','', x.lower()))
+    
+    #numerical feature engineering
+    #total length of sentence
+    df['length'] = df['processed'].apply(lambda x: len(x))
+    #get number of words
+    df['words'] = df['processed'].apply(lambda x: len(x.split(' ')))
+    df['words_not_stopword'] = df['processed'].apply(lambda x: len([t for t in x.split(' ') if t not in stopWords]))
+    #get the average word length
+    df['avg_word_length'] = df['processed'].apply(lambda x: np.mean([len(t) for t in x.split(' ') if t not in stopWords]) if len([len(t) for t in x.split(' ') if t not in stopWords]) > 0 else 0)
+    #get the average word length
+    df['commas'] = df['text'].apply(lambda x: x.count(','))
+
+    return(df)
+
+df = processing(df)
+
+df.head()
 
 
-# ### Read images
-# First, I'll just read all the images. The images are in BGR (Blue/Green/Red) format because OpenCV uses this.
+# ### Creating a Pipeline
 # 
-# Btw... If you'd like to use RGB format, than you can use it, it won't effect the segmentation because we will use the HSV (Hue/Saturation/Value) color space for that.
+# Sklearn's pipeline functionality makes it easier to repeat commonly occuring steps in your modeling process. Similar to the processing function I made above, it provides a way to take code, fit it to the training data, apply it to the test data without having to copy and paste everything.
+# 
+# Super easy, but I find the documentation a little hard to piece through. So let's build the pipelines up from the bottom. Plus, since pipelines are made from pipelines, it's useful to see how they build on each other.
+# 
+# First step, split your data into training and testing.
 
 # In[3]:
 
 
-images_per_class = {}
-for class_folder_name in os.listdir(TRAin_DATA_FOLDER):
-    class_folder_path = os.path.join(TRAin_DATA_FOLDER, class_folder_name)
-    class_label = class_folder_name
-    images_per_class[class_label] = []
-    for image_path in glob(os.path.join(class_folder_path, "*.png")):
-        image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
-        images_per_class[class_label].append(image_bgr)
+from sklearn.model_selection import train_test_split
+
+features= [c for c in df.columns.values if c  not in ['id','text','author']]
+numeric_features= [c for c in df.columns.values if c  not in ['id','text','author','processed']]
+target = 'author'
+
+X_train, X_test, y_train, y_test = train_test_split(df[features], df[target], test_size=0.33, random_state=42)
+X_train.head()
 
 
-# ### Number of images per class
+# Now for the tricky parts.
+# 
+# First thing I want to do is define how to process my variables. The standard preprocessing apply the same preprocessing to the whole dataset, but in cases where you have heterogeneous data, this doesn't quite work. So first thing I'm going to do is create a selector transformer that simply returns the one column in the dataset by the key value I pass. 
+# 
+# I was having difficulty getting the selector to play nicely, so I made two different selectors for either text or numeric columns. The return type is different, but other than that they work the same.
 
 # In[4]:
 
 
-for key,value in images_per_class.items():
-    print("{0} -> {1}".format(key, len(value)))
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class TextSelector(BaseEstimator, TransformerMixin):
+    """
+    Transformer to select a single column from the data frame to perform additional transformations on
+    Use on text columns in the data
+    """
+    def __init__(self, key):
+        self.key = key
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X[self.key]
+    
+class NumberSelector(BaseEstimator, TransformerMixin):
+    """
+    Transformer to select a single column from the data frame to perform additional transformations on
+    Use on numeric columns in the data
+    """
+    def __init__(self, key):
+        self.key = key
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X[[self.key]]
+    
 
 
-# ### Plot images
-# Plot images so we can see what the input looks like
+# To see how this is used, let's actually run it on one column.
+# 
+# I'm going to call it on the text column and transform it with another step. But again, pipelines are all about encapsulating several steps, so I'm going to make a mini pipeline that consists of two steps: first grab just that column from the dataset, then perform tf-idf on just that column and return the results.
+# 
+# To make a pipeline, just pass an array of tuples of the format (name, object). The first part is the name of the action, and the second is the actual object. So this pipeline consists of "selecting" and then "tfidf-ing" a column.
+# 
+# To execute, use it just like any other transformer. You can call text.fit() to fit to training data, text.transform() to apply it to training data, or text.fit_transform() to do both. 
+# 
+# Since it's text, it will return a sparse matrix, but we can see that it works:
 
-# In[5]:
+# In[17]:
 
 
-def plot_for_class(label):
-    nb_rows = 3
-    nb_cols = 3
-    fig, axs = plt.subplots(nb_rows, nb_cols, figsize=(6, 6))
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-    n = 0
-    for i in range(0, nb_rows):
-        for j in range(0, nb_cols):
-            axs[i, j].xaxis.set_ticklabels([])
-            axs[i, j].yaxis.set_ticklabels([])
-            axs[i, j].imshow(images_per_class[label][n])
-            n += 1        
+text = Pipeline([
+                ('selector', TextSelector(key='processed')),
+                ('tfidf', TfidfVectorizer( stop_words='english'))
+            ])
 
+text.fit_transform(X_train)
+
+
+# Since our data is heterogeneous, we might want to do something else on numeric data, so let's build a mini pipeline for that too.
+# 
+# This transformer will be a simple scaler. Since our data is mixed, we must apply it column by column. Let's make one to process the "length" variable I made above. Just like the text one, we combine two steps, first selecting the column, then transforming the column, like so:
 
 # In[6]:
 
 
-plot_for_class("Small-flowered Cranesbill")
+from sklearn.preprocessing import StandardScaler
 
+length =  Pipeline([
+                ('selector', NumberSelector(key='length')),
+                ('standard', StandardScaler())
+            ])
+
+length.fit_transform(X_train)
+
+
+# We can see that the transformer pipeline returns a matrix for the column it's called on, so now all that's left to do is join the results from several transformed variables into a single dataset. I'll go ahead and make a pipeline for every variable in the data, then join them all together. 
+# 
+# First, I'll transform all the numeric columns with the standard scaler, but of course you can change the scaler for any column as you desire.
 
 # In[7]:
 
 
-plot_for_class("Maize")
+words =  Pipeline([
+                ('selector', NumberSelector(key='words')),
+                ('standard', StandardScaler())
+            ])
+words_not_stopword =  Pipeline([
+                ('selector', NumberSelector(key='words_not_stopword')),
+                ('standard', StandardScaler())
+            ])
+avg_word_length =  Pipeline([
+                ('selector', NumberSelector(key='avg_word_length')),
+                ('standard', StandardScaler())
+            ])
+commas =  Pipeline([
+                ('selector', NumberSelector(key='commas')),
+                ('standard', StandardScaler()),
+            ])
 
 
-# ### Preprocessing for the images:
+# To make a pipeline from all of our pipelines, we do the same thing, but now we use a FeatureUnion to join the feature processing pipelines.
 # 
-# Now comes the interesting and fun part!
+# The syntax is the same as a regular pipeline, it's just an array of tuple, with the (name, object) format. 
 # 
-# I created separate functions so if you'd like to use these it is easier.
+# The feature union itself is not a pipeline, it's just a union, so you need to do *one more step* to make it useable: pass it to a pipeline, with the same structure, an array of tuples, with the simple (name, object) format. . As you can see, we get a pipeline-ception going on the more complex you get! 
 # 
-# In the next block I'll explain what I am doing to make the segmentation happen.
+# You can then apply all those transformations at once with a single fit, transform, or fit_transform call. Nice, right?
 
 # In[8]:
 
 
-def create_mask_for_plant(image):
-    image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+from sklearn.pipeline import FeatureUnion
 
-    sensitivity = 35
-    lower_hsv = np.array([60 - sensitivity, 100, 50])
-    upper_hsv = np.array([60 + sensitivity, 255, 255])
+feats = FeatureUnion([('text', text), 
+                      ('length', length),
+                      ('words', words),
+                      ('words_not_stopword', words_not_stopword),
+                      ('avg_word_length', avg_word_length),
+                      ('commas', commas)])
 
-    mask = cv2.inRange(image_hsv, lower_hsv, upper_hsv)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    
-    return mask
-
-def segment_plant(image):
-    mask = create_mask_for_plant(image)
-    output = cv2.bitwise_and(image, image, mask = mask)
-    return output
-
-def sharpen_image(image):
-    image_blurred = cv2.GaussianBlur(image, (0, 0), 3)
-    image_sharp = cv2.addWeighted(image, 1.5, image_blurred, -0.5, 0)
-    return image_sharp
+feature_processing = Pipeline([('feats', feats)])
+feature_processing.fit_transform(X_train)
 
 
-# The `create_mask_for_plant` function: This function returns an image mask: Matrix with shape `(image_height, image_width)`. In this matrix there are only `0` and `1` values. The 1 values define the interesting part of the original image. But the question is...How do we create this mask?
+# To add a model to the mix and generate predictions as well, you can add a model at the end of the pipeline. The syntax is, you guessed it, an array of tuples, merging the transformations with a model. 
 # 
-# This is a simple object detection problem, where we can use the color of the object.
+# We can see the raw accuracy is at 63%. Not bad for a start.
 # 
-# The HSV color-space is suitable for color detection because with the Hue we can define the color and the saturation and value will define "different kinds" of the color. (For example it will detect the red, darker red, lighter red too). We cannot do this with the original BGR color space.
-# 
-# ![](https://www.mathworks.com/help/images/hsvcone.gif)
-# 
-# *image from https://www.mathworks.com/help/images/convert-from-hsv-to-rgb-color-space.html*
-# 
-# We have to set a range, which color should be detected:
-# 
-#     sensitivity = 35
-#     lower_hsv = np.array([60 - sensitivity, 100, 50])
-#     upper_hsv = np.array([60 + sensitivity, 255, 255])
-#     
-# After the mask is created with the `inRange` function, we can do a little *CV magic* (not close to magic, because this is almost the most basic thing in CV, but it is a cool buzzword, and this opertation is as awesome as simple it is) which is called *morphological operations* ([You can read more here](https://www.cs.auckland.ac.nz/courses/compsci773s1c/lectures/ImageProcessing-html/topic4.htm)).
-# 
-# Basically with the *Close* operation we would like to keep the shape of the original objects (1 blobs on the mask image) but close the small holes. That way we can clarify our detection mask more.
-# 
-# ![](https://homepages.inf.ed.ac.uk/rbf/HIPR2/figs/closebin.gif)
-# 
-# *image from https://www.cs.auckland.ac.nz/courses/compsci773s1c/lectures/ImageProcessing-html/topic4.htm*
-# 
-# After these steps we created the mask for the object.
-# 
-
-# In[9]:
-
-
-# Test image to see the changes
-image = images_per_class["Small-flowered Cranesbill"][97]
-
-image_mask = create_mask_for_plant(image)
-image_segmented = segment_plant(image)
-image_sharpen = sharpen_image(image_segmented)
-
-fig, axs = plt.subplots(1, 4, figsize=(20, 20))
-axs[0].imshow(image)
-axs[1].imshow(image_mask)
-axs[2].imshow(image_segmented)
-axs[3].imshow(image_sharpen)
-
-
-# After this step we can see that the image on the right is more recognizable than the original image on the left.
-
-# ----------------------------------------------
-
-# From the mask image what we created (because we need that for the segmentation), we can extract some features. For example we can see how the area of the plant changes based on their classes.
-
-# Of course from the contours we can extract much more information than the area of the
-# contour and the number of components, but this is the one I would like to show you.
-# 
-# Additional read: https://en.wikipedia.org/wiki/Image_moment
-
-# In[10]:
-
-
-def find_contours(mask_image):
-    return cv2.findContours(mask_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
-
-def calculate_largest_contour_area(contours):
-    if len(contours) == 0:
-        return 0
-    c = max(contours, key=cv2.contourArea)
-    return cv2.contourArea(c)
-
-def calculate_contours_area(contours, min_contour_area = 250):
-    area = 0
-    for c in contours:
-        c_area = cv2.contourArea(c)
-        if c_area >= min_contour_area:
-            area += c_area
-    return area
-
-
-# In[11]:
-
-
-areas = []
-larges_contour_areas = []
-labels = []
-nb_of_contours = []
-images_height = []
-images_width = []
-
-for class_label in images_per_class.keys():
-    for image in images_per_class[class_label]:
-        mask = create_mask_for_plant(image)
-        contours = find_contours(mask)
-        
-        area = calculate_contours_area(contours)
-        largest_area = calculate_largest_contour_area(contours)
-        height, width, channels = image.shape
-        
-        images_height.append(height)
-        images_width.append(width)
-        areas.append(area)
-        nb_of_contours.append(len(contours))
-        larges_contour_areas.append(largest_area)
-        labels.append(class_label)
-
 
 # In[12]:
 
 
-features_df = pd.DataFrame()
-features_df["label"] = labels
-features_df["area"] = areas
-features_df["largest_area"] = larges_contour_areas
-features_df["number_of_components"] = nb_of_contours
-features_df["height"] = images_height
-features_df["width"] = images_width
+from sklearn.ensemble import RandomForestClassifier
 
+pipeline = Pipeline([
+    ('features',feats),
+    ('classifier', RandomForestClassifier(random_state = 42)),
+])
+
+pipeline.fit(X_train, y_train)
+
+preds = pipeline.predict(X_test)
+np.mean(preds == y_test)
+
+
+# # Bringing It All Together
+# 
+# Preprocessing is great, but most likely, you actually want to model something too. To do that, we just need to add a classifier at the end of the pipeline. Here I'm going to make a pipeline that does all the processing I made above, then passes it to a Random Forest. As you might guess, this requires passing an array of tuples to the pipeline, with the (name, object) structure. 
+# 
+# To put it to use, we just fit and predict as if it was a regular classifier. First we fit on the training, then predict on the test data, and then see how well it did:
+
+# # Cross Validation To Find The Best Pipeline
+# 
+# That alone should give you enough flexibility to create some rather complex pipelines. But we're on a role, let's keep going.
+# 
+# What if I wanted to do cross validation on my pipeline? How many trees should I use on my classifier? How deep should I go? Or even more complicated, how many words should I use in my tf-idf transform? Should I include stop words? Pipelines allow you to do that with just a few more lines.
+# 
+# Cross validation is all about figuring out what the best hyperparameters of the data set is. To see the list of all the possible things you could fine tune, call get_params().keys() on your pipeline.
 
 # In[13]:
 
 
-features_df.groupby("label").describe()
+pipeline.get_params().keys()
 
+
+# Obviously don't be crazy, cross validation takes a while to run, and the more options you select, the longer it takes. But to give you an idea on how these work together, to test out the different combinations, define a dictionary with the settings you want, with the key being the pipeline's parameter key name, and the value being an array of all the settings you want to apply.
+# 
+# After the dictionary is made, call GridSearchCV on your pipeline, passing the dictionary and the number of folds you want to use. 
+# 
+# Here's an example with a few settings on 5 fold cross validation.
+
+# In[22]:
+
+
+from sklearn.model_selection import GridSearchCV
+
+hyperparameters = { 'features__text__tfidf__max_df': [0.9, 0.95],
+                    'features__text__tfidf__ngram_range': [(1,1), (1,2)],
+                   'classifier__max_depth': [50, 70],
+                    'classifier__min_samples_leaf': [1,2]
+                  }
+clf = GridSearchCV(pipeline, hyperparameters, cv=5)
+ 
+# Fit and tune model
+clf.fit(X_train, y_train)
+
+
+# If you want to see which settings won, you can do so:
+
+# In[23]:
+
+
+clf.best_params_
+
+
+# What's really convenient is you can call refit to automatically fit the pipeline on all of the training data with the best_params_setting applied!
+# 
+# Then applying it to the test data is the same as before.
+# 
+# Not much of an improvement, but at least now we can go back and easily change out the individual pieces.
+
+# In[24]:
+
+
+#refitting on entire training data using best settings
+clf.refit
+
+preds = clf.predict(X_test)
+probs = clf.predict_proba(X_test)
+
+np.mean(preds == y_test)
+
+
+# # Final Predictions
+# 
+# To generate submission results, you just need to do the preprocessing on the submission data, then call the pipeline with the predict_proba call, since we want to know all the probabilities, not just the label.
+# 
+# The only tricky part for the submission is we need the class names as the column values. To access it, you must call clf.best_estimator_.named_steps['classifier'].classes_
+
+# In[28]:
+
+
+submission = pd.read_csv('../input/test.csv')
+
+#preprocessing
+submission = processing(submission)
+predictions = clf.predict_proba(submission)
+
+preds = pd.DataFrame(data=predictions, columns = clf.best_estimator_.named_steps['classifier'].classes_)
+
+#generating a submission file
+result = pd.concat([submission[['id']], preds], axis=1)
+result.set_index('id', inplace = True)
+result.head()
+
+
+# ### Wrapping Up
+# 
+# I hope this helps shed some light on the inner workings of pipelines. Using pipelines effectively can really help elevate you to the next level of data scientist, so once you've mastered the algorithms themselves, I strongly recommend mastering pipelines as well! You can even create a pipeline to test out different classifiers and pick the best one too! It's one step closer to automating away the boring stuff, letting you focus on what matters, the creativity and feature engineering.
+# 
+# More to come, so stay tuned!

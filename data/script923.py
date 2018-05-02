@@ -1,305 +1,282 @@
 
 # coding: utf-8
 
-# Make sure to install the superb [__Bayesian Optimization__](https://github.com/fmfn/BayesianOptimization) library.
+# ## 1. Introduction
+# 
+# ### In this notebook, we  will show our method which can get a PB score <font color = red > 0.84211 </font>. This notebook only uses single model random forest classifier, so there is still room to improve the performance like  using ensemble methods.  
+# 
+# ### Because our method based on other great minds and the intuition behind the feature engineering can be found in the following notebooks. Hence, I will omit the details and only provide the codes.
+# 
+# #### 1. Titanic Random Forest: 82.78%
+# #### 2. A Journey through Titanic
+# #### 3. Titanic Data Science Solutions
+# #### 4.Pytanic
 
-# In[ ]:
+# ## 2. Load Libraries and Raw Data
+
+# In[1]:
 
 
-# This line is needed for python 2.7 ; probably not for python 3
-from __future__ import print_function
-
-import numpy as np
 import pandas as pd
-import gc
+import numpy as np
 import warnings
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-from bayes_opt import BayesianOptimization
+from sklearn import preprocessing 
+from sklearn.model_selection import GridSearchCV 
+from sklearn.ensemble import RandomForestClassifier 
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn import cross_validation
 
-from sklearn.cross_validation import cross_val_score, StratifiedKFold, StratifiedShuffleSplit
-from sklearn.metrics import log_loss, matthews_corrcoef, roc_auc_score
-from sklearn.preprocessing import MinMaxScaler
-import xgboost as xgb
-import contextlib
+get_ipython().run_line_magic('matplotlib', 'inline')
+warnings.filterwarnings('ignore')
 
 
-# This will be used to capture stderr and stdout without having anything print on screen.
-# 
-# **It turns out that Kaggle does not have "cStringIO", so I will comment out this portion.**
-
-# In[ ]:
+# In[2]:
 
 
-#@contextlib.contextmanager
-#def capture():
-#    import sys
-#    from cStringIO import StringIO
-#    olderr, oldout = sys.stderr, sys.stdout
-#    try:
-#        out=[StringIO(), StringIO()]
-#        sys.stderr,sys.stdout = out
-#        yield out
-#    finally:
-#        sys.stderr,sys.stdout = olderr,oldout
-#        out[0] = out[0].getvalue().splitlines()
-#        out[1] = out[1].getvalue().splitlines()
-
-
-# Scaling is really not needed for XGBoost, but I leave it here in case if you do the optimization using ML approaches that need it.
-
-# In[ ]:
-
-
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
-
-
-# Loading files.
-
-# In[ ]:
-
-
-DATA_TRAIN_PATH = '../input/train.csv'
-DATA_TEST_PATH = '../input/test.csv'
-
-def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
-    train_loader = pd.read_csv(path_train, dtype={'target': np.int8, 'id': np.int32})
-    train = train_loader.drop(['target', 'id'], axis=1)
-    train_labels = train_loader['target'].values
-    train_ids = train_loader['id'].values
-    print('\n Shape of raw train data:', train.shape)
-
-    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
-    test = test_loader.drop(['id'], axis=1)
-    test_ids = test_loader['id'].values
-    print(' Shape of raw test data:', test.shape)
+train = pd.read_csv("../input/train.csv")
+train.head()
 
-    return train, train_labels, test, train_ids, test_ids
-
 
-# Define cross-validation variables that are used for parameter search. Each parameter has its own line, so it is easy to comment something out if you wish. Keep in mind that in such a case you must comment out the matching lines in optimization and explore sections below.
-# 
-# *Note that the learning rate ("eta") is set to 0.1 below. That is certainly not optimal, but it will make the search go faster. You will probably want to experiment with values in 0.01-0.05 range, but beware that it will significantly slow down the process because more iterations will be required to get to early stopping. Doing 10-fold instead of 5-fold cross-validation will also result in a small gain, but will double the search time.*
-# 
-# XGBoost outputs lots of interesting info, but it is not very helpful and clutters the screen when doing grid search. So we will run XGboost CV with verbose turned on, but will capture stderr in result[0] and stdout in result[1]. We will extract the relevant info from these variables later, and will print the record of each CV run into a log file.
-# 
-# AUC will be optimized here. We can go with separately defined gini scorer and use **feval=gini** below but I don't think it makes any difference because AUC and gini are directly correlated.
-# 
-# **Commenting out the capture so there will be no record of xgb.cv in log file.**
-
-# In[ ]:
-
-
-# Comment out any parameter you don't want to test
-def XGB_CV(
-          max_depth,
-          gamma,
-          min_child_weight,
-          max_delta_step,
-          subsample,
-          colsample_bytree
-         ):
-
-    global AUCbest
-    global ITERbest
-
-#
-# Define all XGboost parameters
-#
-
-    paramt = {
-              'booster' : 'gbtree',
-              'max_depth' : int(max_depth),
-              'gamma' : gamma,
-              'eta' : 0.1,
-              'objective' : 'binary:logistic',
-              'nthread' : 4,
-              'silent' : True,
-              'eval_metric': 'auc',
-              'subsample' : max(min(subsample, 1), 0),
-              'colsample_bytree' : max(min(colsample_bytree, 1), 0),
-              'min_child_weight' : min_child_weight,
-              'max_delta_step' : int(max_delta_step),
-              'seed' : 1001
-              }
-
-    folds = 5
-    cv_score = 0
-
-    print("\n Search parameters (%d-fold validation):\n %s" % (folds, paramt), file=log_file )
-    log_file.flush()
-
-    xgbc = xgb.cv(
-                    paramt,
-                    dtrain,
-                    num_boost_round = 20000,
-                    stratified = True,
-                    nfold = folds,
-#                    verbose_eval = 10,
-                    early_stopping_rounds = 100,
-                    metrics = 'auc',
-                    show_stdv = True
-               )
+# In[3]:
 
-# This line would have been on top of this section
-#    with capture() as result:
-
-# After xgb.cv is done, this section puts its output into log file. Train and validation scores 
-# are also extracted in this section. Note the "diff" part in the printout below, which is the 
-# difference between the two scores. Large diff values may indicate that a particular set of 
-# parameters is overfitting, especially if you check the CV portion of it in the log file and find 
-# out that train scores were improving much faster than validation scores.
 
-#    print('', file=log_file)
-#    for line in result[1]:
-#        print(line, file=log_file)
-#    log_file.flush()
-
-    val_score = xgbc['test-auc-mean'].iloc[-1]
-    train_score = xgbc['train-auc-mean'].iloc[-1]
-    print(' Stopped after %d iterations with train-auc = %f val-auc = %f ( diff = %f ) train-gini = %f val-gini = %f' % ( len(xgbc), train_score, val_score, (train_score - val_score), (train_score*2-1),
-(val_score*2-1)) )
-    if ( val_score > AUCbest ):
-        AUCbest = val_score
-        ITERbest = len(xgbc)
-
-    return (val_score*2) - 1
+test = pd.read_csv("../input/test.csv")
+test.head()
 
 
-# The "real" code starts here.
-
-# In[ ]:
+# ## 2. Feature Engineering
 
-
-# Define the log file. If you repeat this run, new output will be added to it
-log_file = open('Porto-AUC-5fold-XGB-run-01-v1-full.log', 'a')
-AUCbest = -1.
-ITERbest = 0
+# In[4]:
 
-# Load data set and target values
-train, target, test, tr_ids, te_ids = load_data()
-n_train = train.shape[0]
-train_test = pd.concat((train, test)).reset_index(drop=True)
-col_to_drop = train.columns[train.columns.str.endswith('_cat')]
-col_to_dummify = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
 
-for col in col_to_dummify:
-    dummy = pd.get_dummies(train_test[col].astype('category'))
-    columns = dummy.columns.astype(str).tolist()
-    columns = [col + '_' + w for w in columns]
-    dummy.columns = columns
-    train_test = pd.concat((train_test, dummy), axis=1)
+train['Sex'] = train['Sex'].apply(lambda x: 1 if x == 'male' else 0)
+test['Sex'] = test['Sex'].apply(lambda x: 1 if x == 'male' else 0)
 
-train_test.drop(col_to_dummify, axis=1, inplace=True)
-train_test_scaled, scaler = scale_data(train_test)
-train = train_test_scaled[:n_train, :]
-test = train_test_scaled[n_train:, :]
-print('\n Shape of processed train data:', train.shape)
-print(' Shape of processed test data:', test.shape)
-
-# We really didn't need to load the test data in the first place unless you are planning to make
-# a prediction at the end of this run.
-# del test
-# gc.collect()
 
+# In[5]:
 
-# I am doing a stratified split and using only 25% of the data. Obviously, this is done to make sure that this notebook can run to completion on Kaggle. In a production version, you should uncomment the first line in the section below, and comment out or delete everything else.
 
-# In[ ]:
+def Name_Title_Code(x):
+    if x == 'Mr.':
+        return 1
+    if (x == 'Mrs.') or (x=='Ms.') or (x=='Lady.') or (x == 'Mlle.') or (x =='Mme'):
+        return 2
+    if x == 'Miss':
+        return 3
+    if x == 'Rev.':
+        return 4
+    return 5
 
+train['Name_Title'] = train['Name'].apply(lambda x: x.split(',')[1]).apply(lambda x: x.split()[0])
+test['Name_Title'] = test['Name'].apply(lambda x: x.split(',')[1]).apply(lambda x: x.split()[0]) 
 
-# dtrain = xgb.DMatrix(train, label = target)
 
-sss = StratifiedShuffleSplit(target, random_state=1001, test_size=0.75)
-for train_index, test_index in sss:
-    break
-X_train, y_train = train[train_index], target[train_index]
-del train, target
-gc.collect()
-dtrain = xgb.DMatrix(X_train, label = y_train)
+# In[6]:
 
 
-# These are the parameters and their ranges that will be used during optimization. They must match the parameters that are passed above to the XGB_CV function. If you commented out any of them above, you should do the same here. Note that these are pretty wide ranges for most parameters.
+def Age_feature(train, test):
+    for i in [train, test]:
+        i['Age_Null_Flag'] = i['Age'].apply(lambda x: 1 if pd.isnull(x) else 0)  
+        data = train.groupby(['Name_Title', 'Pclass'])['Age']
+        i['Age'] = data.transform(lambda x: x.fillna(x.mean()))
+#         i['Age'] = data.transform(lambda x: x.fillna(x.median()))
+    return train, test
 
-# In[ ]:
 
+# In[7]:
 
-XGB_BO = BayesianOptimization(XGB_CV, {
-                                     'max_depth': (2, 12),
-                                     'gamma': (0.001, 10.0),
-                                     'min_child_weight': (0, 20),
-                                     'max_delta_step': (0, 10),
-                                     'subsample': (0.4, 1.0),
-                                     'colsample_bytree' :(0.4, 1.0)
-                                    })
 
+def Family_feature(train, test):
+    for i in [train, test]:
+        i['Fam_Size'] = np.where((i['SibSp']+i['Parch']) == 0 , 'Solo',
+                           np.where((i['SibSp']+i['Parch']) <= 3,'Nuclear', 'Big'))
+        del i['SibSp']
+        del i['Parch']
+    return train, test 
 
-# This portion of the code is not necessary. You can simply specify that 10-20 random parameter combinations (**init_points** below) be used. However, I like to try couple of high- and low-end values for each parameter as a starting point, and after that fewer random points are needed. Note that a number of options must be the same for each parameter, and they are applied vertically.
 
-# In[ ]:
+# In[8]:
 
 
-XGB_BO.explore({
-              'max_depth':            [3, 8, 3, 8, 8, 3, 8, 3],
-              'gamma':                [0.5, 8, 0.2, 9, 0.5, 8, 0.2, 9],
-              'min_child_weight':     [0.2, 0.2, 0.2, 0.2, 12, 12, 12, 12],
-              'max_delta_step':       [1, 2, 2, 1, 2, 1, 1, 2],
-              'subsample':            [0.6, 0.8, 0.6, 0.8, 0.6, 0.8, 0.6, 0.8],
-              'colsample_bytree':     [0.6, 0.8, 0.6, 0.8, 0.6, 0.8, 0.6, 0.8],
-              })
+def ticket_grouped(train, test):
+    for i in [train, test]:
+        i['Ticket_Lett'] = i['Ticket'].apply(lambda x: str(x)[0])
+        i['Ticket_Lett'] = i['Ticket_Lett'].apply(lambda x: str(x))
+        i['Ticket_Lett'] = np.where((i['Ticket_Lett']).isin(['1', '2', '3', 'S', 'P', 'C', 'A']), i['Ticket_Lett'],
+                                    np.where((i['Ticket_Lett']).isin(['W', '4', '7', '6', 'L', '5', '8']),
+                                            'Low_ticket', 'Other_ticket'))
+        i['Ticket_Len'] = i['Ticket'].apply(lambda x: len(x))
+        del i['Ticket']
+    return train, test
 
 
-# In my version of sklearn there are many warning thrown out by the GP portion of this code. This is set to prevent them from showing on screen.
-# 
-# If you have a special relationship with your computer and want to know everything it is saying back, you'd probably want to remove the two "warnings" lines and slide the XGB_BO line all the way left.
-# 
-# I am doing only 2 initial points, which along with 8 exploratory points above makes it 10 "random" parameter combinations. I'd say that 15-20 is usually adequate. For n_iter 25-50 is usually enough.
-# 
-# There are several commented out maximize lines that could be worth exploring. The exact combination of parameters determines **[exploitation vs. exploration](https://github.com/fmfn/BayesianOptimization/blob/master/examples/exploitation%20vs%20exploration.ipynb)**. It is tough to know which would work better without actually trying, though in my hands exploitation with "expected improvement" usually works the best. That's what the XGB_BO.maximize line below is specifying.
+# In[9]:
 
-# In[ ]:
 
+def Cabin_feature(train, test):
+    for i in [train, test]:
+        i['Cabin_Letter'] = i['Cabin'].apply(lambda x: str(x)[0])
+        del i['Cabin']
+    return train, test
 
-print('-'*130)
-print('-'*130, file=log_file)
-log_file.flush()
 
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore')
-    XGB_BO.maximize(init_points=2, n_iter=5, acq='ei', xi=0.0)
+# In[10]:
 
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ei', xi=0.0)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ei', xi=0.01)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ucb', kappa=10)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ucb', kappa=1)
 
+def cabin_num(train, test):
+    for i in [train, test]:
+        i['Cabin_num1'] = i['Cabin'].apply(lambda x: str(x).split(' ')[-1][1:])
+        i['Cabin_num1'].replace('an', np.NaN, inplace = True)
+        i['Cabin_num1'] = i['Cabin_num1'].apply(lambda x: int(x) if not pd.isnull(x) and x != '' else np.NaN)
+        i['Cabin_num'] = pd.qcut(train['Cabin_num1'],3)
+    train = pd.concat((train, pd.get_dummies(train['Cabin_num'], prefix = 'Cabin_num')), axis = 1)
+    test = pd.concat((test, pd.get_dummies(test['Cabin_num'], prefix = 'Cabin_num')), axis = 1)
+    del train['Cabin_num']
+    del test['Cabin_num']
+    del train['Cabin_num1']
+    del test['Cabin_num1']
+    return train, test
 
-# This portions gives the summary and creates a CSV file with results.
 
-# In[ ]:
+# In[11]:
 
 
-print('-'*130)
-print('Final Results')
-print('Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'])
-print('Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'])
-print('-'*130, file=log_file)
-print('Final Result:', file=log_file)
-print('Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'], file=log_file)
-print('Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'], file=log_file)
-log_file.flush()
-log_file.close()
+def embarked_impute(train, test):
+    for i in [train, test]:
+        i['Embarked'] = i['Embarked'].fillna('S')
+    return train, test
 
-history_df = pd.DataFrame(XGB_BO.res['all']['params'])
-history_df2 = pd.DataFrame(XGB_BO.res['all']['values'])
-history_df = pd.concat((history_df, history_df2), axis=1)
-history_df.rename(columns = { 0 : 'gini'}, inplace=True)
-history_df['AUC'] = ( history_df['gini'] + 1 ) / 2
-history_df.to_csv('Porto-AUC-5fold-XGB-run-01-v1-grid.csv')
 
+# In[12]:
 
-# Good luck! Let me know how it works.
+
+test['Fare'].fillna(train['Fare'].mean(), inplace = True)
+
+
+# In[13]:
+
+
+def dummies(train, test, columns = ['Pclass', 'Sex', 'Embarked', 'Ticket_Lett', 'Cabin_Letter', 'Name_Title', 'Fam_Size']):
+    for column in columns:
+        train[column] = train[column].apply(lambda x: str(x))
+        test[column] = test[column].apply(lambda x: str(x))
+        good_cols = [column+'_'+i for i in train[column].unique() if i in test[column].unique()]
+        train = pd.concat((train, pd.get_dummies(train[column], prefix = column)[good_cols]), axis = 1)
+        test = pd.concat((test, pd.get_dummies(test[column], prefix = column)[good_cols]), axis = 1)
+        del train[column]
+        del test[column]
+    return train, test
+
+
+# In[14]:
+
+
+def drop(train, test, bye = ['PassengerId']):
+    for i in [train, test]:
+        for z in bye:
+            del i[z]
+    return train, test
+
+
+# In[15]:
+
+
+train, test = Age_feature(train, test)
+ 
+train['Name_Title'] = train['Name_Title'].apply(Name_Title_Code)
+test['Name_Title'] = test['Name_Title'].apply(Name_Title_Code)
+train = pd.get_dummies(columns = ['Name_Title'], data = train)
+test = pd.get_dummies(columns = ['Name_Title'], data = test)
+
+train, test = cabin_num(train, test)
+
+train, test = Cabin_feature(train, test)
+
+train, test = embarked_impute(train, test)
+
+train, test = Family_feature(train, test)
+
+test['Fare'].fillna(train['Fare'].mean(), inplace = True)
+
+train, test = ticket_grouped(train, test)
+
+train, test = dummies(train, test, columns = ['Pclass', 'Sex', 'Embarked', 'Ticket_Lett', 'Fam_Size','Cabin_Letter'])  
+
+train, test = drop(train, test)
+
+
+# In[16]:
+
+
+train.drop('Name',axis=1,inplace=True)
+test.drop('Name',axis=1,inplace=True)
+
+
+# ## 4. Model training
+
+# In[17]:
+
+
+
+# rf = RandomForestClassifier(max_features='auto', oob_score=True, random_state=1, n_jobs=-1)
+# param_grid = { "criterion" : ["gini", "entropy"], "min_samples_leaf" : [1, 5, 10], "min_samples_split" : [2, 4, 10, 12, 16], "n_estimators": [50, 100, 400, 700, 1000]}
+# gs = GridSearchCV(estimator=rf, param_grid=param_grid, scoring='accuracy', cv=3, n_jobs=-1)
+
+# gs = gs.fit(train.iloc[:, 1:], train.iloc[:, 0])
+
+# print(gs.best_score_)
+# print(gs.best_params_) 
+
+
+# In[18]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+ 
+rf = RandomForestClassifier(criterion='gini', 
+                             n_estimators=700,
+                             min_samples_split=16,
+                             min_samples_leaf=1,
+                             max_features='auto',
+                             oob_score=True,
+                             random_state=1,
+                             n_jobs=-1) 
+
+rf.fit(train.iloc[:, 1:], train.iloc[:, 0])
+print("%.4f" % rf.oob_score_)
+
+
+# In[19]:
+
+
+pd.concat((pd.DataFrame(train.iloc[:, 1:].columns, columns = ['variable']), 
+           pd.DataFrame(rf.feature_importances_, columns = ['importance'])), 
+          axis = 1).sort_values(by='importance', ascending = False)[:20]
+
+
+# ## 5. Submit
+
+# In[20]:
+
+
+submit = pd.read_csv('../input/genderclassmodel.csv')
+submit.set_index('PassengerId',inplace=True)
+
+rf_res =  rf.predict(test)
+submit['Survived'] = rf_res
+submit['Survived'] = submit['Survived'].apply(int)
+submit.to_csv('submit.csv')
+
+
+# In[21]:
+
+
+submit
+
+
+# ## 6. Learning together
+# ### If you have other techniques or expereriences to improve this PB score, I wish you could share with us. Let's learn together.

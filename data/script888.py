@@ -1,139 +1,200 @@
 
 # coding: utf-8
 
-# I used this approach in my solution which is the 11th on the Leaderboard. Here I'm infering 4 components in the target's value distribution and I'm showing how did I identify to which of these components does the particular object belong.
-# Of course I should mention this forum thread as the main source of the idea: https://www.kaggle.com/c/mercedes-benz-greener-manufacturing/discussion/35382.
-# My solution itself is here: https://www.kaggle.com/c/mercedes-benz-greener-manufacturing/discussion/36242
+# This notebook is just a (very) small improvement over most common baseline.
+# 
+# It loads a few images from train and resize it to 8x8 pixels to generate a 64 (8 x 8) feature vector.
+# 
+# Then, it uses KNN to find the most similar image on test set.
+# 
+# Unfortunatelly, due to limitations on Kernel, only a few test images are classified.
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
-import seaborn as sns
-import xgboost as xgb
-from sklearn.model_selection import cross_val_score,cross_val_predict
-train = pd.read_csv('../input/train.csv')
-X_train = train.drop(['y'],axis=1)
-y_train = train['y']
-X_test = pd.read_csv('../input/test.csv')
+import io
+import bson
+import cv2
+import matplotlib.pyplot as plt
+from tqdm import tqdm_notebook
+import concurrent.futures
+from multiprocessing import cpu_count
 
-#
-#   Here we drop columns with zero std
-#
-
-zero_std = X_train.std()[X_train.std()==0].index
-X_train = X_train.drop(zero_std,axis=1)
-X_test = X_test.drop(zero_std,axis=1)
-
-
-# The four components I've mentioned are clearly observable on the distplot
 
 # In[ ]:
 
 
-sns.distplot(y_train[y_train<170],bins=100,kde=False)
+num_images = 200000
+im_size = 16
+num_cpus = cpu_count()
 
-
-# So we are trying using our features to figure out where (to what component) does the particular object belongs. 
-# Here we build a kind of "cluster encoder". It takes categorical feature, computes group means and clusters them to four groups.
 
 # In[ ]:
 
 
-class cluster_target_encoder:
-    def make_encoding(self,df):
-        self.encoding = df.groupby('X')['y'].mean()
-    def fit(self,X,y):
-        df = pd.DataFrame(columns=['X','y'],index=X.index)
-        df['X'] = X
-        df['y'] = y
-        self.make_encoding(df)
-        clust = KMeans(4,random_state=0)
-        labels = clust.fit_predict(self.encoding[df['X'].values].values.reshape(-1,1))
-        df['labels'] = labels
-        self.clust_encoding = df.groupby('X')['labels'].median()
-    def transform(self,X):
-        res = X.map(self.clust_encoding).astype(float)
-        return res
-    def fit_transform(self,X,y):
-        self.fit(X,y)
-        return self.transform(X)
+def imread(buf):
+    return cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_ANYCOLOR)
 
+def img2feat(im):
+    x = cv2.resize(im, (im_size, im_size), interpolation=cv2.INTER_AREA)
+    return np.float32(x) / 255
 
-# Now as mentioned on forum we use X0 to split the components
+X = np.empty((num_images, im_size, im_size, 3), dtype=np.float32)
+y = []
+
+def load_image(pic, target, bar):
+    picture = imread(pic)
+    x = img2feat(picture)
+    bar.update()
+    
+    return x, target
+
+bar = tqdm_notebook(total=num_images)
+with open('../input/train.bson', 'rb') as f,         concurrent.futures.ThreadPoolExecutor(num_cpus) as executor:
+
+    data = bson.decode_file_iter(f)
+    delayed_load = []
+
+    i = 0
+    try:
+        for c, d in enumerate(data):
+            target = d['category_id']
+            for e, pic in enumerate(d['imgs']):
+                delayed_load.append(executor.submit(load_image, pic['picture'], target, bar))
+                
+                i = i + 1
+
+                if i >= num_images:
+                    raise IndexError()
+
+    except IndexError:
+        pass;
+    
+    for i, future in enumerate(concurrent.futures.as_completed(delayed_load)):
+        x, target = future.result()
+        
+        X[i] = x
+        y.append(target)
+
 
 # In[ ]:
 
 
-enc1 = cluster_target_encoder()
-labels_train = enc1.fit_transform(X_train['X0'],train['y'])
-labels_test = enc1.transform(X_test['X0'])
-get_ipython().run_line_magic('pylab', 'inline')
-plt.figure(figsize(10,5))
-plt.hist(y_train.values[labels_train==0],bins=70,label='cluster 0')
-plt.hist(y_train.values[labels_train==1],bins=100,label='cluster 1')
-plt.hist(y_train.values[labels_train==2],bins=70,label='cluster 2')
-plt.hist(y_train.values[labels_train==3],bins=70,label='cluster 3')
-plt.legend()
-plt.title('Train targets distribution for all clusters')
-plt.xlim((60,170))
-plt.show()
+X.shape, len(y)
 
-
-# Brilliant, isn't it? But we have a problem. We have some values of X0 in test which we don't have in train, so we have some NaNs in labels_test
 
 # In[ ]:
 
 
-labels_test[np.isnan(labels_test)].shape
+y = pd.Series(y)
+
+num_classes = 500  # This will reduce the max accuracy to about 0.75
+
+# Now we must find the most `num_classes-1` frequent classes
+# (there will be an aditional 'other' class)
+valid_targets = set(y.value_counts().index[:num_classes-1].tolist())
+valid_y = y.isin(valid_targets)
+
+# Set other classes to -1
+y[~valid_y] = -1
+
+max_acc = valid_y.mean()
+print(max_acc)
 
 
-# In fact we can just do nothing. 6 objects is to few to worry about. But instead we can predict these labels using other features. Actually this global four "car clusters" are obvious for most of the algorithms and it's really not a problem to predict them. The problem is to predict what's happening inside the cluster (you can read the Discussions thread for more).
-# Let's ensure that we can predict the labels well.
-
-# In[ ]:
-
-
-cross_val_score(
-    X = X_train.select_dtypes(include=[np.number]),
-    y = labels_train,
-    estimator = xgb.XGBClassifier(),
-    cv = 5,
-    scoring = 'accuracy')
-
-
-# As you see the accuracy is super. The last thing we have to do is to predict NaNs in labels_test and we have almost perfect split of these four parts of the mixture
-
-# In[ ]:
-
-
-est = xgb.XGBClassifier()
-est.fit(X_train.select_dtypes(include=[np.number]),labels_train)
-labels_test[np.isnan(labels_test)] = est.predict(
-    X_test.select_dtypes(include=[np.number]))[np.isnan(labels_test)]
-np.isnan(labels_test).any()
-
-
-# And the last note here. This feature is not the silver bullet. In fact we did not add much information, machine learning algorithms are capable to understand this structure without our help. Take a look how well does xgboost separate these clusters when predicting the y.
+# Note that the max accuracy reported above is greater than ~0.75 reported [here](http://https://www.kaggle.com/bguberfain/naive-statistics) due to smaller train set.
 
 # In[ ]:
 
 
-y_pred = cross_val_predict(
-    X = X_train.select_dtypes(include=[np.number]),
-    y = y_train,
-    estimator = xgb.XGBRegressor(),
-    cv = 5)
-plt.figure(figsize(10,5))
-plt.hist(y_pred[labels_train==0],bins=70,label='cluster 0')
-plt.hist(y_pred[labels_train==1],bins=100,label='cluster 1')
-plt.hist(y_pred[labels_train==2],bins=70,label='cluster 2')
-plt.hist(y_pred[labels_train==3],bins=70,label='cluster 3')
-plt.legend()
-plt.title('Cross_val_predict distribution for all clusters')
-plt.show()
+# Now we categorize the dataframe
+y, rev_labels = pd.factorize(y)
 
 
-# But this new feature was really very useful for me, you can check my solution to figure out how.
+# In[ ]:
+
+
+# Train a simple NN
+from keras.layers import Conv2D, MaxPooling2D, Dense, Flatten
+from keras.models import Sequential
+from keras.optimizers import Adam
+
+model = Sequential()
+model.add(Conv2D(16, 3, activation='relu', padding='same', input_shape=X.shape[1:]))
+model.add(Conv2D(16, 3, activation='relu', padding='same'))
+model.add(MaxPooling2D(2))
+model.add(Conv2D(32, 3, activation='relu', padding='same'))
+model.add(Conv2D(32, 3, activation='relu', padding='same'))
+model.add(MaxPooling2D(2))
+model.add(Flatten())
+model.add(Dense(num_classes, activation='relu'))
+model.add(Dense(num_classes, activation='softmax'))
+
+
+opt = Adam(lr=0.01)
+
+model.compile('adam', 'sparse_categorical_crossentropy', metrics=['accuracy'])
+
+model.summary()
+
+
+# In[ ]:
+
+
+model.fit(X, y, validation_split=0.1, epochs=2)
+
+
+# In[ ]:
+
+
+model.save_weights('model.h5')  #You can download this model and run whole test localy
+
+
+# Now we evaluate the test set using the previous trained model.
+
+# In[ ]:
+
+
+submission = pd.read_csv('../input/sample_submission.csv', index_col='_id')
+
+most_frequent_guess = 1000018296
+submission['category_id'] = most_frequent_guess # Most frequent guess
+
+
+# In[ ]:
+
+
+num_images_test = 800000  # We only have time for a few test images..
+
+bar = tqdm_notebook(total=num_images_test * 2)
+with open('../input/test.bson', 'rb') as f,          concurrent.futures.ThreadPoolExecutor(num_cpus) as executor:
+
+    data = bson.decode_file_iter(f)
+
+    future_load = []
+    
+    for i,d in enumerate(data):
+        if i >= num_images_test:
+            break
+        future_load.append(executor.submit(load_image, d['imgs'][0]['picture'], d['_id'], bar))
+
+    print("Starting future processing")
+    for future in concurrent.futures.as_completed(future_load):
+        x, _id = future.result()
+        
+        y_cat = rev_labels[np.argmax(model.predict(x[None])[0])]
+        if y_cat == -1:
+            y_cat = most_frequent_guess
+
+        bar.update()
+        submission.loc[_id, 'category_id'] = y_cat
+print('Finished')
+
+
+# In[ ]:
+
+
+submission.to_csv('new_submission.csv.gz', compression='gzip')
+

@@ -1,311 +1,231 @@
 
 # coding: utf-8
 
-# # Using the Wisconsin breast cancer diagnostic data set for predictive analysis
-# ## Buddhini Waidyawansa (12-03-2016)
-# Attribute Information:
+# ## Some code to save you time
 # 
-#  - 1) ID number 
-#  - 2) Diagnosis (M = malignant, B = benign) 
-#  
-# -3-32.Ten real-valued features are computed for each cell nucleus:
+# A slight improvement on 'rle_encode' from my kernel https://www.kaggle.com/stainsby/fast-tested-rle used in the Carvana Image Masking Challenge. This kernel also reads all stage 1 test and training data into memory.
 # 
-#  - a) radius (mean of distances from center to points on the perimeter) 
-#  - b) texture (standard deviation of gray-scale values) 
-#  - c) perimeter 
-#  - d) area 
-#  - e) smoothness (local variation in radius lengths) 
-#  - f) compactness (perimeter^2 / area - 1.0) 
-#  - g). concavity (severity of concave portions of the contour) 
-#  - h). concave points (number of concave portions of the contour) 
-#  - i). symmetry 
-#  - j). fractal dimension ("coastline approximation" - 1)
+# The RLE encoding routine is tested by:
 # 
-# The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features. For instance, field 3 is Mean Radius, field 13 is Radius SE, field 23 is Worst Radius.
+# 1. RLE encoding all masks and then decoding them and checking that the output matches the input mask.
+# 2. Checking the generated RLEs against the supplied data in `stage1_train_labels.csv`.
 # 
-# 
-# For this analysis, as a guide to predictive analysis I followed the instructions and discussion on "A Complete Tutorial on Tree Based Modeling from Scratch (in R & Python)" at Analytics Vidhya.
-
-# #Load Libraries
+# Note that there was a issue with an earlier version encoding in the wrong direction that has now been fixed. Thanks to [Lam Dang](https://www.kaggle.com/lamdang) for pointing this out. **This may depend on the library that you use to read image files, so be aware that you will need to preprocess your mask with a transpose operation  if your library reads images as width × height instead of height × width** (thanks to [firolino](https://www.kaggle.com/firolino)).
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import os, time
+from pathlib import Path
 
-# keeps the plots in one place. calls image as static pngs
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt # side-stepping mpl backend
-import matplotlib.gridspec as gridspec # subplots
-import mpld3 as mpl
+import numpy as np
 
-#Import models from scikit learn module:
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.cross_validation import KFold   #For K-fold cross validation
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier, export_graphviz
-from sklearn import metrics
-
-
-# # Load the data
-
-# In[ ]:
-
-
-df = pd.read_csv("../input/data.csv",header = 0)
-df.head()
-
-
-# # Clean and prepare data
-
-# In[ ]:
-
-
-df.drop('id',axis=1,inplace=True)
-df.drop('Unnamed: 32',axis=1,inplace=True)
-# size of the dataframe
-len(df)
+import imageio
+import matplotlib.pyplot as plt
 
 
 # In[ ]:
 
 
-df.diagnosis.unique()
+WORKING_DIR = Path(os.getcwd())
+PROJECT_DIR = WORKING_DIR.parent
+INPUT_DIR = PROJECT_DIR / 'input'
+TRAIN_DIR = INPUT_DIR / 'stage1_train'
+TEST_DIR = INPUT_DIR / 'stage1_test'
+
+# Images with errors that should be skipped. Adjust as required.
+TRAIN_ERROR_IDS = [
+    '7b38c9173ebe69b4c6ba7e703c0c27f39305d9b2910f46405993d2ea7a963b80'
+]
+
+
+# ## Data input routines
+
+# In[ ]:
+
+
+def image_ids_in(root_dir, is_train_data=False):
+    ids = []
+    for id in os.listdir(root_dir):
+        if id in TRAIN_ERROR_IDS:
+            print('Skipping ID due to bad training data:', id)
+        else:
+            ids.append(id)
+    return ids
+
+TRAIN_IMAGE_IDS = image_ids_in(TRAIN_DIR, is_train_data=True)
+TEST_IMAGE_IDS = image_ids_in(TEST_DIR)
+
+print('Examples:', TRAIN_IMAGE_IDS[22], TEST_IMAGE_IDS[22])
 
 
 # In[ ]:
 
 
-df['diagnosis'] = df['diagnosis'].map({'M':1,'B':0})
-df.head()
+def load_images(root_dir, ids, get_masks=False):
+    images = []
+    masks = []
+    image_sizes = []
+    for id in ids:
+        item_dir = root_dir / id
+        image_path = item_dir / 'images' / (id + '.png')
+        image = imageio.imread(str(image_path))
+        image = image[:, :, :3] # remove the alpha channel as it is not used
+        images.append(image)
+        image_sizes.append(image.shape[:2])
+        if get_masks:
+            mask_sequence = []
+            masks_dir = item_dir / 'masks'
+            mask_paths = masks_dir.glob('*.png')
+            for mask_path in mask_paths:
+                mask = imageio.imread(str(mask_path)) # 0 and 255 values
+                mask = (mask > 0).astype(np.uint8) # 0 and 1 values
+                mask_sequence.append(mask)
+            masks.append(mask_sequence)
+    if get_masks:
+        return images, masks, image_sizes
+    else:
+        return images, image_sizes
 
-
-# # Explore data
-
-# In[ ]:
-
-
-df.describe()
-
-
-# In[ ]:
-
-
-df.describe()
-plt.hist(df['diagnosis'])
-plt.title('Diagnosis (M=1 , B=0)')
-plt.show()
-
-
-# ### nucleus features vs diagnosis
-
-# In[ ]:
-
-
-features_mean=list(df.columns[1:11])
-# split dataframe into two based on diagnosis
-dfM=df[df['diagnosis'] ==1]
-dfB=df[df['diagnosis'] ==0]
+TRAIN_IMAGES, TRAIN_MASKS, TRAIN_IMAGE_SIZES = load_images(TRAIN_DIR, TRAIN_IMAGE_IDS, True)
+TEST_IMAGES, TEST_IMAGE_SIZES  = load_images(TEST_DIR, TEST_IMAGE_IDS, False)
 
 
 # In[ ]:
 
 
-#Stack the data
-plt.rcParams.update({'font.size': 8})
-fig, axes = plt.subplots(nrows=5, ncols=2, figsize=(8,10))
-axes = axes.ravel()
-for idx,ax in enumerate(axes):
-    ax.figure
-    binwidth= (max(df[features_mean[idx]]) - min(df[features_mean[idx]]))/50
-    ax.hist([dfM[features_mean[idx]],dfB[features_mean[idx]]], bins=np.arange(min(df[features_mean[idx]]), max(df[features_mean[idx]]) + binwidth, binwidth) , alpha=0.5,stacked=True, normed = True, label=['M','B'],color=['r','g'])
-    ax.legend(loc='upper right')
-    ax.set_title(features_mean[idx])
-plt.tight_layout()
-plt.show()
+def show_image_shape_stats(image_sizes, image_ids):
+    print('  no. of images:', len(image_sizes))
+    print('  first five shapes:', image_sizes[:5])
+    image_sizes = np.asarray(image_sizes)
+    image_ids = np.asarray(image_ids)
+    print('  min. width:', image_sizes[:, 1].min(), '; max width:', image_sizes[:, 1].max())
+    print('  min. height:', image_sizes[:, 0].min(), '; max height:', image_sizes[:, 0].max())
+    pixel_counts = image_sizes.prod(axis=1)
+    sorted_pixel_count_indices = np.argsort(pixel_counts)[::-1] # biggest to smallest
+    print('  biggest images (by pixel count):\n   ',           '\n    '.join(image_ids[sorted_pixel_count_indices[:3]]))
+    print('  smallest images (by pixel count):\n   ',           '\n    '.join(image_ids[sorted_pixel_count_indices[-3:]]))
+
+print('Train image stats:')
+show_image_shape_stats(TRAIN_IMAGE_SIZES, TRAIN_IMAGE_IDS)
+print('\nTest image stats:')
+show_image_shape_stats(TEST_IMAGE_SIZES, TEST_IMAGE_IDS)
 
 
-# ###Observations
-# 
-# 1. mean values of cell radius, perimeter, area, compactness, concavity and concave points can be used in classification of the cancer. Larger values of these parameters tends to show a correlation with malignant tumors. 
-# 2. mean values of texture, smoothness, symmetry or fractual dimension does not show a particular preference of one diagnosis over the other. In any of the histograms there are no noticeable large outliers that warrants further cleanup.
-
-# ## Creating a test set and a training set
-# Since this data set is not ordered, I am going to do a simple 70:30 split to create a training data set and a test data set.
+# ## RLE routines
 
 # In[ ]:
 
 
-traindf, testdf = train_test_split(df, test_size = 0.3)
+def rle_encode(mask):
+    pixels = mask.T.flatten()
+    # We need to allow for cases where there is a '1' at either end of the sequence.
+    # We do this by padding with a zero at each end when needed.
+    use_padding = False
+    if pixels[0] or pixels[-1]:
+        use_padding = True
+        pixel_padded = np.zeros([len(pixels) + 2], dtype=pixels.dtype)
+        pixel_padded[1:-1] = pixels
+        pixels = pixel_padded
+    rle = np.where(pixels[1:] != pixels[:-1])[0] + 2
+    if use_padding:
+        rle = rle - 1
+    rle[1::2] = rle[1::2] - rle[:-1:2]
+    return rle
 
 
-# ## Model Classification
-# 
-# Here we are going to build a classification model and evaluate its performance using the training set.
-# 
-# 
+def rle_to_string(runs):
+    return ' '.join(str(x) for x in runs)
+
+
+# Used only for testing.
+# This is copied from https://www.kaggle.com/paulorzp/run-length-encode-and-decode.
+# Thanks to Paulo Pinto.
+def rle_decode(rle_str, mask_shape, mask_dtype):
+    s = rle_str.split()
+    starts, lengths = [np.asarray(x, dtype=int) for x in (s[0:][::2], s[1:][::2])]
+    starts -= 1
+    ends = starts + lengths
+    mask = np.zeros(np.prod(mask_shape), dtype=mask_dtype)
+    for lo, hi in zip(starts, ends):
+        mask[lo:hi] = 1
+    return mask.reshape(mask_shape[::-1]).T
+
+
+# ### Tests
 
 # In[ ]:
 
 
-#Generic function for making a classification model and accessing the performance. 
-# From AnalyticsVidhya tutorial
-def classification_model(model, data, predictors, outcome):
-  #Fit the model:
-  model.fit(data[predictors],data[outcome])
-  
-  #Make predictions on training set:
-  predictions = model.predict(data[predictors])
-  
-  #Print accuracy
-  accuracy = metrics.accuracy_score(predictions,data[outcome])
-  print("Accuracy : %s" % "{0:.3%}".format(accuracy))
-
-  #Perform k-fold cross-validation with 5 folds
-  kf = KFold(data.shape[0], n_folds=5)
-  error = []
-  for train, test in kf:
-    # Filter training data
-    train_predictors = (data[predictors].iloc[train,:])
+# Used for testing only.
+def read_sample_training_rles():
+    is_header = True
+    id_rle_map = {}
+    for line in open(INPUT_DIR / 'stage1_train_labels.csv').readlines():
+        if is_header:
+            is_header = False
+            continue
+        id, rle = line.split(',')
+        id = id.strip()
+        rle = rle.strip()
+        assert len(id) > 0
+        assert len(rle) > 0
+        if id in TRAIN_ERROR_IDS:
+            continue
+        rles = id_rle_map.get(id)
+        if not rles:
+            rles = set([])
+            id_rle_map[id] = rles
+        rles.add(rle)
+    ids = id_rle_map.keys()
+    print('Read sample RLEs for', len(ids), 'images')
+    return id_rle_map
     
-    # The target we're using to train the algorithm.
-    train_target = data[outcome].iloc[train]
-    
-    # Training the algorithm using the predictors and target.
-    model.fit(train_predictors, train_target)
-    
-    #Record error from each cross-validation run
-    error.append(model.score(data[predictors].iloc[test,:], data[outcome].iloc[test]))
-    
-    print("Cross-Validation Score : %s" % "{0:.3%}".format(np.mean(error)))
-    
-  #Fit the model again so that it can be refered outside the function:
-  model.fit(data[predictors],data[outcome]) 
+
+SAMPLE_TRAINING_RLES = read_sample_training_rles()
 
 
-# ### Logistic Regression model
-# 
-# Logistic regression is widely used for classification of discrete data. In this case we will use it for binary (1,0) classification.
-# 
-# Based on the observations in the histogram plots, we can reasonably hypothesize that the cancer diagnosis depends on the mean cell radius, mean perimeter, mean area, mean compactness, mean concavity and mean concave points. We can then  perform a logistic regression analysis using those features as follows:
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
-outcome_var='diagnosis'
-model=LogisticRegression()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# The prediction accuracy is reasonable. 
-# What happens if we use just one predictor? 
-# Use the mean_radius:
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean']
-model=LogisticRegression()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# This gives a similar prediction accuracy and a cross-validation score.
-# 
-
-# The accuracy of the predictions are good but not great. The cross-validation scores are reasonable. 
-# Can we do better with another model?
-
-# ### Decision Tree Model
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
-model = DecisionTreeClassifier()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# Here we are over-fitting the model probably due to the large number of predictors.
-# Let use a single predictor, the obvious one is the radius of the cell.
-
-# In[ ]:
+def test_rle_encode():
+    test_mask = np.asarray([[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [1, 0, 0, 0]]).T
+    assert rle_to_string(rle_encode(test_mask)) == '7 2 11 3'
+    test_mask = np.asarray([[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [1, 0, 0, 1]]).T
+    assert rle_to_string(rle_encode(test_mask)) == '7 2 11 3 16 1'
+    test_mask = np.asarray([[1, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [1, 0, 0, 0]]).T
+    assert rle_to_string(rle_encode(test_mask)) == '1 1 7 2 11 3'
+    test_mask = np.asarray([[1, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [1, 0, 0, 1]]).T
+    assert rle_to_string(rle_encode(test_mask)) == '1 1 7 2 11 3 16 1'
+    num_images = len(TRAIN_IMAGES)
+    print('Verfiying RLE encoding on', num_images, 'mask sequences ...')
+    time_rle = 0.0 # seconds
+    time_stringify = 0.0 # seconds
+    mask_count = 0
+    for image_idx in range(num_images):
+        image_id = TRAIN_IMAGE_IDS[image_idx]
+        mask_sequence = TRAIN_MASKS[image_idx]
+        num_masks = len(mask_sequence)
+        sample_rles = SAMPLE_TRAINING_RLES[image_id]
+        assert num_masks == len(sample_rles),                 'number of masks should match that of RLEs in supplied sample'
+        for mask_idx in range(num_masks):
+            mask = mask_sequence[mask_idx]
+            t0 = time.clock()
+            rle = rle_encode(mask)
+            assert len(rle) % 2 == 0 , 'RLE array length should be even'
+            time_rle += time.clock() - t0
+            t0 = time.clock()
+            rle_str = rle_to_string(rle)
+            time_stringify += time.clock() - t0
+            assert rle_str in sample_rles, 'RLE not found in supplied sample'
+            regenerated_mask = rle_decode(rle_str, mask.shape, mask.dtype)
+            assert mask.dtype == regenerated_mask.dtype
+            assert np.array_equal(mask.shape, regenerated_mask.shape),                     repr(mask.shape) + ' v. ' + repr(regenerated_mask.shape)
+            assert np.array_equal(mask, regenerated_mask),                     'mask does not match regenerated mask'
+            if mask_count and (mask_count % 5000) == 0:
+                print('  ..', mask_count, 'masks tested ..')
+            mask_count += 1
+    print('Total number of masks encoded:', mask_count)
+    print('Time spent RLE encoding masks:', time_rle, 's =>',             1000*(time_rle/mask_count), 'ms per mask.')
+    print('Time spent stringifying RLEs:', time_stringify, 's =>',             1000*(time_stringify/mask_count), 'ms per mask.')
 
 
-predictor_var = ['radius_mean']
-model = DecisionTreeClassifier()
-classification_model(model,traindf,predictor_var,outcome_var)
+test_rle_encode()
 
-
-# The accuracy of the prediction is much much better here.  But does it depend on the predictor?
-
-# Using a single predictor gives a 97% prediction accuracy for this model but the cross-validation score is not that great. 
-
-# ### Randome Forest
-
-# In[ ]:
-
-
-# Use all the features of the nucleus
-predictor_var = features_mean
-model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model, traindf,predictor_var,outcome_var)
-
-
-# Using all the features improves the prediction accuracy and the cross-validation score is great.
-
-#  An advantage with Random Forest is that it returns a feature importance matrix which can be used to select features. So lets select the top 5 features and use them as predictors.
-
-# In[ ]:
-
-
-#Create a series with feature importances:
-featimp = pd.Series(model.feature_importances_, index=predictor_var).sort_values(ascending=False)
-print(featimp)
-
-
-# In[ ]:
-
-
-# Using top 5 features
-predictor_var = ['concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean',]
-model = RandomForestClassifier(n_estimators=100, min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# Using the top 5 features only changes the prediction accuracy a bit but I think we get a better result if we use all the predictors.
-# 
-# What happens if we use a single predictor as before? Just check.
-
-# In[ ]:
-
-
-predictor_var =  ['radius_mean']
-model = RandomForestClassifier(n_estimators=100)
-classification_model(model, traindf,predictor_var,outcome_var)
-
-
-# This gives a better prediction accuracy too but the cross-validation is not great.
-# 
-
-# ## Using on the test data set
-
-# In[ ]:
-
-
-# Use all the features of the nucleus
-predictor_var = features_mean
-model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model, testdf,predictor_var,outcome_var)
-
-
-# The prediction accuracy for the test data set using the above Random Forest model is 95%!
-
-# ## Conclusion
-# 
-# The best model to be used for diagnosing breast cancer as found in this analysis is the Random Forest model with the top 5 predictors, 'concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean'. It gives a prediction accuracy of ~95% and a cross-validation score ~ 93% for the test data set.
-# 
-# 
-# I will see if I can improve this more by tweaking the model further and trying out other models in a later version of this analysis.

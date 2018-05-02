@@ -1,79 +1,37 @@
 
 # coding: utf-8
 
-# # Most Common Indentation Space Count in Python Code
-# As you may know [PEP8](https://www.python.org/dev/peps/pep-0008/#indentation) defined Python indentation should follow 4 spaces, but is it really common nowadays? because I have often seen 2 spaces indentation in Python code.
-# In this kernel, I extracted indentation style from GitHub repositories, inspired by [Aleksey's kernel](https://www.kaggle.com/residentmario/most-common-random-seeds).
+# # Looking For Your Files?
 # 
-# Note: This query extracts number of spaces from head of the line, and choose minimum spaces as the indentation style of the code. This number may not always be the indentation.
+# Your data files can be found by clicking on the **Input Files** Link above your editing area.
+# 
+# ![Imgur](https://i.imgur.com/TB8cntG.png)
+
+# From there, you will find a list of files in the left sidebar.  It may look something like this.  
+# ![Imgur](https://i.imgur.com/rqO331u.png)
+# 
+# If you have many sets of files, it could be longer.  If you don't have any data files listed, click on the button to add a data file.
+# 
+# To get the path you'll need to load a file, just click on the filename in this list.  That causes the file's path to show up in the main window.  It will look something like this.
+# 
+# ![Imgur](https://i.imgur.com/7yAY8Z1.png)
+# 
+# If you have a great memory, congrats. You can remember it and type in that path to load it.
+# 
+# But computers are finicky if you get any part of it wrong (like those darn leading dots.) . So it's usually easier to highlight the file path, then use keyboard shortcuts to copy and paste it into your code.  
+# 
+# Once you've copied it, click the button to the left of the **Input Files** link to get back to your editing environment.
+# 
+# ![Imgur](https://i.imgur.com/9RYRekU.png)
+# 
+# From there, you can load it with your favorite Python or R libraries.  Here's an example.
 
 # In[ ]:
 
 
 import pandas as pd
-from google.cloud import bigquery
-client = bigquery.Client()
+
+my_data = pd.read_csv('../input/train.csv')
 
 
-# In[ ]:
-
-
-QUERY = ('''
-#standardSQL
-WITH
-  lines AS (
-  SELECT
-    SPLIT(content, '\\n') AS line,
-    id
-  FROM
-    `bigquery-public-data.github_repos.sample_contents`
-  WHERE
-    sample_path LIKE "%.py" )
-SELECT
-  space_count,
-  COUNT(space_count) AS number_of_occurence
-FROM (
-  SELECT
-    id,
-    MIN(CHAR_LENGTH(REGEXP_EXTRACT(flatten_line, r"^ +"))) AS space_count
-  FROM
-    lines
-  CROSS JOIN
-    UNNEST(lines.line) AS flatten_line
-  WHERE
-    REGEXP_CONTAINS(flatten_line, r"^ +")
-  GROUP BY
-    id )
-GROUP BY
-  space_count
-ORDER BY
-  number_of_occurence DESC
-''')
-
-query_job = client.query(QUERY)
-
-iterator = query_job.result(timeout=30)
-rows = list(iterator)
-
-
-# In[ ]:
-
-
-rows = [dict(row) for row in rows]
-df = pd.DataFrame(rows)
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-plt.style.use('fivethirtyeight')
-df[:6].plot(kind='bar', x='space_count', y='number_of_occurence')
-
-ax = plt.gca()
-ax.set_ylabel('Number of Occurence')
-ax.set_xlabel('Indentation Space Count')
-pass
-
-
-# 4 spaces indentation is quite popular, but 2 spaces indentation is 2nd place!
+# Now you are off to code. If you're unsure what to do with a loaded data file, Kaggle has some [great learning resources](https://www.kaggle.com/dansbecker/learning-materials-on-kaggle).

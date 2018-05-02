@@ -1,363 +1,415 @@
 
 # coding: utf-8
 
-# # Goal
-# So the excellent [original kernel](https://www.kaggle.com/gaborvecsei/basic-pure-computer-vision-segmentation-lb-0-229) put together by [Gabor](https://www.kaggle.com/gaborvecsei) gets 0.229 "without even using the training data" which is a great result, but what if we use the training data.  
-# ## Overview
-# The idea is to take the parameters found in the original kernel and try to improve them using the IOU score as the ground criteria.
-# 1. Get a cross-validation setup working that gives us a similar value to the 0.229
-# 1. Rewrite the threshold and label methods to take all of their parameters
-# 1. Use scipy.optimize (probably sk-optimize would be better, but we'll keep it simple here) to improve the values
-# 1. Predict and submit
+# # Dimensionality Reduction and PCA for Fashion MNIST
+# 
+# Principal Components Analysis is the simplest example of dimensionality reduction. **Dimensionality reduction** is a the problem of taking a matrix with many observations, and "compressing it" to a matrix with fewer observations which preserves as much of the information in the full matrix as possible.
+# 
+# Principal components is the most straightforward of the methodologies for doing so. It relies on finding an orthonormal basis (a set of perpendicular vectors) within the dimensional space of the dataset which explain the largest possible amount of variance in the dataset. For example, here is PCA applied to a small two-dimensional problem:
+# 
+# ![](https://i.imgur.com/tlZIO7t.png)
+# 
+# PCA then remaps the values of the points in the dataset to their projection onto the newly minted bases, spitting out a matrix of observations with as few variables as you desire!
+# 
+# ## Basic application
+# 
+# The fashion MNIST dataset is a fun dataset to try this algorithm out on because it includes 28x28 variables in an easy-to-visualize form (a picture). What happens when we pick just two principal components, and try to map the result?
 
-# In[ ]:
+# In[1]:
 
 
-from os.path import join
-import cv2
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from glob import glob
-import os
-from skimage.io import imread
-import matplotlib.pyplot as plt
+import pandas as pd
+df = pd.read_csv("../input/fashion-mnist_test.csv")
+X = df.iloc[:, 1:]
+y = df.iloc[:, :1]
+
+
+# In[2]:
+
+
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=2)
+X_r = pca.fit(X).transform(X)
+
+
+# To visualize the result of applying PCA to our datasets, we'll plot how much weight each pixel in the clothing picture gets in the resulting vector, using a heatmap. This creates a nice, potentially interpretable picture of what each vector is "finding".
+
+# In[3]:
+
+
+pca.explained_variance_ratio_
+
+
+# In[4]:
+
+
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-dsb_data_dir = os.path.join('..', 'input')
-stage_label = 'stage1'
+import matplotlib.pyplot as plt
+plt.style.use('fivethirtyeight')
+
+fig, axarr = plt.subplots(1, 2, figsize=(12, 4))
+
+sns.heatmap(pca.components_[0, :].reshape(28, 28), ax=axarr[0], cmap='gray_r')
+sns.heatmap(pca.components_[1, :].reshape(28, 28), ax=axarr[1], cmap='gray_r')
+axarr[0].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[0]*100),
+    fontsize=12
+)
+axarr[1].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[1]*100),
+    fontsize=12
+)
+axarr[0].set_aspect('equal')
+axarr[1].set_aspect('equal')
+
+plt.suptitle('2-Component PCA')
 
 
-# In[ ]:
+# The first component looks like...some kind of large clothing object (e.g. not a shoe or accessor). The second component looks like negative space around a pair of pants.
+# 
+# What do the next two components look like?
+
+# In[5]:
 
 
-all_images = glob(os.path.join(dsb_data_dir, 'stage1_*', '*', '*', '*'))
-img_df = pd.DataFrame({'path': all_images})
-img_id = lambda in_path: in_path.split('/')[-3]
-img_type = lambda in_path: in_path.split('/')[-2]
-img_group = lambda in_path: in_path.split('/')[-4].split('_')[1]
-img_stage = lambda in_path: in_path.split('/')[-4].split('_')[0]
-img_df['ImageId'] = img_df['path'].map(img_id)
-img_df['ImageType'] = img_df['path'].map(img_type)
-img_df['TrainingSplit'] = img_df['path'].map(img_group)
-img_df['Stage'] = img_df['path'].map(img_stage)
-img_df.sample(2)
+pca = PCA(n_components=4)
+X_r = pca.fit(X).transform(X)
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+plt.style.use('fivethirtyeight')
+
+fig, axarr = plt.subplots(2, 2, figsize=(12, 8))
+
+sns.heatmap(pca.components_[0, :].reshape(28, 28), ax=axarr[0][0], cmap='gray_r')
+sns.heatmap(pca.components_[1, :].reshape(28, 28), ax=axarr[0][1], cmap='gray_r')
+sns.heatmap(pca.components_[2, :].reshape(28, 28), ax=axarr[1][0], cmap='gray_r')
+sns.heatmap(pca.components_[3, :].reshape(28, 28), ax=axarr[1][1], cmap='gray_r')
+
+axarr[0][0].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[0]*100),
+    fontsize=12
+)
+axarr[0][1].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[1]*100),
+    fontsize=12
+)
+axarr[1][0].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[2]*100),
+    fontsize=12
+)
+axarr[1][1].set_title(
+    "{0:.2f}% Explained Variance".format(pca.explained_variance_ratio_[3]*100),
+    fontsize=12
+)
+axarr[0][0].set_aspect('equal')
+axarr[0][1].set_aspect('equal')
+axarr[1][0].set_aspect('equal')
+axarr[1][1].set_aspect('equal')
+
+plt.suptitle('4-Component PCA')
+pass
 
 
-# # Process and Import Training Data
-# Here we load in the training data images and labels. We load the label images into a single index colored integer image.
+# Both of these components look like they have some sort of shoe-related thing going on.
+# 
+# Each additional dimension we add to the PCA captures less and less of the variance in the model. The first component is the most important one, followed by the second, then the third, and so on.
+# 
+# When using PCA, it's a good idea to pick a decomposition with a reasonably small number of variables by looking for a "cutoff" in the effectiveness of the model. To do that, you can plot the explained variance ratio (out of all variance) for each of the components of the PCA. This goes thusly:
 
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'train_df = img_df.query(\'TrainingSplit=="train"\')\ntrain_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in train_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'masks\'] = n_rows.query(\'ImageType == "masks"\')[\'path\'].values.tolist()\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    train_rows += [c_row]\ntrain_img_df = pd.DataFrame(train_rows)    \nIMG_CHANNELS = 3\ndef read_and_stack(in_img_list):\n    return np.sum(np.stack([i*(imread(c_img)>0) for i, c_img in enumerate(in_img_list, 1)], 0), 0)\n\ndef read_hist_bw(in_img_list):\n    return cv2.imread(in_img_list[0], cv2.IMREAD_GRAYSCALE)\ntrain_img_df[\'images\'] = train_img_df[\'images\'].map(read_hist_bw)\ntrain_img_df[\'masks\'] = train_img_df[\'masks\'].map(read_and_stack).map(lambda x: x.astype(int))\ntrain_img_df.sample(1)')
-
-
-# In[ ]:
+# In[6]:
 
 
-for _, c_row in train_img_df.sample(1).iterrows():
-    fig, (ax1, ax2) = plt.subplots(1,2, figsize = (8, 4))
-    ax1.imshow(c_row['images'], cmap = 'bone')
-    ax2.imshow(c_row['masks'], cmap = 'nipy_spectral')
+import numpy as np
+
+pca = PCA(n_components=10)
+X_r = pca.fit(X).transform(X)
+
+plt.plot(range(10), pca.explained_variance_ratio_)
+plt.plot(range(10), np.cumsum(pca.explained_variance_ratio_))
+plt.title("Component-wise and Cumulative Explained Variance")
+pass
 
 
-# In[ ]:
+# Looking at this plot, it seems like the first and second components add a lot of information about the variables to the model, but every component after that is not particularly worthwhile. If we were using PCA as a processing step ourselves, we might want to cut off at $n=2$.
+
+# ## Digging deeper
+# 
+# The understanding above (specifically, explained variance and understanding how to find and interpret which coefficients go into each dimension-reduced component) is sufficient for using PCA for plug-and-play modeling purposes. However, it's useful to have a "toolbox" for comprehending dimensionality reduction output.
+# 
+# Dimensionality reduction techniques (and more specifically PCA in this example notebook) can be used to understand clusters of variables which co-occur with one another. We can think of each new vector across the dataset values as being some new composite variable that the dimensionality reduction technique has come up with. For example, suppose we find that the third PCA vector is a good indicator of the "shoe-ness" of an item in the Fashion MNIST dataset. We could compute this vector, grab it, and push it back into our original matrix of features as a new column. If we were previously having trouble distinguishing shoes in the dataset, this might significantly increase the accuracy of our model!
+# 
+# Even if none of the variables in the dataset are worth pushing back to our original feature matrix, PCA will still help us probe for new features. If dimensionality reduction picks up shoe-ness in some sense, then that's a good indication that trying to define "shoe-ness" in the data is a good idea to try to engineer as a feature.
+# 
+# The next section applies a battery of techniques of this form. It is based on Selfish Gene's excellent notebooks elsewhere.
+# 
+# For the diagnoses that follow, we will use a standardly normalized 120-component PCA.
+
+# In[16]:
 
 
-from sklearn.model_selection import train_test_split
-train_split_df, valid_split_df = train_test_split(train_img_df, 
-                                                  test_size = 0.4, 
-                                                  random_state = 2018,
-                                                  # ensures both splits have the different sized images
-                                                  stratify = train_img_df['images'].map(lambda x: '{}'.format(np.shape))
-                                                 )
-print('train', train_split_df.shape, 'valid', valid_split_df.shape)
+from sklearn.preprocessing import normalize 
+X_norm = normalize(X.values)
+# X_norm = X.values / 255
+
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=120)
+X_norm_r = pca.fit(X_norm).transform(X_norm)
 
 
-# Here are the two functions from the original kernel
+# ### Mean and standard deviation summaries
+# 
+# To dig deeper into PCA, let's start by looking at the mean clothing image as as well as a heatmap of the clothing image standard deviations.
 
-# In[ ]:
+# In[8]:
 
 
-def gabor_threshold(image_gray):
-    image_gray = cv2.GaussianBlur(image_gray, (7, 7), 1)
-    ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU)
+sns.heatmap(pd.DataFrame(X_norm).mean().values.reshape(28, 28), cmap='gray_r')
+
+
+# In[9]:
+
+
+sns.heatmap(pd.DataFrame(X).std().values.reshape(28, 28), cmap='gray_r')
+
+
+# Pixels on the edge of the image don't matter. The pixels with the least variance and highest mean value are shoe pixels from the center of the image, while pixels elsewhere in the "sweater outline" are the highest variance. This hints that shoes are relatively easily differenciable as a class of items, but the rest of the types of items in the dataset will be much harder.
+
+# ### Assessing fit by reconstructing individual sample images
+# 
+# PCA compresses the 28x28 pixel values in the dataset to `n` vectors across those pixels. A way of diagnosing how well we did this is to compare original images with ones reconstructed from those vectors.
+
+# In[33]:
+
+
+def reconstruction(X, n, trans):
+    """
+    Creates a reconstruction of an input record, X, using the topmost (n) vectors from the
+    given transformation (trans)
     
-    _, cnts, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
-    max_cnt_area = cv2.contourArea(cnts[0])
+    Note 1: In this dataset each record is the set of pixels in the image (flattened to 
+    one row).
+    Note 2: X should be normalized before input.
+    """
+    vectors = [trans.components_[n] * X[n] for n in range(0, n)]
     
-    if max_cnt_area > 50000:
-        ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+    # Invert the PCA transformation.
+    ret = trans.inverse_transform(X)
     
-    return thresh
-
-def gabor_apply_morphology(thresh):
-    mask = cv2.dilate(thresh, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5)))
-    mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5)))
-    return mask
-
-def gabor_pipeline(in_img):
-    thresh = gabor_threshold(in_img)
-    return gabor_apply_morphology(thresh)
+    # This process results in non-normal noise on the margins of the data.
+    # We clip the results to fit in the [0, 1] interval.
+    ret[ret < 0] = 0
+    ret[ret > 1] = 1
+    return ret
 
 
-# > # IOU Metric
-# [This kernel](https://www.kaggle.com/aglotero/another-iou-metric) has a nice IOU implementation that we just copy here
+# For example, here is how well a 120-variable reconstruction (15% as many variables as in the root dataset) does for the first image in the dataset, a T-shirt:
 
-# In[ ]:
+# In[34]:
 
 
-from skimage.morphology import label
-def iou_metric(y_true_in, y_pred_in, print_table=False):
-    labels = y_true_in
-    y_pred = label(y_pred_in > 0.5)
+fig, axarr = plt.subplots(1, 2, figsize=(12, 4))
+
+sns.heatmap(X_norm[0, :].reshape(28, 28), cmap='gray_r',
+            ax=axarr[0])
+sns.heatmap(reconstruction(X_norm_r[0, :], 120, pca).reshape(28, 28), cmap='gray_r',
+            ax=axarr[1])
+axarr[0].set_aspect('equal')
+axarr[0].axis('off')
+axarr[1].set_aspect('equal')
+axarr[1].axis('off')
+
+
+# In[41]:
+
+
+def n_sample_reconstructions(X, n_samples=5, trans_n=120, trans=None):
+    """
+    Returns a tuple with `n_samples` reconstructions of records from the feature matrix X,
+    as well as the indices sampled from X.
+    """
+    sample_indices = np.round(np.random.random(n_samples)*len(X))
+    return (sample_indices, 
+            np.vstack([reconstruction(X[int(ind)], trans_n, trans) for ind in sample_indices]))
+
+
+def plot_reconstructions(X, n_samples=5, trans_n=120, trans=None):
+    """
+    Plots `n_samples` reconstructions.
+    """
+    fig, axarr = plt.subplots(n_samples, 3, figsize=(12, n_samples*4))
+    ind, reconstructions = n_sample_reconstructions(X, n_samples, trans_n, trans)
+    for (i, (ind, reconstruction)) in enumerate(zip(ind, reconstructions)):
+        ax0, ax1, ax2 = axarr[i][0], axarr[i][1], axarr[i][2]
+        sns.heatmap(X_norm[int(ind), :].reshape(28, 28), cmap='gray_r', ax=ax0)
+        sns.heatmap(reconstruction.reshape(28, 28), cmap='gray_r', ax=ax1)
+        sns.heatmap(np.abs(X_norm[int(ind), :] - reconstruction).reshape(28, 28), 
+                    cmap='gray_r', ax=ax2)
+        ax0.axis('off')
+        ax0.set_aspect('equal')
+        ax0.set_title("Original Image", fontsize=12)
+        ax1.axis('off')
+        ax1.set_aspect('equal')
+        ax1.set_title("120-Vector Reconstruction", fontsize=12)
+        ax2.axis('off')
+        ax2.set_title("Original-Reconstruction Difference", fontsize=12)
+        ax2.set_aspect('equal')
+
+
+# In[42]:
+
+
+plot_reconstructions(X_norm_r, n_samples=10, trans_n=120, trans=pca)
+
+
+# A 120-vector reconstruction seems to do pretty well. It struggles the most when applied to images with holes in them. It has difficulty finding the edges of things. These problems are pretty typical of image datasets (many of which do not have the first problem, holes!).
+# 
+# By applying this sample reconstruction technique to more of the dataset, we can start to understand what features are and are not easily modeled. Similarly, by applying this technique whilst trying out different `n`, we can triangulate what aspects of the images are most-to-least easily modeled, by seeing how far up `n` has to go before we have "acceptably" captured a particular aspect of the dataset.
+# 
+# In this case, I suspect that finding the edges of clothing items that are not contiguous (e.g. the brace on a pair of heels, or the straps on a handbag) is the hardest part of this dataset to model. This presents the clue that we should worry about this aspect of the data quite a bit!
+
+# ### Assessing how to interpret individual components using record similarity
+# 
+# When we want to understand the variables of a dataset at-a-glance, we can use the handy `pd.describe` function to do so. This function includes, among other things, the 0th, 25th, 50th, 75th, and 100th percentile of the dataset. Records (quantiles) very close to the edges of the usefulness of a variable are often very informative as to what that variable "does". This is true of ordinary variables, and all the more true of our computed ones, which we need all the help we can get interpreting!
+
+# In[96]:
+
+
+from sklearn.metrics import mean_squared_error
+
+def quartile_record(X, vector, q=0.5):
+    """
+    Returns the data which is the q-quartile fit for the given vector.
+    """
+    errors = [mean_squared_error(X_norm[i, :], vector) for i in range(len(X_norm))]
+    errors = pd.Series(errors)
     
-    true_objects = len(np.unique(labels))
-    pred_objects = len(np.unique(y_pred))
-
-    intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
-
-    # Compute areas (needed for finding the union between all objects)
-    area_true = np.histogram(labels, bins = true_objects)[0]
-    area_pred = np.histogram(y_pred, bins = pred_objects)[0]
-    area_true = np.expand_dims(area_true, -1)
-    area_pred = np.expand_dims(area_pred, 0)
-
-    # Compute union
-    union = area_true + area_pred - intersection
-
-    # Exclude background from the analysis
-    intersection = intersection[1:,1:]
-    union = union[1:,1:]
-    union[union == 0] = 1e-9
-
-    # Compute the intersection over union
-    iou = intersection / union
-
-    # Precision helper function
-    def precision_at(threshold, iou):
-        matches = iou > threshold
-        true_positives = np.sum(matches, axis=1) == 1   # Correct objects
-        false_positives = np.sum(matches, axis=0) == 0  # Missed objects
-        false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
-        tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
-        return tp, fp, fn
-
-    # Loop over IoU thresholds
-    prec = []
-    if print_table:
-        print("Thresh\tTP\tFP\tFN\tPrec.")
-    for t in np.arange(0.5, 1.0, 0.05):
-        tp, fp, fn = precision_at(t, iou)
-        if (tp + fp + fn) > 0:
-            p = tp / (tp + fp + fn)
-        else:
-            p = 0
-        if print_table:
-            print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
-        prec.append(p)
-    
-    if print_table:
-        print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
-    return np.mean(prec)
+    e_value = errors.quantile(q, interpolation='lower')
+    return X[errors[errors == e_value].index[0], :]
 
 
-# # Wrap Everything Up
-# We have a single function to evaluate the IOU of a model on a dataset
+# For example, here is the most-explained records in the dataset when it comes to the first principal component:
 
-# In[ ]:
-
-
-def calculate_iou(in_df, thresh_func):
-    pred_masks = valid_split_df['images'].map(thresh_func).values
-    gt_masks = valid_split_df['masks'].values
-    all_ious = [iou_metric(cur_gt, cur_pred, print_table=False) for cur_gt, cur_pred in 
-            zip(gt_masks, pred_masks)]
-    return np.mean(all_ious)
+# In[106]:
 
 
-# # Estimate our IOU with the Gabor Model
-# Here we see the result is 0.35 which is quite a bit higher than the actual 0.229, so we have to be aware the value isn't super reliable.
-
-# In[ ]:
+sns.heatmap(quartile_record(X_norm, pca.components_[0], q=0.98).reshape(28, 28), 
+            cmap='gray_r')
 
 
-get_ipython().run_cell_magic('time', '', "print('IOU', calculate_iou(valid_split_df, gabor_pipeline))")
+# Let's extend this idea to the first eight components in the dataset.
+
+# In[128]:
 
 
-# # Define a Parametric Model
-# Here we take the basic Gabor pipeline and allow the important parameters to be adjusted so they can consequently be optimized
+def plot_quartiles(X, trans, n):
 
-# In[ ]:
-
-
-def parametric_pipeline(image_gray, 
-                       blur_sigma = 1, 
-                        dilate_iters = 1,
-                       dilate_size = 5, 
-                       erode_size = 5):
-    # some functions don't like floats
-    blur_sigma = np.clip(blur_sigma, 0.01, 100)
-    blur_size = int(2*round(3*blur_sigma)+1)
-    dilate_size = int(dilate_size)
-    erode_size = int(erode_size)
-    dilate_iters = int(dilate_iters)
-    if blur_size>0:
-        image_gray = cv2.GaussianBlur(image_gray, (blur_size, blur_size), blur_sigma)
-    
-    ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU)
-    _, cnts, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
-    max_cnt_area = cv2.contourArea(cnts[0])
-    
-    if max_cnt_area > 50000:
-        ret, thresh = cv2.threshold(image_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
-    mask = thresh
-    for i in range(dilate_iters):
-        if dilate_size>0:
-            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size)))
-        if erode_size>0:
-            mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_size, erode_size)))
-    return mask
-
-
-# # Optimization
-# A very simple optimization routine with no knowledge about morphology, integer steps, iterations or anything else. It just serves as an example of how such a pipeline can be optimized. At the very least some random search would probably improve the results
-
-# In[ ]:
-
-
-from scipy.optimize import fmin
-from tqdm import tqdm
-base_x0_min = [0, 0, 0, 0]
-base_x0_max = [10, 10, 15, 15]
-
-def random_search_fmin(random_restart = 5, search_steps = 5):
-    results = []
-    base_x0 = (1, 1, 5, 5) # starting point
-    for _ in tqdm(range(random_restart)):
-        def inv_iou_func(scale_x0):
-            x0 = [s*x/10 for s,x in zip(scale_x0, base_x0)]
-            # score it on the training data
-            try:
-                score = calculate_iou(train_split_df, 
-                                      lambda x: parametric_pipeline(x, *x0))
-            except Exception as e:
-                print('Arguments:', ' '.join(['%1.1f' % xi for xi in x0]))
-                raise ValueError(e)
-            print('Arguments:', ' '.join(['%1.1f' % xi for xi in x0]), 
-                  'IOU: %2.3f' % score)
-            return 1-score # since we are minimizing the result
-
-        opt_scalars = fmin(inv_iou_func, 
-                          (10, 10, 10, 10), 
-                           xtol = 0.1,
-                          maxiter = search_steps)
+    fig, axarr = plt.subplots(n, 7, figsize=(12, n*2))
+    for i in range(n):
+        vector = trans.components_[i, :]
+        sns.heatmap(quartile_record(X, vector, q=0.02).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][0], cbar=False)
+        axarr[i][0].set_aspect('equal')
+        axarr[i][0].axis('off')
         
-        opt_params = [s*x/10 for s,x in zip(opt_scalars, base_x0)]
-        results += [(calculate_iou(train_split_df, 
-                                  lambda x: parametric_pipeline(x, *opt_params)), 
-                     opt_params)]
-        # pick a new random spot to iterate from
-        base_x0 = [np.random.choice(np.linspace(x_start, x_end, 10))
-                   for x_start, x_end in zip(base_x0_min, base_x0_max)]
-    n_out = sorted(results, key = lambda x: 1-x[0])
-    return n_out[0][1], n_out
+        sns.heatmap(quartile_record(X, vector, q=0.1).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][1], cbar=False)
+        axarr[i][1].set_aspect('equal')
+        axarr[i][1].axis('off')
+        
+        sns.heatmap(quartile_record(X, vector, q=0.25).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][2], cbar=False)
+        axarr[i][2].set_aspect('equal')
+        axarr[i][2].axis('off')
+        
+        sns.heatmap(quartile_record(X, vector, q=0.5).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][3], cbar=False)
+        axarr[i][3].set_aspect('equal')
+        axarr[i][3].axis('off')
+
+        sns.heatmap(quartile_record(X, vector, q=0.75).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][4], cbar=False)
+        axarr[i][4].set_aspect('equal')
+        axarr[i][4].axis('off')
+
+        sns.heatmap(quartile_record(X, vector, q=0.9).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][5], cbar=False)
+        axarr[i][5].set_aspect('equal')
+        axarr[i][5].axis('off')        
+        
+        sns.heatmap(quartile_record(X, vector, q=0.98).reshape(28, 28), 
+            cmap='gray_r', ax=axarr[i][6], cbar=False)        
+        axarr[i][6].set_aspect('equal')
+        axarr[i][6].axis('off')
+        
+    axarr[0][0].set_title('2nd Percentile', fontsize=12)
+    axarr[0][1].set_title('10th Percentile', fontsize=12)
+    axarr[0][2].set_title('25th Percentile', fontsize=12)
+    axarr[0][3].set_title('50th Percentile', fontsize=12)
+    axarr[0][4].set_title('75th Percentile', fontsize=12)
+    axarr[0][5].set_title('90th Percentile', fontsize=12)
+    axarr[0][6].set_title('98th Percentile', fontsize=12)
 
 
-# In[ ]:
+# In[130]:
 
 
-get_ipython().run_cell_magic('time', '', 'opt_params, results = random_search_fmin(5, 8)')
+plot_quartiles(X_norm, pca, 8)
 
 
-# # Calculate the Score on Hold-Out (validation)
-# Here we calculate the score on the validation to see if we actually improved anything
+# Each of these components does something interesting. The very first one seems to separate shoes from pants. The next one seperates uppers from pants. The third one, shoes from sandals. The fourth, items with huge sleeves from everything else. The eighth, bags from shoes; and so on!
+# 
+# Notice that *all of these vectors have meaning*, at least, more meaning than "pixel value 25, 25 is 27". Each component tells us the whatever-ness of something interesting. In this sense the PCA reconstruction is almost a more "natural" way of defining the same dataset; that is, it's a methodology that better fits the data itself, as opposed to structural constraints (like the need to describe individual pixel values) introduced by ease-of-use.
+# 
+# If you're doing supervised learning, you may want to look at this result and potentially pinch one similarity to or more of these componenets for use as a feature in your model. Otherwise, again, seeing where each "-ness" falls is useful for getting a deeper understanding of what you're working with.
 
-# In[ ]:
+# ### Assessing component fit using record similarity
+# 
+# Distinguishability between different dimensionality-determined attributes in the dataset is hard to establish emperically. One thing we can do to make it a little bit easier is plot out the errors (according to a metric of our choice; I'll keep using mean squared error) each component has relative to the data.
 
-
-print('IOU', calculate_iou(valid_split_df, 
-                           lambda x: parametric_pipeline(x, *opt_params)))
-
-
-# Now we load the test images and apply the algorithm to them
-
-# In[ ]:
+# In[133]:
 
 
-get_ipython().run_cell_magic('time', '', 'test_df = img_df.query(\'TrainingSplit=="test"\')\ntest_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in test_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    test_rows += [c_row]\ntest_img_df = pd.DataFrame(test_rows)    \n\ntest_img_df[\'images\'] = test_img_df[\'images\'].map(read_hist_bw)\nprint(test_img_df.shape[0], \'images to process\')\ntest_img_df.sample(1)')
+def record_similarity(X, vector, metric=mean_squared_error):
+    """
+    Returns the record similarity to the vector, using MSE is the measurement metric.
+    """
+    return pd.Series([mean_squared_error(X_norm[i, :], vector) for i in range(len(X_norm))])
 
 
-# In[ ]:
+# In[149]:
 
 
-get_ipython().run_cell_magic('time', '', "test_img_df['masks'] = test_img_df['images'].map(lambda x: \n                                                 parametric_pipeline(x, *opt_params))")
+fig, axarr = plt.subplots(2, 4, figsize=(12, 6))
+axarr = np.array(axarr).flatten()
+
+for i in range(0, 8):
+    record_similarity(X_norm, pca.components_[i]).plot.hist(bins=50, ax=axarr[i])
+    axarr[i].set_title("Component {0} Errors".format(i + 1), fontsize=12)
+    axarr[i].set_xlabel("")
+    axarr[i].set_ylabel("")
 
 
-# In[ ]:
+# In the histogram above, each element included in the bins is a measurement of the mean absolute error between a record in the dataset and a component (which are numerically labeled).
+# 
+# The worst-possible component would be one which has unfiromally distributed errors for all records in the dataset. This is bad because it is a "mean vector", e.g. the average response in the dataset.
+# 
+# A very good component would be one which has a bimodial distribution, as does the first component here. This indicates that there is a set of records which are *very distinguishable* from one another: a class A which is very close to this vector, and a class B which is very far away, with relatively few "middling" points. To understand *what* we are separating, construct and study a diagram like in the previous section. If we are using dimensionality reduction as part of our EDA before modeling, consider using similarity to this component as a feature!
+# 
+# Recall that very near to the beginning of the notebook we found that by far the highest gain in the dataset came from the first two components. This visualization illustrates why: those two components are the ones which are best separators of things (e.g. they are the most multimodal).
+# 
+# Components further into to dataset will tend to be normally distributed, with all of the various dataset records having more approximately equal distances from them. These components are picking up on features which are (1) more difficult to linearly separate and (2) occur in a smaller number of records.
+# 
+# Sometimes specific subfeatures demonstrated by this plot are worth exploring. For example, what is the contents of that very-near-the-metric clump at the beginning of Component 5? This demonstrates a set of things that are unusually homogeneous with regards to a particular component, and hence probably relatively easier to "tease out" (e.g. classify and separate) from the rest of the data.
 
-
-n_img = 3
-fig, m_axs = plt.subplots(2, n_img, figsize = (12, 6))
-for (_, d_row), (c_im, c_lab) in zip(test_img_df.sample(n_img).iterrows(), 
-                                     m_axs.T):
-    c_im.imshow(d_row['images'])
-    c_im.axis('off')
-    c_im.set_title('Microscope')
-    
-    c_lab.imshow(d_row['masks'])
-    c_lab.axis('off')
-    c_lab.set_title('Predicted')
-
-
-# In[ ]:
-
-
-def rle_encoding(x):
-    '''
-    x: numpy array of shape (height, width), 1 - mask, 0 - background
-    Returns run length as list
-    '''
-    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
-    run_lengths = []
-    prev = -2
-    for b in dots:
-        if (b>prev+1): run_lengths.extend((b+1, 0))
-        run_lengths[-1] += 1
-        prev = b
-    return run_lengths
-
-def prob_to_rles(x, cut_off = 0.5):
-    lab_img = label(x>cut_off)
-    if lab_img.max()<1:
-        lab_img[0,0] = 1 # ensure at least one prediction per image
-    for i in range(1, lab_img.max()+1):
-        yield rle_encoding(lab_img==i)
-
-
-# In[ ]:
-
-
-test_img_df['rles'] = test_img_df['masks'].map(lambda x: list(prob_to_rles(x)))
-
-
-# In[ ]:
-
-
-out_pred_list = []
-for _, c_row in test_img_df.iterrows():
-    for c_rle in c_row['rles']:
-        out_pred_list+=[dict(ImageId=c_row['ImageId'], 
-                             EncodedPixels = ' '.join(np.array(c_rle).astype(str)))]
-out_pred_df = pd.DataFrame(out_pred_list)
-print(out_pred_df.shape[0], 'regions found for', test_img_df.shape[0], 'images')
-out_pred_df.sample(3)
-
-
-# In[ ]:
-
-
-out_pred_df[['ImageId', 'EncodedPixels']].to_csv('predictions.csv', index = False)
-
+# ## Conclusion
+# 
+# The advantage of PCA (and dimensionality reduction in general) is that it compresses your data down to something that is more effectively modeled. This means that it will, for example, compress away highly correlated and colinear variables, a useful thing to do when trying to run models that would otherwise be sensitive to these data problems.
+# 
+# As a pre-processing technique, dimensionality reduction makes the most sense when it is used to redesign a dataset with particularly many artificially defined features. Image datasets, for example, are a perfect target for PCA because they are entirely artificial: pixel values are simply not particularly meaningful to us as casual observers; whereas "does this look more like a shoe or a pair of pants" *is*.
+# 
+# This notebook demonstrated (hopefully) the power of PCA for lending insight to your analysis for just such an image dataset. It's worth knowing that the techniques here can be extended to non-image datasets, of course. The results will be harder to interpret. You'll need to spend more time staring at records to understand why the things are pointing the way they're pointing. But it's ultimately still a very powerful, very important technique.
+# 
+# Finally, PCA/dimensionality reduction can be used as a part of the pipeline search process to squeeze one last bit of performace out of a model. If the result is a model which is *significantly less* interpretable than the one you started with, I caution avoiding this if you can. Avoid putting into production models that you can't explain, or at least put a lot of effort into understanding them! See the comments for arguments on this particular point.

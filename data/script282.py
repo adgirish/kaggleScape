@@ -1,507 +1,262 @@
 
 # coding: utf-8
 
-# # Safe Driver Prediction Explotory Data Analysis
-# 
-# `Kueip- Sept 2017`
-# 
-# ---
-# ## Outline:
-# -   ** Intoduction** ([completed]())
-#     - Packages Loading
-#     - Check Memory Usage
-# -  ** Multii-Variables Analysis**  ([non-complete]())
-# -  ** Bi-Variables Analysis**  ([non-complete]())
-#         - Feature Values Distribution
-# -  ** Target Value Analysis** ([completed]())
-# -  ** Missing Values Analysis** ([completed]())
-#     - Matrix
-#     - HeatMap
-#     - Bar
-# 
-# -  ** Feature Important** ([non-complete]())
-#         - Decision Tree
-#         - RandomForest
-#         - XGB
-#         - LGB
+# **Keras CNN with FastText Embeddings**
 
-# # Introduction
-# Porto Seguro, one of Brazil’s largest auto and homeowner insurance companies, completely agrees. Inaccuracies in car insurance company’s claim predictions raise the cost of insurance for good drivers and reduce the price for bad ones.
-
-# ### Packages Loading
+# CNNs provide a faster alternative to LSTM models at a comparable performance. They are faster to train and use fewer parameters. CNN models are translation invariant and in application to text make sense when there is no strong dependence on recent past vs distant past of the input sequence. CNNs can learn patterns in word embeddings and given the nature of the dataset (e.g. multiple misspellings, out of vocabulary words), it makes sense to use sub-word information. In this notebook, a simple CNN architecture is used for multi-label classification with the help of FastText word embeddings. Thus, it can be a good addition (diverse and accurate) to your ensemble.
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import numpy as np
+import pandas as pd
+import seaborn as sns
 import matplotlib.pyplot as plt
-import matplotlib
-get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn as sns # visualization
+
+import keras
+from keras import optimizers
+from keras import backend as K
+from keras import regularizers
+from keras.models import Sequential
+from keras.layers import Dense, Activation, Dropout, Flatten
+from keras.layers import Embedding, Conv1D, MaxPooling1D, GlobalMaxPooling1D 
+from keras.utils import plot_model
+from keras.preprocessing import sequence
+from keras.preprocessing.text import Tokenizer
+from keras.callbacks import EarlyStopping
+
+from tqdm import tqdm
+from nltk.corpus import stopwords
+from nltk.tokenize import RegexpTokenizer 
+import os, re, csv, math, codecs
+
+sns.set_style("whitegrid")
+np.random.seed(0)
+
+DATA_PATH = '../input/'
+EMBEDDING_DIR = '../input/'
+
+MAX_NB_WORDS = 100000
+tokenizer = RegexpTokenizer(r'\w+')
+stop_words = set(stopwords.words('english'))
+stop_words.update(['.', ',', '"', "'", ':', ';', '(', ')', '[', ']', '{', '}'])
+
 from subprocess import check_output
-import missingno as msno
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import BaggingClassifier, RandomForestClassifier 
 
-import xgboost as xgb # Gradeint Boosting
-from xgboost import XGBClassifier # Gradeint Boosting
-import lightgbm as lgb # Gradeint Boosting
-import gc
-import warnings
-warnings.filterwarnings("ignore")
-# Any results you write to the current directory are saved as output.
+# Let's load the data and the embeddings...
+
+# In[ ]:
+
+
+#load embeddings
+print('loading word embeddings...')
+embeddings_index = {}
+f = codecs.open('../input/fasttext/wiki.simple.vec', encoding='utf-8')
+for line in tqdm(f):
+    values = line.rstrip().rsplit(' ')
+    word = values[0]
+    coefs = np.asarray(values[1:], dtype='float32')
+    embeddings_index[word] = coefs
+f.close()
+print('found %s word vectors' % len(embeddings_index))
 
 
 # In[ ]:
 
 
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-print("Train shape : ", train.shape)
-print("Test shape : ", test.shape)
+#load data
+train_df = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge' + '/train.csv', sep=',', header=0)
+test_df = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge' + '/test.csv', sep=',', header=0)
+test_df = test_df.fillna('_NA_')
+
+print("num train: ", train_df.shape[0])
+print("num test: ", test_df.shape[0])
+
+label_names = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+y_train = train_df[label_names].values
+
+#visualize word distribution
+train_df['doc_len'] = train_df['comment_text'].apply(lambda words: len(words.split(" ")))
+max_seq_len = np.round(train_df['doc_len'].mean() + train_df['doc_len'].std()).astype(int)
+sns.distplot(train_df['doc_len'], hist=True, kde=True, color='b', label='doc len')
+plt.axvline(x=max_seq_len, color='k', linestyle='--', label='max len')
+plt.title('comment length'); plt.legend()
+plt.show()
 
 
-# - No. of rows are large with 58 columns. 
-# 
-# From VC dimension theory, we dont worry about overfitting too much, if we could cover the function set, choose the proper number of features.
-# 
-
-# In[ ]:
-
-
-train.head()
-
-
-# ### Check Memory Usage
-
-# In[ ]:
-
-
-train.info(verbose=False),test.info(verbose=False)
-
-
-# ### Convert Type
+# Let's pre-process the text, tokenize it and pad it to a maximum length (as in the figure above).
 
 # In[ ]:
 
 
-for c, dtype in zip(train.columns, train.dtypes):
-    if dtype == np.float64:
-        train[c] = train[c].astype(np.float32) 
-    elif dtype == np.int64:
-        train[c] = train[c].astype(np.int32) 
-gc.collect()
-for c, dtype in zip(test.columns, test.dtypes):
-    if dtype == np.float64:
-        test[c] = test[c].astype(np.float32) 
-    elif dtype == np.int64:
-        test[c] = test[c].astype(np.int32) 
+raw_docs_train = train_df['comment_text'].tolist()
+raw_docs_test = test_df['comment_text'].tolist() 
+num_classes = len(label_names)
+
+print("pre-processing train data...")
+processed_docs_train = []
+for doc in tqdm(raw_docs_train):
+    tokens = tokenizer.tokenize(doc)
+    filtered = [word for word in tokens if word not in stop_words]
+    processed_docs_train.append(" ".join(filtered))
+#end for
+
+processed_docs_test = []
+for doc in tqdm(raw_docs_test):
+    tokens = tokenizer.tokenize(doc)
+    filtered = [word for word in tokens if word not in stop_words]
+    processed_docs_test.append(" ".join(filtered))
+#end for
+
+print("tokenizing input data...")
+tokenizer = Tokenizer(num_words=MAX_NB_WORDS, lower=True, char_level=False)
+tokenizer.fit_on_texts(processed_docs_train + processed_docs_test)  #leaky
+word_seq_train = tokenizer.texts_to_sequences(processed_docs_train)
+word_seq_test = tokenizer.texts_to_sequences(processed_docs_test)
+word_index = tokenizer.word_index
+print("dictionary size: ", len(word_index))
+
+#pad sequences
+word_seq_train = sequence.pad_sequences(word_seq_train, maxlen=max_seq_len)
+word_seq_test = sequence.pad_sequences(word_seq_test, maxlen=max_seq_len)
 
 
-# ## Multi-Variable Analysis
+# Let's define our training and model parameters:
 
 # In[ ]:
 
 
-from collections import Counter
-count = Counter()
-unique_values_dict = {}
-for col in train.columns:
-    unique_values_dict[col] = np.sort(train[col].unique())
-    count[col] = len(np.sort(train[col].unique()))   
+#training params
+batch_size = 256 
+num_epochs = 8 
+
+#model parameters
+num_filters = 64 
+embed_dim = 300 
+weight_decay = 1e-4
+
+
+# We can now prepare our embedding matrix limiting to a max number of words:
+
+# In[ ]:
+
+
+#embedding matrix
+print('preparing embedding matrix...')
+words_not_found = []
+nb_words = min(MAX_NB_WORDS, len(word_index))
+embedding_matrix = np.zeros((nb_words, embed_dim))
+for word, i in word_index.items():
+    if i >= nb_words:
+        continue
+    embedding_vector = embeddings_index.get(word)
+    if (embedding_vector is not None) and len(embedding_vector) > 0:
+        # words not found in embedding index will be all-zeros.
+        embedding_matrix[i] = embedding_vector
+    else:
+        words_not_found.append(word)
+print('number of null word embeddings: %d' % np.sum(np.sum(embedding_matrix, axis=1) == 0))
+
+
+# It's interesting to look at the words not found in the embeddings:
+
+# In[ ]:
+
+
+print("sample words not found: ", np.random.choice(words_not_found, 10))
+
+
+# We can finally define the CNN architecture
+
+# In[ ]:
+
+
+#CNN architecture
+print("training CNN ...")
+model = Sequential()
+model.add(Embedding(nb_words, embed_dim,
+          weights=[embedding_matrix], input_length=max_seq_len, trainable=False))
+model.add(Conv1D(num_filters, 7, activation='relu', padding='same'))
+model.add(MaxPooling1D(2))
+model.add(Conv1D(num_filters, 7, activation='relu', padding='same'))
+model.add(GlobalMaxPooling1D())
+model.add(Dropout(0.5))
+model.add(Dense(32, activation='relu', kernel_regularizer=regularizers.l2(weight_decay)))
+model.add(Dense(num_classes, activation='sigmoid'))  #multi-label (k-hot encoding)
+
+adam = optimizers.Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+model.compile(loss='binary_crossentropy', optimizer=adam, metrics=['accuracy'])
+model.summary()
+
+
+# Because of the multi-label loss, we are using k-hot encoding of the output and sigmoid activations. As a result, the loss is binary cross-entropy.
+
+# In[ ]:
+
+
+#define callbacks
+early_stopping = EarlyStopping(monitor='val_loss', min_delta=0.01, patience=4, verbose=1)
+callbacks_list = [early_stopping]
 
 
 # In[ ]:
 
 
-cat_cols = [ col for col , val in count.items() if(val==10)]
-plt.figure(figsize=(20,70))
-for i in range(len(cat_cols)):
-    c = cat_cols[i]
-    
-    means = train.groupby(c).target.mean()
-    stds = train.groupby(c).target.std()#.fillna(0)
-    means_astds = train.groupby(c).target.mean() + train.groupby(c).target.std()
-    means_sstds = train.groupby(c).target.mean() - train.groupby(c).target.std()
-    
-    ddd = pd.concat([means, stds, means_astds, means_sstds], axis=1); 
-    ddd.columns = ['means', 'stds', 'means + stds', 'means - stds']
-    ddd.sort_values('means', inplace=True)
-    
-    plt.subplot(len(cat_cols), 2, 2*i+1)
-    ax = sns.countplot(train[c], order=ddd.index.values)
-    plt.xticks(rotation=90)
-    for p in ax.patches:
-        x=p.get_bbox().get_points()[:,0]
-        y=p.get_bbox().get_points()[1,1]
-        ax.annotate('{:.0f}'.format(y), (x.mean(), y), ha='center', va='bottom')
-    
-    plt.subplot(len(cat_cols ), 2, 2*i+2)
-    plt.fill_between(range(len(train[c].unique())), 
-                     ddd.means.values - ddd.stds.values,
-                     ddd.means.values + ddd.stds.values,
-                     alpha=0.3
-                    )
-    plt.xticks(range(len(train[c].unique())), ddd.index.values, rotation=90,fontsize=18)
-    plt.plot(ddd.means.values, color='b', marker='.', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd['means + stds'].values, color='g', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd['means - stds'].values, color='r', linestyle='dashed', linewidth=0.7)
-    plt.xlabel(c + ': Means, STDs and +- STDs',fontsize=18)
-    #plt.ylim(80, 270)
+#model training
+hist = model.fit(word_seq_train, y_train, batch_size=batch_size, epochs=num_epochs, callbacks=callbacks_list, validation_split=0.1, shuffle=True, verbose=2)
+
+
+# Let's make predictions on the test data:
+
+# In[ ]:
+
+
+y_test = model.predict(word_seq_test)
+
+
+# In[ ]:
+
+
+#create a submission
+submission_df = pd.DataFrame(columns=['id'] + label_names)
+submission_df['id'] = test_df['id'].values 
+submission_df[label_names] = y_test 
+submission_df.to_csv("./cnn_fasttext_submission.csv", index=False)
+
+
+# Looking at training and validation loss / accuracy figures below, we can see there is no sign of over-fitting.
+
+# In[ ]:
+
+
+#generate plots
+plt.figure()
+plt.plot(hist.history['loss'], lw=2.0, color='b', label='train')
+plt.plot(hist.history['val_loss'], lw=2.0, color='r', label='val')
+plt.title('CNN sentiment')
+plt.xlabel('Epochs')
+plt.ylabel('Cross-Entropy Loss')
+plt.legend(loc='upper right')
 plt.show()
 
 
 # In[ ]:
 
 
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-
-a=[column for column in train]
-trace = go.Heatmap(z=train.corr().values,
-                   x=a,
-                   y=a)
-data=[trace]
-py.iplot(data, filename='backorders heatmap')
-
-
-# ## Binary Variables:
-# 
-
-# In[ ]:
-
-
-cat_cols = [ col for col , val in count.items() if(val==2)]
-plt.figure(figsize=(25,100))
-for i in range(len(cat_cols)):
-    c = cat_cols[i]
-    
-    means = train.groupby(c).target.mean()
-    stds = train.groupby(c).target.std()#.fillna(0)
-    means_astds = train.groupby(c).target.mean() + train.groupby(c).target.std()
-    means_sstds = train.groupby(c).target.mean() - train.groupby(c).target.std()
-    
-    ddd = pd.concat([means, stds, means_astds, means_sstds], axis=1); 
-    ddd.columns = ['means', 'stds', 'means + stds', 'means - stds']
-    ddd.sort_values('means', inplace=True)
-    
-    plt.subplot(len(cat_cols), 2, 2*i+1)
-    ax = sns.countplot(train[c], order=ddd.index.values)
-    plt.xticks(rotation=90)
-    for p in ax.patches:
-        x=p.get_bbox().get_points()[:,0]
-        y=p.get_bbox().get_points()[1,1]
-        ax.annotate('{:.0f}'.format(y), (x.mean(), y), ha='center', va='bottom')
-    
-    plt.subplot(len(cat_cols ), 2, 2*i+2)
-    plt.fill_between(range(len(train[c].unique())), 
-                     ddd.means.values - ddd.stds.values,
-                     ddd.means.values + ddd.stds.values,
-                     alpha=0.3
-                    )
-    plt.xticks(range(len(train[c].unique())), ddd.index.values, rotation=90,fontsize=18)
-    plt.yticks(fontsize=18)
-    plt.plot(ddd.means.values, color='b', marker='.', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd['means + stds'].values, color='g', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd['means - stds'].values, color='r', linestyle='dashed', linewidth=0.7)
-    plt.xlabel(c + ': Means, STDs and +- STDs',fontsize=16)
-    #plt.ylim(80, 270)
+plt.figure()
+plt.plot(hist.history['acc'], lw=2.0, color='b', label='train')
+plt.plot(hist.history['val_acc'], lw=2.0, color='r', label='val')
+plt.title('CNN sentiment')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(loc='upper left')
 plt.show()
 
 
-# - **ps_ind_10_bin**
-# - **ps_ind_11_bin**
-# - **ps_ind_12_bin**
-# - **ps_ind_13_bin** 
+# **References:**
 # 
-# have obvious imbalanced distribution.
-
-# ## Target Variable Analysis
-
-# In[ ]:
-
-
-labels = '1', '0'
-sizes = [train[train.target==1].shape[0],train[train.target==0].shape[0]]
-colors = ['gold', 'lightskyblue']
-explode = (0.1, 0)  # explode 1st slice
-# Plot
-plt.pie(sizes, explode=explode, labels=labels, colors=colors,
-        autopct='%1.2f%%', shadow=True, startangle=140)
-
-plt.axis('equal')
-plt.show()
-
-
-# - imblalanced data
-# - Scikit-Learn provide [StratifiedShuffleSplit](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedShuffleSplit.html#sklearn.model_selection.StratifiedShuffleSplit) API by preserving the percentage of samples for each class.
-
-# ### A Review on Imbalanced Learning Methods
-# 
-# Imbalanced classification is a supervised learning problem where one class outnumbers other class by a large proportion. This problem is faced more frequently in binary classification problems than multi-level classification problems. The reasons which leads to reduction in accuracy of ML algorithms on imbalanced data sets:
-#     1. ML algorithms struggle with accuracy because of the unequal distribution in dependent variable.
-#     2. This causes the performance of existing classifiers to get biased towards majority class.
-#     3. The algorithms are accuracy driven i.e. they aim to minimize the overall error to which the minority class contributes very little.
-#     4. ML algorithms assume that the data set has balanced class distributions.
-#     5. They also assume that errors obtained from different classes have same cost
-
-# ### How to use imbalanced data to cheat your boss ? Let's conduct an experiment!
-
-# In[ ]:
-
-
-from sklearn.model_selection import StratifiedShuffleSplit
-X = train.drop(['id','target'], axis=1).values
-y = train.target.values
-sss = StratifiedShuffleSplit(n_splits=10, test_size=0.3, random_state=0)
-for train_index, test_index in sss.split(X, y):
-    X_train, X_test = X[train_index], X[test_index]
-    y_train, y_test = y[train_index], y[test_index]
-    break
-    
-from sklearn.dummy import DummyClassifier
-# Negative class (0) is most frequent
-dummy_majority = DummyClassifier(strategy = 'most_frequent').fit(X_train, y_train)
-# Therefore the dummy 'most_frequent' classifier always predicts class 0
-dummy_majority.score(X_test, y_test)
-
-
-# 
-# Hey Boss, I design a bullshit classifier with accuracy 96.35%.
-# 
-# .
-# 
-# .
-# 
-# 
-# Now, you should know why **Normalized Gini** is the metric in this case, instead of **accuracy**. 
-# (If  we just used a majority class to assign values to all records, we will still be having a high accuracy.)
-# 
-# One Specific example, if this bullshiter recognize a terrorist isnt a terroist, it will become a disaster.
-
-# ## Missing Values Analysis
-# - Thanks **Pedro Schoen** for pointing missing are encoded as **-1**
-# - Let's encode **-1** as `np.nan`
-
-# In[ ]:
-
-
-for col in np.intersect1d(train.columns,test.columns):
-    train.loc[train[col]==-1,col] = np.nan
-    test.loc[test[col]==-1,col] = np.nan
-
-
-# ## Train Set Missing Values
-
-# In[ ]:
-
-
-missing_df = train.isnull().sum(axis=0).reset_index()
-missing_df.columns = ['column_name', 'missing_count']
-missing_df['ratio'] = round(missing_df['missing_count'] / train.shape[0],4)
-missing_df[missing_df['ratio']>0][['column_name', 'missing_count','ratio']].sort_values(by='ratio',ascending=False)
-
-
-# In[ ]:
-
-
-def missingno_matrix(df):
-    missingValueColumns = df.columns[df.isnull().any()].tolist()
-    msno.matrix(df[missingValueColumns],width_ratios=(10,1),            figsize=(20,8),color=(0,0, 0),fontsize=12,sparkline=True,labels=True)
-    plt.show()
-missingno_matrix(train)
-
-
-# In[ ]:
-
-
-def missingno_heatmap(df):
-    missingValueColumns = df.columns[df.isnull().any()].tolist()
-    msno.heatmap(df[missingValueColumns],figsize=(20,20))
-    plt.show()
-missingno_heatmap(train)
-
-
-# In[ ]:
-
-
-def missing_bar(df):
-
-    missingValueColumns = df.columns[df.isnull().any()].tolist()
-    msno.bar(df[missingValueColumns],figsize=(20,8),color="#34495e",fontsize=12,labels=True)
-    plt.show()
-missing_bar(train)
-
-
-# ## Test Set Missing Values
-
-# In[ ]:
-
-
-missing_df = test.isnull().sum(axis=0).reset_index()
-missing_df.columns = ['column_name', 'missing_count']
-missing_df['ratio'] = round(missing_df['missing_count'] / test.shape[0],4)
-missing_df[missing_df['ratio']>0][['column_name', 'missing_count','ratio']].sort_values(by='ratio',ascending=False)
-
-
-# In[ ]:
-
-
-missingno_matrix(test)
-
-
-# In[ ]:
-
-
-missingno_heatmap(test)
-
-
-# In[ ]:
-
-
-missing_bar(test)
-
-
-# - Good News. Both dataset get the same NaN ratio/distribution
-
-# ## Feature Importance
-
-# - **Decision Tree Classifier**
-# 
-# A decision tree is a flowchart-like structure in which each internal node represents a "test" on an attribute (e.g. whether a coin flip comes up heads or tails), each branch represents the outcome of the test, and each leaf node represents a class label (decision taken after computing all attributes). The paths from root to leaf represent classification rules.
-
-# In[ ]:
-
-
-matplotlib.style.use('fivethirtyeight')
-matplotlib.rcParams['figure.figsize'] = (12,6)
-model = DecisionTreeClassifier(max_depth=6 ,random_state=87)
-model.fit(X_train, y_train)
-feat_names = train.drop(['id','target'],axis=1).columns
-## plot the importances ##
-importances = model.feature_importances_
-
-indices = np.argsort(importances)[::-1]
-plt.figure(figsize=(12,6))
-plt.title("Feature importances by DecisionTreeClassifier")
-plt.bar(range(len(indices)), importances[indices], color='lightblue',  align="center")
-plt.step(range(len(indices)), np.cumsum(importances[indices]), where='mid', label='Cumulative')
-plt.xticks(range(len(indices)), feat_names[indices], rotation='vertical',fontsize=14)
-plt.xlim([-1, len(indices)])
-plt.show()
-
-
-# In[ ]:
-
-
-from sklearn.tree import export_graphviz
-import graphviz
-treegraph = export_graphviz(model, out_file=None, 
-                         feature_names=train.drop(['id','target'],axis=1).columns,  
-                         filled=True, rounded=True,  
-                         special_characters=True)  
-graph = graphviz.Source(treegraph)  
-graph
-
-
-# - **RandomForest Classifier**
-# 
-# A random forest is a meta estimator that fits a number of decision tree classifiers on various sub-samples of the dataset and use averaging to improve the predictive accuracy and control over-fitting.
-
-# In[ ]:
-
-
-model = RandomForestClassifier(max_depth=8)
-model.fit(X_train, y_train)
-feat_names = train.drop(['id','target'],axis=1).columns
-## plot the importances ##
-importances = model.feature_importances_
-std = np.std([tree.feature_importances_ for tree in model.estimators_], axis=0)
-indices = np.argsort(importances)[::-1]
-
-plt.figure(figsize=(12,6))
-plt.title("Feature importances by Random Forest")
-plt.bar(range(len(indices)), importances[indices], color='lightblue', yerr=std[indices], align="center")
-plt.step(range(len(indices)), np.cumsum(importances[indices]), where='mid', label='Cumulative')
-plt.xticks(range(len(indices)), feat_names[indices], rotation='vertical',fontsize=14)
-plt.xlim([-1, len(indices)])
-plt.show()
-
-
-# - **XGB Classifier**
-# 
-# XGBoost is an optimized distributed gradient boosting library designed to be highly efficient, flexible and portable. It implements machine learning algorithms under the Gradient Boosting framework
-
-# In[ ]:
-
-
-model = XGBClassifier(eta = 0.01, max_depth = 8, subsample = 0.8, colsample_bytree= 0.8)
-model.fit(X_train, y_train)
-importances = model.feature_importances_
-indices = np.argsort(importances)[::-1]
-plt.figure(figsize=(12,6))
-plt.title("Feature importances by XGB") # Thanks Oscar Takeshita's kindly remind
-plt.bar(range(len(indices)), importances[indices], color='lightblue', align="center")
-plt.step(range(len(indices)), np.cumsum(importances[indices]), where='mid', label='Cumulative')
-plt.xticks(range(len(indices)), feat_names[indices], rotation='vertical',fontsize=14)
-plt.xlim([-1, len(indices)])
-plt.show()
-
-
-# - Create Tree digraph by using 
-# 
-# `xgb.to_graphviz`
-
-# In[ ]:
-
-
-xgb.to_graphviz(model, fmap='', rankdir='UT', num_trees=6,
-                yes_color='#0000FF', no_color='#FF0000')
-
-
-# - **LightGBM Classifier**
-# 
-# LightGBM is a gradient boosting framework that uses tree based learning algorithms. It is designed to be distributed and efficient with the following advantages
-
-# In[ ]:
-
-
-lgb_params = {}
-lgb_params['objective'] = 'binary'
-lgb_params['sub_feature'] = 0.80 
-lgb_params['max_depth'] = 7
-lgb_params['feature_fraction'] = 0.7
-lgb_params['bagging_fraction'] = 0.7
-lgb_params['bagging_freq'] = 10
-lgb_params['learning_rate'] = 0.01
-
-lgb_train = lgb.Dataset(X_train, y_train)
-lightgbm = lgb.train(lgb_params, lgb_train, feature_name=[ i for i in feat_names])
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-lgb.plot_importance(lightgbm,max_num_features=30)
-plt.title("Feature importances by LightGBM")
-plt.show()
-
-
-# In[ ]:
-
-
-ax = lgb.plot_tree(lightgbm, tree_index=83, figsize=(20, 8), show_info=['split_gain'])
-plt.show()
-
-
-# # Acknowledgement:
-# 1. Pedro Schoen
-# 
-# 
-# ## Stay Tuned
-# 
+# [1] P. Bojanowski, E. Grave, A. Joulin, T. Mikolov, "Enriching Word Vectors with Subword Information", arXiv, 2016  
+# [2] FastText Embeddings: https://github.com/facebookresearch/fastText/blob/master/pretrained-vectors.md  
+# [3] F. Chollet, "Deep Learning with Python", Manning Publications, 2017  

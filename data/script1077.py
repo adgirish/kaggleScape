@@ -1,221 +1,203 @@
 
 # coding: utf-8
 
-# Welcome to the new competition. This notebook aims to provide data insights. Please up vote if you find this useful. Happy Kaggling!!
+# # Introduction
+# 
+# This is the workbook component of the "Indexing, selecting, assigning" section. For the reference component, [**click here**](https://www.kaggle.com/residentmario/indexing-selecting-assigning-reference).
+# 
+# Selecting specific values of a `pandas` `DataFrame` or `Series` to work on is an implicit step in almost any data operation you'll run, so one of the first things you need to learn in working with data in Python is how to go about selecting the data points relevant to you quickly and effectively.
+# 
+# In this set of exercises we will work on exploring the [Wine Reviews dataset](https://www.kaggle.com/zynicide/wine-reviews). 
+# 
+# # Relevant Resources
+# * **[Quickstart to indexing and selecting data](https://www.kaggle.com/residentmario/indexing-and-selecting-data/)** 
+# * [Indexing and Selecting Data](https://pandas.pydata.org/pandas-docs/stable/indexing.html) section of pandas documentation
+# * [Pandas Cheat Sheet](https://assets.datacamp.com/blog_assets/PandasPythonForDataScience.pdf)
+# 
+# 
+# 
+
+# # Set Up
+# **Fork this notebook using the button towards the top of the screen.**
+# 
+# Run the following cell to load your data and some utility functions
 
 # In[1]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+import sys
+sys.path.append('../input/advanced-pandas-exercises/')
+from indexing_selecting_assigning import *
 
-# Any results you write to the current directory are saved as output.
+reviews = pd.read_csv("../input/wine-reviews/winemag-data-130k-v2.csv", index_col=0)
+pd.set_option("display.max_rows", 5)
 
+
+# Look at an overview of your data by running the following line
 
 # In[2]:
 
 
-# Read the train and test data file
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-print("Total number of samples in train file : ", train.shape[0])
-print("Total number of samples in test file : ", test.shape[0])
+reviews.head()
 
+
+# # Checking Answers
+# 
+# You can check your answers in each of the exercises that follow using the  `check_qN` function provided in the code cell above (replacing `N` with the number of the exercise). For example here's how you would check an incorrect answer to exercise 1:
+
+# In[3]:
+
+
+check_q1(pd.DataFrame())
+
+
+# For the first set of questions, if you use `check_qN` on your answer, and your answer is right, a simple `True` value will be returned.
+# 
+# For the second set of questions, using this function to check a correct answer will present you will an informative graph!
+# 
+# If you get stuck, use `answer_qN` function to print the answer outright.
+
+# # Exercises
+
+# **Exercise 1**: Select the `description` column from `reviews`.
+
+# In[4]:
+
+
+# Your code here
+
+
+# **Exercise 2**: Select the first value from the description column of `reviews`.
 
 # In[5]:
 
 
-# Let's look at the train data first
-print("A view of the train dataframe")
-print(train.head())
-print("\nColumns in train dataset : ", train.columns)
-print("\n")
-print("Overall description of the train dataset : ")
-print(train.info())
+# Your code here
 
+
+# **Exercise 3**: Select the first row of data (the first record) from `reviews`. Hint: from this exercise onwards I strongly recommend using `loc` or `iloc`.
+
+# In[6]:
+
+
+# Your code here
+
+
+# **Exercise 4**: Select the first 10 values from the `description` column in `reviews`. Hint: format your output as a `pandas` `Series`.
 
 # In[7]:
 
 
-# Okay  we have an overview of the train dataset. Before exploring further, let's see if the id column has some overlap with the test ids or not
-train_id = set(train['id'].values)
-test_id = set(test['id'].values)
-print("Number of unique id in train dataset : ", len(train_id))
-print("Number of unique id in test dataset : ", len(test_id))
-common_ids = train_id.intersection(test_id)
-print("Number of common id in the train and test datasets : ", len(common_ids))
+# Your code here
 
 
-# No overlap in train and test ids. Hence we can drop the id column for now until unless we figure out that there actually was some overlap(by some magic of course!)
+# **Exercise 5**: Select the records with the `1`, `2`, `3`, `5`, and `8` row index positions. In other words, generate the following`DataFrame`:
+# 
+# ![](https://i.imgur.com/sHZvI1O.png)
 
 # In[8]:
 
 
-# Let's have a look at the traget variable(trip duration) first
-target = train['trip_duration']
-print("Longest trip duration {} or {} minutes: " .format(np.max(target.values), np.max(target.values)//60))
-print("Smallest trip duration {} or {} minutes: ".format(np.min(target.values),np.min(target.values)//60))
-print("Average trip duration : {} or {} minutes".format(np.mean(target.values), np.mean(target.values)//60))
+# Your code here
 
 
-# LOL!! Did the rider just opened the door and got out at once? And 58771 minutes?
+# **Exercise 6**: Select the `country`, `province`, `region_1`, and `region_2` columns of the records with the `0`, `1`, `10`, and `100` index positions. In other words, generate the following `DataFrame`:
+# 
+# ![](https://i.imgur.com/FUCGiKP.png)
 
 # In[9]:
 
 
-#Visualization is always better 
-f = plt.figure(figsize=(8,6))
-plt.scatter(range(len(target)), np.sort(target.values), alpha=0.5)
-plt.xlabel('Index')
-plt.ylabel('Trip duration in seconds')
-plt.show()
+# Your code here
 
 
-# So there are four outliers in the datset. Should we drop them? We will see about that
+# **Exercise 7**: Select the `country` and `variety` columns of the first 100 records. 
+# 
+# Hint: you may use `loc` or `iloc`. When working on the answer this question and the several of the ones that follow, keep the following "gotcha" described in the [reference](https://www.kaggle.com/residentmario/indexing-selecting-assigning-reference) for this tutorial section:
+# 
+# > `iloc` uses the Python stdlib indexing scheme, where the first element of the range is included and the last one excluded. So `0:10` will select entries `0,...,9`. `loc`, meanwhile, indexes inclusively. So `0:10` will select entries `0,...,10`.
+# 
+# > [...]
+# 
+# > ...[consider] when the DataFrame index is a simple numerical list, e.g. `0,...,1000`. In this case `df.iloc[0:1000]` will return 999 entries, while `df.loc[0:1000]` return 1000 of them! To get 1000 elements using `iloc`, you will need to go one higher and ask for `df.iloc[0:1001]`.
 
 # In[10]:
 
 
-# Moving on to the vendor_id column
-unique_vendors = set(train['vendor_id'].values)
-print("Number of unique vendors : ", len(unique_vendors))
-print("How popular is the vendor? ")
-vendor_popularity = train['vendor_id'].value_counts()
+# Your code here
 
-f = plt.figure(figsize=(10,5))
-sns.barplot(vendor_popularity.index, vendor_popularity.values, alpha=0.7)
-plt.xlabel('Vendor', fontsize=14)
-plt.ylabel('Trips offered', fontsize=14)
-plt.show()
 
+# **Exercise 8**: Select wines made in `Italy`. Hint: `reviews.country` equals what?
 
 # In[11]:
 
 
-# Moving to passengers count column
-pass_count = train['passenger_count']
-print("Maximum number of passengers on a trip : ", np.max(pass_count.values))
-print("Minimum number of passengers on a trip : ", np.min(pass_count.values))
-print("Average number of passengers on a trip : ", np.mean(pass_count.values))
-
-f = plt.figure(figsize=(10,5))
-pass_count = train['passenger_count'].value_counts()
-sns.barplot(pass_count.index, pass_count.values, alpha=0.7)
-plt.xlabel('Number of passengers on a trip', fontsize=14)
-plt.ylabel('Count', fontsize=14)
-plt.show()
+# Your code here
 
 
-# 9 passengers on a trip. This may be the case where someone hired a taxi for many days. Does this belong to the same data points where our outliers for the trip duration exist?
+# **Exercise 9**: Select wines whose `region_2` is not `NaN`.
 
 # In[12]:
 
 
-# Let's move to the store_and_fwd_flag column
-flags = train['store_and_fwd_flag'].value_counts()
-
-f = plt.figure(figsize=(10,5))
-sns.barplot(flags.index, flags.values, alpha=0.7)
-plt.xlabel('Flags', fontsize=14)
-plt.ylabel('Count', fontsize=14)
-plt.show()
+# Your code here
 
 
-# Let's take a closer look to the pickup and dropoff columns
+# The remaining exercises are visual.
+
+# **Exercise 10**: <!--What is the distribution of wine ratings assigned by Wine Magazine?--> Select the `points` column.
 
 # In[13]:
 
 
-train['pickup_datetime'] = pd.to_datetime(train['pickup_datetime'])
-train['dropoff_datetime'] = pd.to_datetime(train['dropoff_datetime'])
+# Your code here
 
-train['pickup_day'] = train['pickup_datetime'].dt.day
-train['pickup_month'] = train['pickup_datetime'].dt.month
-train['pickup_weekday'] = train['pickup_datetime'].dt.weekday
-train['pickup_hour'] = train['pickup_datetime'].dt.hour
 
-train['drop_day'] = train['dropoff_datetime'].dt.day
-train['drop_month'] = train['dropoff_datetime'].dt.month
-train['drop_weekday'] = train['dropoff_datetime'].dt.weekday
-train['drop_hour'] = train['dropoff_datetime'].dt.hour
+# **Exercise 11**: <!--What is the distribution of reviews scores for the first 1000 wines in the dataset?--> Select the `points` column for the first 1000 wines.
 
+# In[14]:
+
+
+# Your code here
+
+
+# **Exercise 12**: <!--What is the distribution of reviews scores for the last 1000 wines in the dataset?--> Select the `points` column for the last 1000 wines.
 
 # In[15]:
 
 
-# Do the number of pickups looks same for the whole month? Let's find out
-f = plt.figure(figsize=(15,5))
-sns.countplot(x='pickup_day', data=train)
-plt.xlabel('Day of month', fontsize=14)
-plt.ylabel('Pickup count', fontsize=14)
-plt.show()
+# Your code here
 
 
-# Looks good. No surprising thing here. Let's see how many pickups were there for each month
+# **Exercise 13**: <!--What is the distribution of reviews scores for wines made in Italy?--> Select the `points` column, but only for wines made in Italy.
 
 # In[16]:
 
 
-f = plt.figure(figsize=(15,5))
-sns.countplot(x='pickup_month', data=train)
-plt.xlabel('Month', fontsize=14)
-plt.ylabel('Pickup count', fontsize=14)
-plt.show()
+# Your code here
 
 
-# Expected because there is no major festive season around these months. Let's move on to the number of pickups on different days of the week
+# **Exercise 14**: Who produces more above-averagely good wines, France or Italy? Select the `country` column, but only  when said `country` is one of those two options, _and_ the `points` column is greater than or equal to 90.
+# 
+# Your output should look roughly like this:
+# ```
+# 119       France
+# 120        Italy
+#            ...  
+# 129969    France
+# 129970    France
+# Name: country, Length: 15840, dtype: object
+# ```
 
 # In[17]:
 
 
-f = plt.figure(figsize=(15,5))
-days = [i for i in range(7)]
-sns.countplot(x='pickup_weekday', data=train)
-plt.xlabel('Day of the week', fontsize=14)
-plt.ylabel('Pickup count', fontsize=14)
-plt.xticks(days, ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'))
-plt.show()
+# Your code here
 
 
-# What about hour of the day? Let's check that too
-
-# In[18]:
-
-
-f = plt.figure(figsize=(15,5))
-sns.countplot(x='pickup_hour', data=train)
-plt.xlabel('Hour', fontsize=14)
-plt.ylabel('Pickup count', fontsize=14)
-plt.show()
-
-
-# Everything looks good here too. As expected, the number of pickups gradually decreases after mid-night. The highest number of pickups are around 6pm and 7pm in the evening which makes sense as many people are on their way to home from office.
-
-# In[19]:
-
-
-f = plt.figure(figsize=(10,8))
-days = [i for i in range(7)]
-sns.countplot(x='pickup_weekday', data=train, hue='pickup_hour', alpha=0.8)
-plt.xlabel('Day of the week', fontsize=14)
-plt.ylabel('Pickup count', fontsize=14)
-plt.xticks(days, ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'))
-plt.legend(loc=(1.04,0))
-plt.show()
-
-
-# Ahh nice plot. Did you notice the peaks at mid-night on Saturday and Sunday? This should be fine because most of the people are doing parties on weekends.
+# ## Keep going
 # 
-# I think the same pattern will be for dropoff_time column. So I am not diving into it right now.
+# Move on to the [**Summary functions and maps workbook**](https://www.kaggle.com/residentmario/summary-functions-and-maps-workbook).

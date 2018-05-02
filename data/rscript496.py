@@ -1,112 +1,121 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import numpy as np
+np.random.seed(42)
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import cv2
-from shapely.wkt import loads as wkt_loads
-import tifffile as tiff
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
 
+from keras.models import Model
+from keras.layers import Input, Embedding, Dense, Conv2D, MaxPool2D
+from keras.layers import Reshape, Flatten, Concatenate, Dropout, SpatialDropout1D
+from keras.preprocessing import text, sequence
+from keras.callbacks import Callback
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import warnings
+warnings.filterwarnings('ignore')
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-# The code is for python 2.7. Parts of it are taken from other posts/kernels.
-# Good luck!
+import os
+os.environ['OMP_NUM_THREADS'] = '4'
 
 
-def _get_image_names(base_path, imageId):
-    '''
-    Get the names of the tiff files
-    '''
-    d = {'3': path.join(base_path,'three_band/{}.tif'.format(imageId)),             # (3, 3348, 3403)
-         'A': path.join(base_path,'sixteen_band/{}_A.tif'.format(imageId)),         # (8, 134, 137)
-         'M': path.join(base_path,'sixteen_band/{}_M.tif'.format(imageId)),         # (8, 837, 851)
-         'P': path.join(base_path,'sixteen_band/{}_P.tif'.format(imageId)),         # (3348, 3403)
-         }
-    return d
+EMBEDDING_FILE = '../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec'
+
+train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+
+X_train = train["comment_text"].fillna("fillna").values
+y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
+X_test = test["comment_text"].fillna("fillna").values
 
 
-def _convert_coordinates_to_raster(coords, img_size, xymax):
-    Xmax,Ymax = xymax
-    H,W = img_size
-    W1 = 1.0*W*W/(W+1)
-    H1 = 1.0*H*H/(H+1)
-    xf = W1/Xmax
-    yf = H1/Ymax
-    coords[:,1] *= yf
-    coords[:,0] *= xf
-    coords_int = np.round(coords).astype(np.int32)
-    return coords_int
+max_features = 100000
+maxlen = 200
+embed_size = 300
+
+tokenizer = text.Tokenizer(num_words=max_features)
+tokenizer.fit_on_texts(list(X_train) + list(X_test))
+X_train = tokenizer.texts_to_sequences(X_train)
+X_test = tokenizer.texts_to_sequences(X_test)
+x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
+x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
 
 
-def _get_xmax_ymin(grid_sizes_panda, imageId):
-    xmax, ymin = grid_sizes_panda[grid_sizes_panda.ImageId == imageId].iloc[0,1:].astype(float)
-    return (xmax,ymin)
+def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
+embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE))
+
+word_index = tokenizer.word_index
+nb_words = min(max_features, len(word_index))
+embedding_matrix = np.zeros((nb_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features: continue
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
 
 
-def _get_polygon_list(wkt_list_pandas, imageId, cType):
-    df_image = wkt_list_pandas[wkt_list_pandas.ImageId == imageId]
-    multipoly_def = df_image[df_image.ClassType == cType].MultipolygonWKT
-    polygonList = None
-    if len(multipoly_def) > 0:
-        assert len(multipoly_def) == 1
-        polygonList = wkt_loads(multipoly_def.values[0])
-    return polygonList
+class RocAucEvaluation(Callback):
+    def __init__(self, validation_data=(), interval=1):
+        super(Callback, self).__init__()
+
+        self.interval = interval
+        self.X_val, self.y_val = validation_data
+
+    def on_epoch_end(self, epoch, logs={}):
+        if epoch % self.interval == 0:
+            y_pred = self.model.predict(self.X_val, verbose=0)
+            score = roc_auc_score(self.y_val, y_pred)
+            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
 
 
-def _get_and_convert_contours(polygonList, raster_img_size, xymax):
-    perim_list = []
-    interior_list = []
-    if polygonList is None:
-        return None
-    for k in range(len(polygonList)):
-        poly = polygonList[k]
-        perim = np.array(list(poly.exterior.coords))
-        perim_c = _convert_coordinates_to_raster(perim, raster_img_size, xymax)
-        perim_list.append(perim_c)
-        for pi in poly.interiors:
-            interior = np.array(list(pi.coords))
-            interior_c = _convert_coordinates_to_raster(interior, raster_img_size, xymax)
-            interior_list.append(interior_c)
-    return perim_list,interior_list
+filter_sizes = [1,2,3,5]
+num_filters = 32
+
+def get_model():    
+    inp = Input(shape=(maxlen, ))
+    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
+    x = SpatialDropout1D(0.4)(x)
+    x = Reshape((maxlen, embed_size, 1))(x)
+    
+    conv_0 = Conv2D(num_filters, kernel_size=(filter_sizes[0], embed_size), kernel_initializer='normal',
+                                                                                    activation='elu')(x)
+    conv_1 = Conv2D(num_filters, kernel_size=(filter_sizes[1], embed_size), kernel_initializer='normal',
+                                                                                    activation='elu')(x)
+    conv_2 = Conv2D(num_filters, kernel_size=(filter_sizes[2], embed_size), kernel_initializer='normal',
+                                                                                    activation='elu')(x)
+    conv_3 = Conv2D(num_filters, kernel_size=(filter_sizes[3], embed_size), kernel_initializer='normal',
+                                                                                    activation='elu')(x)
+    
+    maxpool_0 = MaxPool2D(pool_size=(maxlen - filter_sizes[0] + 1, 1))(conv_0)
+    maxpool_1 = MaxPool2D(pool_size=(maxlen - filter_sizes[1] + 1, 1))(conv_1)
+    maxpool_2 = MaxPool2D(pool_size=(maxlen - filter_sizes[2] + 1, 1))(conv_2)
+    maxpool_3 = MaxPool2D(pool_size=(maxlen - filter_sizes[3] + 1, 1))(conv_3)
+        
+    z = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])   
+    z = Flatten()(z)
+    z = Dropout(0.1)(z)
+        
+    outp = Dense(6, activation="sigmoid")(z)
+    
+    model = Model(inputs=inp, outputs=outp)
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                  metrics=['accuracy'])
+
+    return model
+
+model = get_model()
 
 
-def _plot_mask_from_contours(raster_img_size, contours, class_value = 1):
-    img_mask = np.zeros(raster_img_size,np.uint8)
-    if contours is None:
-        return img_mask
-    perim_list,interior_list = contours
-    cv2.fillPoly(img_mask,perim_list,class_value)
-    cv2.fillPoly(img_mask,interior_list,0)
-    return img_mask
+batch_size = 256
+epochs = 3
+
+X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
+RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
+
+hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),
+                 callbacks=[RocAuc], verbose=2)
 
 
-def generate_mask_for_image_and_class(raster_size, imageId, class_type, grid_sizes_panda,
-                                     wkt_list_pandas):
-    xymax = _get_xmax_ymin(grid_sizes_panda,imageId)
-    polygon_list = _get_polygon_list(wkt_list_pandas,imageId,class_type)
-    contours = _get_and_convert_contours(polygon_list,raster_size,xymax)
-    mask = _plot_mask_from_contours(raster_size,contours,1)
-    return mask
-
-
-inDir = '../input'
-
-
-# read the training data from train_wkt_v4.csv
-df = pd.read_csv(inDir + '/train_wkt_v4.csv')
-
-# grid size will also be needed later..
-gs = pd.read_csv(inDir + '/grid_sizes.csv', names=['ImageId', 'Xmax', 'Ymin'], skiprows=1)
-
-mask = generate_mask_for_image_and_class((500,500),"6120_2_2",4,gs,df)
-cv2.imwrite("mask.png",mask*255)
-
-
+y_pred = model.predict(x_test, batch_size=1024)
+submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
+submission.to_csv('submission.csv', index=False)

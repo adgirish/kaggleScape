@@ -1,79 +1,50 @@
-# -*- coding: utf-8 -*-
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+#!/usr/bin/env python3
+'''
+Randomforest - plot: # of trees - accuracy
 
-import operator
+@Author: Hideki Ikeda
+@Date 7/11/15
+'''
 
-INPUT_PATH = "../input/"
-SUBM_PATH = "./"
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.cross_validation import cross_val_score
 
+def main():
+    # loading training data
+    print('Loading training data')
+    data = pd.read_csv('../input/train.csv')
+    X_tr = data.values[:, 1:].astype(float)
+    y_tr = data.values[:, 0]
 
-def solve():
-    print('Train start...')
-    train = open(INPUT_PATH + "ru_train.csv", encoding='UTF8')
-    line = train.readline()
-    res = dict()
-    total = 0
-    not_same = 0
-    while 1:
-        line = train.readline().strip()
-        if line == '':
-            break
-        total += 1
-        pos = line.find('","')
-        text = line[pos + 2:]
-        if text[:3] == '","':
-            continue
-        text = text[1:-1]
-        arr = text.split('","')
-        if arr[0] != arr[1]:
-            not_same += 1
-        if arr[0] not in res:
-            res[arr[0]] = dict()
-            res[arr[0]][arr[1]] = 1
-        else:
-            if arr[1] in res[arr[0]]:
-                res[arr[0]][arr[1]] += 1
-            else:
-                res[arr[0]][arr[1]] = 1
+    scores = list()
+    scores_std = list()
 
-    train.close()
-    print('Total: {} Have diff value: {}'.format(total, not_same))
+    print('Start learning...')
+    n_trees = [10, 15, 20, 25, 30, 40, 50, 70, 100, 150]
+    for n_tree in n_trees:
+        print(n_tree)
+        recognizer = RandomForestClassifier(n_tree)
+        score = cross_val_score(recognizer, X_tr, y_tr)
+        scores.append(np.mean(score))
+        scores_std.append(np.std(score))
 
-    total = 0
-    changes = 0
-    out = open(SUBM_PATH + 'baseline_ru.csv', "w", encoding='UTF8')
-    out.write('"id","after"\n')
-    test = open(INPUT_PATH + "ru_test.csv", encoding='UTF8')
-    line = test.readline().strip()
-    while 1:
-        line = test.readline().strip()
-        if line == '':
-            break
+    sc_array = np.array(scores)
+    std_array = np.array(scores_std)
+    print('Score: ', sc_array)
+    print('Std  : ', std_array)
 
-        pos = line.find(',')
-        i1 = line[:pos]
-        line = line[pos + 1:]
-
-        pos = line.find(',')
-        i2 = line[:pos]
-        line = line[pos + 1:]
-
-        line = line[1:-1]
-        out.write('"' + i1 + '_' + i2 + '",')
-        if line in res:
-            srtd = sorted(res[line].items(), key=operator.itemgetter(1), reverse=True)
-            out.write('"' + srtd[0][0] + '"')
-            changes += 1
-        else:
-            out.write('"' + line + '"')
-
-        out.write('\n')
-        total += 1
-
-    print('Total: {} Changed: {}'.format(total, changes))
-    test.close()
-    out.close()
+    #plt.figure(figsize=(4,3))
+    plt.plot(n_trees, scores)
+    plt.plot(n_trees, sc_array + std_array, 'b--')
+    plt.plot(n_trees, sc_array - std_array, 'b--')
+    plt.ylabel('CV score')
+    plt.xlabel('# of trees')
+    plt.savefig('cv_trees.png')
+    # plt.show()
 
 
 if __name__ == '__main__':
-    solve()
+    main()

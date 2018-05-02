@@ -1,708 +1,980 @@
 
 # coding: utf-8
 
-# # Exploratory Data Analysis
+# ***Here is what was done on the first Zillow kernel*:**
 # 
-# I'm exploring the data a bit to get a feel of where loans are more commonly being disbursed, where larger loans are being disbursed, how various factors affect loan amount. After this initial analysis, I will go into borrower profiles and how Kiva can use these to make decisions about disbursing loans.
+# 1. Look into the data (ofcourse!!)
+# 2. Visualize the various independent variables visually (links for the same are provided)
+# 3. Check for columns showing **non-variance**
+# 4. Split columns based on their **data types**.
+# 5. Carefully perform further analysis on **missing values** in those columns with respect to the values they can possibly hold; rather than assinging them to '0' blindly!
 # 
-# 1. Number of Loans By Country
-# 2. Most popular sectors in which loans are taken
-# 3.  Distribution of Loan duration
-# 4. Distribution of number of lenders
-# 5. Gender of borrowers
-# 6. Distribution of Loan Amount
-#     * 6.1 Analysis of loan amount below \$2000
-#     * 6.2 Analysis of loan amount  \$2,000 - \$20,000
-#     * 6.3 Analysis of loan amount \$20,000 to \$60,000
-#     * 6.4 Loan amount above \$60,000
-#     * 6.5 Loan amount by Sector
-#     * 6.6 Loan Amount by Gender
-#     * 6.7 Loan Amount by Country
-# 7. Time taken to fund loans
-#     * 7.1 Maximum time taken for a loan to be funded
-#     * 7.2 Distribution of time taken for a loan to be funded
-#     * 7.3 Distribution of time taken for a loan to be funded greater than 100 days
-#     * 7.4 Is there any difference in the time taken to fund a loan based on the gender of the borrower?
-#     
-#     
-# # Analysis of Borrower Profiles in India
-# 1. Number of loans
-# 2. Sector
-# 3. Loans by region in India
-#     * 3.1 Top 10 regions receiving loans
-#     * 3.2 Getting in the latitude and longitude data
-#     * 3.3 Visualizing the regions in india in which loans are disbursed
+# ***What we did later:***
+# 1. Created new meaningful features (from 60 to 82 columns)
+# 2. Visualizing the features.(to be updated)
 # 
+# ***What we did NOW:***
 # 
+# 1. Looked into **memory consumption** of the dataframe and **REDUCED** it !!
+# 
+# As always let's take a look into the data.
 
-# * * *
-# 
-
-# # Exploratory Data Analysis
-# - Python is being used as the tool for this analysis, with pandas helping with data-frame operations, and also with plotting
-# - The following data sources are used:
-#     1. Original data set posted by Kiva [here](https://www.kaggle.com/gaborfodor/additional-kiva-snapshot/)
-#     2. Additional data posted by @beluga [here](https://www.kaggle.com/gaborfodor/additional-kiva-snapshot): Currently, I am only using the loans_coords.csv file to map loans to their geo-locations
-# - The analysis is done on a snapshot of the data having 671 unique loans. It would be interesting to repeat this analysis on the larger dataset provided in the second source above
-# 
-
-# In[1]:
+# In[ ]:
 
 
-import matplotlib.pyplot as plt
+
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import pylab
 import seaborn as sns
-plt.style.use('fivethirtyeight')
-get_ipython().run_line_magic('matplotlib', 'inline')
-pylab.rcParams['figure.figsize'] = (10.0, 8.0)
 
+#from subprocess import check_output
+#print(check_output(["ls", "../input"]).decode("utf8"))
+train_df = pd.read_csv('../input/train_2016_v2.csv')
+prop_df = pd.read_csv('../input/properties_2016.csv')
+samp = pd.read_csv('../input/sample_submission.csv')
 
-# In[2]:
+print (train_df.head())
+print (prop_df.head())  
 
 
-loans_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv", parse_dates=['disbursed_time', 'funded_time', 'posted_time'])
-loan_theme_ids_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_theme_ids.csv")
-loan_themes_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv")
-loan_coords_df = pd.read_csv("../input/additional-kiva-snapshot/loan_coords.csv")
+# In[ ]:
 
 
-# In[3]:
+print(train_df.columns)
+print(prop_df.columns)
+print(train_df.shape)
+print(prop_df.shape)
 
 
-loan_coords_df.columns = ['id', 'latitude', 'longitude']
+# I can see a **LOT** of missing values can you?
+# 
+# Let us see the number of rows and columns in each of the dataframes.
 
+# First, let us merge both these columns based on their '**parcel_id**' and then we can perform our analysis.
 
-# In[4]:
+# In[ ]:
 
 
-loans_df.shape
+train_df = pd.merge(train_df, prop_df, on='parcelid', how='left')
+print(train_df.head())
+print(train_df.shape)
 
 
-# In[5]:
-
-
-loans_df.head()
-
-
-# In[6]:
-
-
-# From: https://deparkes.co.uk/2016/11/04/sort-pandas-boxplot/
-def boxplot_sorted(df, by, column):
-    # use dict comprehension to create new dataframe from the iterable groupby object
-    # each group name becomes a column in the new dataframe
-    df2 = pd.DataFrame({col:vals[column] for col, vals in df.groupby(by)})
-    # find and sort the median values in this new dataframe
-    meds = df2.median().sort_values()
-    # use the columns in the dataframe, ordered sorted by median value
-    # return axes so changes can be made outside the function
-    return df2[meds.index].plot(kind='box', logy=True)
-
-
-# ## 1. Number of loans by country
-# - Since Kiva extends services to financially excluded people around the globe, it makes sense that the countries where the most loans are given out are developing nations like the Phillipines and Kenya
-
-# In[7]:
-
-
-pylab.rcParams['figure.figsize'] = (8.0, 25.0)
-plt.style.use('fivethirtyeight')
-loans_df.groupby(loans_df.country).id.count().sort_values().plot.barh(color='cornflowerblue');
-plt.ylabel('Loan Count')
-plt.title("Loan Count by Country");
-
-
-# ## 2. Most popular sectors in which loans are taken
-# - Agriculture, food and retail are the most popular sectors in which loans are taken as food production is one of the biggest challenges for developing nations
-
-# In[8]:
-
-
-pylab.rcParams['figure.figsize'] = (6.0, 6.0)
-loans_df.groupby(loans_df.sector).id.count().sort_values().plot.bar(color='cornflowerblue');
-plt.ylabel('Loan Count')
-plt.title("Loan Count by Sector");
-
-
-# ## 3. Distribution of Loan duration
-# Most loans are short term loans of less than 24 months(two years)
-
-# In[9]:
-
-
-loans_df.term_in_months.plot.hist(bins=100);
-plt.ylabel('Loan Count')
-plt.title("Loan Count by Loan Duration");
-
-
-# ## 4. Distribution of number of lenders
-# - Most loans have between 1 to 150 lenders. Only 0.6% of all loans have more than 150 lenders.
-# - For loans with fewer than 150 lenders, the distribution is skewed to the right, with the median 13!
-# - There are outliers having a large numbers of lenders with the maximum number of lenders being 2986
-# - There is a single loan which required 2986 lenders to fund which was for an amount of $100,000 for creating more than 300 Agricultural jobs in Haiti
-
-# In[10]:
-
-
-loans_df.lender_count.plot(kind='box', logy=True);
-plt.title("Distribution of Number of Lenders per loan");
-plt.xlabel("Number of lenders in powers of 10");
-
-
-# In[11]:
-
-
-loans_df[loans_df.lender_count > 150].shape[0]/loans_df.shape[0]
-
-
-# In[12]:
-
-
-axes = plt.gca()
-axes.set_xlim([0,150])
-loans_df.lender_count.plot.hist(bins=1000);
-plt.xlabel('Number of Lenders')
-plt.title("Distribution of Number of Lenders where number < 150");
-
-
-# In[13]:
-
-
-max(loans_df.lender_count)
-
-
-# In[14]:
-
-
-loans_df[loans_df.lender_count == max(loans_df.lender_count)]
-
-
-# ## 5. Gender of borrowers
-# - Female only borrowers(single or group) are significantly more than male only borrowers(single or group) and mixed groups
-
-# In[15]:
-
-
-def process_gender(x):
-    
-    if type(x) is float and np.isnan(x):
-        return "nan"
-    genders = x.split(",")
-    male_count = sum(g.strip() == 'male' for g in genders)
-    female_count = sum(g.strip() == 'female' for g in genders)
-    
-    if(male_count > 0 and female_count > 0):
-        return "MF"
-    elif(female_count > 0):
-        return "F"
-    elif (male_count > 0):
-        return "M"
-
-
-# In[16]:
-
-
-loans_df.borrower_genders = loans_df.borrower_genders.apply(process_gender)
-
-
-# In[17]:
-
-
-loans_df.borrower_genders.value_counts().plot.bar(color='cornflowerblue');
-plt.xlabel('Borrower Group/Individual Gender')
-plt.ylabel('Count')
-plt.title("Loan Count by Gender of Borrower");
-
-
-# ## 6. Distribution of Loan Amount
-# - We will consider the **funded_amount** variable as this is the amount which is disbursed to the borrower by the field agent
-# - As all amounts are in USD, no currency conversion is required
-# - Most of the values are below \$2000, with only 8 % of all loans lying above this value
-# - There is the outlier of \$100,000 for Agriculture in Haiti which we can ignore
-
-# In[18]:
-
-
-loans_df.funded_amount.plot(kind='box', logy=True);
-plt.title("Distribution of Loan Funded Amount");
-
-
-# In[19]:
-
-
-loans_df.funded_amount.describe()
-
-
-# In[20]:
-
-
-# Q3 + 1.5 * IQR
-IQR = loans_df.funded_amount.quantile(0.75) - loans_df.funded_amount.quantile(0.25)
-upper_whisker = loans_df.funded_amount.quantile(0.75) + 1.5 * IQR
-loans_above_upper_whisker = loans_df[loans_df.funded_amount > upper_whisker]
-loans_above_upper_whisker.shape
-
-
-# In[21]:
-
-
-# percentage of loans above upper whisker
-loans_above_upper_whisker.shape[0]/loans_df.shape[0]
-
-
-# ### Analysis of loan amount \$0
-# - A **funded_amount** of 0 implies that the loan was not able to attract full funding after having being posted to Kiva
-# - A total of 3383(0.5%) loans were not funded. We can look investigate more about the kind of loans that went unfunded in another section
-
-# In[22]:
-
-
-loans_zero = loans_df[loans_df.funded_amount == 0]
-print("Number of unfunded loans", loans_zero.shape)
-print("% of unfunded loans", loans_zero.shape[0]/loans_df.shape[0])
-
-
-# ### 6.1 Analysis of loan amount below \$2000
-# - The distribution is skewed to the right with higher loan amounts being less common
-
-# In[23]:
-
-
-loans_below_upper_whisker = loans_df[loans_df.funded_amount < upper_whisker]
-
-
-# In[24]:
-
-
-loans_below_upper_whisker.funded_amount.plot.hist();
-plt.xlabel('Funded Amount')
-plt.title("Distribution of Loan Funded amount < $2000");
-
-
-# ### 6.2 Analysis of loan amount  \$2,000 - \$20,000
-# - Most of the outliers lie in this range
-
-# In[25]:
-
-
-df = loans_above_upper_whisker[loans_above_upper_whisker.funded_amount < 20000]
-df.funded_amount.plot.hist();
-plt.xlabel('Funded Amount')
-plt.title("Distribution of Loan Funded Amount between \$2,000 and \$20,000");
-df.shape
-
-
-# ### 6.3 Analysis of loan amount \$20,000 to \$60,000
-# - A few values lie in this range
-# - Most of the high value loans are disbursed for Agriculture and Retail
-
-# In[26]:
-
-
-df = loans_above_upper_whisker[(loans_above_upper_whisker.funded_amount > 20000) & (loans_above_upper_whisker.funded_amount < 60000)]
-df.funded_amount.plot.hist()
-plt.xlabel('Funded Amount')
-plt.title("Distribution of Loan Funded Amount between \$20,000 and \$60,000");
-
-
-# In[27]:
-
-
-df.sector.value_counts().sort_values().plot.bar(color='cornflowerblue');
-plt.ylabel('Count')
-plt.xlabel('Sector')
-plt.title("Loan Count by Sector for Loan Amount between \$20,000 and \$60,000");
-
-
-# ### 6.4 Loan amount above \$60,000
-# - There is only a single loan amount with a value of \$100,000 in this range distributed for Agriculture in Haiti
+# Let us visualize the distribution of the various independent variables in categorical form:
+# 
+# the independent variables (click both the links below to see what I mean):
+# 
+# 1. [Independent variables](https://github.com/JeruLuke/My-Kaggle-Participations/blob/master/Zillow_House/Inferences/coll_variables.JPG)
+# 
+# and
+# 
+# 2. [Rooms and various features](https://github.com/JeruLuke/My-Kaggle-Participations/blob/master/Zillow_House/Inferences/rooms%26features_2.JPG)
 # 
 
-# In[28]:
-
-
-loans_df[loans_df.funded_amount > 60000]
-
-
-# ### 6.5 Loan amount by Sector
-# - Not much observable difference in distributions of loan amount by sector except that loan amounts for the personal use sector tends to be on the lower side
-
-# In[29]:
-
-
-pylab.rcParams['figure.figsize'] = (16.0, 8.0)
-boxplot_sorted(loans_df[loans_df.funded_amount < 10000], by=["sector"], column="funded_amount");
-plt.xticks(rotation=90);
-plt.ylabel('Funded Amount')
-plt.xlabel('Sector')
-plt.title('Funded Amount by Sector');
-
-
-# ### 6.6 Loan Amount by Gender
-# - The distribution of loan amount show slightly lower amounts for female only borrowers than for male only borrowers. I will dig into this a bit more after exploring the breakdown by country. 
-# - The distribution for mixed gender groups of borrowers is much more widespread
-
-# In[30]:
-
-
-pylab.rcParams['figure.figsize'] = (6.0, 6.0)
-boxplot_sorted(loans_df[(loans_df.funded_amount < 10000) & (loans_df.borrower_genders != "nan")], by=["borrower_genders"], column="funded_amount");
-plt.title('Funded Amount by Gender')
-plt.ylabel('Funded Amount')
-plt.xlabel('Gender')
-
-
-# In[31]:
-
-
-loan_amount_values = loans_df[(loans_df.funded_amount < 10000) & (loans_df.borrower_genders != "nan")].groupby("borrower_genders").loan_amount
-loan_amount_values.median()
-
-
-# In[32]:
-
-
-loan_amount_values.quantile(0.75) - loan_amount_values.quantile(0.25)
-
-
-# ### 6.7 Loan Amount by Country
-# - There's a lot going on here, but some countries that are clearly on the higher end of the loan amount spectrum are Afhanistan, Congo, Chile. It will be interesting to see what kind of sectors the loans in these countries were made for
-# - In Afghanistan, there were only 2 loans disbursed with amounts between \$6,000 and \$8,000 and both of them were for Textile activity.
-# - On the other end of the spectrum are countries like Nigeria which has the lowest distribution. A possible explanation for Nigeria is that the value of the dollar against the Nigerian naira is so high that even small loan amounts in dollar value go a long way
-
-# In[33]:
-
-
-pylab.rcParams['figure.figsize'] = (24.0, 8.0)
-boxplot_sorted(loans_df[(loans_df.funded_amount < 10000) & (loans_df.borrower_genders != "nan")], by=["country"], column="funded_amount");
-plt.xticks(rotation=90);
-plt.title('Funded Amount by Country')
-plt.ylabel('Funded Amount')
-plt.xlabel('Country');
-
-
-# In[34]:
-
-
-loans_df[loans_df.country == 'Afghanistan']
-
-
-# In[35]:
-
-
-pylab.rcParams['figure.figsize'] = (6.0, 6.0)
-loans_df[loans_df.country == 'Chile'].sector.value_counts().plot.bar(color='cornflowerblue');
-plt.title("Loan Count by Sector in Chile")
-plt.xlabel("Sector")
-plt.ylabel("Loan Count")
-
-
-# ## 7. Time taken to fund loans
-# The loan disbursal process works like this in Kiva: the field agent disburses the loan to the borrower at the **disbursed_time**. The agent then posts the loan to Kiva at the **posted_time**. Lenders are then able to see the loan on Kiva and make contributions towards it. The time at which the loan has been completely funded is the **funded_time**
+# ***1. COLUMNS WITH NON-VARIANCE***
 # 
-# We can then consider the time taken to completed fund a loan to be **funded_time** - **posted_time**. There is only one case where the posted time is 17 days greater than the funded time. This is probably an error which I need to look into further. (**UPDATE** - The process I described above, where the field agent issues the funds to the borrower before posting it on Kiva is called *Pre-Disbursal* and although it is followed for *most* loans, it is not necessarily followed for all loans)
+# We have quite a lot of columns. Let us see if any of them have only **ONE distinct** value, so that they can be dropped.
+
+# In[ ]:
+
+
+count = 0
+for c in list(train_df):
+    if (len(train_df[c].unique()) == 1):
+        print(c)
+        count+=1
+print(count)
+
+
+# Let us see if there are any columns having less than 1% of unique values.
+
+# In[ ]:
+
+
+count = 0
+low_var_cols = []
+for c in list(train_df):
+    if (len(train_df[c].unique()) < 907):
+        print(c)
+        low_var_cols.append(c)
+        count+=1
+print(count)
+
+
+# There are 43 such columns. Out of this we can drop columns which have only two unique values as either of these values would be less than 1%, hence such columns would have less variance. (we can think about dropping them later)
+
+# In[ ]:
+
+
+len(low_var_cols)
+
+
+# In[ ]:
+
+
+count = 0
+low_var_drop_cols = []
+for c in low_var_cols:
+    if (train_df[c].nunique() <= 2):
+        print(c)
+        low_var_drop_cols.append(c)
+        count+=1
+print(count)
+len(low_var_drop_cols)
+
+
+# The column `assessmentyear` alone has one unique variable throughout. All the other columns have some unique features which can considerably vary the cost. Hence, we will not drop those columns for now.
+
+# Only **ONE** column '**assessmentyear**' has a single distinct value throughout. We can cross check that:
+
+# In[ ]:
+
+
+print(train_df['assessmentyear'].nunique())
+
+
+# ***2. COLUMNS WITH MISSING VALUES***
+
+# In[ ]:
+
+
+#--- List of columns having Nan values and the number ---
+
+missing_col = train_df.columns[train_df.isnull().any()].tolist()
+print(missing_col)
+print('There are {} missing columns'.format(len(missing_col)))
+
+
+# ***3. COLUMNS WITH NO MISSING VALUES***
+
+# In[ ]:
+
+
+nonmissing_col = train_df.columns[~(train_df.isnull().any())].tolist()
+print(nonmissing_col)
+print('There are {} non-missing columns'.format(len(nonmissing_col)))
+
+
+# There are 13 columns that have no missing values. Every other column has some missing values.
 # 
-# - The longest time it took for a loan to get funded was 1 year and 2 months
-# - Most of the loans are funded within a 100 days. Only 0.1% of all loans in the entire sample take more than a 100 days to be funded
-
-# In[36]:
-
-
-time_to_fund = (loans_df.funded_time - loans_df.posted_time)
-time_to_fund_in_days = (time_to_fund.astype('timedelta64[s]')/(3600 * 24))
-loans_df = loans_df.assign(time_to_fund=time_to_fund)
-loans_df = loans_df.assign(time_to_fund_in_days=time_to_fund_in_days)
-
-
-
-# ### 7.1 Maximum time taken for a loan to be funded
-
-# In[37]:
-
-
-max(time_to_fund_in_days)
-
-
-# ### 7.2 Distribution of time taken for a loan to be funded
-
-# In[38]:
-
-
-lower = loans_df.time_to_fund_in_days.quantile(0.01)
-upper = loans_df.time_to_fund_in_days.quantile(0.99)
-loans_df[(loans_df.time_to_fund_in_days > lower)].time_to_fund_in_days.plot.hist();
-plt.title('Loan Count by Time taken to fund')
-plt.xlabel('Time taken to fund')
-plt.ylabel('Loan Count')
-
-
-# ### 7.3 Distribution of time taken for a loan to be funded greater than 100 days
-
-# In[39]:
-
-
-loans_df[(loans_df.time_to_fund_in_days > 100)].shape
-
-
-# In[40]:
-
-
-loans_df[(loans_df.time_to_fund_in_days > 100)].shape[0]/loans_df.shape[0]
-
-
-# In[41]:
-
-
-loans_df[(loans_df.time_to_fund_in_days > 100)].time_to_fund_in_days.plot.hist();
-
-
-# ### 7.4 Is there any difference in the time taken to fund a loan based on the gender of the borrower?
-#  - It looks like female only borrower/borrower groups take *slightly* less time to get funded. We would need to investigate if this is significant.
-
-# In[42]:
-
-
-pylab.rcParams['figure.figsize'] = (8.0, 8.0)
-boxplot_sorted(loans_df[loans_df.borrower_genders != 'nan'], by=["borrower_genders"], column="time_to_fund_in_days");
-
-
-# ### 7.5 Is there any difference in the time taken to fund a loan based on the country of the borrower?
-# - Countries are sorted in the increasing order of their median time to fund
-# - Countries like Afghanistan and Chile are on the lower end of the spectrum. 
-# - It's surprising to see the United States on the higher end of the spectrum.
 # 
+# ***4. CHECKING DATATYPE OF EACH COLUMN ***
 
-# In[43]:
-
-
-pylab.rcParams['figure.figsize'] = (24.0, 8.0)
-#loans_df[["time_to_fund_in_days", "country"]].boxplot(by="country");
-axes = boxplot_sorted(loans_df, by=["country"], column="time_to_fund_in_days")
-axes.set_title("Time to Fund by country in days")
-plt.xticks(rotation=90);
+# In[ ]:
 
 
-# * * *
+#--- Data type of each column ---
+print(train_df.dtypes)
+
+
+# Let us see the split-up of the datatypes:
+
+# In[ ]:
+
+
+import seaborn as sns
+#sns.barplot( x = train_df.dtypes.unique(), y = train_df.dtypes.value_counts(), data = train_df)
+sns.barplot( x = ['float', 'object', 'int'], y = train_df.dtypes.value_counts(), data = prop_df)
+
+
+# What is the exact count of all these datatypes?
+
+# In[ ]:
+
+
+print(train_df.dtypes.value_counts())
+
+
+# Observations:
+# 1. Only '**parcel_id**' is off **integer** type
+# 2. '**hashottuborspa**', '**propertycountylandusecode**', '**propertyzoningdesc**', '**fireplaceflag**' and '**taxdelinquencyflag** are of type **object**
+# 3. The remaining columns are of type **float**.
+
+# ***5.1 Analyzing column of type `int` -> `parcelid`***
+
+# In[ ]:
+
+
+#--- Checking if all the parcelids are unique in both the dataframes ---
+
+print (prop_df['parcelid'].nunique())
+print (prop_df.shape[0])
+
+print (train_df['parcelid'].nunique())
+print (train_df.shape[0]) 
+
+
+# Some of the parcelid in the merged dataframe have been repeated more than once.
+
+# ***5.2 Analyzing columns of type `object`***
 # 
+# Let us get the unique elements in each of these columns (categorical variables) along with their count. Then we can convert them to numerical variables:
 
-# # Analysis of Borrower Profiles in India
-# - More than 11k loans have been disbursed in India, putting India in the 13th place for the total number of loans disbursed via Kiva
-# - The sector with the highest number of loans is Agriculture
-# - The sectors in which loans are disbursed in India are similar to the global distribution for the top 4 categories, except for the housing category. In India, housing falls at #3 in terms of number of loans disbursed. It makes sense that with a booming population, housing is a concern and one of the top sectors, next to agriculture and food
+# In[ ]:
+
+
+print(train_df['hashottuborspa'].nunique())
+print(train_df['hashottuborspa'].unique())
+print('\n')
+print(train_df['propertycountylandusecode'].nunique())
+print(train_df['propertycountylandusecode'].unique())
+print('\n')
+print(train_df['propertyzoningdesc'].nunique())
+print(train_df['propertyzoningdesc'].unique())
+print('\n')
+print(train_df['fireplaceflag'].nunique())
+print(train_df['fireplaceflag'].unique())
+print('\n')
+print(train_df['taxdelinquencyflag'].nunique())
+print(train_df['taxdelinquencyflag'].unique()) 
+print('\n') 
+print(train_df['transactiondate'].nunique())
+
+
+# Three of the columns mentioned above (**hashottuborspa**, **fireplaceflag** and **taxdelinquencyflag**) are merely **flags** indicating presence of the feature or not. Hence the `nan` values can be replaced with '0', while the other values can be replaced with '1'.
+
+# In[ ]:
+
+
+train_df['hashottuborspa'] = train_df['hashottuborspa'].fillna(0)
+train_df['fireplaceflag'] = train_df['fireplaceflag'].fillna(0)
+train_df['taxdelinquencyflag'] = train_df['taxdelinquencyflag'].fillna(0)
+
+#---  replace the string 'True' and 'Y' with value '1' ---
+
+train_df.hashottuborspa = train_df.hashottuborspa.astype(np.int8)
+train_df.fireplaceflag = train_df.fireplaceflag.astype(np.int8)
+train_df['taxdelinquencyflag'].replace( 'Y', 1, inplace=True)
+train_df.taxdelinquencyflag = train_df.taxdelinquencyflag.astype(np.int8)
+
+
+# Out of the remaining three columns `transactiondate` is a datetime object
+
+# In[ ]:
+
+
+train_df['transactiondate'] = pd.to_datetime(train_df['transactiondate'])
+
+#--- Creating two additional columns each for the month and day ---
+train_df['transaction_month'] = train_df.transactiondate.dt.month.astype(np.int64)
+train_df['transaction_day'] = train_df.transactiondate.dt.weekday.astype(np.int64)
+
+#--- Dropping the 'transactiondate' column now ---
+train_df = train_df.drop('transactiondate', 1)
+
+
+# The remaining two columns are random in nature, in terms of their values `propertycountylandusecode` and `propertyzoningdesc`
+
+# In[ ]:
+
+
+#--- Counting number of occurrences of Nan values in remaining two columns ---
+print(train_df['propertycountylandusecode'].isnull().sum())
+print(train_df['propertyzoningdesc'].isnull().sum())
+
+
+# The occurrences of missing values for the second column (`propertyzoningdesc`) is so large for us to remove the observations. So we will replace them with a **random** value.
+
+# In[ ]:
+
+
+#--- Since there is only ONE missing value in this column we will replace it manually ---
+train_df["propertycountylandusecode"].fillna('023A', inplace =True)
+print(train_df['propertycountylandusecode'].isnull().sum())
+
+
+# In[ ]:
+
+
+train_df["propertyzoningdesc"].fillna('UNIQUE', inplace =True)
+print(train_df['propertyzoningdesc'].isnull().sum())
+
+
+# I have assigned same code `UNIQUE` for all the missing observations. If it does impact our modeling we can always change it.
+
+# ***5.3 Analyzing columns of type `float`***
 # 
+#    ***5.3.1 Firstly, the target variable `logerror`. ***
+#    
+#    Let us see the statistics of this column and then plot it.
 
-# In[44]:
-
-
-df_india = loans_df[loans_df.country == 'India']
-
-
-# ## 1. Number of loans
-
-# In[45]:
+# In[ ]:
 
 
-df_india.shape
+#--- Statistics of the target variable ---
+
+print(train_df['logerror'].describe())
 
 
-# ## 2. Sector
-
-# In[46]:
-
-
-pylab.rcParams['figure.figsize'] = (8.0, 8.0)
-df_india.groupby('sector').id.count().sort_values().plot.bar(color='cornflowerblue');
-
-
-# ## 3. Loans by region in India
-# - The top ten regions receiving loans were analyzed and 8 out of them had the highest count of loans for agriculture. An exception was the city of Jaipur for which the largest number of loans were disbursed for the Arts sector. Jaipur is famous for it's art and craft shops and past rulers of the city also patronized these trades. 
-
-# ### 3.1 Top 10 regions receiving loans
-
-# In[47]:
-
-
-pylab.rcParams['figure.figsize'] = (8.0, 8.0)
-df_india.groupby('region').id.count().sort_values(ascending=False).head(20).plot.bar(color='cornflowerblue');
-
-
-# In[48]:
-
-
-df_india_top_ten = df_india.groupby('region').id.count().sort_values(ascending=False).head(10)
-
-
-# In[49]:
-
-
-df_india_top_ten
-
-
-# In[50]:
-
-
-df_india_top_ten.plot.bar(color='cornflowerblue');
-
-
-# In[51]:
-
-
-for region in df_india_top_ten.index:
-    plt.title(region)
-    df_india[df_india.region==region].groupby('sector').id.count().sort_values(ascending=False).plot.bar(color='cornflowerblue')
-    plt.show()
-
-
-# ## 3.2 Getting in the latitude and longitude data
-# - I'm making use of [this](https://www.kaggle.com/gaborfodor/additional-kiva-snapshot/data) additional data source to obtain the latitude and longitude for each loan's location. The  file `loan_coords.csv` contains the mapping from loan_id to latitude-longitude pair
-# - 99% of the loans disbursed in India have mappings to their latitude and longitude, so this is something we can work with
-
-# In[52]:
-
-
-pd.Series(list(set(df_india.id) & set(loan_coords_df.id))).shape[0]/df_india.shape[0]
-
-
-# In[53]:
-
-
-df_india = df_india.merge(loan_coords_df, on='id', how='inner')
-
-
-# ## 3.3 Visualizing the regions in india in which loans are disbursed
-# - There is a large concentration of loans in the East of India, especially in the state of Odisha. It would be interesting to plot the MPI(multi-dimensional poverty index) per state and see if the current allocation of loans
-
-# In[54]:
+# In[ ]:
 
 
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import Basemap
+plt.scatter(train_df['logerror'], train_df.logerror.values)
+plt.xlabel('No of observations', fontsize=12)
+plt.ylabel('logerror', fontsize=12)
+plt.show()
 
 
-# In[55]:
+# Most of the values lie in the range [**-1.75 - 3.75**] (approx)
+
+# First I would like to take all columns of type `float` in a list
+
+# In[ ]:
 
 
-longitudes = list(df_india.longitude)
-latitudes = list(df_india.latitude)
+#--- putting all columns of 'float' type in a list ---
+float_cols = list(train_df.select_dtypes(include=['float']).columns)
+print('There are {} columns of type float having missing values'.format(len(float_cols)))
+print('\n')
+print(float_cols)
 
 
-# In[56]:
+# Now collect all columns of type `float` and **missing** values in a list
+
+# In[ ]:
 
 
-plt.figure(figsize=(14, 8))
-earth = Basemap(projection='lcc',
-                resolution='h',
-                llcrnrlon=67,
-                llcrnrlat=5,
-                urcrnrlon=99,
-                urcrnrlat=37,
-                lat_0=28,
-                lon_0=77
-)
-earth.drawcoastlines()
-earth.drawcountries()
-earth.drawstates(color='#555566', linewidth=1)
-earth.drawmapboundary(fill_color='#46bcec')
-earth.fillcontinents(color = 'white',lake_color='#46bcec')
-# convert lat and lon to map projection coordinates
-longitudes, latitudes = earth(longitudes, latitudes)
-plt.scatter(longitudes, latitudes, 
-            c='red',alpha=0.5, zorder=10)
-plt.savefig('Loans Disbursed in India', dpi=350)
+#--- putting columns of type 'float' having missing values in a list ---
+float_nan_col = []
+for column in float_cols:
+    if (train_df[column].isnull().sum() > 0):
+        float_nan_col.append(column)
+
+print('There are {} columns of type float having missing values'.format(len(float_nan_col)))
+print('\n')
+print(float_nan_col)
 
 
-# ## 3.4 Visualizing the MPI per region in India
+# ***5.3.2*** Analysis must be done on **THESE** 42 columns to impute missing values** with** care:
 # 
-# ### MPI from the OPHI data
-# - The code for effectively joining all data sources has been reused from Elliot's notebook here: https://www.kaggle.com/elliottc/kivampi. Elliot is from the Kiva impact team and has provided this code as an example of how Kiva currently uses MPI. However, `MPI_subnational.csv` doesn't contain subnational MPI information for Indian regions, so I will need to look at another poverty index for India. 
-# - I will consider using the state-wise Tendulkar Poverty Estimate from [here](http://niti.gov.in/state-statistics#) (COMING SOON!)
+# a. Columns **`regionidcity`, `regionidneighborhood`** and **`regionidzip`** can be given some random values based on the other values in the respective columns.
+# 
+# b. Missing values in column **`unitcnt`** must be assigned value **1**, signifying a single structural unit. Making it '0' would be absurd!!!
+# 
+# c. Column **`censustractandblock`** can be given random values to the missing observations present within the same column.
+# 
+# d. There are **756** missing values in the column **`yearbuilt`**, which cannot be imputed randomly AT ALL!! However, for the sake of starting off I will assign it random year values based in the same column.
+# 
+# e. The remaining columns can be safely assigned value '0', beacuse they all signify a presence of a particular ID or count.
 
-# In[57]:
+# ***5.3.2.a*** Columns **`regionidcity`, `regionidneighborhood`** and **`regionidzip`**
+# 
+# Here I am imputing missing values by randomly assigning values already present in the respective columns. (If you have a better way to impute such values do mention it in the comments section!!)
 
-
-MPI = pd.read_csv("../input/mpi/MPI_subnational.csv")
-MPI[MPI.Country=='India'].shape
-
-
-# In[58]:
-
-
-# Load data
-MPI = pd.read_csv("../input/mpi/MPI_subnational.csv")[['Country', 'Sub-national region', 'World region', 'MPI Regional']]
-MPInat = pd.read_csv("../input/mpi/MPI_national.csv")[['ISO','Country','MPI Rural', 'MPI Urban']].set_index('ISO')
-LT = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv")[['country','Partner ID', 'Loan Theme ID', 'region', 'mpi_region', 'ISO', 'number', 'amount','rural_pct', 'LocationName', 'Loan Theme Type']]
-# Create new column mpi_region and join MPI data to Loan themes on it
-MPI['mpi_region'] = MPI[['Sub-national region', 'Country']].apply(lambda x: ', '.join(x), axis=1)
-MPI = MPI.set_index('mpi_region')
-LT = LT.join(MPI, on='mpi_region', rsuffix='_mpi') #[['country','Partner ID', 'Loan Theme ID', 'Country', 'ISO', 'mpi_region', 'MPI Regional', 'number', 'amount','Loan Theme Type']]
-#~ Pull in country-level MPI Scores for when there aren't regional MPI Scores
-LT = LT.join(MPInat, on='ISO',rsuffix='_mpinat')
-LT['Rural'] = LT['rural_pct']/100        #~ Convert rural percentage to 0-1
-LT['MPI Natl'] = LT['Rural']*LT['MPI Rural'] + (1-LT['Rural'])*LT['MPI Urban']
-LT['MPI Regional'] = LT['MPI Regional'].fillna(LT['MPI Natl'])
-#~ Get "Scores": volume-weighted average of MPI Region within each loan theme.
-Scores = LT.groupby('Loan Theme ID').apply(lambda df: np.average(df['MPI Regional'], weights=df['amount'])).to_frame()
-Scores.columns=["MPI Score"]
-#~ Pull loan theme details
-LT = LT.groupby('Loan Theme ID').first().join(Scores)#.join(LT_['MPI Natl'])
+# In[ ]:
 
 
-# In[59]:
+cols = ['regionidcity', 'regionidneighborhood', 'regionidzip']
+print(train_df['regionidcity'].isnull().sum())
+print(train_df['regionidneighborhood'].isnull().sum())
+print(train_df['regionidzip'].isnull().sum())
+
+train_df["regionidcity"].fillna(lambda x: np.random(train_df[train_df["regionidcity"] != np.nan]), inplace =True)
+train_df["regionidneighborhood"].fillna(lambda x: np.random(train_df[train_df["regionidneighborhood"] != np.nan]), inplace =True)
+train_df["regionidzip"].fillna(lambda x : np.random(train_df["regionidzip"] != np.nan) , inplace =True)
+
+#--- cross check whether nan values are present or not ---
+print(train_df['regionidcity'].isnull().sum())
+print(train_df['regionidneighborhood'].isnull().sum())
+print(train_df['regionidzip'].isnull().sum())
 
 
-LT['Loan Theme ID'] = LT.index
+# ***5.3.2.b*** Column **`unitcnt`**
+# 
+# Here we will replace missing values with the mostly occuring variable
+
+# In[ ]:
 
 
-# In[60]:
+#--- some analysis on the column values ---
+
+print(train_df['unitcnt'].unique())
+print(train_df['unitcnt'].value_counts())
+sns.countplot(x = 'unitcnt', data = train_df)
 
 
-loans_with_mpi_df = loans_df.merge(loan_theme_ids_df, on='id').merge(LT, on='Loan Theme ID')
-loans_with_mpi_india_df = loans_with_mpi_df[loans_with_mpi_df.Country == 'India']
+# In[ ]:
 
 
-# In[61]:
+#--- Replace the missing values with the maximum occurences ---
+train_df['unitcnt'] = train_df['unitcnt'].fillna(train_df['unitcnt'].mode()[0])
+
+#--- cross check for missing values ---
+print(train_df['unitcnt'].isnull().sum())
 
 
-loans_with_mpi_india_df.shape
+# ***5.3.2.c*** Column **`censustractandblock`**
+# 
+# Let us see the correlation between `censustractandblock` and `rawcensustractandblock`
+
+# In[ ]:
 
 
-# ### Simple State-Wise Poverty Rate in India
-# - Data source: [Wikipedia](https://www.wikiwand.com/en/List_of_Indian_states_and_union_territories_by_poverty_rate)
-# - Let's look at the state-wise poverty rate in India (The percentage of people below the poverty line). Although this is a unidimensional poverty index looking only at income as a factor, it will give us some idea of the relative poverty of Indian states
-# - Here, we see that the Poverty Rate is quite high in the north-eastern states (shown in dark red) which could justify the large number of loans concentrated in these states. We'll have to dig further with the MPI measure for each state
-
-# In[72]:
+print(train_df['censustractandblock'].corr(train_df['rawcensustractandblock']))
 
 
-df_poverty_rate = pd.read_csv("../input/poverty-rate-of-indian-states/IndiaPovertyRate.csv", encoding = "ISO-8859-1")
-latitudes = list(df_poverty_rate.Latitude)
-longitudes = list(df_poverty_rate.Longitude)
-poverty_rate = list(df_poverty_rate.PovertyRate)
+# In[ ]:
 
 
-# In[73]:
+print(train_df['censustractandblock'].nunique())
+print(train_df['rawcensustractandblock'].nunique())
 
 
-plt.figure(figsize=(14, 8))
-earth = Basemap(projection='lcc',
-                resolution='h',
-                llcrnrlon=67,
-                llcrnrlat=5,
-                urcrnrlon=99,
-                urcrnrlat=37,
-                lat_0=28,
-                lon_0=77
-)
-earth.drawcoastlines()
-earth.drawcountries()
-earth.drawstates(color='#555566', linewidth=1)
-earth.drawmapboundary(fill_color='#46bcec')
-earth.fillcontinents(color = 'white',lake_color='#46bcec')
-# convert lat and lon to map projection coordinates
-longitudes, latitudes = earth(longitudes, latitudes)
-plt.scatter(longitudes, latitudes, 
-            c=poverty_rate, zorder=10, cmap='bwr')
-plt.savefig('Loans Disbursed in India', dpi=350)
+# The correlation between these columns is VERY high (~1). So filling missing values MUST be in relation to column `rawcensustractandblock`
 
+# In[ ]:
+
+
+'''  #--- to be continued ---
+print(train_df['censustractandblock'].isnull().sum())
+#print('\n')
+#print(train_df['rawcensustractandblock'].nunique())
+
+#train_df['censustractandblock'] = train_df['censustractandblock'].fillna()
+pop = pd.DataFrame()
+pop['censustractandblock'] = train_df['censustractandblock'] 
+print(pop.shape[0])
+
+a = 0
+count = 0
+for i in pop['censustractandblock']:
+    if (np.isnan(i)):
+        a = train_df.iloc[count]['rawcensustractandblock']
+        #a.append(train_df['rawcensustractandblock'].iloc())
+        for j in pop['censustractandblock']:
+            if ((np.isfinite(j)) & ( )):
+                
+        count+=1
+print(count)
+#pop['censustractandblock'] = pop['censustractandblock'].fillna(pop['censustractandblock'] /
+       # if )
+print (a)    
+''' 
+
+
+# ***5.3.2.d*** Column **`yearbuilt`**
+# 
+# Arranging the `yearbuilt`column in ascending order.
+
+# In[ ]:
+
+
+print(train_df['yearbuilt'].sort_values().unique())
+
+
+# Looking at the above sorted list of years, we have collection of houses built since 1885. Missing values are probably for the houses built in the year 2016 (I think !!!). So let us replace them:
+
+# In[ ]:
+
+
+train_df['yearbuilt'] = train_df['yearbuilt'].fillna(2016)
+
+#--- cross check for missing values ---
+print(train_df['yearbuilt'].isnull().sum())
+
+
+# ***5.3.2.e***  ***Remaining columns***
+# 
+# The remaining columns can be safely assigned value '0', beacuse they all signify a presence of a particular ID or count.
+
+# In[ ]:
+
+
+#--- list of columns of type 'float' having missing values
+#--- float_nan_col 
+
+#--- list of columns of type 'float' after imputing missing values ---
+float_filled_cols = ['regionidcity', 'regionidneighborhood', 'regionidzip', 'unitcnt', 'censustractandblock', 'yearbuilt']
+
+count = 0
+for i in float_nan_col:
+    if i not in float_filled_cols:
+        train_df[i] = train_df[i].fillna(0)
+        count+=1
+print(count)
+
+
+# In[ ]:
+
+
+print(len(float_nan_col))
+
+
+# **Plotting columns `Latitude` and `Longitude`**
+# 
+# From the dictionary, this column specifies ' *Latitude and Longitude of the middle of the parcel multiplied by 10e6*'
+# 
+
+# In[ ]:
+
+
+sns.regplot(x = 'latitude', y = 'longitude', data = train_df)
+
+
+# In[ ]:
+
+
+x = train_df.iloc[1]
+#print(x)
+
+
+# **CREATING NEW FEATURES**:
+# 
+# Let us create new features using the existing one in the dataframe
+
+# In[ ]:
+
+
+#--- how old is the house? ---
+train_df['house_age'] = 2017 - train_df['yearbuilt']
+
+#--- how many rooms are there? ---  
+train_df['tot_rooms'] = train_df['bathroomcnt'] + train_df['bedroomcnt']
+
+#--- does the house have A/C? ---
+train_df['AC'] = np.where(train_df['airconditioningtypeid']>0, 1, 0)
+
+#--- Does the house have a deck? ---
+train_df['deck'] = np.where(train_df['decktypeid']>0, 1, 0)
+train_df.drop('decktypeid', axis=1, inplace=True)
+
+#--- does the house have a heating system? ---
+train_df['heating_system'] = np.where(train_df['heatingorsystemtypeid']>0, 1, 0)
+
+#--- does the house have a garage? ---
+train_df['garage'] = np.where(train_df['garagecarcnt']>0, 1, 0)
+
+#--- does the house come with a patio? ---
+train_df['patio'] = np.where(train_df['yardbuildingsqft17']>0, 1, 0)
+
+#--- does the house have a pool?
+train_df['pooltypeid10'] = train_df.pooltypeid10.astype(np.int8)
+train_df['pooltypeid7'] = train_df.pooltypeid7.astype(np.int8)
+train_df['pooltypei2'] = train_df.pooltypeid2.astype(np.int8)
+train_df['pool'] = train_df['pooltypeid10'] | train_df['pooltypeid7'] | train_df['pooltypeid2'] 
+
+#--- does the house have all of these? -> spa/hot-tub/pool, A/C, heating system , garage, patio
+train_df['exquisite'] = train_df['pool'] + train_df['patio'] + train_df['garage'] + train_df['heating_system'] + train_df['AC'] 
+
+#--- Features based on location ---
+train_df['x_loc'] = np.cos(train_df['latitude']) * np.cos(train_df['longitude'])
+train_df['y_loc'] = np.cos(train_df['latitude']) * np.sin(train_df['longitude'])
+train_df['z_loc'] = np.sin(train_df['latitude'])
+
+print('DONE')
+
+
+# When do people usually buy houses?
+
+# In[ ]:
+
+
+#train_df['transaction_year']
+sns.countplot(x = 'transaction_month', data = train_df)
+
+
+# Let us create a feature called 'season' to know in which season transactions are high.
+# 
+# According to [THIS WEBSITE](https://www.timeanddate.com/calendar/aboutseasons.html) the four seaons are categorized as:
+# 1. Spring - from March 1 to May 31;
+# 2. Summer - from June 1 to August 31;
+# 3. Fall (autumn) - from September 1 to November 30; and,
+# 4. Winter - from December 1 to February 28
+# 
+
+# In[ ]:
+
+
+#--- create an additional feature called season ---
+def seas(x):
+    if 2 < x < 6:
+        return 1        #--- Spring
+    elif 5 < x < 9:
+        return 2        #---Summer
+    elif 8 < x < 12:
+        return 3        #--- Fall (Autumn) 
+    else:
+        return 4        #--- Winter 
+
+train_df['season'] = train_df['transaction_month'].apply(seas)
+
+
+# In[ ]:
+
+
+ax = sns.countplot(x = 'season', data = train_df)
+ax.set(xlabel='Seasons', ylabel='Count')
+season_list=['Spring','Summer','Fall','Winter']
+plt.xticks(range(4), season_list, rotation=45)
+plt.show()
+
+
+# Most of the house transactions are done in the Spring and Summer seasons.
+
+# Lets us see the distribution of the newly created exquisite features:
+
+# In[ ]:
+
+
+ax = sns.countplot(x = 'exquisite', data = train_df)
+ax.set(xlabel='Exquisite features present', ylabel='Count')
+plt.show()
+
+
+# Most of the houses have ATLEAST ONE of the mentioned exquisite features.
+
+# In[ ]:
+
+
+ax = sns.countplot(x = 'transaction_day', data = train_df)
+ax.set(xlabel='Transaction Days', ylabel='Count')
+days_list=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+plt.xticks(range(len(days_list)), days_list, rotation=45)
+plt.show()
+
+
+# **New feature**: Weekend/weekday transaction
+# 
+# Transactions are high during the weekdays. So we can create another categorical feature Weekdays/Weekends
+
+# In[ ]:
+
+
+#--- create an additional feature called weekday_trans ---
+def weekday_transaction(x):
+    if 4 < x <= 6:
+        return 1        #--- Weekend
+    else:
+        return 2        #--- Weekday
+
+train_df['weekday_trans'] = train_df['transaction_day'].apply(weekday_transaction)
+
+
+# In[ ]:
+
+
+ax = sns.countplot(x = 'weekday_trans', data = train_df)
+ax.set(xlabel='Weekday/weekend', ylabel='Count')
+weekend_day_list=['Weekend', 'Weekday']
+plt.xticks(range(len(weekend_day_list)), weekend_day_list, rotation=45)
+plt.show()
+
+
+# **New features based on area** adapted from [THIS KERNEL](https://www.kaggle.com/nikunjm88/creating-additional-features?scriptVersionId=1379783)
+
+# In[ ]:
+
+
+#--- living area ---
+train_df['LivingArea'] = train_df['calculatedfinishedsquarefeet']/train_df['lotsizesquarefeet']
+train_df['LivingArea_2'] = train_df['finishedsquarefeet12']/train_df['finishedsquarefeet15']
+
+#--- Extra space available
+train_df['ExtraSpace'] = train_df['lotsizesquarefeet'] - train_df['calculatedfinishedsquarefeet'] 
+train_df['ExtraSpace-2'] = train_df['finishedsquarefeet15'] - train_df['finishedsquarefeet12'] 
+
+
+# **New features based on TAX**
+
+# In[ ]:
+
+
+#Ratio of tax of property over parcel
+train_df['ValueRatio'] = train_df['taxvaluedollarcnt']/train_df['taxamount']
+
+#TotalTaxScore
+train_df['TaxScore'] = train_df['taxvaluedollarcnt']*train_df['taxamount']
+
+
+# **New features based on the address**
+
+# In[ ]:
+
+
+#Number of properties in the zip
+zip_count = train_df['regionidzip'].value_counts().to_dict()
+train_df['zip_count'] = train_df['regionidzip'].map(zip_count)
+
+#Number of properties in the city
+city_count = train_df['regionidcity'].value_counts().to_dict()
+train_df['city_count'] = train_df['regionidcity'].map(city_count)
+
+#Number of properties in the city
+region_count = train_df['regionidcounty'].value_counts().to_dict()
+train_df['county_count'] = train_df['regionidcounty'].map(region_count)
+
+
+# In[ ]:
+
+
+#--- Number of columns present in our dataframe now ---
+a = train_df.columns.tolist()
+print('Now there are {} columns in our dataframe'.format(len(a)))
+
+
+# **VISUALIZATIONS**
+# 
+# **1. Target Variable**
+
+# Obtaining the **absolute** error from the **`logerror`** column.
+
+# In[ ]:
+
+
+import math
+p = pd.DataFrame()
+p['val'] = np.exp(train_df['logerror'])
+print(p.head())
+
+plt.scatter(p['val'], p.val.values)
+plt.xlabel('No of observations', fontsize=12)
+plt.ylabel('vals', fontsize=12)
+plt.show()
+
+
+# We can clearly see 4 distinct outliers. 
+# 
+# Let us see the statistics of the column.
+
+# In[ ]:
+
+
+print(p.describe())
+
+
+# Let us **remove** those outliers and visualize the plot and see the statistics again
+
+# In[ ]:
+
+
+p = p[p['val'] < 40]
+
+plt.scatter(p['val'], p.val.values)
+plt.xlabel('No of observations', fontsize=12)
+plt.ylabel('vals', fontsize=12)
+plt.show()
+
+print(p.describe())
+
+
+# The ***standard deviation*** and the ***maximum*** value have dropped by quite a large margin.
+
+# In[ ]:
+
+
+#plt.hist(np.log(train_df['trip_duration']+25), bins = 25)
+plt.hist(train_df['logerror'], bins = 100)
+
+
+# **2. Correlations**
+
+# In[ ]:
+
+
+corr = train_df.corr()
+fig, ax = plt.subplots(figsize=(20, 20))
+ax.matshow(corr)
+ax.set_xticklabels(ax.xaxis.get_majorticklabels(), rotation=90)
+plt.xticks(range(len(corr.columns)), corr.columns, fontsize = 15)
+plt.yticks(range(len(corr.columns)), corr.columns, fontsize = 15)
+
+
+# **Number of houses built VS year**
+
+# In[ ]:
+
+
+alist = []
+alist = train_df['yearbuilt'].unique()
+alist.sort()
+
+
+# In[ ]:
+
+
+from matplotlib import pyplot
+fig, ax = pyplot.subplots(figsize=(20, 20))
+ax = sns.countplot(x = 'yearbuilt', data = train_df)
+ax.set(xlabel='Year Built', ylabel='Count')
+#weekend_day_list=['Weekend', 'Weekday']
+plt.xticks(range(len(alist)), alist, rotation=90)
+plt.show()
+
+
+# In[ ]:
+
+
+'''
+from matplotlib import pyplot
+fig, ax = pyplot.subplots(figsize=(20, 20))
+ax = sns.countplot(x = 'yearbuilt', data = train_df)
+ax.set(xlabel='Year Built', ylabel='Count')
+#weekend_day_list=['Weekend', 'Weekday']
+plt.xticks(range(len(alist)), alist, rotation=90)
+plt.show()
+''' 
+'''
+x = list(train_df['yearbuilt'])
+y = train_df['logerror']
+fig = plt.bar(x, y)
+plt.show()
+'''
+
+
+# **MEMORY CONSUMPTION**
+# 
+# Let us look into the memory consumption of our dataframe and see if we can reduce it efficiently.
+
+# In[ ]:
+
+
+#--- Memory usage of entire dataframe ---
+mem = train_df.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
+
+
+# In[ ]:
+
+
+#--- Memory usage of each column ---
+print(train_df.memory_usage()/ 1024**2)  #--- in MB ---
+
+
+# We can reduce memory for columns only having type **`int`** and type **`float`**, or columns having **numeric** values.
+
+# In[ ]:
+
+
+#--- List of columns that cannot be reduced in terms of memory size ---
+count = 0
+for col in train_df.columns:
+    if train_df[col].dtype == object:
+        count+=1
+        print (col)
+print('There are {} columns that cannot be reduced'.format(count))        
+
+
+# Reducing columns to type `int8` if possible
+
+# In[ ]:
+
+
+count = 0
+for col in train_df.columns:
+    if train_df[col].dtype != object:
+        if ((train_df[col].max() < 255) & (train_df[col].min() > -255)):
+            if((col != 'logerror')|(col != 'yearbuilt')|(col != 'xloc')|(col != 'yloc')|(col != 'zloc')):
+                count+=1
+                train_df[col] = train_df[col].astype(np.int8)
+                print (col)
+print(count)                
+                
+
+
+# In[ ]:
+
+
+#--- Memory usage of reduced dataframe ---
+mem = train_df.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
+
+
+# We just reduced the dataframe size **from** **~57MB to ~35MB**
+# 
+# *Splendid*
+# 
+# 
+
+# In[ ]:
+
+
+#--- Reducing memory of `float64` type columns to `float32` type columns
+
+count = 0
+for col in train_df.columns:
+    if train_df[col].dtype != object:
+        if train_df[col].dtype == float:
+            train_df[col] = train_df[col].astype(np.float32)
+            count+=1
+print('There were {} such columns'.format(count))
+
+
+# In[ ]:
+
+
+#--- Let us check the memory consumed again ---
+mem = train_df.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
+
+
+# WOW!!! Now reduced **from ~35MB to ~24MB !!!!**
+# 
+# Let us see what we can do with columns of type **`int64`**.
+
+# In[ ]:
+
+
+#print(train_df.dtypes)
+#print(train_df.dtypes.value_counts())
+col_int64 = []
+for col in train_df.columns:
+    if train_df[col].dtype == 'int64':
+        print(col)
+        col_int64.append(col)
+print(col_int64)
+
+
+# By checking the maximum and minimum values of these columns we can make sure which ones to convert to type **`int32`**.
+
+# In[ ]:
+
+
+for i in col_int64:
+    print('{} - {} and {}'.format(i, max(train_df[i]), min(train_df[i])) )
+
+
+# Clearly these three columns can be converted to type **`int32`**:
+# 
+# `zip_count`, `city_count` and `county_count`
+
+# In[ ]:
+
+
+train_df['zip_count'] = train_df['zip_count'].astype(np.int32)
+train_df['city_count'] = train_df['city_count'].astype(np.int32)
+train_df['county_count'] = train_df['county_count'].astype(np.int32)
+
+
+# In[ ]:
+
+
+#--- Let us check the memory consumed again ---
+mem = train_df.memory_usage(index=True).sum()
+print(mem/ 1024**2," MB")
+
+
+# KEY TAKEAWAYS FROM THE **PREVIOUS** KERNEL:
+# 
+# 1. There are so **many** **missing** values in this dataset.
+# 2. Understanding the **target** variable.
+# 3. Missing values in column `propertyzoningdesc` have been replaced with the **SAME** value throughout that column. If it does affect the performance at the time of modeling we must consider making more random values for them.
+# 4. Columns of type `float` have been analysed in detail(except for `censustractandblock` column, which I will later).
+# 5. We have lot of scope to create MANY new features!! (Houses along the coast/beach would cost more would'nt it?)
+# 
+# 
+# KEY TAKEAWAYS FROM THIS **UPDATED** KERNEL:
+# 
+# 1. Reduced the memory of the dataframe.
+# 
+# 
+# Since there are 2 months to the merger deadline. We have PLENTY of time to perform more analysis on the features!!!!
+# 
+
+# This Kernel is under regular update!
+# 
+# SO DO VISIT AGAIN!! 
+# 
+# Do give me suggestions on how to improve and ....
+# 
+# **UPVOTE  UPVOTE  UPVOTE ** (Ps. only if you think it deserves any.. :) )

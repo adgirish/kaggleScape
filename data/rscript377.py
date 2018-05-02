@@ -1,235 +1,414 @@
-# THANK YOU AND ACKNOLEDGEMENTS:
-# This kernel develops further the ideas suggested in:
-#   *  "lgbm starter - early stopping 0.9539" by Aloisio Dourado, https://www.kaggle.com/aloisiodn/lgbm-starter-early-stopping-0-9539/code
-#   * "LightGBM (Fixing unbalanced data)" by Pranav Pandya, https://www.kaggle.com/pranav84/lightgbm-fixing-unbalanced-data-auc-0-9787?scriptVersionId=2777211
-#   * "LightGBM with count features" by Ravi Teja Gutta, https://www.kaggle.com/rteja1113/lightgbm-with-count-features
-# I would like to extend my gratitude to these individuals for sharing their work.
+"""
+Based on supernova's code : https://www.kaggle.com/supernova117
+https://www.kaggle.com/supernova117/ftrl-with-validation-and-auc
+Modified by olivier : https://www.kaggle.com/ogrellier
+Addition : Multi processing with concurrent updates of weights
+"""
 
-# WHAT IS NEW IN THIS VERSION? 
-# In addition to some cosmetic changes to the code/LightGBM parameters, I am adding the 'ip' feature to and 
-# removing the 'day' feature from the training set, and using the last chunk of the training data to build the model.
-
-# What new is NICKS VERSION?
-#1 Added Day of Week Time Variable, A IP Count Variable, Feature Importance
-#2 Increased validation set to 15%
-#3 Imbalanced parameter for lgbm, lower learning rate
-#4 new variables- "ip_hour_channel", "ip_hour_os", "ip_hour_app","ip_hour_device"
-
-import pandas as pd
+from datetime import datetime
+from math import exp, log, sqrt
 import numpy as np
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
+import pandas as pd
+from sklearn.model_selection import KFold, train_test_split
+from sklearn.metrics import log_loss, roc_auc_score
+from numba import jit
+from multiprocessing import Process, Value, Array, Lock, Pool, cpu_count
 import gc
+import sys, os, psutil
+from sklearn.metrics import mean_squared_error
+from collections import defaultdict
+import functools
+import re
+import unidecode
+from itertools import combinations
 
-path = '../input/' 
-path_train = path + 'train.csv'
-path_test = path + 'test.csv'
+np.random.seed(4689571)
 
-train_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
-test_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time']
 
-dtypes = {
+class FTRLProximal(object):
+    """ Our main algorithm: Follow the regularized leader - proximal
+
+        In short,
+        this is an adaptive-learning-rate sparse logistic-regression with
+        efficient reg_alpha-reg_lambda-regularization
+
+        Reference:
+        http://www.eecs.tufts.edu/~dsculley/papers/ad-click-prediction.pdf
+    """
+
+    def __init__(self, id_name="id", target_name="target",
+                 alpha=1e-2, beta=1.0, reg_alpha=1e-5,
+                 reg_lambda=1.0, dim_expo=24,
+                 shuffle=True, n_jobs=2):
+        # parameters
+        self.alpha = alpha
+        self.beta = beta
+        self.reg_alpha = reg_alpha
+        self.reg_lambda = reg_lambda
+
+        self.id = id_name
+        self.target_name = target_name
+
+        # Check n_jobs
+        if n_jobs == -1:
+            self.cpus = cpu_count()
+        else:
+            self.cpus = min(n_jobs, cpu_count())
+
+        # feature related parameters
+        self.D = 2 ** dim_expo
+        self.shuffle = shuffle
+
+        # model
+        # n: squared sum of past gradients
+        # z: weights
+        # w: lazy weights
+        self.n = np.zeros(self.D)  # [0.] * self.D
+        self.z = np.random.uniform(0.0, 1.0, self.D)
+        self.w = {}
+        # Filters are not in use yet
+        self.filter = defaultdict(int)
+        self.min_occ = 2
+
+    def _logloss(self, p, y):
+        p = max(min(p, 1. - 10e-15), 10e-15)
+        return -log(p) if y == 1. else -log(1. - p)
+
+    def multi_fit(self, data, target, epochs=1, eval_x=None, eval_y=None):
+
+        hash_x = data.copy()
+        # Remove id if in the columns
+        if self.id in hash_x:
+            hash_x.drop(self.id, axis=1, inplace=True)
+
+        if eval_x is not None:
+            # val_hash_x = self.multi_hash(eval_x)
+            val_hash_x = eval_x.copy()
+            # Remove id if in the columns
+            if self.id in val_hash_x:
+                val_hash_x.drop(self.id, axis=1, inplace=True)
+
+        start = datetime.now()
+        count = len(data)
+        n_ = Array('d', self.n, lock=False)
+        z_ = Array('d', self.z, lock=False)
+        lock_ = Lock()
+        for e_ in range(epochs):
+            # Compute predictions
+            loss_train = Value('d', 0, lock=False)
+            full_data = np.hstack((target.values.reshape(-1, 1), hash_x.values))
+            # Here we use Process directly since map does not support shared objects
+            # z and n will be updated wildly, no lock has been implemented
+            processes = [
+                Process(target=self._train_samples,
+                        args=(partial_data, z_, n_, lock_, loss_train))
+                for partial_data in np.array_split(full_data, self.cpus)
+            ]
+
+            for p in processes:
+                p.start()
+
+            while processes:
+                processes.pop().join()
+
+            if eval_x is not None:
+                # Compute validation losses
+                p = Pool(self.cpus)
+                # Shared memory is not supported by map and z_ and n_ should be read only here
+                # So we create np.arrays form shared memory objects
+                oof_v = p.map(functools.partial(self._predict_samples, z_=np.array(z_), n_=np.array(n_)),
+                              np.array_split(val_hash_x.values, self.cpus))
+                val_preds = np.hstack(oof_v)
+                p.close()
+                p.join()
+                val_logloss = log_loss(eval_y, val_preds)
+                val_auc = roc_auc_score(eval_y, val_preds)
+                # Display current training and validation losses
+                # t_logloss stands for current train_logloss, v for valid
+                print('time_used:%s\tepoch: %-4drows:%d\tt_logloss:%.5f\tv_logloss:%.5f\tv_auc:%.6f'
+                      % (datetime.now() - start, e_, count + 1, (loss_train.value / count), val_logloss, val_auc))
+                del val_preds
+                del oof_v
+                gc.collect()
+            else:
+                print('time_used:%s\tepoch: %-4drows:%d\tt_logloss:%.5f'
+                      % (datetime.now() - start, e_, count + 1, (loss_train.value / count)))
+
+            # del loss_v
+            # print(z_)
+            gc.collect()
+
+        self.n = np.array(n_)
+        self.z = np.array(z_)
+
+    def _train_samples(self, y_data, z_, n_, lock_, loss_):
+        # retrieve target and data
+        target_ = y_data[:, 0]
+        data_ = y_data[:, 1:]
+        # print(data_[:10])
+        # loss_train = 0.
+        idx = np.arange(len(data_))
+        if self.shuffle:
+            np.random.shuffle(idx)
+        
+        y = target_[idx]
+        for count, x in enumerate(data_[idx]):
+            # Train on current sample
+            p = self._train_single(x, y[count], z_, n_, lock_)
+            # Compute cumulated loss
+            loss_.value += self._logloss(p, y[count])
+            # print(loss_.value)
+        return loss_.value
+
+    def _train_single(self, x, y, z_, n_, lock_):
+        # First get the indices
+        indices = [i_ for i_ in self._indices(x)]
+
+        # Compute prediction - does not need a lock
+        p, w = self._predict_single(x, z_, n_, indices)
+
+        # Update weights
+        # gradient under log loss, remember all x are equal to 1 once hashed
+        # 1 + y = 2 for is_attribute = 1 and 0 for is_attribute = 0 
+        # so increase gradient for positives (if I understoof Scirpus' idea correctly)
+        g = (p - y)  # * (1 + y)
+
+        # update z and n - this part needs a lock
+        # Full update must be done under the lock
+        # with lock_:
+        for i in indices:
+            # Increase index occurences
+            # self.filter[i] += 1
+            # If enough occurences then update
+            # if self.filter[i] > self.min_occ:
+            sigma = (sqrt(n_[i] + g * g) - sqrt(n_[i])) / self.alpha
+            z_[i] += g - sigma * w[i]
+            n_[i] += g * g
+
+        return p
+
+    def _predict_single(self, x, z_, n_, indices=None):
+        """
+        Get probability estimation for input x
+        The input is expected to be hashed
+        outputs the probability and individual values
+        """
+
+        # compute probability
+        w = {}
+
+        # wTx is the inner product of w and x
+        wTx = 0.
+        # print(x)
+        for i in indices:
+            # sign = -1. if z[i] < 0 else 1.  # get sign of z[i]
+
+            # build w on the fly using z and n, hence the name - lazy weights
+            # we are doing this at prediction instead of update time is because
+            # this allows us for not storing the complete w
+            # if sign * z[i] <= reg_alpha:
+            if abs(z_[i]) <= self.reg_alpha:  # or (self.filter[i] <= self.min_occ):
+                # w[i] vanishes due to reg_alpha regularization
+                w[i] = 0.
+            else:
+                # apply prediction time reg_alpha, reg_lambda regularization to z and get w
+                w[i] = (np.sign(z_[i]) * self.reg_alpha - z_[i]) / \
+                       ((self.beta + sqrt(n_[i])) / self.alpha + self.reg_lambda)
+
+            wTx += w[i]
+
+        # bounded sigmoid function, this is the probability estimation
+        proba = 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
+
+        return proba, w
+
+    def predict_proba(self, df_dat):
+        # Compute validation losses
+        p = Pool(self.cpus)
+        # Shared memory is not supported by map and z_ and n_ should be read only here
+        # So we create np.arrays form shared memory objects
+        oof_v = p.map(functools.partial(self._predict_samples,
+                                        z_=self.z,
+                                        n_=self.n),
+                      np.array_split(df_dat.values, self.cpus))
+        preds = np.hstack(oof_v)
+        p.close()
+        p.join()
+
+        return preds
+
+    def _predict_samples(self, np_dat, z_, n_):
+        preds = np.zeros(len(np_dat))
+        for i, row in enumerate(np_dat):
+            indices = [i_ for i_ in self._indices(row)]
+            preds[i], w_ = self._predict_single(row, z_, n_, indices)
+        return preds
+
+    def _indices(self, x):
+        """ A helper generator that yields the indices in x
+            The purpose of this generator is to make the following
+            code a bit cleaner when doing feature interaction.
+            x[0] is the ip
+            x[1] is the app
+            x[2] is the device
+            x[3] is the os
+            x[4] is the channel
+            x[5] is the time
+            x[6] is day of week
+            x[7] is day of year
+            x[8] is week of year
+            x[9] is days to the end of month
+            x[10] is days to end of year
+        """
+        # print(x)
+
+        # first yield index of the bias term
+        yield 0
+        # yield ip
+        yield abs(hash("ip_" + str(x[0]))) % self.D
+        # yield app
+        yield abs(hash("app_" + str(x[1]))) % self.D
+        # yield device
+        yield abs(hash("dev_" + str(x[2]))) % self.D
+        # yield os
+        yield abs(hash("os_" + str(x[3]))) % self.D
+        # yield channel
+        yield abs(hash("channel_" + str(x[4]))) % self.D
+        # Now yield time
+        time1 = x[5].split()
+        date = time1[0]
+        time = time1[1]
+        # First yield date
+        # pref = ["year_", "month_", "dom_"]
+        # for i_t, tok in enumerate(date.split("-")):
+        #     yield abs(hash(pref[i_t] + str(tok))) % self.D
+        yield abs(hash("dom_" + date.split("-")[-1])) % self.D
+        # Then yield time
+        pref = ["hour_", "min_", "sec_"]
+        for i_t, tok in enumerate(date.split(":")):
+            yield abs(hash(pref[i_t] + str(tok))) % self.D
+        # Yield dow
+        yield abs(hash("dow_" + str(x[6]))) % self.D
+        # Yield doy
+        # yield abs(hash("doy_" + str(x[7]))) % self.D
+        # Yield woy
+        # yield abs(hash("woy_" + str(x[8]))) % self.D
+        # Yield remaining days in month
+        # yield abs(hash("dteom_" + str(x[9]))) % self.D
+        # Yield remaining days in year
+        # yield abs(hash("dteoy_" + str(x[10]))) % self.D
+
+        # Now yield combinations
+        # App + Channel
+        yield abs(hash("app_chan_" + str(x[1]) + "_" + str(x[4]))) % self.D
+        # OS + Channel
+        yield abs(hash("os_chan_" + str(x[3]) + "_" + str(x[4]))) % self.D
+        # App + OS + Channel
+        yield abs(hash("app_os_chan_" + str(x[1]) + "_" + str(x[3]) + "_" + str(x[4]))) % self.D
+        # IP + App
+        yield abs(hash("ip_app_" + str(x[0]) + "_" + str(x[1]))) % self.D
+
+
+def cpuStats(disp=""):
+    """ @author: RDizzl3 @address: https://www.kaggle.com/rdizzl3"""
+    pid = os.getpid()
+    py = psutil.Process(pid)
+    memoryUse = py.memory_info()[0] / 2. ** 30
+    print("%s MEMORY USAGE for PID %10d : %.3f" % (disp, pid, memoryUse))
+
+
+def add_time_related_info(df):
+    # Hour, minutes and seconds are already used by pure hashing
+    # year, month and day of month as well
+    df["datetime"] = pd.to_datetime(df["click_time"])
+    df["dow"] = df["datetime"].dt.dayofweek
+    df["doy"] = df["datetime"].dt.dayofyear
+    df["woy"] = df["datetime"].dt.week
+    df["dteom"] = df["datetime"].dt.daysinmonth - df["datetime"].dt.day
+    daysinyear = df["doy"].mod(4).apply(lambda x: 365 if x>0 else 366)
+    df["dteoy"] = daysinyear - df["doy"]
+    # df["dteoy"] =
+    del df["datetime"]
+    del daysinyear
+    gc.collect()
+
+def main():
+    train_file, trn_nb_samples, chunksize = "../input/train.csv", 184903890, 20000000
+    # train_file, trn_nb_samples, chunksize = "../input/train_sample.csv", 100000, 50000
+    
+    test_file = "../input/test.csv"
+    
+    nb_epochs = 1
+    
+    dtypes = {
         'ip'            : 'uint32',
         'app'           : 'uint16',
         'device'        : 'uint16',
         'os'            : 'uint16',
         'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
-        
-skip = range(1, 140000000)
-print("Loading Data")
-train = pd.read_csv(path_train, skiprows=skip, dtype=dtypes,
-        header=0,usecols=train_cols,parse_dates=["click_time"])#.sample(1000)
-test = pd.read_csv(path_test, dtype=dtypes, header=0,
-        usecols=test_cols,parse_dates=["click_time"])#.sample(1000)
-
-len_train = len(train)
-print('The initial size of the train set is', len_train)
-print('Binding the training and test set together...')
-train=train.append(test)
-
-del test
-gc.collect()
-
-print("Creating new time features: 'hour' and 'day'...")
-train['hour'] = train["click_time"].dt.hour.astype('uint8')
-train['day'] = train["click_time"].dt.day.astype('uint8')
-
-gc.collect()
-
-print("Creating new count features: 'n_channels', 'ip_app_count', 'ip_app_os_count'...")
-
-print('Computing the number of channels associated with ')
-
-# Count by IP,DAY,HOUR
-print('a given IP address within each hour...')
-n_chans = train[['ip','day','hour','channel']].groupby(by=['ip','day',
-          'hour'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_day_hour'})
-train = train.merge(n_chans, on=['ip','day','hour'], how='left')
-del n_chans
-gc.collect()
-
-# Count by IP and APP
-print('a given IP address and app...')
-n_chans = train[['ip','app', 'channel']].groupby(by=['ip', 
-          'app'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_count'})
-train = train.merge(n_chans, on=['ip','app'], how='left')
-del n_chans
-gc.collect()
-
-# Count by IP APP OS
-print('a given IP address, app, and os...')
-n_chans = train[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 
-          'os'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_os_count'})
-train = train.merge(n_chans, on=['ip','app', 'os'], how='left')
-del n_chans
-gc.collect()
-
-
-#######
-# Added
-n_chans = train[['ip','channel']].groupby(by=['ip'])[['channel']].count().reset_index().rename(columns={'channel': 'count_by_ip'})
-print('Merging the channels data with the main data set...')
-train = train.merge(n_chans, on=['ip'], how='left')
-
-# Count by IP HOUR CHANNEL
-n_chans = train[['ip','hour','channel','os']].groupby(by=['ip','hour','channel'
-           ])[['os']].count().reset_index().rename(columns={'os': 'ip_hour_channel'})
-train = train.merge(n_chans, on=['ip','hour','channel'], how='left')
-del n_chans
-gc.collect()
-
-# Count by IP HOUR Device
-n_chans = train[['ip','hour','channel','os']].groupby(by=['ip','hour','os'
-           ])[['channel']].count().reset_index().rename(columns={'channel': 'ip_hour_os'})
-train = train.merge(n_chans, on=['ip','hour','os'], how='left')
-del n_chans
-gc.collect()
-
-n_chans = train[['ip','hour','channel','app']].groupby(by=['ip','hour','app'
-           ])[['channel']].count().reset_index().rename(columns={'channel': 'ip_hour_app'})
-train = train.merge(n_chans, on=['ip','hour','app'], how='left')
-del n_chans
-gc.collect()
-
-n_chans = train[['ip','hour','channel','device']].groupby(by=['ip','hour','device'
-           ])[['channel']].count().reset_index().rename(columns={'channel': 'ip_hour_device'})
-train = train.merge(n_chans, on=['ip','hour','device'], how='left')
-del n_chans
-gc.collect()
-#######
-
-print("Adjusting the data types of the new count features... ")
-train.info()
-train['ip_day_hour'] = train['ip_day_hour'].astype('uint16')
-train['ip_app_count'] = train['ip_app_count'].astype('uint16')
-train['ip_app_os_count'] = train['ip_app_os_count'].astype('uint16')
-
-# added..
-train['count_by_ip'] = train['count_by_ip'].astype('uint16')
-train['ip_hour_channel'] = train['ip_hour_channel'].astype('uint16')
-train['ip_hour_os'] = train['ip_hour_os'].astype('uint16')
-train['ip_hour_app'] = train['ip_hour_app'].astype('uint16')
-train['ip_hour_device'] = train['ip_hour_device'].astype('uint16')
-
-test = train[len_train:]
-print('The size of the test set is ', len(test))
-
-r = 0.05 # the fraction of the train data to be used for validation
-val = train[(len_train-round(r*len_train)):len_train]
-print('The size of the validation set is ', len(val))
-
-train = train[:(len_train-round(r*len_train))]
-print('The size of the train set is ', len(train))
-
-target = 'is_attributed'
-train[target] = train[target].astype('uint8')
-train.info()
-
-predictors = ['ip', 'device', 'app', 'os', 'channel', 'hour', # Starter Vars, Then new features below
-              'ip_day_hour','count_by_ip','ip_app_count', 'ip_app_os_count',
-              "ip_hour_channel", "ip_hour_os", "ip_hour_app","ip_hour_device"]
-categorical = ['ip', 'app', 'device', 'os', 'channel', 'hour']
-gc.collect()
-
-print("Preparing the datasets for training...")
-
-params = {
-    'boosting_type': 'gbdt',
-    'objective': 'binary',
-    'metric': 'auc',
-    'learning_rate': 0.05,
-    'num_leaves': 255,  
-    'max_depth': 9,  
-    'min_child_samples': 100,  
-    'max_bin': 100,  
-    'subsample': 0.7,  
-    'subsample_freq': 1,  
-    'colsample_bytree': 0.7,  
-    'min_child_weight': 0,  
-    'subsample_for_bin': 200000,  
-    'min_split_gain': 0,  
-    'reg_alpha': 0,  
-    'reg_lambda': 0,  
-   # 'nthread': 8,
-    'verbose': 0,
-    'is_unbalance': True
-    #'scale_pos_weight':99 
+        'is_attributed' : 'uint8'
     }
     
-dtrain = lgb.Dataset(train[predictors].values, label=train[target].values,
-                      feature_name=predictors,
-                      categorical_feature=categorical
-                      )
-dvalid = lgb.Dataset(val[predictors].values, label=val[target].values,
-                      feature_name=predictors,
-                      categorical_feature=categorical
-                      )
-                      
-evals_results = {}
+    for epoch in range(nb_epochs):
+        # Create FTRL model
+        model = FTRLProximal(
+            id_name="id",
+            target_name="is_attributed",
+            alpha=.05,  # Learning rate
+            beta=0.1,  # Smoothing parameter for adaptive learning
+            reg_alpha=0.,  # L1 regularization
+            reg_lambda=0.,  # L2 regularization
+            dim_expo=24,  # Hashing space dimension
+            shuffle=True,
+            n_jobs=4
+        )
+        
+        # Read train data in chuncks and train FTRL
+        
+        for i_c, df in enumerate(pd.read_csv(train_file, chunksize=chunksize, iterator=True, dtype=dtypes)):
+            print("%10d / %10d read so far meaning %6.3f %%" 
+                  % (i_c*chunksize, trn_nb_samples, 100*i_c*chunksize/trn_nb_samples))
+            # Get target and drop it
+            y = df["is_attributed"]
+            del df["is_attributed"]
+            
+            add_time_related_info(df)
+            
+            features = [f_ for f_ in df 
+                        if f_ not in ["click_id", "is_attributed", "attributed_time"]]
+            
+            # Train 
+            model.multi_fit(
+                df[features], y,
+                epochs=4,
+            )
+            
+    # Now read the test data and predict
+    print("Reading test dataset")
+    # sub = pd.read_csv(test_file, dtype=dtypes)
+    # print(sub.shape)
+    print("Predicting for test data")
+    sub_preds = None
+    sub_ids = None
+    sub_nb_samples = 18790469
+    chunksize = 5000000
+    for i_c, df in enumerate(pd.read_csv(test_file, chunksize=chunksize, iterator=True, dtype=dtypes)):
+        print("%10d / %10d read so far meaning %6.3f %%" 
+              % (i_c*chunksize, sub_nb_samples, 100*i_c*chunksize/sub_nb_samples))
+        add_time_related_info(df)
+        if sub_preds is None:
+            sub_preds = model.predict_proba(df[features])  # .values)
+            sub_ids = df["click_id"].values
+        else:
+            sub_preds = np.hstack((sub_preds, model.predict_proba(df[features])))  # .values)))
+            sub_ids = np.hstack((sub_ids, df["click_id"].values))
+    print(sub_preds.shape)
+    
+    sub = pd.DataFrame()
+    sub["is_attributed"] = sub_preds
+    sub["click_id"] = sub_ids
+    sub[["click_id", "is_attributed"]].to_csv("ftrl_submission.csv", index=False, float_format="%.6f")
 
-print("Training the model...")
-
-lgb_model = lgb.train(params, 
-                 dtrain, 
-                 valid_sets=[dtrain, dvalid], 
-                 valid_names=['train','valid'], 
-                 evals_result=evals_results, 
-                 num_boost_round=1000,
-                 early_stopping_rounds=30,
-                 verbose_eval=50, 
-                 feval=None)
-
-del train
-del val
-gc.collect()
-
-# Nick's Feature Importance Plot
-import matplotlib.pyplot as plt
-f, ax = plt.subplots(figsize=[7,10])
-lgb.plot_importance(lgb_model, ax=ax, max_num_features=len(predictors))
-plt.title("Light GBM Feature Importance")
-plt.savefig('feature_import.png')
-
-# Feature names:
-print('Feature names:', lgb_model.feature_name())
-# Feature importances:
-print('Feature importances:', list(lgb_model.feature_importance()))
-
-feature_imp = pd.DataFrame(lgb_model.feature_name(),list(lgb_model.feature_importance()))
-
-print("Preparing data for submission...")
-
-submit = pd.read_csv(path_test, dtype='int', usecols=['click_id'])
-
-print("Predicting the submission data...")
-
-submit['is_attributed'] = lgb_model.predict(test[predictors], num_iteration=lgb_model.best_iteration)
-
-print("Writing the submission data into a csv file...")
-
-submit.to_csv("submission.csv",index=False)
-
-print("All done...")
+if __name__ == '__main__':
+    gc.enable()
+    main()

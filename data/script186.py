@@ -1,1068 +1,432 @@
 
 # coding: utf-8
 
-# # FIFA 18 Data Exploration and Visualization With Python
-# ***
+# Like Nitin Surya's kernel but excluding same-week reservations.
 
-# ***Piotr Skalski - 14.10.2017***
+# In addition to the 3 models used in the *surpise me 2!* script, I have added a feed forward neural network for the prediction of visitors.
 
-# # Table of Contents
+# In[ ]:
 
-# * [1. Importing dataset and preparation of data](#importing_dataset_and_preparation_of_data) <br>
-#    * [1.1. Load dataset](#load_dataset) <br>
-#    * [1.2. Let's summarize the Dataset](#lets_summarize_the_dataset) <br>
-#    * [1.3. Data preprocessing](#data_preprocessing) <br>
-#       * [1.3.1. Numeric columns of Value and Wage](#numeric_columns_of_value_and_wage) <br>
-#       * [1.3.2. Categorical columns of Value and Wage](#categorical_columns_of_value_and_wage) <br>
-#       * [1.3.3. Potential points](#potential_points) <br>
-#       * [1.3.4. Preferred position](#preferred_position) <br>
-#       * [1.3.5. Continent](#continent) <br>
-# <br>
-# * [2. Data Visualization Age/Overall/Potential](#data_visualization_age_overall_potential) <br>
-#    * [2.1. Grouping players by Nationality](#grouping_players_by_nationality) <br>
-#    * [2.2. Top 20 players value](#top_20_players_value) <br>
-#    * [2.3. Grouping players by Age](#grouping_players_by_age) <br>
-#    * [2.4. Grouping players by Overall](#grouping_players_by_overall) <br>
-#    * [2.5. Age vs Mean Overall Rating](#age_vs_mean_overall_rating) <br>
-#    * [2.6. Age vs Potential Points](#age_vs_potential_points) <br>
-#    * [2.7. Grouping players by Preffered Position](#grouping_players_by_preffered_position) <br>
-# <br>
-# * [3. Data Visualization Value/Wage](#data_value_wage) <br>
-#    * [3.1. Ten players with highest value](#ten_players_with_highest_value) <br>
-#    * [3.2. Ten players with highest wage](#ten_players_with_highest_wage) <br>
-#    * [3.3. Player value distribution](#player_value_distribution) <br>
-#    * [3.4. Over or Under Mean Value](#over_or_under_mean_value) <br>
-#    * [3.5. Over or Under Mean Wage](#over_or_under_mean_wage) <br>
-#    * [3.6. Players Value vs Age & Overall](#players_value_vs_age_overall) <br>
-#    * [3.7. Players Wage vs Age & Overall](#players_wage_vs_age_overall) <br>
-#    * [3.8. Overall vs Wage and Value](#overall_vs_wage_and_value) <br>
-#    * [3.9. Player Position vs Value](#player_position_vs_value) <br>
-#    * [3.10. Top 1000 players Age vs. Mean Value](#top_1000_players_age_vs_mean_value) <br>
-#    * [3.11. Clubs value](#clubs_value) <br>
 
-# <img src='https://compass-ssl.xbox.com/assets/e3/8a/e38a0652-17a2-4f64-80e0-8d69f0223126.jpg?n=FF18_gallery-desktop_1154x649_03.jpg'>
+"""
+Contributions from:
+DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
+https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
+JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
+https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
+hklee - weighted mean comparisons, LB 0.497, 1ST
+https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+tunguz - Surprise Me 2!
+https://www.kaggle.com/tunguz/surprise-me-2/code
 
-# <b>NOTE:</b> First of all let's import essential libraries:
+Also all comments for changes, encouragement, and forked scripts rock
 
-# In[1]:
-
-
-import numpy as np
-import pandas as pd
-
-import seaborn as sns
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-
-
-# ## 1. Importing dataset and preparation of data
-# <a id="importing_dataset_and_preparation_of_data"></a>
-
-# ### 1.1 Load dataset
-# <a id="load_dataset"></a>
-
-# In[2]:
-
-
-# Importing the dataset
-dataset = pd.read_csv('../input/CompleteDataset.csv', header = 0)
-
-
-# <b>NOTE:</b> Let's select the most interesting columns from loaded dataset:
-
-# In[3]:
-
-
-interesting_columns = [
-    'Name', 
-    'Age', 
-    'Photo', 
-    'Nationality', 
-    'Overall', 
-    'Potential', 
-    'Club', 
-    'Value', 
-    'Wage', 
-    'Preferred Positions'
-]
-dataset = pd.DataFrame(dataset, columns=interesting_columns)
-
-
-# ### 1.2. Let's summarize the Dataset
-# <a id="lets_summarize_the_dataset"></a>
-
-# In[4]:
-
-
-dataset.head(3)
-
-
-# In[5]:
-
-
-dataset.info()
-
-
-# ### 1.3. Data preprocessing
-# <a id="data_preprocessing"></a>
-
-# ### 1.3.1. Numeric columns of Value and Wage
-# <a id="numeric_columns_of_value_and_wage"></a>
-
-# <b>NOTE:</b> Right away we can see that values in columns: 'Value' and 'Wage' aren't numeric but objects. Firstly we need to preprocess the data to make it usable for us. We will use short supporting function to convert values in those two columns into numbers. We will end up with two new columns 'ValueNum' and 'WageNum' that will contain numeric values.
-
-# In[6]:
-
-
-# Supporting function for converting string values into numbers
-def str2number(amount):
-    if amount[-1] == 'M':
-        return float(amount[1:-1])*1000000
-    elif amount[-1] == 'K':
-        return float(amount[1:-1])*1000
-    else:
-        return float(amount[1:])
-    
-
-#dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
-dataset['ValueNum'] = dataset['Value'].apply(lambda x: str2number(x))
-dataset['WageNum'] = dataset['Wage'].apply(lambda x: str2number(x))
-
-
-# ### 1.3.2. Categorical columns of Value and Wage
-# <a id="categorical_columns_of_value_and_wage"></a>
-
-# <b>NOTE:</b> We will also add two additional columns: 'ValueCategory' and 'WageCategory'. We will use those collumns to divide players into ten classes basing on their value and incom.
-
-# In[7]:
-
-
-max_value = float(dataset['ValueNum'].max() + 1)
-max_wage = float(dataset['WageNum'].max() + 1)
-
-# Supporting function for creating category columns 'ValueCategory' and 'WageCategory'
-def mappingAmount(x, max_amount):
-    for i in range(0, 10):
-        if x >= max_amount/10*i and x < max_amount/10*(i+1):
-            return i
-        
-dataset['ValueCategory'] = dataset['ValueNum'].apply(lambda x: mappingAmount(x, max_value))
-dataset['WageCategory'] = dataset['WageNum'].apply(lambda x: mappingAmount(x, max_wage))
-
-
-# <b>NOTE:</b> Next we add columns: 'OverMeanValue' and 'OverMeanWage'. They will contain two categories 0 and 1 and inform if player value/wage is highier then mean value.
-
-# In[8]:
-
-
-mean_value = float(dataset["ValueNum"].mean())
-mean_wage = float(dataset["WageNum"].mean())
-
-# Supporting function for creating category columns 'OverMeanValue' and 'OverMeanWage'
-def overValue(x, limit):
-    if x > limit:
-        return 1
-    else:
-        return 0
-    
-dataset['OverMeanValue'] = dataset['ValueNum'].apply(lambda x: overValue(x, mean_value))
-dataset['OverMeanWage'] = dataset['WageNum'].apply(lambda x: overValue(x, mean_wage))
-
-
-# ### 1.3.3. Potential points
-# <a id="potential_points"></a>
-
-# In[9]:
-
-
-dataset['PotentialPoints'] = dataset['Potential'] - dataset['Overall']
-
-
-# ### 1.3.4. Preferred position
-# <a id="preferred_position"></a>
-
-# <b>NOTE:</b> We will add two more columns. To make things simpler we select first position from list as preferred and save it in 'Position' column. We will also count number of alternative positions and store it in column 'PositionNum'.
-
-# In[10]:
-
-
-dataset['Position'] = dataset['Preferred Positions'].str.split().str[0]
-
-
-# In[11]:
-
-
-dataset['PositionNum'] = dataset['Preferred Positions'].apply(lambda x: len(x.split()))
-
-
-# ### 1.3.5. Continent
-# <a id="continent"></a>
-
-# In[12]:
-
-
-# List of countries for each continent
-continents = {
-    'Africa' : ['Algeria','Angola','Benin','Botswana','Burkina','Burundi','Cameroon','Cape Verde','Central African Republic','Chad','Comoros','Congo','DR Congo','Djibouti','Egypt','Equatorial Guinea','Eritrea','Ethiopia','Gabon','Gambia','Ghana','Guinea','Guinea Bissau','Ivory Coast','Kenya','Lesotho','Liberia','Libya','Madagascar','Malawi','Mali','Mauritania','Mauritius','Morocco','Mozambique','Namibia','Niger','Nigeria','Rwanda','Sao Tome and Principe','Senegal','Seychelles','Sierra Leone','Somalia','South Africa','South Sudan','Sudan','Swaziland','Tanzania','Togo','Tunisia','Uganda','Zambia','Zimbabwe','Burkina Faso'],
-    'Antarctica' : ['Fiji','Kiribati','Marshall Islands','Micronesia','Nauru','New Zealand','Palau','Papua New Guinea','Samoa','Solomon Islands','Tonga','Tuvalu','Vanuatu'],
-    'Asia' : ['Afghanistan','Bahrain','Bangladesh','Bhutan','Brunei','Burma (Myanmar)','Cambodia','China','China PR','East Timor','India','Indonesia','Iran','Iraq','Israel','Japan','Jordan','Kazakhstan','North Korea','South Korea','Korea Republic','Korea DPR','Kuwait','Kyrgyzstan','Laos','Lebanon','Malaysia','Maldives','Mongolia','Nepal','Oman','Pakistan','Palestine','Philippines','Qatar','Russian Federation','Saudi Arabia','Singapore','Sri Lanka','Syria','Tajikistan','Thailand','Turkey','Turkmenistan','United Arab Emirates','Uzbekistan','Vietnam','Yemen','Russia'],
-    'Australia Oceania' : ['Australia','New Caledonia'],
-    'Europe' : ['Albania','Andorra','Armenia','Austria','Azerbaijan','Belarus','Belgium','Bosnia Herzegovina','Bulgaria','Croatia','Cyprus','Czech Republic','Denmark','Estonia','Finland','France','FYR Macedonia','Georgia','Germany','Greece','Hungary','Iceland','Ireland','Italy','Kosovo','Latvia','Liechtenstein','Lithuania','Luxembourg','Macedonia','Malta','Moldova','Monaco','Montenegro','Netherlands','Northern Ireland','Norway','Poland','Portugal','Romania','San Marino','Scotland','Serbia','Slovakia','Slovenia','Spain','Sweden','Switzerland','Ukraine','England','Vatican City','Republic of Ireland','Wales'],
-    'North America' : ['Antigua and Barbuda','Bahamas','Barbados','Belize','Canada','Costa Rica','Cuba','Dominica','Dominican Republic','El Salvador','Grenada','Guatemala','Haiti','Honduras','Jamaica','Mexico','Nicaragua','Panama','Saint Kitts and Nevis','Saint Lucia','Saint Vincent and the Grenadines','Trinidad and Tobago','United States'],
-    'South America' : ['Argentina','Bolivia','Brazil','Chile','Colombia','Curacao','Ecuador','Guyana','Paraguay','Peru','Suriname','Trinidad & Tobago','Uruguay','Venezuela']
-}
-
-# Function matching continent to countries
-def find_continent(x, continents_list):
-    # Iteration over 
-    for key in continents_list:
-        if x in continents_list[key]:
-            return key
-    return np.NaN
-
-dataset['Continent'] = dataset['Nationality'].apply(lambda x: find_continent(x, continents))
-
-
-# ## 2. Data Visualization Age/Overall/Potential
-# <a id="data_visualization_age_overall_potential"></a>
-
-# ### 2.1. Grouping players by Nationality
-# <a id="grouping_players_by_nationality"></a>
-
-# > <b>NOTE: </b> This chapter is inspired by <a href="https://www.kaggle.com/arthurtok/zoomable-circle-packing-via-d3-js-in-ipython">Zoomable Circle Packing via D3.js in IPython</a>. Thank you.
-
-# In[13]:
-
-
-from IPython.core.display import display, HTML, Javascript
-from string import Template
-import json
-import IPython.display
-
-
-# In[14]:
-
-
-top_1000 = dataset.sort_values("Overall", ascending=False).reset_index().head(1000)[["Name", "Nationality", "Continent", "Overall", "Club"]]
-
-
-# In[15]:
-
-
-Africa = top_1000[top_1000["Continent"]=='Africa']
-Antarctica = top_1000[top_1000["Continent"]=='Antarctica']
-Asia = top_1000[top_1000["Continent"]=='Asia']
-Australia_Oceania =  top_1000[top_1000["Continent"]=='Australia_Oceania']
-Europe = top_1000[top_1000["Continent"]=='Europe']
-North_america = top_1000[top_1000["Continent"]=='North_america']
-South_america = top_1000[top_1000["Continent"]=='South_america']
-
-data = {}
-data["name"] = "DISTRIBUTION OF TOP 1000 PLAERS DUE TO NATIONALITY"
-data["children"] = []
-# Split dataset into Continents:
-for continent in top_1000['Continent'].unique():
-    
-    continent_set = top_1000[top_1000["Continent"]==continent]
-    continent_dict = {}
-    continent_dict["name"] = continent
-    continent_dict["children"] = []
-    
-    for country in continent_set['Nationality'].unique():
-        
-        countries_set = continent_set[continent_set['Nationality']==country][['Name', 'Overall']]
-        
-        country_dict = {}
-        country_dict["name"] = country
-        country_dict["children"] = []
-        
-        for player in countries_set.values:
-            
-            player_dict = {}
-            player_dict['name'] = player[0]
-            player_dict['size'] = player[1]
-            country_dict["children"].append(player_dict)
-            
-        continent_dict['children'].append(country_dict)
-        
-    data["children"].append(continent_dict)
-
-
-# In[16]:
-
-
-North_america_dict = {}
-North_america_dict['name'] = 'North_america'
-North_america_dict['children'] = []
-for country in North_america['Nationality'].unique():
-    list_of_countries = North_america[North_america['Nationality']==country][['Name', 'Overall']].rename(columns={'Name': 'name', 'Overall': 'size'})
-    tmp_dict = {}
-    tmp_dict["name"] = country
-    tmp_dict["children"] = []
-    for row in list_of_countries.values:
-        player_tmp = {}
-        player_tmp['name'] = row[0]
-        player_tmp['size'] = row[1]
-        tmp_dict["children"].append(player_tmp)
-    North_america_dict['children'].append(tmp_dict)
-
-
-# In[17]:
-
-
-html_string = """
-<!DOCTYPE html>
-<meta charset="utf-8">
-<style>
-
-.node {
-  cursor: pointer;
-}
-
-.node:hover {
-  stroke: #000;
-  stroke-width: 1.5px;
-}
-
-.node--leaf {
-  fill: white;
-}
-
-.label {
-  font: 11px "Helvetica Neue", Helvetica, Arial, sans-serif;
-  text-anchor: middle;
-  text-shadow: 0 1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 -1px 0 #fff;
-}
-
-.label,
-.node--root,
-.node--leaf {
-  pointer-events: none;
-}
-
-</style>
-<svg width="800" height="800"></svg>
+Keep the Surprise Going
 """
 
+import glob, re
+import numpy as np
+import pandas as pd
+from sklearn import *
+from datetime import datetime
+from xgboost import XGBRegressor
+
+from keras.layers import Embedding, Input, Dense
+import keras
+import keras.backend as K
+
+import matplotlib.pyplot as plt
+
+
+# In[ ]:
+
+
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
+
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_dow'] = data[df]['visit_datetime'].dt.dayofweek
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    # Exclude same-week reservations
+    data[df] = data[df][data[df]['reserve_datetime_diff'] > data[df]['visit_dow']]
+    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['doy'] = data['tra']['visit_date'].dt.dayofyear
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['week'] = data['tra']['visit_date'].dt.week
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['doy'] = data['tes']['visit_date'].dt.dayofyear
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['week'] = data['tes']['visit_date'].dt.week
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+
+#sure it can be compressed...
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+#tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
+#stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+# NEW FEATURES FROM Georgii Vyshnia
+stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
+stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
+lbl = preprocessing.LabelEncoder()
+for i in range(10):
+    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
+
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+
+train = pd.merge(train, stores, how='inner', on=['air_store_id','dow']) 
+test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
+
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+
+train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
 
-# In[18]:
+train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
+train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
+train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
 
+test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
+test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
+test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
 
-js_string="""
- require.config({
-    paths: {
-        d3: "https://d3js.org/d3.v4.min"
-     }
- });
-
-  require(["d3"], function(d3) {
-
-   console.log(d3);
-
-var svg = d3.select("svg"),
-    margin = 20,
-    diameter = +svg.attr("width"),
-    g = svg.append("g").attr("transform", "translate(" + diameter / 2 + "," + diameter / 2 + ")");
-
-var color = d3.scaleSequential(d3.interpolatePlasma)
-    .domain([-4, 4]);
-
-var pack = d3.pack()
-    .size([diameter - margin, diameter - margin])
-    .padding(2);
-
-d3.json("output.json", function(error, root) {
-  if (error) throw error;
-
-  root = d3.hierarchy(root)
-      .sum(function(d) { return d.size; })
-      .sort(function(a, b) { return b.value - a.value; });
-
-  var focus = root,
-      nodes = pack(root).descendants(),
-      view;
-
-  var circle = g.selectAll("circle")
-    .data(nodes)
-    .enter().append("circle")
-      .attr("class", function(d) { return d.parent ? d.children ? "node" : "node node--leaf" : "node node--root"; })
-      .style("fill", function(d) { return d.children ? color(d.depth) : null; })
-      .on("click", function(d) { if (focus !== d) zoom(d), d3.event.stopPropagation(); });
-
-  var text = g.selectAll("text")
-    .data(nodes)
-    .enter().append("text")
-      .attr("class", "label")
-      .style("fill-opacity", function(d) { return d.parent === root ? 1 : 0; })
-      .style("display", function(d) { return d.parent === root ? "inline" : "none"; })
-      .text(function(d) { return d.data.name; });
-
-  var node = g.selectAll("circle,text");
-
-  svg
-      .style("background", color(-1))
-      .on("click", function() { zoom(root); });
-
-  zoomTo([root.x, root.y, root.r * 2 + margin]);
-
-  function zoom(d) {
-    var focus0 = focus; focus = d;
-
-    var transition = d3.transition()
-        .duration(d3.event.altKey ? 7500 : 750)
-        .tween("zoom", function(d) {
-          var i = d3.interpolateZoom(view, [focus.x, focus.y, focus.r * 2 + margin]);
-          return function(t) { zoomTo(i(t)); };
-        });
-
-    transition.selectAll("text")
-      .filter(function(d) { return d.parent === focus || this.style.display === "inline"; })
-        .style("fill-opacity", function(d) { return d.parent === focus ? 1 : 0; })
-        .on("start", function(d) { if (d.parent === focus) this.style.display = "inline"; })
-        .on("end", function(d) { if (d.parent !== focus) this.style.display = "none"; });
-  }
-
-  function zoomTo(v) {
-    var k = diameter / v[2]; view = v;
-    node.attr("transform", function(d) { return "translate(" + (d.x - v[0]) * k + "," + (d.y - v[1]) * k + ")"; });
-    circle.attr("r", function(d) { return d.r * k; });
-  }
-});
-  });
- """
-
-
-# In[19]:
-
-
-with open('output.json', 'w') as outfile:  
-    json.dump(data, outfile)
-
-
-# In[20]:
-
-
-h = display(HTML(html_string))
-j = IPython.display.Javascript(js_string)
-IPython.display.display_javascript(j)
-
-
-# ### 2.2. Top 20 players value
-# <a id="top_20_players_value"></a>
-
-# In[21]:
-
-
-players_value = dataset.sort_values("ValueNum", ascending=False).head(20).reset_index()[["Name", "Overall", "PotentialPoints", "ValueNum", "Age"]]
-
-
-# In[22]:
-
-
-trace1 = go.Bar(
-    x = players_value["Name"].tolist(),
-    y = players_value["Overall"].tolist(),
-    name='Overall',
-    marker=dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace2 = go.Bar(
-    x = players_value["Name"].tolist(),
-    y = players_value["PotentialPoints"].tolist(),
-    name='Potential',
-    marker=dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace3 = go.Scatter(
-    x = players_value["Name"].tolist(),
-    y = (players_value["ValueNum"] / 1000000).tolist(),
-    name='Value [M€]',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2,trace3]
-
-layout = go.Layout(
-    barmode='stack',
-    title = 'Is it really worth it?',
-    titlefont=dict(size=25),
-    width=850,
-    height=500,
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Overall/Potential',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    xaxis = dict(title= 'Player Names'),
-    yaxis2=dict(
-        title='Value [M€]',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 20
-    ),
-    legend=dict(x=0.05, y=0.05)
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# ### 2.3. Grouping players by Age
-# <a id="grouping_players_by_age"></a>
-
-# In[23]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Grouping players by Age', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Number of players', fontsize=15)
-plt.ylabel('Players Age', fontsize=15)
-sns.countplot(x="Age", data=dataset, palette="hls");
-plt.show()
-
-
-# ### 2.4. Grouping players by Overall
-# <a id="grouping_players_by_overall"></a>
-
-# In[24]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Grouping players by Overall', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Number of players', fontsize=15)
-plt.ylabel('Players Age', fontsize=15)
-sns.countplot(x="Overall", data=dataset, palette="hls");
-plt.show()
-
-
-# ### 2.5. Age vs Mean Overall Rating
-# <a id="age_vs_mean_overall_rating"></a>
-
-# In[25]:
-
-
-# Selecting players with age smaller then 40 
-dataset40 = dataset.loc[dataset['Age'] <= 40]
-# Selecting unique Age from DataFrame
-age = dataset40.sort_values("Age")['Age'].unique()
-# Selecting mean Overall from DataFrame
-overall = dataset40.groupby("Age")["Overall"].mean().values
-# Selecting mean Overall from DataFrame
-potential = dataset40.groupby("Age")["Potential"].mean().values
-
-
-# In[26]:
-
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('Age vs Mean Overall/Potential Rating', fontsize=20, fontweight='bold')
-plt.xlabel('Player Age', fontsize=15)
-plt.ylabel('Player Overall', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(age, overall, label="Overall")
-plt.plot(age, potential, label="Potential")
-plt.legend(loc=4, prop={'size': 15}, frameon=True,shadow=True, facecolor="white", edgecolor="black")
-plt.show()
-
-
-# ### 2.6. Age vs Potential Points
-# <a id="age_vs_potential_points"></a>
-
-# In[27]:
-
-
-# Selecting mean PotentialPoints from DataFrame
-potential_points = dataset40.groupby("Age")["PotentialPoints"].mean().values
-
-
-# In[28]:
-
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('Age vs Potential points', fontsize=20, fontweight='bold')
-plt.xlabel('Player Age', fontsize=15)
-plt.ylabel('Player Potential points', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(age, potential_points, label="Points of potential")
-plt.legend(loc=4, prop={'size': 15}, frameon=True,shadow=True, facecolor="white", edgecolor="black")
-plt.show()
-
-
-# ### 2.7. Grouping players by Preffered Position
-# <a id="grouping_players_by_preffered_position"></a>
-
-# In[29]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Grouping players by Preffered Position', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Number of players', fontsize=15)
-plt.ylabel('Players Age', fontsize=15)
-sns.countplot(x="Position", data=dataset, palette="hls");
-plt.show()
-
-
-# <b>ST</b>  - Striker
-# <b>RW</b>  - Right winger
-# <b>LW</b>  - Left winger
-# <b>GK</b>  - Goalkeeper
-# <b>CDM</b> - Centre defensive midfield
-# <b>CB</b>  - Center-back
-# <b>RM</b>  - Right midfield
-# <b>CM</b>  - Centre midfield
-# <b>LM</b>  - Left midfield
-# <b>LB</b>  - Left-back (Full-back)
-# <b>CMA</b> - Centre attacking midfield
-# <b>RB</b>  - Right-back (Full-back)
-# <b>CF</b>  - Center forward
-# <b>RWB</b> - Right-back (Full-back)
-# <b>LWB</b> - Left-back (Full-back)
-
-# ## 3. Data Visualization Value/Wage
-# <a id="data_value_wage"></a>
-
-# ### 3.1. Ten players with highest value
-# <a id="ten_players_with_highest_value"></a>
-
-# In[30]:
-
-
-sorted_players = dataset.sort_values(["ValueNum"], ascending=False).head(10)
-players = sorted_players[["Photo" ,"Name" ,"Age" ,"Nationality" ,"Club", "Value"]].values
-
-
-# In[31]:
-
-
-from IPython.display import HTML, display
-
-table_content = ''
-for row in players:
-    HTML_row = '<tr>'
-    HTML_row += '<td><img src="' + str(row[0]) + '"style="width:50px;height:50px;"></td>'
-    HTML_row += '<td>' + str(row[1]) + '</td>'
-    HTML_row += '<td>' + str(row[2]) + '</td>'
-    HTML_row += '<td>' + str(row[3]) + '</td>'
-    HTML_row += '<td>' + str(row[4]) + '</td>'
-    HTML_row += '<td>' + str(row[5]) + '</td>'
+# NEW FEATURES FROM JMBULL
+train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+train['var_max_lat'] = train['latitude'].max() - train['latitude']
+train['var_max_long'] = train['longitude'].max() - train['longitude']
+test['var_max_lat'] = test['latitude'].max() - test['latitude']
+test['var_max_long'] = test['longitude'].max() - test['longitude']
+
+# NEW FEATURES FROM Georgii Vyshnia
+train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
+test['lon_plus_lat'] = test['longitude'] + test['latitude']
+
+lbl = preprocessing.LabelEncoder()
+train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
+test['air_store_id2'] = lbl.transform(test['air_store_id'])
+
+col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
+train = train.fillna(-1)
+test = test.fillna(-1)
+
+
+# In[ ]:
+
+
+def RMSLE(y, pred):
+    return metrics.mean_squared_error(y, pred)**0.5
+
+
+# Here we prepare data required for the neural network model.
+# 
+# **value_col**:  taken as float input(which are normalized)
+# 
+# **nn_col - value_col**: taken as categorical inputs(embedding layers used)
+
+# In[ ]:
+
+
+value_col = ['holiday_flg','min_visitors','mean_visitors','median_visitors', # 'max_visitors',
+             'count_observations',
+'rs1_x','rv1_x','rs2_x','rv2_x','rs1_y','rv1_y','rs2_y','rv2_y','total_reserv_sum','total_reserv_mean',
+'total_reserv_dt_diff_mean','date_int','var_max_lat','var_max_long','lon_plus_lat']
+
+nn_col = value_col + ['dow', 'year', 'month', 'air_store_id2', 'air_area_name', 'air_genre_name',
+'air_area_name0', 'air_area_name1', 'air_area_name2', 'air_area_name3', 'air_area_name4',
+'air_area_name5', 'air_area_name6', 'air_genre_name0', 'air_genre_name1',
+'air_genre_name2', 'air_genre_name3', 'air_genre_name4']
+
+
+X = train.copy()
+X_test = test[nn_col].copy()
+
+value_scaler = preprocessing.MinMaxScaler()
+for vcol in value_col:
+    X[vcol] = value_scaler.fit_transform(X[vcol].values.astype(np.float64).reshape(-1, 1))
+    X_test[vcol] = value_scaler.transform(X_test[vcol].values.astype(np.float64).reshape(-1, 1))
+
+X_train = list(X[nn_col].T.as_matrix())
+Y_train = np.log1p(X['visitors']).values
+nn_train = [X_train, Y_train]
+nn_test = [list(X_test[nn_col].T.as_matrix())]
+print("Train and test data prepared")
+
+
+# Following function implements the Keras neural network model.
+# 
+# Basic structure:
+# - categorical columns get independent inputs, passed through embedding layer and then flattened.
+# - numeric columns are simply taken as float32 inputs
+# - the final tensors of categorical and numerical are then concatenated together
+# - following the concatenated layer and simple feed forward neural network is implemented.
+# - output layer has 'ReLU' activation function
+
+# In[ ]:
+
+
+def get_nn_complete_model(train, hidden1_neurons=35, hidden2_neurons=15):
+    """
+    Input:
+        train:           train dataframe(used to define the input size of the embedding layer)
+        hidden1_neurons: number of neurons in the first hidden layer
+        hidden2_neurons: number of neurons in the first hidden layer
+    Output:
+        return 'keras neural network model'
+    """
+    K.clear_session()
+
+    air_store_id = Input(shape=(1,), dtype='int32', name='air_store_id')
+    air_store_id_emb = Embedding(len(train['air_store_id2'].unique()) + 1, 15, input_shape=(1,),
+                                 name='air_store_id_emb')(air_store_id)
+    air_store_id_emb = keras.layers.Flatten(name='air_store_id_emb_flatten')(air_store_id_emb)
+
+    dow = Input(shape=(1,), dtype='int32', name='dow')
+    dow_emb = Embedding(8, 3, input_shape=(1,), name='dow_emb')(dow)
+    dow_emb = keras.layers.Flatten(name='dow_emb_flatten')(dow_emb)
+
+    month = Input(shape=(1,), dtype='int32', name='month')
+    month_emb = Embedding(13, 3, input_shape=(1,), name='month_emb')(month)
+    month_emb = keras.layers.Flatten(name='month_emb_flatten')(month_emb)
+
+    air_area_name, air_genre_name = [], []
+    air_area_name_emb, air_genre_name_emb = [], []
+    for i in range(7):
+        area_name_col = 'air_area_name' + str(i)
+        air_area_name.append(Input(shape=(1,), dtype='int32', name=area_name_col))
+        tmp = Embedding(len(train[area_name_col].unique()), 3, input_shape=(1,),
+                        name=area_name_col + '_emb')(air_area_name[-1])
+        tmp = keras.layers.Flatten(name=area_name_col + '_emb_flatten')(tmp)
+        air_area_name_emb.append(tmp)
+
+        if i > 4:
+            continue
+        area_genre_col = 'air_genre_name' + str(i)
+        air_genre_name.append(Input(shape=(1,), dtype='int32', name=area_genre_col))
+        tmp = Embedding(len(train[area_genre_col].unique()), 3, input_shape=(1,),
+                        name=area_genre_col + '_emb')(air_genre_name[-1])
+        tmp = keras.layers.Flatten(name=area_genre_col + '_emb_flatten')(tmp)
+        air_genre_name_emb.append(tmp)
+
+    air_genre_name_emb = keras.layers.concatenate(air_genre_name_emb)
+    air_genre_name_emb = Dense(4, activation='sigmoid', name='final_air_genre_emb')(air_genre_name_emb)
+
+    air_area_name_emb = keras.layers.concatenate(air_area_name_emb)
+    air_area_name_emb = Dense(4, activation='sigmoid', name='final_air_area_emb')(air_area_name_emb)
     
-    table_content += HTML_row + '</tr>'
-
-display(HTML(
-    '<table><tr><th>Photo</th><th>Name</th><th>Age</th><th>Nationality</th><th>Club</th><th>Value</th></tr>{}</table>'.format(table_content))
-)
-
-
-# ### 3.2. Ten players with highest wage
-# <a id="ten_players_with_highest_wage"></a>
-
-# In[32]:
-
-
-sorted_players = dataset.sort_values(["WageNum"], ascending=False).head(10)
-players = sorted_players[["Photo" ,"Name" ,"Age" ,"Nationality" ,"Club", "Wage"]].values
-
-
-# In[33]:
-
-
-from IPython.display import HTML, display
-
-table_content = ''
-for row in players:
-    HTML_row = '<tr>'
-    HTML_row += '<td><img src="' + str(row[0]) + '"style="width:50px;height:50px;"></td>'
-    HTML_row += '<td>' + str(row[1]) + '</td>'
-    HTML_row += '<td>' + str(row[2]) + '</td>'
-    HTML_row += '<td>' + str(row[3]) + '</td>'
-    HTML_row += '<td>' + str(row[4]) + '</td>'
-    HTML_row += '<td>' + str(row[5]) + '</td>'
+    air_area_code = Input(shape=(1,), dtype='int32', name='air_area_code')
+    air_area_code_emb = Embedding(len(train['air_area_name'].unique()), 8, input_shape=(1,), name='air_area_code_emb')(air_area_code)
+    air_area_code_emb = keras.layers.Flatten(name='air_area_code_emb_flatten')(air_area_code_emb)
     
-    table_content += HTML_row + '</tr>'
+    air_genre_code = Input(shape=(1,), dtype='int32', name='air_genre_code')
+    air_genre_code_emb = Embedding(len(train['air_genre_name'].unique()), 5, input_shape=(1,),
+                                   name='air_genre_code_emb')(air_genre_code)
+    air_genre_code_emb = keras.layers.Flatten(name='air_genre_code_emb_flatten')(air_genre_code_emb)
+
+    
+    holiday_flg = Input(shape=(1,), dtype='float32', name='holiday_flg')
+    year = Input(shape=(1,), dtype='float32', name='year')
+    min_visitors = Input(shape=(1,), dtype='float32', name='min_visitors')
+    mean_visitors = Input(shape=(1,), dtype='float32', name='mean_visitors')
+    median_visitors = Input(shape=(1,), dtype='float32', name='median_visitors')
+#    max_visitors = Input(shape=(1,), dtype='float32', name='max_visitors')
+    count_observations = Input(shape=(1,), dtype='float32', name='count_observations')
+    rs1_x = Input(shape=(1,), dtype='float32', name='rs1_x')
+    rv1_x = Input(shape=(1,), dtype='float32', name='rv1_x')
+    rs2_x = Input(shape=(1,), dtype='float32', name='rs2_x')
+    rv2_x = Input(shape=(1,), dtype='float32', name='rv2_x')
+    rs1_y = Input(shape=(1,), dtype='float32', name='rs1_y')
+    rv1_y = Input(shape=(1,), dtype='float32', name='rv1_y')
+    rs2_y = Input(shape=(1,), dtype='float32', name='rs2_y')
+    rv2_y = Input(shape=(1,), dtype='float32', name='rv2_y')
+    total_reserv_sum = Input(shape=(1,), dtype='float32', name='total_reserv_sum')
+    total_reserv_mean = Input(shape=(1,), dtype='float32', name='total_reserv_mean')
+    total_reserv_dt_diff_mean = Input(shape=(1,), dtype='float32', name='total_reserv_dt_diff_mean')
+    date_int = Input(shape=(1,), dtype='float32', name='date_int')
+    var_max_lat = Input(shape=(1,), dtype='float32', name='var_max_lat')
+    var_max_long = Input(shape=(1,), dtype='float32', name='var_max_long')
+    lon_plus_lat = Input(shape=(1,), dtype='float32', name='lon_plus_lat')
+
+    date_emb = keras.layers.concatenate([dow_emb, month_emb, year, holiday_flg])
+    date_emb = Dense(5, activation='sigmoid', name='date_merged_emb')(date_emb)
+
+    cat_layer = keras.layers.concatenate([holiday_flg, min_visitors, mean_visitors,
+                    median_visitors, # max_visitors, 
+                    count_observations, rs1_x, rv1_x,
+                    rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y,
+                    total_reserv_sum, total_reserv_mean, total_reserv_dt_diff_mean,
+                    date_int, var_max_lat, var_max_long, lon_plus_lat,
+                    date_emb, air_area_name_emb, air_genre_name_emb,
+                    air_area_code_emb, air_genre_code_emb, air_store_id_emb])
+
+    m = Dense(hidden1_neurons, name='hidden1',
+             kernel_initializer=keras.initializers.RandomNormal(mean=0.0,
+                            stddev=0.05, seed=None))(cat_layer)
+    m = keras.layers.PReLU()(m)
+    m = keras.layers.BatchNormalization()(m)
+    
+    m1 = Dense(hidden2_neurons, name='sub1')(m)
+    m1 = keras.layers.PReLU()(m1)
+    m = Dense(1, activation='relu')(m1)
+
+    inp_ten = [
+        holiday_flg, min_visitors, mean_visitors, median_visitors, # max_visitors, 
+        count_observations,
+        rs1_x, rv1_x, rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y, total_reserv_sum, total_reserv_mean,
+        total_reserv_dt_diff_mean, date_int, var_max_lat, var_max_long, lon_plus_lat,
+        dow, year, month, air_store_id, air_area_code, air_genre_code
+    ]
+    inp_ten += air_area_name
+    inp_ten += air_genre_name
+    model = keras.Model(inp_ten, m)
+    model.compile(loss='mse', optimizer='rmsprop', metrics=['acc'])
+
+    return model
+
+
+# In[ ]:
+
+
+model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3,
+                    n_estimators=200, subsample=0.8, max_depth =10)
+model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
+model3 = XGBRegressor(learning_rate=0.02, random_state=2, n_estimators=1000, subsample=0.8, 
+                      colsample_bytree=0.75, max_depth =10, reg_lambda=.25)
+model4 = get_nn_complete_model(train, hidden2_neurons=12)
+
+model1.fit(train[col], np.log1p(train['visitors'].values))
+print("Model1 trained")
+model2.fit(train[col], np.log1p(train['visitors'].values))
+print("Model2 trained")
+model3.fit(train[col], np.log1p(train['visitors'].values))
+print("Model3 trained")
+
+for i in range(5):
+    model4.fit(nn_train[0], nn_train[1], epochs=3, verbose=1,
+        batch_size=256, shuffle=True, validation_split=0.15)
+    model4.fit(nn_train[0], nn_train[1], epochs=8, verbose=0,
+        batch_size=256, shuffle=True)
+print("Model4 trained")
+
+preds1 = model1.predict(train[col])
+preds2 = model2.predict(train[col])
+preds3 = model3.predict(train[col])
+preds4 = pd.Series(model4.predict(nn_train[0]).reshape(-1)).clip(0, 6.8).values
+
+print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds1))
+print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds2))
+print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds3))
+print('RMSE NeuralNetwork: ', RMSLE(np.log1p(train['visitors'].values), preds4))
+
+preds1 = model1.predict(test[col])
+preds2 = model2.predict(test[col])
+preds3 = model3.predict(test[col])
+preds4 = pd.Series(model4.predict(nn_test[0]).reshape(-1)).clip(0, 6.8).values
 
-display(HTML(
-    '<table><tr><th>Photo</th><th>Name</th><th>Age</th><th>Nationality</th><th>Club</th><th>Wage</th></tr>{}</table>'.format(table_content))
-)
+test['visitors'] = 0.15*preds1+0.15*preds2+0.4*preds3+0.3*preds4
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
+print("Model predictions done.")
+# del train; del data;
 
 
-# ### 3.3. Player value distribution
-# <a id="player_value_distribution"></a>
+# In[ ]:
 
-# In[34]:
 
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
-value_distribution = dataset.sort_values("WageNum", ascending=False).reset_index().head(100)[["Name", "WageNum"]]
-value_distribution_values = value_distribution["WageNum"].apply(lambda x: x/1000)
+for k, v in dfs.items(): locals()[k] = v
 
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
 
-# In[35]:
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
 
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('Top 100 Players Wage Distribution', fontsize=20, fontweight='bold')
-plt.ylabel('Player Wage [K€]', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(value_distribution_values)
-plt.show()
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub2 = sub2.fillna(-1)
 
-# ### 3.4. Over or Under Mean Value
-# <a id="over_or_under_mean_value"></a>
 
-# In[36]:
+# In[ ]:
 
 
-print('Mean value of player in FIFA 18 is around: €' + str(round(mean_value, -5)) + '.')
+def final_visitors(x, alt=False):
+    visitors_x, visitors_y = x['visitors_x'], x['visitors_y']
+    if x['visitors_y'] == -1:
+        return visitors_x
+    else:
+        return 0.7*visitors_x + 0.3*visitors_y* 1.1
 
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+sub_merge['visitors'] = sub_merge.apply(lambda x: final_visitors(x), axis=1)
+print("Done")
+sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
 
-# In[37]:
 
+# In[ ]:
 
-players_value = dataset.groupby("OverMeanValue").size().reset_index(name='NumberOfPlayers')
 
+sub_merge.head()
 
-# In[38]:
-
-
-# Number of players with value smaller then mean
-players_value
-
-
-# In[39]:
-
-
-plt.figure(figsize=(16,8))
-plt.title('Over or Under Mean Value', fontsize=20, fontweight='bold', y=1.05,)
-labels = 'Value under mean', 'Value over mean'
-explode=(0, 0.05)
-plt.rcParams['font.size'] = 20.0
-plt.pie(players_value["NumberOfPlayers"], explode=explode, labels=labels, autopct='%1.1f%%', startangle=90)
-plt.axis('equal')
-plt.show()
-
-
-# In[40]:
-
-
-plt.figure(figsize=(16,2))
-plt.title('Mean vs Max Value', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Value [M€]')
-
-max_value = dataset['ValueNum'].max()
-objects = ('Max Value', 'Mean Value')
-y_pos = np.arange(len(objects))
-performance = [max_value/1000000, mean_value/1000000]
- 
-plt.barh(y_pos, performance, align='center', alpha=0.5)
-plt.yticks(y_pos, objects)
-
-
-plt.show()
-
-
-# <b>NOTE:</b> Mean Value of Player in FIFA 18 is about €2.4M. It seems to be lots of money, but it is still nothing when we compare it to €123M - Value of Neymar. Moreover Value of players is unequally distributed - only 23.2% of players cross this Value.
-
-# ### 3.5. Over or Under Mean Wage
-# <a id="over_or_under_mean_wage"></a>
-
-# In[41]:
-
-
-print('Mean wage of player in FIFA 18 is around: €' + str(round(mean_wage, -3)) + '.')
-
-
-# In[42]:
-
-
-players_wage = dataset.groupby("OverMeanWage").size().reset_index(name='NumberOfPlayers')
-
-
-# In[43]:
-
-
-# Number of players with wage smaller then mean
-players_wage
-
-
-# In[44]:
-
-
-plt.figure(figsize=(16,8))
-plt.title('Over or Under Mean Wage', fontsize=20, fontweight='bold', y=1.05,)
-labels = 'Wage under mean', 'Wage over mean'
-explode=(0, 0.05)
-plt.rcParams['font.size'] = 20.0
-plt.pie(players_wage["NumberOfPlayers"], explode=explode, labels=labels, autopct='%1.1f%%', startangle=90)
-plt.axis('equal')
-plt.show()
-
-
-# In[45]:
-
-
-plt.figure(figsize=(16,2))
-plt.title('Mean vs Max Wage', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Wage [K€]')
-
-max_wage = dataset['WageNum'].max()
-objects = ('Max Wage', 'Mean Wage')
-y_pos = np.arange(len(objects))
-performance = [max_wage/1000, mean_wage/1000]
- 
-plt.barh(y_pos, performance, align='center', alpha=0.5, color='red')
-plt.yticks(y_pos, objects)
-
-plt.show()
-
-
-# ### 3.7. Players Value vs Age & Overall
-# <a id="players_value_vs_age_overall"></a>
-
-# In[46]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Players value according to their Age and Overall', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Age', fontsize=15)
-plt.ylabel('Overall', fontsize=15)
-
-age = dataset["Age"].values
-overall = dataset["Overall"].values
-value = dataset["ValueNum"].values
-
-plt.scatter(age, overall, s = value/100000, edgecolors='black')
-plt.show()
-
-
-# ### 3.8. Players Wage vs Age & Overall
-# <a id="players_wage_vs_age_overall"></a>
-
-# In[47]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Players wage according to their Age and Overall', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Age', fontsize=15)
-plt.ylabel('Overall', fontsize=15)
-
-age = dataset["Age"].values
-overall = dataset["Overall"].values
-value = dataset["WageNum"].values
-
-plt.scatter(age, overall, s = value/500, edgecolors='black', color="red")
-plt.show()
-
-
-# ### 3.9. Overall vs Wage and Value
-# <a id="overall_vs_wage_and_value"></a>
-
-# In[48]:
-
-
-# Selecting unique Overall from DataFrame
-overall = dataset.sort_values('Overall')['Overall'].unique()
-
-overall_wage = dataset.groupby(['Overall'])['WageNum'].mean()
-overall_wage = overall_wage.apply(lambda x: x/1000).values
-
-overall_value = dataset.groupby(['Overall'])['ValueNum'].mean()
-overall_value = overall_value.apply(lambda x: x/1000000).values
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('Overall vs Wage/Values', fontsize=20, fontweight='bold')
-plt.xlabel('Overall', fontsize=15)
-plt.ylabel('Wage/Values', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(overall, overall_wage, label="Wage in [K€]")
-plt.plot(overall, overall_value, label="Values in [M€]")
-plt.legend(loc=4, prop={'size': 15}, frameon=True,shadow=True, facecolor="white", edgecolor="black")
-plt.show()
-
-
-# ### 3.10. Player Position vs Value
-# <a id="player_position_vs_value"></a>
-
-# In[49]:
-
-
-player_position_value = dataset.groupby("Position").mean().reset_index()[["Position", "ValueNum"]]
-player_position_value = player_position_value.sort_values(["ValueNum"], ascending=False)
-player_position_value["ValueNum"] = player_position_value["ValueNum"].apply(lambda x: x/1000000).values.tolist()
-
-
-# In[50]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-plt.title('Player Position vs Value', fontsize=20, fontweight='bold', y=1.05,)
-sns.set(font_scale = 2)
-b = sns.barplot(x="Position", y="ValueNum", data=player_position_value, palette="hls")
-plt.xticks(rotation=90)
-b.tick_params(labelsize=15)
-plt.xlabel("Position", fontsize=20)
-plt.ylabel('Mean Value [M€]', fontsize=20)
-plt.show()
-
-
-# <b>NOTE:</b> As we can see in the chart above, offensive positions are most valuable in football. Mean Value of <b>RW</b> - Right winger, <b>LW</b> - Left winger and <b>CF</b> - Center forward is above €3.0M. The least valuable position is <b>GK</b>, with value just over €1.5M.
-
-# ### 3.10. Top 1000 players Age vs. Mean Value
-# <a id="top_1000_players_age_vs_mean_value"></a>
-
-# In[51]:
-
-
-top1000 = dataset.head(1000)
-
-
-# In[52]:
-
-
-top1000 = top1000.groupby("Age").mean().reset_index()[["Age", "ValueNum"]]
-top1000["ValueNum"] = top1000["ValueNum"].apply(lambda x: x/1000000)
-
-
-# In[53]:
-
-
-top1000_age = top1000['Age'].values
-top1000_value = top1000['ValueNum'].values
-
-
-# In[54]:
-
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('Age vs Mean Overall/Potential Rating', fontsize=20, fontweight='bold')
-plt.xlabel('Player Age', fontsize=15)
-plt.ylabel('Player Overall', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(top1000_age, top1000_value)
-plt.show()
-
-
-# ### 3.11. Clubs value
-# <a id="clubs_value"></a>
-
-# In[55]:
-
-
-top_teams = dataset.groupby("Club").sum().sort_values("ValueNum", ascending=False).head(20).reset_index()[["Club", "Overall", "PotentialPoints", "ValueNum"]]
-
-
-# In[56]:
-
-
-trace1 = go.Bar(
-    x = top_teams["Club"].tolist(),
-    y = top_teams["Overall"].tolist(),
-    name='Team Overall',
-    marker=dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace2 = go.Bar(
-    x = top_teams["Club"].tolist(),
-    y = top_teams["PotentialPoints"].tolist(),
-    name='Team Potential',
-    marker=dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace3 = go.Scatter(
-    x = top_teams["Club"].tolist(),
-    y = (top_teams["ValueNum"] / 1000000).tolist(),
-    name='Team Value [M€]',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2,trace3]
-
-layout = go.Layout(
-    barmode='stack',
-    title = 'Is it really worth it?',
-    titlefont=dict(size=25),
-    width=850,
-    height=500,
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Team Overall/Potential',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    xaxis = dict(title= 'Club Name'),
-    yaxis2=dict(
-        title='Team Value [M€]',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 200
-    ),
-    #legend=dict(x=-.1, y=1.2)
-    legend=dict(x=0.05, y=0.05)
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# # Thank you
-# Thank you very much for all ideas and suggestions.

@@ -1,120 +1,245 @@
-import gc
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+
+import datetime
 import os
+from collections import defaultdict
 import operator
 
-from glob import glob
 
-import numpy as np
-import pandas as pd
-import xgboost as xgb
-import matplotlib.pyplot as plt
+def apk(actual, predicted, k=7):
+    if len(predicted) > k:
+        predicted = predicted[:k]
 
-from pandas.core.categorical import Categorical
-from scipy.sparse import csr_matrix, hstack
+    score = 0.0
+    num_hits = 0.0
 
-dtypes = {
-    'ip': 'uint32',
-    'app': 'uint16',
-    'device': 'uint16',
-    'os': 'uint16',
-    'channel': 'uint16',
-    'is_attributed': 'uint8'
-}
-to_read = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
-to_parse = ['click_time']
+    for i, p in enumerate(predicted):
+        if p in actual and p not in predicted[:i]:
+            num_hits += 1.0
+            score += num_hits / (i+1.0)
 
-# Features used in training
-categorical_features = ['app', 'device', 'os', 'channel']
-numerical_features = ['clicks_by_ip']
+    if not actual:
+        return 0.0
 
-train_size = 8000000
+    return score / min(len(actual), k)
 
-def sparse_dummies(df, column):
-    """Returns sparse OHE matrix for the column of the dataframe"""
-    categories = Categorical(df[column])
-    column_names = np.array([f"{column}_{str(i)}" for i in range(len(categories.categories))])
-    N = len(categories)
-    row_numbers = np.arange(N, dtype=np.int)
-    ones = np.ones((N,))
-    return csr_matrix((ones, (row_numbers, categories.codes))), column_names
 
-df_train = pd.read_csv('../input/train.csv', nrows=10000000, usecols=to_read, dtype=dtypes, parse_dates=to_parse)
+def get_hash(arr, type = 0):
+    (fecha_dato, ncodpers, ind_empleado,
+    pais_residencia, sexo, age,
+    fecha_alta, ind_nuevo, antiguedad,
+    indrel, ult_fec_cli_1t, indrel_1mes,
+    tiprel_1mes, indresi, indext,
+    conyuemp, canal_entrada, indfall,
+    tipodom, cod_prov, nomprov,
+    ind_actividad_cliente, renta, segmento) = arr[:24]
 
-# Example of numerical feature
-# warning: this is for the sake of example; the feature leaks: it doesn't take time into account, takes whole train dataset, doesn't cut off time; 
-clicks_by_ip = df_train.groupby(['ip']).size().rename('clicks_by_ip', inplace=True)
-df_train = df_train.join(clicks_by_ip, on='ip')
-del clicks_by_ip
-gc.collect()
+    if type == 0:
+        return (pais_residencia, sexo, age, ind_nuevo, segmento, ind_empleado, ind_actividad_cliente, indresi, nomprov)
+    else:
+        return (pais_residencia, sexo, age, ind_nuevo, segmento, ind_empleado, ind_actividad_cliente, indresi)
 
-matrices = []
-all_column_names = []
-# creates a matrix per categorical feature
-for c in categorical_features:
-    matrix, column_names = sparse_dummies(df_train, c)
-    matrices.append(matrix)
-    all_column_names.append(column_names)
 
-# appends a matrix for numerical features (one column per feature)
-matrices.append(csr_matrix(df_train[numerical_features].values, dtype=float))
-all_column_names.append(df_train[numerical_features].columns.values)
+def add_data_to_main_arrays(arr, best, overallbest, customer):
+    ncodpers = arr[1]
+    hash1 = get_hash(arr, 0)
+    hash2 = get_hash(arr, 1)
+    part = arr[24:]
+    for i in range(24):
+        if part[i] == '1':
+            if ncodpers in customer:
+                if customer[ncodpers][i] == '0':
+                    best[hash1][i] += 1
+                    best[hash2][i] += 1
+                    overallbest[i] += 1
+            else:
+                best[hash1][i] += 1
+                best[hash2][i] += 1
+                overallbest[i] += 1
+    customer[ncodpers] = part
 
-train_sparse = hstack(matrices, format="csr")
-feature_names = np.concatenate(all_column_names)
-del matrices, all_column_names
 
-X = train_sparse
-y = df_train['is_attributed']
+def sort_main_arrays(best, overallbest):
+    out = dict()
+    for b in best:
+        arr = best[b]
+        srtd = sorted(arr.items(), key=operator.itemgetter(1), reverse=True)
+        out[b] = srtd
+    best = out
+    overallbest = sorted(overallbest.items(), key=operator.itemgetter(1), reverse=True)
+    return best, overallbest
 
-del df_train
-gc.collect()
 
-# Create binary training and validation files for XGBoost
-x1, y1 = X[:train_size], y.iloc[:train_size]
-dm1 = xgb.DMatrix(x1, y1, feature_names=feature_names)
-dm1.save_binary('train.bin')
-del dm1, x1, y1
-gc.collect()
+def get_predictions(arr1, best, overallbest, customer):
 
-x2, y2 = X[train_size:], y.iloc[train_size:]
-dm2 = xgb.DMatrix(x2, y2, feature_names=feature_names)
-dm2.save_binary('validate.bin')
-del dm2, x2, y2
-del X, y, train_sparse
-gc.collect()
+    predicted = []
 
-# XGBoost parameters example
-params = {
-    'eta': 0.3,
-    'tree_method': "hist",
-    'grow_policy': "lossguide",
-    'max_leaves': 1000,  
-    'max_depth': 0, 
-    'subsample': 0.9, 
-    'alpha':1,
-    'objective': 'binary:logistic', 
-    'scale_pos_weight':100,
-    'eval_metric': 'auc', 
-    'nthread':4,
-    'silent': 1
-}
+    hash1 = get_hash(arr1, 0)
+    hash2 = get_hash(arr1, 1)
+    ncodpers = arr1[1]
 
-# Pointers to binary files for training and validation
-# They won't be loaded into Python environment but passed directly to XGBoost
-dmtrain = xgb.DMatrix('train.bin', feature_names=feature_names)
-dmvalid = xgb.DMatrix('validate.bin', feature_names=feature_names)
+    # hash 1
+    if len(predicted) < 7:
+        if hash1 in best:
+            for a in best[hash1]:
+                # If user is not new
+                if ncodpers in customer:
+                    if customer[ncodpers][a[0]] == '1':
+                        continue
+                if a[0] not in predicted:
+                    predicted.append(a[0])
+                    if len(predicted) == 7:
+                        break
 
-# Training process
-watchlist = [(dmtrain, 'train'), (dmvalid, 'valid')]
-model = xgb.train(params, dmtrain, 50, watchlist, maximize=True, early_stopping_rounds=10, verbose_eval=1)
+    # hash 2
+    if len(predicted) < 7:
+        if hash2 in best:
+            for a in best[hash2]:
+                # If user is not new
+                if ncodpers in customer:
+                    if customer[ncodpers][a[0]] == '1':
+                        continue
+                if a[0] not in predicted:
+                    predicted.append(a[0])
+                    if len(predicted) == 7:
+                        break
 
-# Feature importance as a DataFrame
-importance = sorted(model.get_fscore().items(), key=operator.itemgetter(1))
-df = pd.DataFrame(importance, columns=['feature', 'fscore'])
-df['fscore'] = df['fscore'] / df['fscore'].sum()
-print(df.sort_values('fscore', ascending=False).head(10))
+    # overall
+    if len(predicted) < 7:
+        for a in overallbest:
+            # If user is not new
+            if ncodpers in customer:
+                if customer[ncodpers][a[0]] == '1':
+                    continue
+            if a[0] not in predicted:
+                predicted.append(a[0])
+                if len(predicted) == 7:
+                    break
 
-# Feature importance as a plot
-fig, ax = plt.subplots(figsize=(10, 10))
-xgb.plot_importance(model, ax=ax, max_num_features=20)
-plt.savefig('importance.png', format="png")
+    return predicted
+
+
+def get_real_values(arr1, customer):
+    real = []
+    ncodpers = arr1[1]
+    arr2 = arr1[24:]
+
+    for i in range(len(arr2)):
+        if arr2[i] == '1':
+            if ncodpers in customer:
+                if customer[ncodpers][i] == '0':
+                    real.append(i)
+            else:
+                real.append(i)
+    return real
+
+
+def run_solution():
+
+    print('Preparing arrays...')
+    f = open("../input/train_ver2.csv", "r")
+    first_line = f.readline().strip()
+    first_line = first_line.replace("\"", "")
+    map_names = first_line.split(",")[24:]
+
+    # Normal variables
+    customer = dict()
+    best = defaultdict(lambda: defaultdict(int))
+    overallbest = defaultdict(int)
+
+    # Validation variables
+    customer_valid = dict()
+    best_valid = defaultdict(lambda: defaultdict(int))
+    overallbest_valid = defaultdict(int)
+
+    valid_part = []
+    # Calc counts
+    total = 0
+    while 1:
+        line = f.readline()[:-1]
+        total += 1
+
+        if line == '':
+            break
+
+        tmp1 = line.split("\"")
+        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
+        arr = [a.strip() for a in arr]
+
+        # Normal part
+        add_data_to_main_arrays(arr, best, overallbest, customer)
+
+        # Valid part
+        if arr[0] != '2016-05-28':
+            add_data_to_main_arrays(arr, best_valid, overallbest_valid, customer_valid)
+        else:
+            valid_part.append(arr)
+
+        if total % 1000000 == 0:
+            print('Process {} lines ...'.format(total))
+            # break
+
+    f.close()
+
+    print('Sort best arrays...')
+    print('Hashes num: ', len(best))
+    print('Valid part: ', len(valid_part))
+
+    # Normal
+    best, overallbest = sort_main_arrays(best, overallbest)
+
+    # Valid
+    best_valid, overallbest_valid = sort_main_arrays(best_valid, overallbest_valid)
+
+    map7 = 0.0
+    print('Validation...')
+    for arr1 in valid_part:
+        predicted = get_predictions(arr1, best_valid, overallbest_valid, customer_valid)
+        real = get_real_values(arr1, customer_valid)
+
+        score = apk(real, predicted)
+        map7 += score
+
+    if len(valid_part) > 0:
+        map7 /= len(valid_part)
+    print('Predicted score: {}'.format(map7))
+
+    print('Generate submission...')
+    sub_file = os.path.join('submission_' + str(map7) + '_' + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")) + '.csv')
+    out = open(sub_file, "w")
+    f = open("../input/test_ver2.csv", "r")
+    f.readline()
+    total = 0
+    out.write("ncodpers,added_products\n")
+
+    while 1:
+        line = f.readline()[:-1]
+        total += 1
+
+        if line == '':
+            break
+
+        tmp1 = line.split("\"")
+        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
+        arr = [a.strip() for a in arr]
+        ncodpers = arr[1]
+        out.write(ncodpers + ',')
+
+        predicted = get_predictions(arr, best, overallbest, customer)
+
+        for p in predicted:
+            out.write(map_names[p] + ' ')
+
+        if total % 1000000 == 0:
+            print('Read {} lines ...'.format(total))
+            # break
+
+        out.write("\n")
+
+    print('Total cases:', str(total))
+    out.close()
+    f.close()
+
+
+if __name__ == "__main__":
+    run_solution()

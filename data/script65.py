@@ -1,216 +1,790 @@
 
 # coding: utf-8
 
-# To get a feel for the data beyond [this analysis](https://www.kaggle.com/headsortails/be-my-guest-recruit-restaurant-eda), we'll plot some data for several random restaurants individually.
+# ## Please share your feedback and Add Your Vote on the Top Right Corner :-)
+
+# # Kiva - Beginner Guide to EDA and Data Visuaization
+
+# <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Kiva.org_logo_2016.svg/640px-Kiva.org_logo_2016.svg.png" width="300" height="100" />
+
+# ## 1. Introduction
+
+# In their own words - "*Kiva is an international nonprofit, founded in 2005 and based in San Francisco, with a mission to connect people through lending to alleviate poverty. We celebrate and support people looking to create a better future for themselves, their families and their communities*."
+
+# By lending as little as $25 on Kiva, anyone can help a borrower start or grow a business, go to school, access clean energy or realize their potential. For some, it’s a matter of survival, for others it’s the fuel for a life-long ambition.
+# 
+# 100% of every dollar you lend on Kiva goes to funding loans. Kiva covers costs primarily through optional donations, as well as through support from grants and sponsors.
+
+# ### 1.1 Kiva by the numbers
+# 
+# * 2.7M Borrowers
+# * 1.7M Lenders
+# * 83 Countries
+# * $1.11B Loans funded through Kiva
+# * 97.0% Repayment rate
+# * 81% Of Kiva borrowers are women
+# * A Kiva loan is funded every 2 min
+
+# <img src="https://www-kiva-org.global.ssl.fastly.net/cms/page/images/hp-slideshow-r1-xxl-std.jpg"  width="600" />
+
+# ## 2 Basic Data Overview
+
+# ### 2.1 Load Libraries
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-AIR_RESERVE = 'air_reserve'
-AIR_STORE_INFO = 'air_store_info'
-AIR_VISIT_DATA = 'air_visit_data'
-DATE_INFO = 'date_info'
-HPG_RESERVE = 'hpg_reserve'
-HPG_STORE_INFO = 'hpg_store_info'
-STORE_ID_RELATION = 'store_id_relation'
-SAMPLE_SUBMISSION = 'sample_submission'
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-data = {
-    AIR_VISIT_DATA: pd.read_csv('../input/air_visit_data.csv'),
-    AIR_STORE_INFO: pd.read_csv('../input/air_store_info.csv'),
-    HPG_STORE_INFO: pd.read_csv('../input/hpg_store_info.csv'),
-    AIR_RESERVE: pd.read_csv('../input/air_reserve.csv'),
-    HPG_RESERVE: pd.read_csv('../input/hpg_reserve.csv'),
-    STORE_ID_RELATION: pd.read_csv('../input/store_id_relation.csv'),
-    SAMPLE_SUBMISSION: pd.read_csv('../input/sample_submission.csv'),
-    DATE_INFO: pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date': 'visit_date'})
-}
+
+# ### 2.2 Load Data
+
+# In[ ]:
+
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
 # In[ ]:
 
 
-def plot_number_of_visitors_to_one_resaturant(daat, air_visit_data, air_id):
-  """Plots the number of visitors to this restaurant over time."""
-  x = air_visit_data['visit_date']
-  y = air_visit_data['visitors'] 
+kiva_loans_df = pd.read_csv('../input/kiva_loans.csv')
+kiva_mpi_df = pd.read_csv('../input/kiva_mpi_region_locations.csv')
+kiva_theme_id_df = pd.read_csv('../input/loan_theme_ids.csv')
+kiva_theme_region_df = pd.read_csv('../input/loan_themes_by_region.csv')
 
-  traces = []
-  traces.append(go.Scatter(x=x, y=y, mode='markers'))
-  rolling_mean = y.rolling(window=10, min_periods=1, center=True).mean()
-  traces.append(go.Scatter(x=x, y=rolling_mean, mode='lines'))
 
-  layout = go.Layout(
-    title='Visitors to resaurant ' + air_id,
-    yaxis=dict(title='# Visitors')
-  )
-  iplot(go.Figure(data=traces, layout=layout))
+# ### 2.3 Shape and Features in DataFrames
+
+# In[ ]:
+
+
+print("Shape of kiva_loans_df -> {}".format(kiva_loans_df.shape))
+print("\nFeatures in kiva_loans_df -> {}".format(kiva_loans_df.columns.values))
 
 
 # In[ ]:
 
 
-def plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id):
-  air_visit_and_date_info = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date', copy=True)
-
-  # Rainbow-ranked by median visitor over all restaurants.
-  COLORS = {
-    'Saturday': 'red',
-    'Sunday': 'orange',
-    'Friday': 'green',
-    'Thursday': 'blue',
-    'Wednesday': 'purple',
-    'Tuesday': 'brown',
-    'Monday': 'black',
-  }
-
-  traces = []
-  for day_of_week in COLORS:
-    # Plots the number of visitors to this restaurant over time.
-    x = air_visit_and_date_info['visit_date']
-    y = air_visit_and_date_info.loc[air_visit_and_date_info['day_of_week'] == day_of_week]['visitors']
-    # Adds points to the plot.
-    traces.append(go.Scatter(
-      x=x,
-      y=y,
-      mode='markers',
-      name=day_of_week,
-      line=dict(color=COLORS[day_of_week]),
-    ))
-    # Adds a rolling mean line.
-    traces.append(go.Scatter(
-      x=x,
-      y=y.rolling(7, min_periods=1, center=True).mean(),
-      mode='lines',
-      name=day_of_week,
-      line=dict(color=COLORS[day_of_week]),
-    ))
-
-  layout = go.Layout(
-    title='Visitors to resaurant ' + air_id + ' by day of week, with rolling averages',
-    yaxis=dict(title='# Visitors')
-  )
-  iplot(go.Figure(data=traces, layout=layout))
+# Multidimensional Poverty Index (MPI)
+print("Shape of kiva_mpi_df -> {}".format(kiva_mpi_df.shape))
+print("\nFeatures in kiva_mpi_df -> {}".format(kiva_mpi_df.columns.values))
 
 
 # In[ ]:
 
 
-from scipy import stats
-
-def plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id):
-  air_reserve = data[AIR_RESERVE][data[AIR_RESERVE]['air_store_id'] == air_id]
-  # Some test restaurants have no AIR reservation data.
-  if air_reserve.shape[0] == 0:
-    print('There\'s no reservation data for ' + air_id + '.')
-  else:
-    df = air_reserve.copy()
-    # Converts datetimes to days. Also converts to np.datetime64 because the air_visit_data's date type np.datetime64[ns].
-    df['visit_date'] = df['visit_datetime'].map(lambda dt: np.datetime64(dt.date()))
-    # Groups reservations by visit day, and sums the # seats reserved
-    reserved_seats = df.groupby('visit_date')['reserve_visitors'].sum()
-    reserved_seats = reserved_seats.reset_index()  # Before the index consisted of dates. reset_index makes the index positions, and makes the dates a column
-    reserved_seats_and_visitors = pd.merge(reserved_seats, air_visit_data, how='inner', on='visit_date')
-
-    # Plots the number of visitors to this restaurant over time.
-    x = reserved_seats_and_visitors['reserve_visitors']
-    y = reserved_seats_and_visitors['visitors'] 
-
-    layout = go.Layout(
-      title='Visitors vs seats reserved for resaurant ' + air_id,
-      xaxis=dict(title='# Reserve Visitors'),
-      yaxis=dict(title='# Visitors')
-    )
-
-    traces = []
-    traces.append(go.Scatter(x=x, y=y, text=reserved_seats_and_visitors['visit_date'], mode='markers'))
-    # TODO: Size the point based on the average size of the requested reservation.
-    # Color the point based on how early the reservations for that day were ploced.
-
-    # Overlays the linear trend line of reserved seats vs visitors.
-    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
-    line = slope * x + intercept
-    traces.append(go.Scatter(x=x, y=line, mode='lines'))
-    
-    fig = go.Figure(data=traces, layout=layout)
-    iplot(fig)  
-    
-  if hpg_id:
-    # TODO: plot HPG reservation data.
-    pass
+print("Shape of kiva_theme_id_df -> {}".format(kiva_theme_id_df.shape))
+print("\nFeatures in kiva_theme_id_df -> {}".format(kiva_theme_id_df.columns.values))
 
 
 # In[ ]:
 
 
-def plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id):
-  air_visit_and_dates = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date')
-  days_of_week = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  air_visits_on_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 1]
-  air_visits_on_non_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 0]
-  holiday_data = {}
-  non_holiday_data = {}
-  for day in days_of_week:
-    holiday_data[day] = air_visits_on_holidays[air_visits_on_holidays['day_of_week'] == day]['visitors'].median()
-    non_holiday_data[day] = air_visits_on_non_holidays[air_visits_on_non_holidays['day_of_week'] == day]['visitors'].median()
+print("Shape of kiva_theme_region_df -> {}".format(kiva_theme_region_df.shape))
+print("\nFeatures in kiva_theme_region_df -> {}".format(kiva_theme_region_df.columns.values))
 
-  traces = []
-  traces.append(go.Bar(
-    x=days_of_week,
-    y=[holiday_data[day] for day in days_of_week],
-    name='On a holiday',
-  ))
-  traces.append(go.Bar(
-    x=days_of_week,
-    y=[non_holiday_data[day] for day in days_of_week],
-    name='On a non-holiday',
-  ))
-  layout = go.Layout(
-    title='Median visitors to ' + air_id + ' on holidays and non-holidays',
-    yaxis=dict(title='Median # Visitors')
-  )
-  iplot(go.Figure(data=traces, layout=layout))
+
+# ### 2.4 Basic Info of Data
+
+# In[ ]:
+
+
+kiva_loans_df.info()
 
 
 # In[ ]:
 
 
-# Plots data for several random restaurants.
-NUM_RESTAURANTS = 7
+kiva_mpi_df.info()
 
-# We're using Plotly in offline mode
-# because it appears plotly the credentials on our GCE VM.
-from plotly.offline import init_notebook_mode, iplot
-import plotly.graph_objs as go
-import random
 
-init_notebook_mode(connected=True)
+# In[ ]:
 
-# Converts date strings to datetime objects.
-data[AIR_VISIT_DATA]['visit_date'] = pd.to_datetime(data[AIR_VISIT_DATA]['visit_date'])
-data[DATE_INFO]['visit_date'] = pd.to_datetime(data[DATE_INFO]['visit_date'])
-data[AIR_RESERVE]['visit_datetime'] = pd.to_datetime(data[AIR_RESERVE]['visit_datetime'])
-data[AIR_RESERVE]['reserve_datetime'] = pd.to_datetime(data[AIR_RESERVE]['reserve_datetime'])
 
-for i in range(NUM_RESTAURANTS):
-  random_index = random.randint(0, data[SAMPLE_SUBMISSION].shape[0])
-  air_id = data[SAMPLE_SUBMISSION]['id'][random_index][:len('air_00a91d42b08b08d9')]
-  
-  # Plots the number of visitors to this restaurant over time.
-  air_visit_data = data[AIR_VISIT_DATA][data[AIR_VISIT_DATA]['air_store_id'] == air_id]
-  
-  # The given air store may or may not be represented in the hgp store data.
-  air_ids = data[STORE_ID_RELATION]['air_store_id']
-  idx = air_ids[air_ids == air_id].index
-  hpg_id = ''
-  if len(idx) > 0:
-    hpg_id = data[STORE_ID_RELATION]['hpg_store_id'][idx[0]]
+kiva_theme_id_df.info()
 
-  plot_number_of_visitors_to_one_resaturant(data, air_visit_data, air_id)
-  plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id)
-  plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id)
-  plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id)
 
+# In[ ]:
+
+
+kiva_theme_region_df.info()
+
+
+# ### 2.5 Sample Data from DataFrames
+
+# In[ ]:
+
+
+kiva_loans_df.head()
+
+
+# In[ ]:
+
+
+kiva_mpi_df.head()
+
+
+# In[ ]:
+
+
+kiva_theme_id_df.head()
+
+
+# In[ ]:
+
+
+kiva_theme_region_df.head()
+
+
+# ## 3 Data Analysis
+
+# ### 3.1 Data Analysis - kiva_loans_df
+# 
+# Below we will try to gather few details about the features present in the kiva_loans_df. Some of the important features that we would be looking at include:
+# 
+# 1. loan_amount
+# 2. funded_amount
+# 3. activity
+# 4. sector
+# 5. country
+# 6. region
+# 7. term_in_months
+# 8. lender_count
+# 9. borrower_genders
+# 10. repayment_interval
+
+# #### 3.1.1 EDA on Loan Amount
+
+# Below we will plot a Histogram of the Loan Amount to check the distribution.
+
+# In[ ]:
+
+
+_ = plt.hist(kiva_loans_df['loan_amount'])
+
+
+# Looks like most of the data is spread between `$25` (the lowest amount) and `$10,000`. We will plot a BoxPlot below to see if there are any outliers and how spread is the data.
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,3))
+_ = plt.boxplot(kiva_loans_df['loan_amount'], vert=False)
+
+
+# - The BoxPlot shows that there is a potential outlier of $100,000 and also we see that the data is highly centred around the lowest value. We will see a BoxPlot by removing the outlier.
+# - We will use the describe method on the DataFrame to get better insights of the data.
+
+# In[ ]:
+
+
+# Detail of the borrower who is looking for the highest loan amount
+kiva_loans_df[kiva_loans_df.loan_amount == 100000]
+
+
+# We can see from the above entry that the highest Loan Amount is indeed funded. The highest loan is taken to `create more than 300 jobs for women and farmer...`
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,3))
+_ = plt.boxplot(kiva_loans_df[kiva_loans_df.loan_amount < 100000].loan_amount, vert=False)
+
+
+# Detail of the borrowers who are looking for loan amount greater than $50,000 and who got funded
+
+# In[ ]:
+
+
+# Detail of the borrowers who are looking for loan amount greater than $50,000 and who got funded
+kiva_loans_df[(kiva_loans_df.loan_amount >= 50000) & (kiva_loans_df.funded_amount >= 50000)]
+
+
+# In[ ]:
+
+
+print(kiva_loans_df['loan_amount'].describe())
+
+
+# - Looks like the data is heavily `Right Skewed`. We can see that the max amount is `$100,000` but the **Q3** (75%) lies at `$1000` only.
+# - Below we will plot a histogram until thrice the SD to check the distribution.
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,5))
+_ = plt.hist(kiva_loans_df['loan_amount'], range=(25, np.std(kiva_loans_df['loan_amount'])*3), bins = 50)
+
+
+# As can be seen from the above histrogram most of the data lies below `$500`. Below we will see a one last histogram for the data between `$25` and `$500`.
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,5))
+_ = plt.hist(kiva_loans_df['loan_amount'], range=(25, 500), bins = 10)
+
+
+# #### 3.1.2 EDA on Funded Amount
+
+# Below we will plot a Histogram of the Funded Amount to check the distribution.
+
+# In[ ]:
+
+
+_ = plt.hist(kiva_loans_df['funded_amount'])
+
+
+# Looks like most of the data is spread between `$25` (the lowest amount) and `$10,000`. We will plot a BoxPlot below to see if there are any outliers and how spread is the data.
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,3))
+_ = plt.boxplot(kiva_loans_df['funded_amount'], vert=False)
+
+
+# - The BoxPlot shows that there is a potential outlier of $100,000 and also we see that the data is highly centred around the lowest value. We will see a BoxPlot by removing the outlier.
+# - We will use the describe method on the DataFrame to get better insights of the data.
+
+# In[ ]:
+
+
+# Detail of the borrower who took the highest loan amount
+kiva_loans_df[kiva_loans_df.funded_amount == 100000]
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,3))
+_ = plt.boxplot(kiva_loans_df[kiva_loans_df.funded_amount < 100000].funded_amount, vert=False)
+
+
+# In[ ]:
+
+
+# Detail of the borrowers who took loan amount greater than $50,000
+kiva_loans_df[kiva_loans_df.funded_amount >= 50000]
+
+
+# In[ ]:
+
+
+print(kiva_loans_df['funded_amount'].describe())
+
+
+# Looks like the data is heavily `Right Skewed`. We can see that the max amount is `$100,000` but the **Q3** (75%) lies at `$900` only.
+
+# Below we will plot a histogram until thrice the SD to check the distribution.
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,5))
+_ = plt.hist(kiva_loans_df['funded_amount'], range=(25, np.std(kiva_loans_df['funded_amount'])*3), bins = 50)
+
+
+# As can be seen from the above histrogram most of the data lies below `$500`. Below we will see a one last histogram for the data between `$25` and `$500`.
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,5))
+_ = plt.hist(kiva_loans_df['funded_amount'], range=(25, 500), bins = 10)
+
+
+# #### 3.1.3 EDA on Activity
+
+# Below we will see the different activites that are supported by **Kiva**
+
+# In[ ]:
+
+
+print(kiva_loans_df['activity'].unique())
+
+
+# As there are many `Activities` we will print a table below.
+
+# In[ ]:
+
+
+kiva_loans_df[['activity']].groupby(kiva_loans_df.activity)                            .count()                            .sort_values('activity', ascending=False)
+
+
+# From the above table we can see that there are a total of 163 different activities. Below we will visualize the activity count for the **top 50 activities**.
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_loans_df['activity'], order = kiva_loans_df['activity'].value_counts().iloc[0:50].index)
+plt.title("Kiva Activity Count", fontsize=20)
+plt.xlabel('Kiva Activity', fontsize=18)
+plt.ylabel('Activity Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# As we can see above **`Farming`** has the highest activity count. Below are the top 10 activites from the snapshot data:
+# 
+# 1. Farming
+# 2. General Store
+# 3. Personal Housing Expenses
+# 4. Food Production/Sales
+# 5. Agriculture
+# 6. Pigs
+# 7. Retail
+# 8. Clothing Sales
+# 9. Home Appliances
+# 10. Higher education costs
+# 
+
+# #### 3.1.4 EDA on Sector
+
+# Below we will see the different sectors that are supported by **Kiva**
+
+# In[ ]:
+
+
+print(kiva_loans_df['sector'].unique())
+
+
+# Below we will see the count for each sector.
+
+# In[ ]:
+
+
+kiva_loans_df[['sector']].groupby(kiva_loans_df.sector)                            .count()                            .sort_values('sector', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,4))
+sns.countplot(kiva_loans_df['sector'], order = kiva_loans_df['sector'].value_counts().index)
+plt.title("Kiva Sector Count", fontsize=20)
+plt.xlabel('Kiva Sector List', fontsize=18)
+plt.ylabel('Sector Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# As we can see in the above visualization, `Agriculture` sector is predominantly funded by Kiva. Following Agriculture, `Food` and `Retail` occupy the next slots.
+
+# #### 3.1.5 EDA on Country
+
+# In[ ]:
+
+
+print(kiva_loans_df['country'].unique())
+
+
+# In[ ]:
+
+
+kiva_loans_df[['country']].groupby(kiva_loans_df.country)                            .count()                            .sort_values('country', ascending=False)
+
+
+# We can see that Kiva is funding to users in 87 countries with Philippines, Kenya and El Salvador topping the list.
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_loans_df['country'], order = kiva_loans_df['country'].value_counts().iloc[0:50].index)
+plt.title("Kiva Funding Countries", fontsize=20)
+plt.xlabel('Funded Countries', fontsize=18)
+plt.ylabel('Country Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# From the above visualization we can see that the total number of fundings for `Philippines` is nearly double compared to its next neighbour `Kenya`.
+
+# #### 3.1.6 EDA on Region
+
+# In[ ]:
+
+
+print("Total Regions Funded by Kiva - {}".format(np.count_nonzero(kiva_loans_df['region'].unique())))
+
+
+# As there are more than 12k regions in the 87 countries. We will just print the top 50 regions funded by Kiva.
+
+# In[ ]:
+
+
+kiva_loans_df[['region']].groupby(kiva_loans_df.region)                            .count()                            .sort_values('region', ascending=False)                            .iloc[0:49]
+
+
+# #### 3.1.7 EDA on Term in Months
+
+# In[ ]:
+
+
+print("Total Funding Terms on Kiva - {}".format(np.count_nonzero(kiva_loans_df['term_in_months'].unique())))
+
+
+# In[ ]:
+
+
+print("Funding Terms on Kiva Ranges From {} Months and {} Months ".format(np.min(kiva_loans_df['term_in_months'].unique()), np.max(kiva_loans_df['term_in_months'].unique())))
+
+
+# In[ ]:
+
+
+kiva_loans_df[['term_in_months']].groupby(kiva_loans_df.term_in_months)                            .count()                            .sort_values('term_in_months', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_loans_df['term_in_months'], order = kiva_loans_df['term_in_months'].value_counts().iloc[0:50].index)
+plt.title("Kiva Funding Term in Months", fontsize=20)
+plt.xlabel('Term in Months', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# From the above visualization we can see that most of the funding is given for a tenure of `14 Months` followed by `8 Months` and `11 Months`.
+
+# #### 3.1.8 EDA on Lender Count
+
+# In[ ]:
+
+
+print("Total Lender Counts On Kiva - {}".format(np.count_nonzero(kiva_loans_df['lender_count'].unique())))
+
+
+# In[ ]:
+
+
+print("Lender Count on Kiva Ranges From {} Lenders and {} Lenders".format(np.min(kiva_loans_df['lender_count'].unique()), np.max(kiva_loans_df['lender_count'].unique())))
+
+
+# Looks like there are some entries with `0 Lenders`. We will see what those entries are below by printing some sample.
+
+# In[ ]:
+
+
+kiva_loans_df[kiva_loans_df.lender_count == 0].sample(5)
+
+
+# From the above table it is clear that `0 Lenders` corresponds to those entries where the borrowers are still looking for a lender who can give them a Loan. Looks Fair!!
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_loans_df['lender_count'], order = kiva_loans_df['lender_count'].value_counts().iloc[0:50].index)
+plt.title("Kiva Funding Lender Count", fontsize=20)
+plt.xlabel('Lender Count', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# From above visualization we can see that most of the Lending Groups are of `8 Lenders` followed by `7 Lenders` and `9 Lenders`.
+
+# #### 3.1.9 EDA on Borrower Gender
+
+# In[ ]:
+
+
+print("Gender Counts - {}".format(np.count_nonzero(kiva_loans_df['borrower_genders'].unique())))
+
+
+# `11229 Gender Counts`, looks suspicious. Let's see whats happening.
+
+# In[ ]:
+
+
+kiva_loans_df[['borrower_genders']].groupby(kiva_loans_df.borrower_genders)                            .count()                            .sort_values('borrower_genders', ascending=False)                            .iloc[0:9]
+
+
+# Looks like the Gender information is capturing the details of all the Borrowers and not the main Borrower.
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_loans_df['borrower_genders'], order = kiva_loans_df['borrower_genders'].value_counts().iloc[0:5].index)
+plt.title("Kiva Funding Borrower Count by Gender", fontsize=20)
+plt.xlabel('Borrower Gender', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# From the above visualization we can clearly see that `Women` are the main Borrowers from the `Kiva` platform.
+
+# #### 3.1.10 EDA on Repayment Interval
+
+# In[ ]:
+
+
+print(kiva_loans_df['repayment_interval'].unique())
+
+
+# In[ ]:
+
+
+kiva_loans_df[['repayment_interval']].groupby(kiva_loans_df.repayment_interval)                            .count()                            .sort_values('repayment_interval', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,4))
+sns.countplot(kiva_loans_df['repayment_interval'], order = kiva_loans_df['repayment_interval'].value_counts().iloc[0:49].index)
+plt.title("Kiva Repayment Interval", fontsize=20)
+plt.xlabel('Repayment Interval', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# We see that the most of the users are making their payment `Monthly` and there are substantial number of users who are maling `Irregular` payments.
+
+# ### 3.2 Data Analysis - kiva_mpi_df
+# 
+# Below we will try to gather few details about the features present in the kiva_mpi_df. Some of the important features that we would be looking at include:
+# 
+# 1. MPI
+
+# In[ ]:
+
+
+print("Country with Highest MPI ({:.5f}) - {}".format(kiva_mpi_df['MPI'].max(), kiva_mpi_df[kiva_mpi_df.MPI == kiva_mpi_df['MPI'].max()].country.iloc[0]))
+print("Country with Lowest MPI ({:.5f}) - {}".format(kiva_mpi_df['MPI'].min(), kiva_mpi_df[kiva_mpi_df.MPI == kiva_mpi_df['MPI'].min()].country.iloc[0]))
+
+
+# ### 3.3 Data Analysis - kiva_theme_id_df
+# 
+# Below we will try to gather few details about the features present in the kiva_theme_id_df. Some of the important features that we would be looking at include:
+# 
+# 1. Loan Theme Type
+
+# In[ ]:
+
+
+print(kiva_theme_id_df['Loan Theme Type'].unique())
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_theme_id_df['Loan Theme Type'], order = kiva_theme_id_df['Loan Theme Type'].value_counts().iloc[0:50].index)
+plt.title("Kiva Loan Theme Type", fontsize=20)
+plt.xlabel('Loan Theme Type', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# As can be seen from the above visualization, most of the Funds are spent for `General`, `Underserved` and `Agriculture` followed by `Rural Inclusion` and `Water`
+
+# ### 3.4 Data Analysis - kiva_theme_region_df
+# 
+# Below we will try to gather few details about the features present in the kiva_theme_region_df. Some of the important features that we would be looking at include:
+# 
+# 1. Field Partner Name
+# 2. sector
+# 3. Loan Theme Type
+# 4. country
+
+# #### 3.4.1 EDA on Field Partner Name
+
+# In[ ]:
+
+
+print(kiva_theme_region_df['Field Partner Name'].unique())
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_theme_region_df['Field Partner Name'], order = kiva_theme_region_df['Field Partner Name'].value_counts().iloc[0:50].index)
+plt.title("Kiva Field Partner Name", fontsize=20)
+plt.xlabel('Field Partner Name', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# #### 3.4.2 EDA on Sector
+
+# In[ ]:
+
+
+print(kiva_theme_region_df['sector'].unique())
+
+
+# In[ ]:
+
+
+kiva_theme_region_df[['sector']].groupby(kiva_theme_region_df.sector)                            .count()                            .sort_values('sector', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,4))
+sns.countplot(kiva_theme_region_df['sector'], order = kiva_theme_region_df['sector'].value_counts().index)
+plt.title("Kiva Funding Sector", fontsize=20)
+plt.xlabel('Funding Sector', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# #### 3.4.3 EDA on Loan Theme Type
+
+# In[ ]:
+
+
+print(kiva_theme_region_df['Loan Theme Type'].unique())
+
+
+# In[ ]:
+
+
+kiva_theme_region_df[['Loan Theme Type']].groupby(kiva_theme_region_df['Loan Theme Type'])                            .count()                            .sort_values('Loan Theme Type', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_theme_region_df['Loan Theme Type'], order = kiva_theme_region_df['Loan Theme Type'].value_counts().iloc[0:50].index)
+plt.title("Kiva Loan Theme Type", fontsize=20)
+plt.xlabel('Loan Theme Type', fontsize=18)
+plt.ylabel('Funding Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# #### 3.4.4 EDA on Country
+
+# In[ ]:
+
+
+print(kiva_theme_region_df['country'].unique())
+
+
+# In[ ]:
+
+
+kiva_theme_region_df[['country']].groupby(kiva_theme_region_df.country)                            .count()                            .sort_values('country', ascending=False)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.countplot(kiva_theme_region_df['country'], order = kiva_theme_region_df['country'].value_counts().iloc[0:50].index)
+plt.title("Kiva Loan Themes by Country", fontsize=20)
+plt.xlabel('Loan Themes by Country', fontsize=18)
+plt.ylabel('Loan Count', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# ### 3.5 Funded Amount by Country
+
+# In[ ]:
+
+
+funded_amnt_by_cntry_df = pd.DataFrame(kiva_loans_df.groupby('country').sum()['funded_amount'].sort_values(ascending=False)).reset_index()
+
+
+# In[ ]:
+
+
+print(funded_amnt_by_cntry_df[:5])
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.barplot(x='country', y='funded_amount', data=funded_amnt_by_cntry_df[:25])
+plt.title("Kiva Funded Amount by Country", fontsize=20)
+plt.xlabel('Funded Amount by Country', fontsize=18)
+plt.ylabel('Funded Amount', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# ### 3.6 Loan Amount by Country
+
+# In[ ]:
+
+
+loan_amnt_by_cntry_df = pd.DataFrame(kiva_loans_df.groupby('country').sum()['loan_amount'].sort_values(ascending=False)).reset_index()
+
+
+# In[ ]:
+
+
+print(loan_amnt_by_cntry_df[:5])
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(13,4))
+sns.barplot(x='country', y='loan_amount', data=loan_amnt_by_cntry_df[:25])
+plt.title("Kiva Loan Amount by Country", fontsize=20)
+plt.xlabel('Loan Amount by Country', fontsize=18)
+plt.ylabel('Loan Amount', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# In[ ]:
+
+
+loan_funded_amnt_by_cntry_df = pd.DataFrame(kiva_loans_df.groupby('country').sum())[['loan_amount', 'funded_amount']].sort_values(by=['loan_amount', 'funded_amount'], ascending=False).reset_index()
+
+
+# In[ ]:
+
+
+loan_funded_amnt_by_cntry_df[:5]
+
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(13,4))
+ax = fig.add_subplot(111)
+ax_cpy = ax.twinx()
+width = 0.4
+
+loan_funded_amnt_by_cntry_df.set_index('country').loan_amount[:25].plot(kind='bar', color='DarkOrange', ax=ax, width=width, position=1)
+loan_funded_amnt_by_cntry_df.set_index('country').funded_amount[:25].plot(kind='bar', color='Gray', ax=ax_cpy, width=width, position=0)
+
+plt.title("Kiva Loan Amount vs Funded Amount by Country", fontsize=20)
+ax.set_xlabel('Loan Amount vs Funded Amount by Country', fontsize=18)
+ax.set_ylabel('Loan Amount', fontsize=18)
+ax_cpy.set_ylabel('Funded Amount', fontsize=18)
+plt.xticks(fontsize=14, rotation=90)
+plt.show()
+
+
+# # To be Continued .....
+
+# ## Please share your feedback and Add Your Vote on the Top Right Corner :-)

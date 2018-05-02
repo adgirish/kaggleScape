@@ -1,100 +1,155 @@
-#Enhancing your baseline
+########################################################
+'''
+READ MY COMMENT BELOW
+'''
+########################################################
 
-__author__ = 'BingQing Wei'
-
-import operator
 import os
-import inflect
-import re
+import operator
+from num2words import num2words
+import gc
+
 
 INPUT_PATH = r'../input'
-SUBM_PATH = r'.'
+DATA_INPUT_PATH = r'../input/en_with_types'
+SUBM_PATH = INPUT_PATH
 
-engine = inflect.engine()
+SUB = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+SUP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+OTH = str.maketrans("፬", "4")
 
-NUMBER_TMP = r'^(?!0)[\d]+[\d,]*$'
-DECIMAL_TMP = r'^(?!0)\d*\.\d+$'
-MONEY_TMP = r'^\$([^a-zA-Z]*)\s*([a-zA-Z]*)$'
+print('Train start...')
 
-def inflect_transform(data):
-    data = re.sub(r'-|,|\band\b', ' ', data)
-    data = data.split(' ')
-    data = [x for x in data if x is not '']
-    return  ' '.join(data)
-
-def DIGIT_transform(data):
-    neo_data = re.sub(r',|\s*', '', data)
-    if int(neo_data) > 1000 and ',' not in data: return data
-    return inflect_transform(engine.number_to_words(int(neo_data)))
-
-def NUMBER_transform(data):
-    data = re.sub(r',|\s*', '', data)
-    return inflect_transform(engine.number_to_words(int(data)))
-
-def DECIMAL_transform(data):
-    data = re.sub(',|\s*', '', data)
-    data = inflect_transform(engine.number_to_words(float(data)))
-    return re.sub(r'^\bzero\s*', '', data)
-
-def MONEY_transform(data):
-    m = re.match(MONEY_TMP, data)
-    ts = m.group(1)
-    if re.match(NUMBER_TMP, ts):
-        ts = NUMBER_transform(ts)
+file = "en_train.csv"
+train = open(os.path.join(INPUT_PATH, "en_train.csv"), encoding='UTF8')
+line = train.readline()
+res = dict()
+total = 0
+not_same = 0
+while 1:
+    line = train.readline().strip()
+    if line == '':
+        break
+    total += 1
+    pos = line.find('","')
+    text = line[pos + 2:]
+    if text[:3] == '","':
+        continue
+    text = text[1:-1]
+    arr = text.split('","')
+    if arr[0] != arr[1]:
+        not_same += 1
+    if arr[0] not in res:
+        res[arr[0]] = dict()
+        res[arr[0]][arr[1]] = 1
     else:
-        ts = DECIMAL_transform(ts)
-    if m.group(2).lower() == 'm':
-        return ' '.join([ts, 'million', 'dollars'])
-    elif m.group(2) is not '':
-        return ' '.join([ts, m.group(2).lower(), 'dollars'])
-    else: return ' '.join([ts, 'dollars'])
+        if arr[1] in res[arr[0]]:
+            res[arr[0]][arr[1]] += 1
+        else:
+            res[arr[0]][arr[1]] = 1
+train.close()
+print(file + ':\tTotal: {} Have diff value: {}'.format(total, not_same))
 
-def verbose_wrapper(func, data, verbose=False):
-    if verbose: print('Before: ', data)
-    data = func(data)
-    if verbose: print('After: ', data)
-    return data
-
-def solve():
-    print('Train start...')
-    changes = 0
-    total = 0
-    out = open(os.path.join(SUBM_PATH, 'enhanced_sub.csv'), "w", encoding='UTF8')
-    out.write('"id","after"\n')
-    test = open(os.path.join(INPUT_PATH, "baseline.csv"), encoding='UTF8')
-    line = test.readline().strip()
+files = os.listdir(DATA_INPUT_PATH)
+for file in files:
+    train = open(os.path.join(DATA_INPUT_PATH, file), encoding='UTF8')
     while 1:
-        line = test.readline().strip()
+        line = train.readline().strip()
         if line == '':
             break
-
-        pos = line.find(',')
-        i1 = line[:pos]
-        line = line[pos + 1:]
-
-        line = line[1:-1]
-        out.write(i1 + ',')
-
-        try:
-            if re.match(DECIMAL_TMP, line):
-                line = verbose_wrapper(DECIMAL_transform, data=line, verbose=False)
-                changes += 1
-            elif re.match(MONEY_TMP, line):
-                line = verbose_wrapper(MONEY_transform, data=line, verbose=False)
-                changes += 1
-            elif re.match(NUMBER_TMP, line):
-                line = verbose_wrapper(DIGIT_transform, data=line, verbose=False)
-                changes += 1
-        except Exception as ex:
-            print('Exception: ', ex)
-            print('Error in: ', line)
-        out.write('"' + line + '"')
-        out.write('\n')
         total += 1
+        pos = line.find('\t')
+        text = line[pos + 1:]
+        if text[:3] == '':
+            continue
+        arr = text.split('\t')
+        if arr[0] == '<eos>':
+            continue
+        if arr[1] != '<self>':
+            not_same += 1
 
-    print('Total: {} Changed: {}'.format(total, changes))
-    test.close()
-    out.close()
+        if arr[1] == '<self>' or arr[1] == 'sil':
+            arr[1] = arr[0]
 
-if __name__ == '__main__':
-    solve()
+        if arr[1] == '<self>' or arr[1] == 'sil':
+            arr[1] = arr[0]
+
+        if arr[0] not in res:
+            res[arr[0]] = dict()
+            res[arr[0]][arr[1]] = 1
+        else:
+            if arr[1] in res[arr[0]]:
+                res[arr[0]][arr[1]] += 1
+            else:
+                res[arr[0]][arr[1]] = 1
+    train.close()
+    print(file + ':\tTotal: {} Have diff value: {}'.format(total, not_same))
+    gc.collect()
+
+sdict = {}
+sdict['km2'] = 'square kilometers'
+sdict['km'] = 'kilometers'
+sdict['kg'] = 'kilograms'
+sdict['lb'] = 'pounds'
+sdict['dr'] = 'doctor'
+sdict['m²'] = 'square meters'
+
+total = 0
+changes = 0
+out = open(os.path.join(SUBM_PATH, 'baseline_ext_en.csv'), "w", encoding='UTF8')
+out.write('"id","after"\n')
+test = open(os.path.join(INPUT_PATH, "en_test.csv"), encoding='UTF8')
+line = test.readline().strip()
+while 1:
+    line = test.readline().strip()
+    if line == '':
+        break
+
+    pos = line.find(',')
+    i1 = line[:pos]
+    line = line[pos + 1:]
+
+    pos = line.find(',')
+    i2 = line[:pos]
+    line = line[pos + 1:]
+
+    line = line[1:-1]
+    out.write('"' + i1 + '_' + i2 + '",')
+    if line in res:
+        srtd = sorted(res[line].items(), key=operator.itemgetter(1), reverse=True)
+        out.write('"' + srtd[0][0] + '"')
+        changes += 1
+    else:
+        if len(line) > 1:
+            val = line.split(',')
+            if len(val) == 2 and val[0].isdigit and val[1].isdigit:
+                line = ''.join(val)
+
+        if line.isdigit():
+            srtd = line.translate(SUB)
+            srtd = srtd.translate(SUP)
+            srtd = srtd.translate(OTH)
+            out.write('"' + num2words(float(srtd)) + '"')
+            changes += 1
+        elif len(line.split(' ')) > 1:
+            val = line.split(' ')
+            for i, v in enumerate(val):
+                if v.isdigit():
+                    srtd = v.translate(SUB)
+                    srtd = srtd.translate(SUP)
+                    srtd = srtd.translate(OTH)
+                    val[i] = num2words(float(srtd))
+                elif v in sdict:
+                    val[i] = sdict[v]
+
+            out.write('"' + ' '.join(val) + '"')
+            changes += 1
+        else:
+            out.write('"' + line + '"')
+
+    out.write('\n')
+    total += 1
+
+print('Total: {} Changed: {}'.format(total, changes))
+test.close()
+out.close()

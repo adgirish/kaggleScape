@@ -1,119 +1,197 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jun 29 14:00:37 2015
+
+@author: alexandrebarachant
+
+During a hand movement, the mu (~10Hz) and beta (~20Hz) oscillations are suppressed 
+over the contralateral motor cortex, i.e. we can observe a reduction of the 
+signal power in the corresponding frequency band. This effect is know as 
+Event Related Desynchronization.
+
+I used MNE python to epoch signal corresponding to the hand movement, by assuming that 
+the hand movement occur before the 'Replace' event.
+
+Using Common spatial patterns algorithm, i extract spatial filters that maximize 
+the difference of variance during and after the movement, and then visualize the 
+corresponding spectrum. 
+
+For each subject, we should see a spot over the electrode C3 (Left motor cortex,
+corresponding to a right hand movement), and a decrease of the signal power in 
+10 and 20 Hz during the movement (by reference to after the movement).
+
+Each subject has a different cortex organization, and a different apha and beta 
+peak. The CSP algorithm is also sensitive to artefacts, so it could give eronous 
+maps (for example subject 5 seems to trig on eye movements)
+
+"""
+
 import numpy as np
-from sklearn.metrics import accuracy_score, mean_absolute_error
+import pandas as pd
+from mne.io import RawArray
+from mne.channels import read_montage
+from mne.epochs import concatenate_epochs
+from mne import create_info, find_events, Epochs
+from mne.viz.topomap import _prepare_topo_plot, plot_topomap
+from mne.decoding import CSP
 
-# The following 3 functions have been taken from Ben Hamner's github repository
-# https://github.com/benhamner/Metrics
-def confusion_matrix(rater_a, rater_b, min_rating=None, max_rating=None):
-    """
-    Returns the confusion matrix between rater's ratings
-    """
-    assert(len(rater_a) == len(rater_b))
-    if min_rating is None:
-        min_rating = min(rater_a + rater_b)
-    if max_rating is None:
-        max_rating = max(rater_a + rater_b)
-    num_ratings = int(max_rating - min_rating + 1)
-    conf_mat = [[0 for i in range(num_ratings)]
-                for j in range(num_ratings)]
-    for a, b in zip(rater_a, rater_b):
-        conf_mat[a - min_rating][b - min_rating] += 1
-    return conf_mat
+from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.cross_validation import cross_val_score, LeaveOneLabelOut
+from glob import glob
 
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-def histogram(ratings, min_rating=None, max_rating=None):
-    """
-    Returns the counts of each type of rating that a rater made
-    """
-    if min_rating is None:
-        min_rating = min(ratings)
-    if max_rating is None:
-        max_rating = max(ratings)
-    num_ratings = int(max_rating - min_rating + 1)
-    hist_ratings = [0 for x in range(num_ratings)]
-    for r in ratings:
-        hist_ratings[r - min_rating] += 1
-    return hist_ratings
+from scipy.signal import welch
+from mne import pick_types
 
-
-def quadratic_weighted_kappa(y, y_pred):
-    """
-    Calculates the quadratic weighted kappa
-    axquadratic_weighted_kappa calculates the quadratic weighted kappa
-    value, which is a measure of inter-rater agreement between two raters
-    that provide discrete numeric ratings.  Potential values range from -1
-    (representing complete disagreement) to 1 (representing complete
-    agreement).  A kappa value of 0 is expected if all agreement is due to
-    chance.
-    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
-    each correspond to a list of integer ratings.  These lists must have the
-    same length.
-    The ratings should be integers, and it is assumed that they contain
-    the complete range of possible ratings.
-    quadratic_weighted_kappa(X, min_rating, max_rating), where min_rating
-    is the minimum possible rating, and max_rating is the maximum possible
-    rating
-    """
-    rater_a = y
-    rater_b = y_pred
-    min_rating=None
-    max_rating=None
-    rater_a = np.array(rater_a, dtype=int)
-    rater_b = np.array(rater_b, dtype=int)
-    assert(len(rater_a) == len(rater_b))
-    if min_rating is None:
-        min_rating = min(min(rater_a), min(rater_b))
-    if max_rating is None:
-        max_rating = max(max(rater_a), max(rater_b))
-    conf_mat = confusion_matrix(rater_a, rater_b,
-                                min_rating, max_rating)
-    num_ratings = len(conf_mat)
-    num_scored_items = float(len(rater_a))
-
-    hist_rater_a = histogram(rater_a, min_rating, max_rating)
-    hist_rater_b = histogram(rater_b, min_rating, max_rating)
-
-    numerator = 0.0
-    denominator = 0.0
-
-    for i in range(num_ratings):
-        for j in range(num_ratings):
-            expected_count = (hist_rater_a[i] * hist_rater_b[j]
-                              / num_scored_items)
-            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
-            numerator += d * conf_mat[i][j] / num_scored_items
-            denominator += d * expected_count / num_scored_items
-
-    return (1.0 - numerator / denominator)
+def creat_mne_raw_object(fname):
+    """Create a mne raw instance from csv file"""
+    # Read EEG file
+    data = pd.read_csv(fname)
     
-Y_real = np.array([1,2,3,1,4,4,4,4,4,4])  
-Y_pred = np.array([4,2,3,1,4,4,4,4,4,4])
+    # get chanel names
+    ch_names = list(data.columns[1:])
+    
+    # read EEG standard montage from mne
+    montage = read_montage('standard_1005',ch_names)
 
-print("ONE EXTREME ERROR")
-print("Ground truth:\t%s"%Y_real)
-print("Predicted   :\t%s"%Y_pred)
-print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
-print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
-print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
-print()
+    # events file
+    ev_fname = fname.replace('_data','_events')
+    # read event file
+    events = pd.read_csv(ev_fname)
+    events_names = events.columns[1:]
+    events_data = np.array(events[events_names]).T
+    
+    # concatenate event file and data
+    data = np.concatenate((1e-6*np.array(data[ch_names]).T,events_data))        
+    
+    # define channel type, the first is EEG, the last 6 are stimulations
+    ch_type = ['eeg']*len(ch_names) + ['stim']*6
+    
+    # create and populate MNE info structure
+    ch_names.extend(events_names)
+    info = create_info(ch_names,sfreq=500.0, ch_types=ch_type, montage=montage)
+    info['filename'] = fname
+    
+    # create raw object 
+    raw = RawArray(data,info,verbose=False)
+    return raw
 
-Y_real = np.array([1,2,3,1,4,4,4,4,4,4])
-Y_pred = np.array([1,2,3,1,4,3,3,3,3,2])
+subjects = range(1,13)
+auc = []
+for subject in subjects:
+    epochs_tot = []
+    
+    #eid = 'HandStart'
+    fnames =  glob('../input/train/subj%d_series*_data.csv' % (subject))
+    
+    session = []
+    y = []
+    for i,fname in enumerate(fnames):
+      
+        # read data 
+        raw = creat_mne_raw_object(fname)
+        
+        # pick eeg signal
+        picks = pick_types(raw.info,eeg=True)
+        
+        # Filter data for alpha frequency and beta band
+        # Note that MNE implement a zero phase (filtfilt) filtering not compatible
+        # with the rule of future data.
+        raw.filter(7,35, picks=picks, method='iir', n_jobs=-1, verbose=False)
+        
+        # get event posision corresponding to Replace
+        events = find_events(raw,stim_channel='Replace', verbose=False)
+        # epochs signal for 1.5 second before the movement
+        epochs = Epochs(raw, events, {'during' : 1}, -2, -0.5, proj=False,
+                        picks=picks, baseline=None, preload=True,
+                        add_eeg_ref=False, verbose=False)
+        
+        epochs_tot.append(epochs)
+        session.extend([i]*len(epochs))
+        y.extend([1]*len(epochs))
+        
+        # epochs signal for 1.5 second after the movement, this correspond to the 
+        # rest period.
+        epochs_rest = Epochs(raw, events, {'after' : 1}, 0.5, 2, proj=False,
+                        picks=picks, baseline=None, preload=True,
+                        add_eeg_ref=False, verbose=False)
+        
+        # Workaround to be able to concatenate epochs
+        epochs_rest.times = epochs.times
+        
+        epochs_tot.append(epochs_rest)
+        session.extend([i]*len(epochs_rest))
+        y.extend([-1]*len(epochs_rest))
+        
+    #concatenate all epochs
+    epochs = concatenate_epochs(epochs_tot)
+    
+    # get data 
+    X = epochs.get_data()
+    y = np.array(y)
+    
+    # run CSP
+    csp = CSP(reg='lws')
+    csp.fit(X,y)
+    
+    # compute spatial filtered spectrum
+    po = []
+    for x in X:
+        f,p = welch(np.dot(csp.filters_[0,:].T,x), 500, nperseg=512)
+        po.append(p)
+    po = np.array(po)
+    
+    # prepare topoplot
+    _,epos,_,_,_ = _prepare_topo_plot(epochs,'eeg',None)
+    
+    # plot first pattern
+    pattern = csp.patterns_[0,:]
+    pattern -= pattern.mean()
+    ix = np.argmax(abs(pattern))
+    # the parttern is sign invariant.
+    # invert it for display purpose
+    if pattern[ix]>0:
+        sign = 1.0
+    else:
+        sign = -1.0
+    
+    fig, ax_topo = plt.subplots(1, 1, figsize=(12, 4))
+    title = 'Spatial Pattern'
+    fig.suptitle(title, fontsize=14)
+    img, _ = plot_topomap(sign*pattern,epos,axis=ax_topo,show=False)
+    divider = make_axes_locatable(ax_topo)
+    # add axes for colorbar
+    ax_colorbar = divider.append_axes('right', size='5%', pad=0.05)
+    plt.colorbar(img, cax=ax_colorbar)
+    
+    # plot spectrum
+    fix = (f>7) & (f<35)
+    ax_spectrum = divider.append_axes('right', size='300%', pad=1.2)
+    ax_spectrum.plot(f[fix],np.log(po[y==1][:,fix].mean(axis=0).T),'-r',lw=2)
+    ax_spectrum.plot(f[fix],np.log(po[y==-1][:,fix].mean(axis=0).T),'-b',lw=2)
+    ax_spectrum.set_xlabel('Frequency (Hz)')
+    ax_spectrum.set_ylabel('Power (dB)')
+    plt.grid()
+    plt.legend(['during','after'])
+    plt.title('Subject %d' % subject)
+    plt.show()
+    plt.savefig('spatial_pattern_subject_%02d.png' % subject ,bbox_inches='tight')
+    
+    # run cross validation
+    clf = make_pipeline(CSP(),LogisticRegression())
+    cv = LeaveOneLabelOut(session)
+    auc.append(cross_val_score(clf,X,y,cv=cv,scoring='roc_auc').mean())
+    print("Subject %d : AUC cross val score : %.3f" % (subject,auc[-1]))
 
-print("FIVE SMALL ERRORS")
-print("Ground truth:\t%s"%Y_real)
-print("Predicted   :\t%s"%Y_pred)
-print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
-print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
-print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
-print()
-
-Y_real = np.array([1,1,3,1,4,4,4,4,4,4])
-Y_pred = np.array([1,1,3,1,4,3,3,3,3,2])
-
-print("KAPPA CHANGES WHEN DISTRIBUTION CHANGES")
-print("Ground truth:\t%s"%Y_real)
-print("Predicted   :\t%s"%Y_pred)
-print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
-print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
-print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
-
+auc = pd.DataFrame(data=auc,index=subjects,columns=['auc'])
+auc.to_csv('cross_val_auc.csv')
+plt.figure(figsize=(4,4))
+auc.plot(kind='bar',y='auc')
+plt.xlabel('Subject')
+plt.ylabel('AUC')
+plt.title('During Vs. After classification')
+plt.savefig('cross_val_auc.png' ,bbox_inches='tight')

@@ -1,379 +1,1135 @@
 
 # coding: utf-8
 
-# As a serving U.S. Army infantry officer I want to briefly demonstrate the burden of casualties that infantry forces bore in Vietnam (as they do in every conflict).
+# <h3>- Note that I will use the Dataset with the Risk column </h3>
+
+# <h1>Welcome to my Kernel ! </h1>
+# 
+# <h2>I will do some Explorations through the German Credit Risk to understand their distribuitions and patterns. </h2>
+
+# Look for another interesting Kernels on https://www.kaggle.com/kabure/kernels<br>
+# Give me your feedback and if yo like this kernel, <b>votes up</b>
+
+# # Tables of Content:
+# 
+# **1. [Introduction](#Introduction)** <br>
+#     - Info's about datasets
+# **2. [Librarys](#Librarys)** <br>
+#     - Importing Librarys
+#     - Importing Dataset
+# **3. [Knowning the data](#Known)** <br>
+#     - 3.1 Looking the Type of Data
+#     - 3.2 Shape of data
+#     - 3.3 Null Numbers
+#     - 3.4 Unique values
+#     - 3.5 The first rows of our dataset
+# **4. [Exploring some Variables](#Explorations)** <br>
+#     - 4.1 Ploting some graphical and descriptive informations
+# **5. [Correlation of data](#Correlation)** <br>
+# 	- 5.1 Correlation Data
+# **6. [Preprocess](#Preprocessing)** <br>
+# 	- 6.1 Importing Librarys
+# 	- 6.2 Setting X and Y
+#     - 6.3 Spliting the X and Y in train and test 
+# **7. 1 [Model 1](#Modelling 1)** <br>
+#     - 7.1.1 Random Forest 
+#     - 7.1.2 Score values
+#     - 7.1.3 Cross Validation 
+# **7. 2 [Model 2](#Modelling 2)** <br>
+#     - 7.2.1 Logistic Regression 
+#     - 7.2.2 Score values
+#     - 7.2.3 Cross Validation 
+#     - 7.2.4 ROC Curve
+
+# <a id="Introduction"></a> <br>
+# 
+
+# # **1. Introduction:** 
+# <h2>Context</h2>
+# The original dataset contains 1000 entries with 20 categorial/symbolic attributes prepared by Prof. Hofmann. In this dataset, each entry represents a person who takes a credit by a bank. Each person is classified as good or bad credit risks according to the set of attributes. The link to the original dataset can be found below.
+# 
+# <h2>Content</h2>
+# It is almost impossible to understand the original dataset due to its complicated system of categories and symbols. Thus, I wrote a small Python script to convert it into a readable CSV file. Several columns are simply ignored, because in my opinion either they are not important or their descriptions are obscure. The selected attributes are:
+# 
+# <b>Age </b>(numeric)<br>
+# <b>Sex </b>(text: male, female)<br>
+# <b>Job </b>(numeric: 0 - unskilled and non-resident, 1 - unskilled and resident, 2 - skilled, 3 - highly skilled)<br>
+# <b>Housing</b> (text: own, rent, or free)<br>
+# <b>Saving accounts</b> (text - little, moderate, quite rich, rich)<br>
+# <b>Checking account </b>(numeric, in DM - Deutsch Mark)<br>
+# <b>Credit amount</b> (numeric, in DM)<br>
+# <b>Duration</b> (numeric, in month)<br>
+# <b>Purpose</b>(text: car, furniture/equipment, radio/TV, domestic appliances, repairs, education, business, vacation/others<br>
+# <b>Risk </b> (Value target - Good or Bad Risk)<br>
+
+# <i>English is not my first language, so, sorry about any error</i>
+
+# <a id="Librarys"></a> <br>
+# # **2. Librarys:** 
+# - Importing Librarys
+# - Importing Dataset
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+#Load the librarys
+import pandas as pd #To work with dataset
+import numpy as np #Math library
+import seaborn as sns #Graph library that use matplot in background
+import matplotlib.pyplot as plt #to plot some parameters in seaborn
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+#Importing the data
+df_credit = pd.read_csv("../input/german-credit-data-with-risk/german_credit_data.csv",index_col=0)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+# <a id="Known"></a> <br>
+# # **3. First Look at the data:** 
+# - Looking the Type of Data
+# - Null Numbers
+# - Unique values
+# - The first rows of our dataset
 
-# Any results you write to the current directory are saved as output.
+# In[ ]:
+
+
+#Searching for Missings,type of data and also known the shape of data
+print(df_credit.info())
 
 
 # In[ ]:
 
+
+#Looking unique values
+print(df_credit.nunique())
+#Looking the data
+print(df_credit.head())
+
+
+# # **4. Some explorations:** <a id="Explorations"></a> <br>
+# 
+# - Starting by distribuition of column Age.
+# - Some Seaborn graphical
+# - Columns crossing
+# 
+# 
+
+# <h2>Let's start looking through target variable and their distribuition</h2>
+
+# In[ ]:
+
+
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
+import warnings
+from collections import Counter
+
+trace0 = go.Bar(
+            x = df_credit[df_credit["Risk"]== 'good']["Risk"].value_counts().index.values,
+            y = df_credit[df_credit["Risk"]== 'good']["Risk"].value_counts().values,
+            name='Good credit'
+    )
+
+trace1 = go.Bar(
+            x = df_credit[df_credit["Risk"]== 'bad']["Risk"].value_counts().index.values,
+            y = df_credit[df_credit["Risk"]== 'bad']["Risk"].value_counts().values,
+            name='Bad credit'
+    )
+
+data = [trace0, trace1]
+
+layout = go.Layout(
+    
+)
+
+layout = go.Layout(
+    yaxis=dict(
+        title='Count'
+    ),
+    xaxis=dict(
+        title='Risk Variable'
+    ),
+    title='Target variable distribution'
+)
+
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='grouped-bar')
+
+
+# I will try implement some interactive visuals in my Kernels, this will be the first, inspired in Alexader's Kernel and I will also continue implementing plotly and bokeh in my Kerne
+
+# In[ ]:
+
+
+df_good = df_credit.loc[df_credit["Risk"] == 'good']['Age'].values.tolist()
+df_bad = df_credit.loc[df_credit["Risk"] == 'bad']['Age'].values.tolist()
+df_age = df_credit['Age'].values.tolist()
+
+#First plot
+trace0 = go.Histogram(
+    x=df_good,
+    histnorm='probability',
+    name="Good Credit"
+)
+#Second plot
+trace1 = go.Histogram(
+    x=df_bad,
+    histnorm='probability',
+    name="Bad Credit"
+)
+#Third plot
+trace2 = go.Histogram(
+    x=df_age,
+    histnorm='probability',
+    name="Overall Age"
+)
+
+#Creating the grid
+fig = tls.make_subplots(rows=2, cols=2, specs=[[{}, {}], [{'colspan': 2}, None]],
+                          subplot_titles=('Good','Bad', 'General Distribuition'))
+
+#setting the figs
+fig.append_trace(trace0, 1, 1)
+fig.append_trace(trace1, 1, 2)
+fig.append_trace(trace2, 2, 1)
+
+fig['layout'].update(showlegend=True, title='Age Distribuition', bargap=0.05)
+py.iplot(fig, filename='custom-sized-subplot-with-subplot-titles')
+
+
+# In[ ]:
+
+
+df_good = df_credit[df_credit["Risk"] == 'good']
+df_bad = df_credit[df_credit["Risk"] == 'bad']
+
+fig, ax = plt.subplots(nrows=2, figsize=(12,8))
+plt.subplots_adjust(hspace = 0.4, top = 0.8)
+
+g1 = sns.distplot(df_good["Age"], ax=ax[0], 
+             color="g")
+g1 = sns.distplot(df_bad["Age"], ax=ax[0], 
+             color='r')
+g1.set_title("Age Distribuition", fontsize=15)
+g1.set_xlabel("Age")
+g1.set_xlabel("Frequency")
+
+g2 = sns.countplot(x="Age",data=df_credit, 
+              palette="hls", ax=ax[1], 
+              hue = "Risk")
+g2.set_title("Age Counting by Risk", fontsize=15)
+g2.set_xlabel("Age")
+g2.set_xlabel("Count")
+plt.show()
+
+
+# <h2>Creating an categorical variable to handle with the Age variable </h2>
+
+# In[ ]:
+
+
+#Let's look the Credit Amount column
+interval = (18, 25, 35, 60, 120)
+
+cats = ['Student', 'Young', 'Adult', 'Senior']
+df_credit["Age_cat"] = pd.cut(df_credit.Age, interval, labels=cats)
+
+
+df_good = df_credit[df_credit["Risk"] == 'good']
+df_bad = df_credit[df_credit["Risk"] == 'bad']
+
+
+# In[ ]:
+
+
+trace0 = go.Box(
+    y=df_good["Credit amount"],
+    x=df_good["Age_cat"],
+    name='Good credit',
+    marker=dict(
+        color='#3D9970'
+    )
+)
+
+trace1 = go.Box(
+    y=df_bad['Credit amount'],
+    x=df_bad['Age_cat'],
+    name='Bad credit',
+    marker=dict(
+        color='#FF4136'
+    )
+)
+    
+data = [trace0, trace1]
+
+layout = go.Layout(
+    yaxis=dict(
+        title='Credit Amount (US Dollar)',
+        zeroline=False
+    ),
+    xaxis=dict(
+        title='Age Categorical'
+    ),
+    boxmode='group'
+)
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='box-age-cat')
+
+
+# Interesting distribuition
+
+# <h2>I will now Look the distribuition of Housing own and rent by Risk</h2>
+# 
+
+# In[ ]:
+
+
+#First plot
+trace0 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'good']["Housing"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'good']["Housing"].value_counts().values,
+    name='Good credit'
+)
+
+#Second plot
+trace1 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'bad']["Housing"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'bad']["Housing"].value_counts().values,
+    name="Bad Credit"
+)
+
+data = [trace0, trace1]
+
+layout = go.Layout(
+    title='Housing Distribuition'
+)
+
+
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='Housing-Grouped')
+
+
+# we can see that the own and good risk have a high correlation
+
+# <h3>Distribuition of Credit Amount by Housing</h3>
+
+# In[ ]:
+
+
+fig = {
+    "data": [
+        {
+            "type": 'violin',
+            "x": df_good['Housing'],
+            "y": df_good['Credit amount'],
+            "legendgroup": 'Good Credit',
+            "scalegroup": 'No',
+            "name": 'Good Credit',
+            "side": 'negative',
+            "box": {
+                "visible": True
+            },
+            "meanline": {
+                "visible": True
+            },
+            "line": {
+                "color": 'blue'
+            }
+        },
+        {
+            "type": 'violin',
+            "x": df_bad['Housing'],
+            "y": df_bad['Credit amount'],
+            "legendgroup": 'Bad Credit',
+            "scalegroup": 'No',
+            "name": 'Bad Credit',
+            "side": 'positive',
+            "box": {
+                "visible": True
+            },
+            "meanline": {
+                "visible": True
+            },
+            "line": {
+                "color": 'green'
+            }
+        }
+    ],
+    "layout" : {
+        "yaxis": {
+            "zeroline": False,
+        },
+        "violingap": 0,
+        "violinmode": "overlay"
+    }
+}
+
+
+py.iplot(fig, filename = 'violin/split', validate = False)
+
+
+# Interesting moviments! Highest values come from category "free" and we have a different distribuition by Risk
+
+# <h2>Looking the diference by Sex</h2>
+
+# In[ ]:
+
+
+#First plot
+trace0 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'good']["Sex"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'good']["Sex"].value_counts().values,
+    name='Good credit'
+)
+
+#First plot 2
+trace1 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'bad']["Sex"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'bad']["Sex"].value_counts().values,
+    name="Bad Credit"
+)
+
+#Second plot
+trace2 = go.Box(
+    x = df_credit[df_credit["Risk"]== 'good']["Sex"],
+    y = df_credit[df_credit["Risk"]== 'good']["Credit amount"],
+    name=trace0.name
+)
+
+#Second plot 2
+trace3 = go.Box(
+    x = df_credit[df_credit["Risk"]== 'bad']["Sex"],
+    y = df_credit[df_credit["Risk"]== 'bad']["Credit amount"],
+    name=trace1.name
+)
+
+data = [trace0, trace1, trace2,trace3]
+
+
+fig = tls.make_subplots(rows=1, cols=2, 
+                        subplot_titles=('Sex Count', 'Credit Amount by Sex'))
+
+fig.append_trace(trace0, 1, 1)
+fig.append_trace(trace1, 1, 1)
+fig.append_trace(trace2, 1, 2)
+fig.append_trace(trace3, 1, 2)
+
+fig['layout'].update(height=400, width=800, title='Sex Distribuition', boxmode='group')
+py.iplot(fig, filename='sex-subplot')
+
+
+# <b> How can I set the boxplots in different places? how can I use the same legend to both graphs?</b>
+
+# I will create categories of Age and look the distribuition of Credit Amount by Risk...
+# 
+
+# I will do some explorations through the Job
+# - Distribuition
+# - Crossed by Credit amount
+# - Crossed by Age
+
+# In[ ]:
+
+
+#First plot
+trace0 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'good']["Job"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'good']["Job"].value_counts().values,
+    name='Good credit Distribuition'
+)
+
+#Second plot
+trace1 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'bad']["Job"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'bad']["Job"].value_counts().values,
+    name="Bad Credit Distribuition"
+)
+
+data = [trace0, trace1]
+
+layout = go.Layout(
+    title='Job Distribuition'
+)
+
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='grouped-bar')
+
+
+# In[ ]:
+
+
+trace0 = go.Box(
+    x=df_good["Job"],
+    y=df_good["Credit amount"],
+    name='Good credit'
+)
+
+trace1 = go.Box(
+    x=df_bad['Job'],
+    y=df_bad['Credit amount'],
+    name='Bad credit'
+)
+    
+data = [trace0, trace1]
+
+layout = go.Layout(
+    yaxis=dict(
+        title='Credit Amount distribuition by Job'
+    ),
+    boxmode='group'
+)
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='box-age-cat')
+
+
+# In[ ]:
+
+
+
+fig = {
+    "data": [
+        {
+            "type": 'violin',
+            "x": df_good['Job'],
+            "y": df_good['Age'],
+            "legendgroup": 'Good Credit',
+            "scalegroup": 'No',
+            "name": 'Good Credit',
+            "side": 'negative',
+            "box": {
+                "visible": True
+            },
+            "meanline": {
+                "visible": True
+            },
+            "line": {
+                "color": 'blue'
+            }
+        },
+        {
+            "type": 'violin',
+            "x": df_bad['Job'],
+            "y": df_bad['Age'],
+            "legendgroup": 'Bad Credit',
+            "scalegroup": 'No',
+            "name": 'Bad Credit',
+            "side": 'positive',
+            "box": {
+                "visible": True
+            },
+            "meanline": {
+                "visible": True
+            },
+            "line": {
+                "color": 'green'
+            }
+        }
+    ],
+    "layout" : {
+        "yaxis": {
+            "zeroline": False,
+        },
+        "violingap": 0,
+        "violinmode": "overlay"
+    }
+}
+
+
+py.iplot(fig, filename = 'Age-Housing', validate = False)
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize=(12,12), nrows=2)
+
+g1 = sns.boxplot(x="Job", y="Credit amount", data=df_credit, 
+            palette="hls", ax=ax[0], hue="Risk")
+g1.set_title("Credit Amount by Job", fontsize=15)
+g1.set_xlabel("Job Reference", fontsize=12)
+g1.set_ylabel("Credit Amount", fontsize=12)
+
+g2 = sns.violinplot(x="Job", y="Age", data=df_credit, ax=ax[1],  
+               hue="Risk", split=True, palette="hls")
+g2.set_title("Job Type reference x Age", fontsize=15)
+g2.set_xlabel("Job Reference", fontsize=12)
+g2.set_ylabel("Age", fontsize=12)
+
+plt.subplots_adjust(hspace = 0.4,top = 0.9)
+
+plt.show()
+
+
+# Looking the distribuition of Credit Amont
+
+# In[ ]:
+
+
+import plotly.figure_factory as ff
 
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
 
-data = pd.read_csv('../input/VietnamConflict.csv')
-data1 = data[data['BRANCH'].isin(['ARMY', 'MARINE CORPS'])]
+# Add histogram data
+x1 = np.log(df_good['Credit amount']) 
+x2 = np.log(df_bad["Credit amount"])
 
+# Group data together
+hist_data = [x1, x2]
 
-# Now we come to the part that requires specific domain knowledge. How many of these positions are infantry? Hint: not just the ones that specifically have 'infantry' in the title. Of course, I have to exercise some judgement here since job titles have changed over the years. In general I will not include Rangers and Special Forces in this list, even though the majority of those fine folks are infantry.
+group_labels = ['Good Credit', 'Bad Credit']
+
+# Create distplot with custom bin_size
+fig = ff.create_distplot(hist_data, group_labels, bin_size=.2)
+
+# Plot!
+py.iplot(fig, filename='Distplot with Multiple Datasets')
+
 
 # In[ ]:
 
 
-infantry_MOS = ['INFANTRY OPERATIONS AND INTELLIGENCE SPECIALIST', 'INDIRECT FIRE INFANTRYMAN', 'INFANTRY UNIT LEADER', 'PARACHUTIST, INFANTRY UNIT COMMANDER', 'INFANTRYMAN', 'RIFLEMAN', 'MACHINEGUNNER', 'INFANTRY OFFICER (I)', 'ASSAULTMAN', 'HEAVY ANTI-ARMOR WEAPONS INFANTRYMAN', 'MORTARMAN', 'INFANTRY UNIT COMMANDER', 'BASIC INFANTRY OFFICER', 'RANGER, OPERATIONS AND TRAINING STAFF OFFICER (G3,A3,S3)', 'INFANTRY SENIOR SERGEANT', 'BASIC INFANTRYMAN', 'RANGER, UNIT OFFICER, TRAINING CENTER', 'RANGER, INFANTRY UNIT COMMANDER', 'RANGER', 'INFANTRY UNIT COMMANDER, (MECHANIZED)', 'LAV ASSAULTMAN', 'SCOUT-SNIPER']
-infantry = data1[data1['POSITION'].isin(infantry_MOS)]
-# What proportion of Vietnam casualties were infantrymen?
-infantry_cas = infantry.FATALITY_YEAR.count()
-total_cas = data.FATALITY_YEAR.count()
-infantry_portion = infantry_cas / total_cas * 100
-print('Infantrymen sustained {}% of total casualties in the Vietnam war.'.format(infantry_portion))
+#Ploting the good and bad dataframes in distplot
+plt.figure(figsize = (8,5))
+
+g= sns.distplot(df_good['Credit amount'], color='r')
+g = sns.distplot(df_bad["Credit amount"], color='g')
+g.set_title("Credit Amount Frequency distribuition", fontsize=15)
+plt.show()
 
 
-# No surprises here. Actually it is probable that this number is abnormally low because of the nature of the conflict. Unconventional (i.e. guerilla) wars tend to cause greater casualties among non-infantry troops because guerilla fighters deliberately attempt to attack 'soft' (i.e. not combat) targets. This has certainly been true throughout the Global War on Terror.
+# Distruibution of Saving accounts by Risk
+
+# In[ ]:
+
+
+from plotly import tools
+import numpy as np
+import plotly.graph_objs as go
+
+count_good = go.Bar(
+    x = df_good["Saving accounts"].value_counts().index.values,
+    y = df_good["Saving accounts"].value_counts().values,
+    name='Good credit'
+)
+count_bad = go.Bar(
+    x = df_bad["Saving accounts"].value_counts().index.values,
+    y = df_bad["Saving accounts"].value_counts().values,
+    name='Bad credit'
+)
+
+
+box_1 = go.Box(
+    x=df_good["Saving accounts"],
+    y=df_good["Credit amount"],
+    name='Good credit'
+)
+box_2 = go.Box(
+    x=df_bad["Saving accounts"],
+    y=df_bad["Credit amount"],
+    name='Bad credit'
+)
+
+scat_1 = go.Box(
+    x=df_good["Saving accounts"],
+    y=df_good["Age"],
+    name='Good credit'
+)
+scat_2 = go.Box(
+    x=df_bad["Saving accounts"],
+    y=df_bad["Age"],
+    name='Bad credit'
+)
+
+data = [scat_1, scat_2, box_1, box_2, count_good, count_bad]
+
+fig = tools.make_subplots(rows=2, cols=2, specs=[[{}, {}], [{'colspan': 2}, None]],
+                          subplot_titles=('Count Saving Accounts','Credit Amount by Savings Acc', 
+                                          'Age by Saving accounts'))
+
+fig.append_trace(count_good, 1, 1)
+fig.append_trace(count_bad, 1, 1)
+
+fig.append_trace(box_2, 1, 2)
+fig.append_trace(box_1, 1, 2)
+
+fig.append_trace(scat_1, 2, 1)
+fig.append_trace(scat_2, 2, 1)
+
+
+
+fig['layout'].update(height=700, width=800, title='Saving Accounts Exploration', boxmode='group')
+
+py.iplot(fig, filename='combined-savings')
+
+
+# How can I better configure the legends?  I am trying to substitute the graph below, so how can I use the violinplot on subplots of plotly?
+
+# In[ ]:
+
+
+print("Description of Distribuition Saving accounts by Risk:  ")
+print(pd.crosstab(df_credit["Saving accounts"],df_credit.Risk))
+
+fig, ax = plt.subplots(3,1, figsize=(12,12))
+g = sns.countplot(x="Saving accounts", data=df_credit, palette="hls", 
+              ax=ax[0],hue="Risk")
+g.set_title("Saving Accounts Count", fontsize=15)
+g.set_xlabel("Saving Accounts type", fontsize=12)
+g.set_ylabel("Count", fontsize=12)
+
+g1 = sns.violinplot(x="Saving accounts", y="Job", data=df_credit, palette="hls", 
+               hue = "Risk", ax=ax[1],split=True)
+g1.set_title("Saving Accounts by Job", fontsize=15)
+g1.set_xlabel("Savings Accounts type", fontsize=12)
+g1.set_ylabel("Job", fontsize=12)
+
+g = sns.boxplot(x="Saving accounts", y="Credit amount", data=df_credit, ax=ax[2],
+            hue = "Risk",palette="hls")
+g2.set_title("Saving Accounts by Credit Amount", fontsize=15)
+g2.set_xlabel("Savings Accounts type", fontsize=12)
+g2.set_ylabel("Credit Amount(US)", fontsize=12)
+
+plt.subplots_adjust(hspace = 0.4,top = 0.9)
+
+plt.show()
+
+
+# Pretty and interesting distribution...
+
+# In[ ]:
+
+
+print("Values describe: ")
+print(pd.crosstab(df_credit.Purpose, df_credit.Risk))
+
+plt.figure(figsize = (14,12))
+
+plt.subplot(221)
+g = sns.countplot(x="Purpose", data=df_credit, 
+              palette="hls", hue = "Risk")
+g.set_xticklabels(g.get_xticklabels(),rotation=45)
+g.set_xlabel("", fontsize=12)
+g.set_ylabel("Count", fontsize=12)
+g.set_title("Purposes Count", fontsize=20)
+
+plt.subplot(222)
+g1 = sns.violinplot(x="Purpose", y="Age", data=df_credit, 
+                    palette="hls", hue = "Risk",split=True)
+g1.set_xticklabels(g1.get_xticklabels(),rotation=45)
+g1.set_xlabel("", fontsize=12)
+g1.set_ylabel("Count", fontsize=12)
+g1.set_title("Purposes by Age", fontsize=20)
+
+plt.subplot(212)
+g2 = sns.boxplot(x="Purpose", y="Credit amount", data=df_credit, 
+               palette="hls", hue = "Risk")
+g2.set_xlabel("Purposes", fontsize=12)
+g2.set_ylabel("Credit Amount", fontsize=12)
+g2.set_title("Credit Amount distribuition by Purposes", fontsize=20)
+
+plt.subplots_adjust(hspace = 0.6, top = 0.8)
+
+plt.show()
+
+
+# Duration of the loans distribuition and density
+
+# In[ ]:
+
+
+plt.figure(figsize = (12,14))
+
+g= plt.subplot(311)
+g = sns.countplot(x="Duration", data=df_credit, 
+              palette="hls",  hue = "Risk")
+g.set_xlabel("Duration Distribuition", fontsize=12)
+g.set_ylabel("Count", fontsize=12)
+g.set_title("Duration Count", fontsize=20)
+
+g1 = plt.subplot(312)
+g1 = sns.pointplot(x="Duration", y ="Credit amount",data=df_credit,
+                   hue="Risk", palette="hls")
+g1.set_xlabel("Duration", fontsize=12)
+g1.set_ylabel("Credit Amount(US)", fontsize=12)
+g1.set_title("Credit Amount distribuition by Duration", fontsize=20)
+
+g2 = plt.subplot(313)
+g2 = sns.distplot(df_good["Duration"], color='g')
+g2 = sns.distplot(df_bad["Duration"], color='r')
+g2.set_xlabel("Duration", fontsize=12)
+g2.set_ylabel("Frequency", fontsize=12)
+g2.set_title("Duration Frequency x good and bad Credit", fontsize=20)
+
+plt.subplots_adjust(wspace = 0.4, hspace = 0.4,top = 0.9)
+
+plt.show()
+
+
 # 
-# Incidentally, this is not meant as a veiled criticism of guerilla tactics. It is good sense to attack non-combat units because they are easier to successfully hurt.
-
-# Now let's take a look at infantry casualties by rank as compared to the remainder of the war's casualties. I expect to see that infantry casualties tend to be both lower ranking and younger than the remainder. I don't know that this will necessarily be true, however. I just know that infantrymen tend to be young and that infantry structure has proportionately more lower-ranking individuals than other unit types.
-
-# In[ ]:
-
-
-non_infantry = data1[-data1['POSITION'].isin(infantry_MOS)]
-navy_af = data[data['BRANCH'].isin(['NAVY', 'AIR FORCE'])]
-by_grade = ['E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'W01', 'W02', 'W03','W04', 'W05', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'O07']
-plt.subplot(3,1,1)
-_ = sns.countplot(x='PAY_GRADE', data=infantry, order=by_grade)
-_ = plt.title('Infantry Casualties (Army & Marine Corps)')
-_ = plt.xlabel('Pay Grade')
-_ = plt.ylabel('Number of Casualties')
-plt.subplot(3,1,2)
-_ = sns.countplot(x='PAY_GRADE', data=non_infantry, order=by_grade)
-_ = plt.title('Non-Infantry Casualties (Army & Marine Corps)')
-_ = plt.xlabel('Pay Grade')
-_ = plt.ylabel('Number of Casualties')
-plt.subplot(3,1,3)
-_ = sns.countplot(x='PAY_GRADE', data=navy_af, order=by_grade)
-_ = plt.title('Navy & Air Force Casualties')
-_ = plt.xlabel('Pay Grade')
-_ = plt.ylabel('Number of Casualties')
-plt.tight_layout()
-plt.show()    
-
-
-# As expected, infantry casualties tend to occur at lower pay grades than non-infantry casualties. There is an immediately noticeable increase in the proportional number of officer casualties among non-infantry service-members (SMs) within the Army and Marine Corps. I expect this would become considerably more pronounced if I had seperated out all combat arms troops (i.e. cavalry, armor, special forces, rangers) instead of just infantry.
+# Interesting, we can see that the highest duration have the high amounts. <br>
+# The highest density is between [12 ~ 18 ~ 24] months<br>
+# It all make sense.
 # 
-# Within the Navy and Air Force the casualty structure is significantly different, with nearly as many deaths in the officer as in the enlisted ranks. This is likely because fixed-wing aircraft pilots are officers and the Navy and Air Force both lost good numbers of aircraft during the war. It is possible with this dataset to look into this more closely by seperating out the pilots in these two services, but for now I'm going to move on. If I get distracted I'll never finish, after all.
+
+# <h2> Checking Account variable </h2>
+
+# First, let's look the distribuition 
 
 # In[ ]:
 
 
-# I have to disable a chained assignment warning here because it keeps popping up but has not value
-# to what I am actually doing here (as far as I can tell)
-pd.options.mode.chained_assignment = None
-# Infantry ages first...
-birth = pd.Series(infantry.loc[:,'BIRTH_YEAR'].floordiv(10000), index=infantry.index)
-infantry.loc[:,'BIRTH_YR'] = birth
-for row in infantry:
-    age_at_death = []
-    birth = infantry.BIRTH_YR
-    death = infantry.FATALITY_YEAR
-    age = death - birth
-    age_at_death.extend(age)
-age = pd.Series(age_at_death, index=infantry.index)
-infantry.loc[:,'AGE'] = age
-# then non-infantry...
-birth = pd.Series(non_infantry.loc[:,'BIRTH_YEAR'].floordiv(10000), index=non_infantry.index)
-non_infantry.loc[:,'BIRTH_YR'] = birth
-for row in non_infantry:    
-    age_at_death2 = []
-    birth = non_infantry.BIRTH_YR
-    death = non_infantry.FATALITY_YEAR
-    age = death - birth
-    age_at_death2.extend(age)
-age = pd.Series(age_at_death2, index=non_infantry.index)
-non_infantry.loc[:,'AGE'] = age
-# and lastly my sister services...
-birth = pd.Series(navy_af.loc[:,'BIRTH_YEAR'].floordiv(10000), index=navy_af.index)
-navy_af.loc[:,'BIRTH_YR'] = birth
-for row in navy_af:    
-    age_at_death3 = []
-    birth = navy_af.BIRTH_YR
-    death = navy_af.FATALITY_YEAR
-    age = death - birth
-    age_at_death3.extend(age)
-age = pd.Series(age_at_death3, index=navy_af.index)
-navy_af.loc[:,'AGE'] = age
+#First plot
+trace0 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'good']["Checking account"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'good']["Checking account"].value_counts().values,
+    name='Good credit Distribuition' 
+    
+)
 
-plt.subplot(3,1,1)
-_ = sns.countplot(x='AGE', data=infantry)
-_ = plt.title('Infantry Age at Death')
-_ = plt.xlabel('Age')
-_ = plt.ylabel('Number of Fatalities')
-plt.subplot(3,1,2)
-_ = sns.countplot(x='AGE', data=non_infantry)
-_ = plt.title('Non-Infantry Age at Death (Army & Marine Corps)')
-_ = plt.xlabel('Age')
-_ = plt.ylabel('Number of Fatalities')
-plt.subplot(3,1,3)
-_ = sns.countplot(x='AGE', data=navy_af)
-_ = plt.title('Navy & Air Force Ages at Death')
-_ = plt.xlabel('Age')
-_ = plt.ylabel('Number of Fatalities')
-plt.tight_layout()
-plt.show()   
+#Second plot
+trace1 = go.Bar(
+    x = df_credit[df_credit["Risk"]== 'bad']["Checking account"].value_counts().index.values,
+    y = df_credit[df_credit["Risk"]== 'bad']["Checking account"].value_counts().values,
+    name="Bad Credit Distribuition"
+)
 
-inf_mean = infantry.AGE.mean()
-inf_median = infantry.AGE.median()
-non_inf_mean = non_infantry.AGE.mean()
-non_inf_median = non_infantry.AGE.median()
-oth_svc_mean = navy_af.AGE.mean()
-oth_svc_median = navy_af.AGE.median()
-print('Infantry mean and median age at death are ' + str(inf_mean) + ' and ' + str(inf_median) + ' , respectively.')
-print('Non-Infantry mean and median age at death are ' + str(non_inf_mean) + ' and ' + str(non_inf_median) + ' , respectively.')
-print('AF/Navy mean and median age at death are ' + str(oth_svc_mean) + ' and ' + str(oth_svc_median) + ' , respectively.')
+data = [trace0, trace1]
+
+layout = go.Layout(
+    title='Checking accounts Distribuition',
+    xaxis=dict(title='Checking accounts name'),
+    yaxis=dict(title='Count'),
+    barmode='group'
+)
 
 
-# Looks like there is little difference between the infantry and non-infantry ages at death for the Army and Marine Corps. There is a quite significant difference between those two services and the Navy and Air Force, however. It is quite clear from this analysis that the burden of bleeding for one's country falls quite disproportionately on the young in the Army and Marine Corps, but this hardly comes as a surprise.
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename = 'Age-ba', validate = False)
+
+
+# Now, we will verify the values through Checking Accounts
+
+# In[ ]:
+
+
+df_good = df_credit[df_credit["Risk"] == 'good']
+df_bad = df_credit[df_credit["Risk"] == 'bad']
+
+trace0 = go.Box(
+    y=df_good["Credit amount"],
+    x=df_good["Checking account"],
+    name='Good credit',
+    marker=dict(
+        color='#3D9970'
+    )
+)
+
+trace1 = go.Box(
+    y=df_bad['Credit amount'],
+    x=df_bad['Checking account'],
+    name='Bad credit',
+    marker=dict(
+        color='#FF4136'
+    )
+)
+    
+data = [trace0, trace1]
+
+layout = go.Layout(
+    yaxis=dict(
+        title='Cheking distribuition'
+    ),
+    boxmode='group'
+)
+fig = go.Figure(data=data, layout=layout)
+
+py.iplot(fig, filename='box-age-cat')
+
+
+# The old plot that I am trying to substitute with interactive plots
+
+# In[ ]:
+
+
+print("Total values of the most missing variable: ")
+print(df_credit.groupby("Checking account")["Checking account"].count())
+
+plt.figure(figsize = (12,10))
+
+g = plt.subplot(221)
+g = sns.countplot(x="Checking account", data=df_credit, 
+              palette="hls", hue="Risk")
+g.set_xlabel("Checking Account", fontsize=12)
+g.set_ylabel("Count", fontsize=12)
+g.set_title("Checking Account Counting by Risk", fontsize=20)
+
+g1 = plt.subplot(222)
+g1 = sns.violinplot(x="Checking account", y="Age", data=df_credit, palette="hls", hue = "Risk",split=True)
+g1.set_xlabel("Checking Account", fontsize=12)
+g1.set_ylabel("Age", fontsize=12)
+g1.set_title("Age by Checking Account", fontsize=20)
+
+g2 = plt.subplot(212)
+g2 = sns.boxplot(x="Checking account",y="Credit amount", data=df_credit,hue='Risk',palette="hls")
+g2.set_xlabel("Checking Account", fontsize=12)
+g2.set_ylabel("Credit Amount(US)", fontsize=12)
+g2.set_title("Credit Amount by Cheking Account", fontsize=20)
+
+plt.subplots_adjust(wspace = 0.2, hspace = 0.3, top = 0.9)
+
+plt.show()
+plt.show()
+
+
+# Crosstab session and anothers to explore our data by another metrics a little deep
+
+# In[ ]:
+
+
+print(pd.crosstab(df_credit.Sex, df_credit.Job))
+
+
+# In[ ]:
+
+
+plt.figure(figsize = (10,6))
+
+g = sns.violinplot(x="Housing",y="Job",data=df_credit,
+                   hue="Risk", palette="hls",split=True)
+g.set_xlabel("Housing", fontsize=12)
+g.set_ylabel("Job", fontsize=12)
+g.set_title("Housing x Job - Dist", fontsize=20)
+
+plt.show()
+
+
+# In[ ]:
+
+
+print(pd.crosstab(df_credit["Checking account"],df_credit.Sex))
+
+
+# In[ ]:
+
+
+date_int = ["Purpose", 'Sex']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_credit[date_int[0]], df_credit[date_int[1]]).style.background_gradient(cmap = cm)
+
+
+# In[ ]:
+
+
+date_int = ["Purpose", 'Sex']
+cm = sns.light_palette("green", as_cmap=True)
+pd.crosstab(df_credit[date_int[0]], df_credit[date_int[1]]).style.background_gradient(cmap = cm)
+
+
+# In[ ]:
+
+
+print("Purpose : ",df_credit.Purpose.unique())
+print("Sex : ",df_credit.Sex.unique())
+print("Housing : ",df_credit.Housing.unique())
+print("Saving accounts : ",df_credit['Saving accounts'].unique())
+print("Risk : ",df_credit['Risk'].unique())
+print("Checking account : ",df_credit['Checking account'].unique())
+print("Aget_cat : ",df_credit['Age_cat'].unique())
+
+
+# In[ ]:
+
+
+df_credit.Purpose.replace(('radio/TV', 'education','furniture/equipment', 'car', 'business', 'domestic appliances','repairs','vacation/others'), (0,1,2,3,4,5,6,7), inplace=True)
+
+df_credit.Sex.replace(('female','male'), (0,1), inplace=True)
+
+df_credit.Housing.replace(('own','free','rent'), (0,1,2), inplace=True)
+
+df_credit["Saving accounts"].replace((str('nan'), 'little', 'quite rich', 'rich', 'moderate'), (0,1,3,4,2), inplace=True)
+
+df_credit.Risk.replace(('good', 'bad'),(0,1), inplace=True)
+
+df_credit["Checking account"].replace(('little', 'moderate', 'rich'), (0,1,2), inplace=True)
+
+df_credit["Age_cat"].replace(('Student', 'Young', 'Adult','Senior'), (0,1,2,3), inplace=True)
+
+
+# # **5. Correlation:** <a id="Correlation"></a> <br>
+# - Looking the data correlation
+# <h1>Looking the correlation of the data
+
+# In[ ]:
+
+
+plt.figure(figsize=(14,12))
+sns.heatmap(df_credit.astype(float).corr(),linewidths=0.1,vmax=1.0, 
+            square=True,  linecolor='white', annot=True)
+plt.show()
+
+
+# # **6. Preprocessing:** <a id="Preprocessing"></a> <br>
+# - Importing ML librarys
+# - Setting X and y variables to the prediction
+# - Splitting Data
 # 
-# Now I'll see how hostile and non-hostile deaths stack up between my categories of service-members.
 
 # In[ ]:
 
 
-infantry['HOSTILITY_CONDITIONS'] = infantry['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
-_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=infantry)
-_ = plt.title('Casualty Breakdown, Infantry')
-_ = plt.xlabel('Hostility Conditions')
-_ = plt.ylabel('Number of Fatalities')
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+
+
+# In[ ]:
+
+
+#Excluding the missing columns
+del df_credit["Saving accounts"]
+del df_credit["Checking account"]
+
+
+# In[ ]:
+
+
+#Creating the X and y variables
+X = df_credit.drop('Risk', 1).values
+y = df_credit["Risk"].values
+
+# Spliting X and y into train and test version
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state=42)
+
+
+# # **7.1 Model 1 :** <a id="Modelling 1"></a> <br>
+# - Using Random Forest to predictict the credit score 
+# - Some of Validation Parameters
+
+# In[ ]:
+
+
+# Creating the classifier
+model = RandomForestClassifier(n_estimators=10, random_state=0, class_weight="balanced_subsample", )
+
+# Running the fit
+model.fit(X_train, y_train)
+
+# Printing the Training Score
+print("Training score data: ")
+print(model.score(X_train, y_train))
+
+
+# In[ ]:
+
+
+#Testing the model 
+#Predicting by X_test
+y_pred = model.predict(X_test)
+
+# Verificaar os resultados obtidos
+print(accuracy_score(y_test,y_pred))
+print("\n")
+print(confusion_matrix(y_test, y_pred))
+print("\n")
+print(classification_report(y_test, y_pred))
+
+
+# Getting bad results in classification, how can I increase my model? 
+
+# I will try a new approach, because we have a unbalanced data.... Let me know what's wrong, how can I do it at the correct way?
+
+# # **7.2 Model 2:** <a id="Modelling 2"></a> <br>
+
+# In[ ]:
+
+
+from sklearn.utils import resample
+from sklearn.metrics import roc_curve
+
+
+# In[ ]:
+
+
+# Spliting the data in test and train
+df_test, df_train = train_test_split(df_credit, test_size = 0.7, random_state=42)
+
+
+# In[ ]:
+
+
+#train_high = df_train[df_train["Risk"] == 0] 
+#train_lower = df_train[df_train["Risk"] == 1]
+
+#train_resample = resample(train_high, replace=False, n_samples=len(train_lower), random_state=123)
+
+#train_sample = pd.concat([train_resample, train_lower])
+#train_sample.Risk.value_counts()
+
+
+# In[ ]:
+
+
+# handling with the variables Train and test
+X = df_train.drop('Risk', 1).values
+y = df_train["Risk"].values
+
+X_test = df_test.drop('Risk', 1).values
+y_test = df_test["Risk"].values
+
+
+# In[ ]:
+
+
+# Criando o classificador logreg
+logreg = LogisticRegression(random_state=0)
+
+# Fitting with train data
+model = logreg.fit(X_train, y_train)
+
+
+# In[ ]:
+
+
+# Printing the Training Score
+print("Training score data: ")
+print(model.score(X_train, y_train))
+
+
+# In[ ]:
+
+
+y_pred = model.predict(X_test)
+
+print(accuracy_score(y_test,y_pred))
+print("\n")
+print(confusion_matrix(y_test, y_pred))
+print("\n")
+print(classification_report(y_test, y_pred))
+
+
+# In[ ]:
+
+
+#Predicting proba
+y_pred_prob = model.predict_proba(X_test)[:,1]
+
+# Generate ROC curve values: fpr, tpr, thresholds
+fpr, tpr, thresholds = roc_curve(y_test, y_pred_prob)
+
+
+# Plot ROC curve
+plt.plot([0, 1], [0, 1], 'k--')
+plt.plot(fpr, tpr)
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
 plt.show()
 
-total_deaths = infantry['HOSTILITY_CONDITIONS'].count()
-hostile = infantry[infantry['HOSTILITY_CONDITIONS'] == 'Hostile']
-hostile_death = hostile['HOSTILITY_CONDITIONS'].count()
-non_hostile = infantry[infantry['HOSTILITY_CONDITIONS'] == 'Non-hostile']
-non_hostile_death = non_hostile['HOSTILITY_CONDITIONS'].count()
-non_hostile_ratio = non_hostile_death / total_deaths * 100
-hostile_ratio = hostile_death / total_deaths * 100
-print('Infantry SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
-
-
-# In[ ]:
-
-
-non_infantry['HOSTILITY_CONDITIONS'] = non_infantry['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
-_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=non_infantry)
-_ = plt.title('Casualty Breakdown, Non-Infantry')
-_ = plt.xlabel('Hostility Conditions')
-_ = plt.ylabel('Number of Fatalities')
-plt.show()
-
-total_deaths = non_infantry['HOSTILITY_CONDITIONS'].count()
-ninf_hostile = non_infantry[non_infantry['HOSTILITY_CONDITIONS'] == 'Hostile']
-hostile_death = ninf_hostile['HOSTILITY_CONDITIONS'].count()
-ninf_non_hostile = non_infantry[non_infantry['HOSTILITY_CONDITIONS'] == 'Non-hostile']
-ninf_non_hostile_death = ninf_non_hostile['HOSTILITY_CONDITIONS'].count()
-non_hostile_ratio = ninf_non_hostile_death / total_deaths * 100
-hostile_ratio = hostile_death / total_deaths * 100
-print('Non-infantry SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
-
-
-# In[ ]:
-
-
-navy_af['HOSTILITY_CONDITIONS'] = navy_af['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
-_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=navy_af, order=['Hostile', 'Non-hostile'])
-_ = plt.title('Casualty Breakdown, Navy & Air Force')
-_ = plt.xlabel('Hostility Conditions')
-_ = plt.ylabel('Number of Fatalities')
-plt.show()
-
-total_deaths = navy_af['HOSTILITY_CONDITIONS'].count()
-naf_hostile = navy_af[navy_af['HOSTILITY_CONDITIONS'] == 'Hostile']
-hostile_death = naf_hostile['HOSTILITY_CONDITIONS'].count()
-naf_non_hostile = navy_af[navy_af['HOSTILITY_CONDITIONS'] == 'Non-hostile']
-naf_non_hostile_death = naf_non_hostile['HOSTILITY_CONDITIONS'].count()
-naf_non_hostile_ratio = naf_non_hostile_death / total_deaths * 100
-hostile_ratio = hostile_death / total_deaths * 100
-print('Navy & Air Force SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
-
-
-# It is interesting to note that non-infantry casualties are roughly similiar proportionately to Navy/Air Force casualties over the course of the conflict. This might indicate that there are more similarities between the experience of war between Navy/Air Force personnel and non-infantry Soldiers and Marines than there are between non-infantry Soldiers/Marines and their infantry brethren. One way to shed a little additional light on this thought is to see if there are similarities in the way in which these folks perished.
-
-# In[ ]:
-
-
-order = ['ACCIDENT', 'ILLNESS', 'HOMICIDE', 'SELF-INFLICTED', 'PRESUMED DEAD']
-plt.subplot(2,1,1)
-_ = sns.countplot(x='FATALITY', data=ninf_non_hostile, order=order)
-_ = plt.title('Army/Marine Corps Non-infantry Non-hostile Fatalities by Category')
-_ = plt.xlabel('Fatality Category')
-_ = plt.ylabel('Number of Fatalities')
-
-plt.subplot(2,1,2)
-_ = sns.countplot(x='FATALITY', data=naf_non_hostile, order=order)
-_ = plt.title('Navy/Air Force Non-hostile Fatalities by Category')
-_ = plt.xlabel('Fatality Category')
-_ = plt.ylabel('Number of Fatalities')
-plt.tight_layout()
-plt.show()
-
-
-# Overall quite similiar profiles for non-hostile fatalities. So what about hostile ones? For this we'll have to drill a little deeper and look at actual cause of death.
-
-# In[ ]:
-
-
-plt.subplot(2,1,1)
-_ = sns.countplot(x='FATALITY_2', data=ninf_hostile)
-_ = plt.title('Army/Marine Corps Non-infantry Non-hostile Fatalities by Category')
-_ = plt.xlabel('Fatality Category')
-_ = plt.xticks(rotation=15)
-_ = plt.ylabel('Number of Fatalities')
-
-plt.subplot(2,1,2)
-_ = sns.countplot(x='FATALITY_2', data=naf_hostile)
-_ = plt.title('Navy/Air Force Non-hostile Fatalities by Category')
-_ = plt.xlabel('Fatality Category')
-_ = plt.xticks(rotation=15)
-_ = plt.ylabel('Number of Fatalities')
-plt.tight_layout()
-plt.show()
-
-
-# In[ ]:
-
-
-words = ninf_hostile['FATALITY_2'].tolist()
-words = str(words)
-
-from wordcloud import WordCloud
-
-wordcloud = WordCloud(width=1200, height=1000).generate(text=words)
-plt.title('Non-infantry Hostile Fatality WordCloud')
-plt.imshow(wordcloud)
-plt.show()
-
-
-# In[ ]:
-
-
-
-words2 = naf_hostile['FATALITY_2'].tolist()
-words2 = str(words2)
-wordcloud2 = WordCloud(width=1200, height=1000).generate(text=words2)
-plt.title('Navy/Air Force Hostile Fatality WordCloud')
-plt.imshow(wordcloud2)
-plt.show()
-
-
-# I think this does a much better job of illustrating the difference in the way hostile casualties were inflicted on these forces. Clearly Navy and Air Force casualties mostly involved aircraft crashing or getting shot down while non-infantry Marine and Army casualties were more likely to be inflicted by small arms fire.
-# 
-# Another interesting thing to look at in this dataset might be *when* these SMs died. If we can divide deaths between the rainy and dry seasons in Vietnam we might be able to illustrate whether or not there was a 'fighting season' during this conflict. As an example, in Afghanistan today most fighting occurs during the spring and summer months. Warmer temperatures are more conducive to ill-equipped troops maneuvering and attacking U.S. and coalition forces. I am curious to know if the same was true in Vietnam. If it was it ought to be indicated pretty clearly by the distribution of hostile infantry casualties by month. So let's take a look and see what we can discover.
-# 
-# First I'll just look at how casualties are dispersed across the duration of the conflict. I have seen in some of the other kernels done on this dataset that there are casualties in the 2000s, which are obviously incorrect. I assume that these represent casualties that were discovered during the recent recovery efforts in Vietnam. If this is true I will have to remove these to make my analysis meaningful (since clearly I won't know which year/month these fine Americans died).
-
-# In[ ]:
-
-
-hostile['FATALITY_DATE'] = hostile['FATALITY_DATE'].floordiv(100)
-
-_ = sns.distplot(hostile['FATALITY_DATE'])
-_ = plt.title('Infantry Hostile Fire Casualties by Date')
-plt.show()
-
-
-# As expected.
-
-# In[ ]:
-
-
-hostile = hostile[hostile['FATALITY_DATE'] < 197505]
-
-hostile['FATALITY_MONTH'] = hostile['FATALITY_DATE'] - 190000
-
-
-# In[ ]:
-
-
-hostile['FATALITY_MONTH'] = 0
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196201, 196301, 196401, 196501, 196601, 196701, 196801, 196901, 197001, 197101, 197201, 197301, 197401, 197501])] = 'January'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196202, 196302, 196402, 196502, 196602, 196702, 196802, 196902, 197002, 197102, 197202, 197302, 197402, 197502])] = 'February'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196203, 196303, 196403, 196503, 196603, 196703, 196803, 196903, 197003, 197103, 197203, 197303, 197403, 197503])] = 'March'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196204, 196304, 196404, 196504, 196604, 196704, 196804, 196904, 197004, 197104, 197204, 197304, 197404, 197504])] = 'April'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196205, 196305, 196405, 196505, 196605, 196705, 196805, 196905, 197005, 197105, 197205, 197305, 197405, 197505])] = 'May'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196206, 196306, 196406, 196506, 196606, 196706, 196806, 196906, 197006, 197106, 197206, 197306, 197406, 197506])] = 'June'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196207, 196307, 196407, 196507, 196607, 196707, 196807, 196907, 197007, 197107, 197207, 197307, 197407, 197507])] = 'July'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196208, 196308, 196408, 196508, 196608, 196708, 196808, 196908, 197008, 197108, 197208, 197308, 197408, 197508])] = 'August'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196209, 196309, 196409, 196509, 196609, 196709, 196809, 196909, 197009, 197109, 197209, 197309, 197409, 197509])] = 'September'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196210, 196310, 196410, 196510, 196610, 196710, 196810, 196910, 197010, 197110, 197210, 197310, 197410, 197510])] = 'October'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196211, 196311, 196411, 196511, 196611, 196711, 196811, 196911, 197011, 197111, 197211, 197311, 197411, 197511])] = 'November'
-hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196212, 196312, 196412, 196512, 196612, 196712, 196812, 196912, 197012, 197112, 197212, 197312, 197412, 197512])] = 'December'
-
-
-# In[ ]:
-
-
-hostile['season'] = 0
-
-hostile['season'][hostile['FATALITY_MONTH'].isin(['October', 'November', 'December'])] = 'rainy'
-hostile['season'][-hostile['FATALITY_MONTH'].isin(['October', 'November', 'December'])] = 'dry'
-
-
-# In[ ]:
-
-
-order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-_ = sns.countplot(x='FATALITY_MONTH', hue='season', data=hostile, order=order, hue_order=['rainy', 'dry'])
-_ = plt.title('Infantry Fatalities by Hostile Fire (by month)')
-_ = plt.xlabel('Month')
-_ = plt.ylabel('Number of Casualties')
-plt.xticks(rotation=40)
-plt.show()
-
-
-# In[ ]:
-
-
-plt.subplot(2,1,1)
-_ = sns.countplot(x='FATALITY_YEAR', data=hostile)
-_ = plt.title('Infantry Hostile Casualties by Year')
-_ = plt.xlabel('Fatality Year')
-_ = plt.ylabel('Number of Casualties')
-plt.xticks(rotation=45)
-plt.subplot(2,1,2)
-_ = sns.countplot(x='FATALITY_YEAR', data=data)
-_ = plt.title('Total Fatalities by Year')
-_ = plt.xlabel('Fatality Year')
-_ = plt.ylabel('Number of Casualties')
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.show()
-
-
-# All right, looks like my hypothesis was correct. Casualties were lower during the rainy season months than during the dry season. The highest casualties over the course of the conflict occurred during the dry season and gradually trailed off as the rainy season approached. Apparently the 'fighting season' during the Vietnam conflict occurred during the dry season, which is not particularly surprising.
-# 
-# I also plotted casualties by year for Infantry and the total force just for fun. Evidently 1968 was a bad year.
-# 
-# Well, I think that answers all of my questions for this dataset. It's been fun exploring it.  Please feel free to upvote or comment as you see fit. 
-# 
-# Upvotes are always appreciated!
-# ===============================

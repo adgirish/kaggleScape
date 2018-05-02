@@ -1,161 +1,100 @@
-"""
-This is an upgraded version of Ceshine's and Linzhi and Andy Harless starter script, simply adding more
-average features and weekly average features on it.
-"""
-from datetime import date, timedelta
-import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_squared_error
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation
-from keras.layers import LSTM
-from keras import callbacks
-from keras.callbacks import ModelCheckpoint
+import pandas as pd
+from sklearn import *
+import tensorflow as tf
+from multiprocessing import *
 
-df_train = pd.read_csv(
-    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
-    dtype={'onpromotion': bool},
-    converters={'unit_sales': lambda u: np.log1p(
-        float(u)) if float(u) > 0 else 0},
-    parse_dates=["date"],
-    skiprows=range(1, 66458909)  # 2016-01-01
-)
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+col = [c for c in train.columns if c not in ['id','target']]
+print(len(col))
+col = [c for c in col if not c.startswith('ps_calc_')]
+print(len(col))
 
-df_test = pd.read_csv(
-    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
-    dtype={'onpromotion': bool},
-    parse_dates=["date"]  # , date_parser=parser
-).set_index(
-    ['store_nbr', 'item_nbr', 'date']
-)
+train = train.replace(-1, np.NaN)
+d_median = train.median(axis=0)
+d_mean = train.mean(axis=0)
+train = train.fillna(-1)
+one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
 
-items = pd.read_csv(
-    "../input/items.csv",
-).set_index("item_nbr")
+def transform_df(df):
+    df = pd.DataFrame(df)
+    dcol = [c for c in df.columns if c not in ['id','target']]
+    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
+    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
+    for c in dcol:
+        if '_bin' not in c: #standard arithmetic
+            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
+            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
+            #df[c+str('_sq')] = np.power(df[c].values,2).astype(np.float32)
+            #df[c+str('_sqr')] = np.square(df[c].values).astype(np.float32)
+            #df[c+str('_log')] = np.log(np.abs(df[c].values) + 1)
+            #df[c+str('_exp')] = np.exp(df[c].values) - 1
+    for c in one_hot:
+        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
+            for val in one_hot[c]:
+                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
+    return df
 
-df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
-del df_train
+def multi_transform(df):
+    print('Init Shape: ', df.shape)
+    p = Pool(cpu_count())
+    df = p.map(transform_df, np.array_split(df, cpu_count()))
+    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+    p.close(); p.join()
+    print('After Shape: ', df.shape)
+    return df
 
-promo_2017_train = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
-        level=-1).fillna(False)
-promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
-promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
-promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
-promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
-promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
-del promo_2017_test, promo_2017_train
+def gini(y, pred):
+    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
+    g = 2 * metrics.auc(fpr, tpr) -1
+    return g
 
-df_2017 = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
-        level=-1).fillna(0)
-df_2017.columns = df_2017.columns.get_level_values(1)
+def gini_tf(pred, y):
+    return gini(y, pred) / gini(y, y)
 
-items = items.reindex(df_2017.index.get_level_values(1))
+x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
 
-def get_timespan(df, dt, minus, periods, freq='D'):
-    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+x1 = multi_transform(x1)
+x2 = multi_transform(x2)
+test = multi_transform(test)
 
-def prepare_dataset(t2017, is_train=True):
-    X = pd.DataFrame({
-        "day_1_2017": get_timespan(df_2017, t2017, 1, 1).values.ravel(),
-        "mean_3_2017": get_timespan(df_2017, t2017, 3, 3).mean(axis=1).values,
-        "mean_7_2017": get_timespan(df_2017, t2017, 7, 7).mean(axis=1).values,
-        "mean_14_2017": get_timespan(df_2017, t2017, 14, 14).mean(axis=1).values,
-        "mean_30_2017": get_timespan(df_2017, t2017, 30, 30).mean(axis=1).values,
-        "mean_60_2017": get_timespan(df_2017, t2017, 60, 60).mean(axis=1).values,
-        "mean_140_2017": get_timespan(df_2017, t2017, 140, 140).mean(axis=1).values,
-        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
-        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
-        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values
-    })
-    for i in range(7):
-        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
-        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values
-    for i in range(16):
-        X["promo_{}".format(i)] = promo_2017[
-            t2017 + timedelta(days=i)].values.astype(np.uint8)
-    if is_train:
-        y = df_2017[
-            pd.date_range(t2017, periods=16)
-        ].values
-        return X, y
-    return X
+col = [c for c in x1.columns if c not in ['id','target']]
+col = [c for c in col if not c.startswith('ps_calc_')]
+print(x1.values.shape, x2.values.shape)
 
-print("Preparing dataset...")
-t2017 = date(2017, 5, 31)
-X_l, y_l = [], []
-for i in range(6):
-    delta = timedelta(days=7 * i)
-    X_tmp, y_tmp = prepare_dataset(
-        t2017 + delta
-    )
-    X_l.append(X_tmp)
-    y_l.append(y_tmp)
-X_train = pd.concat(X_l, axis=0)
-y_train = np.concatenate(y_l, axis=0)
-del X_l, y_l
-X_val, y_val = prepare_dataset(date(2017, 7, 26))
-X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
+#remove duplicates just in case
+tdups = multi_transform(train)
+dups = tdups[tdups.duplicated(subset=col, keep=False)]
 
-stores_items = pd.DataFrame(index=df_2017.index)
-test_ids = df_test[['id']]
+x1 = x1[~(x1['id'].isin(dups['id'].values))]
+x2 = x2[~(x2['id'].isin(dups['id'].values))]
+print(x1.values.shape, x2.values.shape)
 
-items = items.reindex( stores_items.index.get_level_values(1) )
+y1 = x1['target']
+y2 = x2['target']
+x1 = x1[col]
+x2 = x2[col]
 
-X_train = X_train.as_matrix()
-X_test = X_test.as_matrix()
-X_val = X_val.as_matrix()
-X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
-X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
-X_val = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
+#start tf reqs
+x1 = x1.values.astype(np.float32)
+x2 = x2.values.astype(np.float32)
+y1 = y1.values.astype(np.int)
+y2 = y2.values.astype(np.int)
+xtest = test[col].values.astype(np.float32)
 
-model = Sequential()
-model.add(LSTM(32, input_shape=(X_train.shape[1],X_train.shape[2])))
-model.add(Dropout(.1))
-model.add(Dense(32))
-model.add(Dropout(.2))
-model.add(Dense(1))
-model.compile(loss = 'mse', optimizer='adam', metrics=['mse'])
+col = [tf.feature_column.numeric_column('x', shape=x1.shape[1:])]
+clf = tf.estimator.DNNClassifier(feature_columns=col, hidden_units=[600, 1200, 600], n_classes=2)
+clf.train(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x1}, y=y1, shuffle=False), steps=10000)
+auc = clf.evaluate(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x2}, y=y2, num_epochs=1, shuffle=False))['auc']
+print('AUC: ', auc)
 
-N_EPOCHS = 5
+preds = clf.predict(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x2}, num_epochs=1, shuffle=False))
+preds = [float(p["probabilities"][1]) for p in preds]
+print('Gini: ', gini_tf(preds, y2))
 
-val_pred = []
-test_pred = []
-# wtpath = 'weights.hdf5'  # To save best epoch. But need Keras bug to be fixed first.
-sample_weights=np.array( pd.concat([items["perishable"]] * 6) * 0.25 + 1 )
-for i in range(16):
-    print("=" * 50)
-    print("Step %d" % (i+1))
-    print("=" * 50)
-    y = y_train[:, i]
-    xv = X_val
-    yv = y_val[:, i]
-    model.fit(X_train, y, batch_size = 512, epochs = N_EPOCHS, verbose=2,
-               sample_weight=sample_weights, validation_data=(xv,yv) ) 
-    val_pred.append(model.predict(X_val))
-    test_pred.append(model.predict(X_test))
-    
-n_public = 5 # Number of days in public test set
-weights=pd.concat([items["perishable"]]) * 0.25 + 1
-print("Unweighted validation mse: ", mean_squared_error(
-    y_val, np.array(val_pred).squeeze(axis=2).transpose()) )
-print("Full validation mse:       ", mean_squared_error(
-    y_val, np.array(val_pred).squeeze(axis=2).transpose(), sample_weight=weights) )
-print("'Public' validation mse:   ", mean_squared_error(
-    y_val[:,:n_public], np.array(val_pred).squeeze(axis=2).transpose()[:,:n_public], 
-    sample_weight=weights) )
-print("'Private' validation mse:  ", mean_squared_error(
-    y_val[:,n_public:], np.array(val_pred).squeeze(axis=2).transpose()[:,n_public:], 
-    sample_weight=weights) )
-    
-y_test = np.array(test_pred).squeeze(axis=2).transpose()
-df_preds = pd.DataFrame(
-    y_test, index=stores_items.index,
-    columns=pd.date_range("2017-08-16", periods=16)
-).stack().to_frame("unit_sales")
-df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
-
-submission = test_ids.join(df_preds, how="left").fillna(0)
-submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
-submission.to_csv('lstm.csv', float_format='%.4f', index=None)
+preds = clf.predict(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': xtest}, num_epochs=1, shuffle=False))
+preds = [float(p["probabilities"][1]) for p in preds]
+test['target'] = preds
+test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
+test[['id','target']].to_csv('tf_submission.csv', index=False, float_format='%.5f')

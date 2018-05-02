@@ -1,390 +1,599 @@
 
 # coding: utf-8
 
-# ### Hello Kagglers!!
+# June 8. Version 13:  Going back to doing separate adjustments for each of the 3 micro models
 # 
-# This is a very basic tutorial to Machine Learning for complete Beginners using the Iris Dataset. You can learn how to implement a machine learning to a given dataset by following this notebook. I have explained everything related to the implementation in detail . Hope you find it useful.
+# From version 12:
 # 
-# For a more advanced notebook that covers some more detailed concepts, have a look at [this notebook](https://www.kaggle.com/ash316/ml-from-scratch-part-2/notebook)
+# This version adjusts results using average (log) predicted prices from a macro model.
 # 
-# If this notebook to be useful, **Please Upvote!!!**
+# By default (that is, if micro_humility_factor=1), it rescales the adjusted log predictions so that the standard deviation of the raw predictions is the same as it was before the adjustment.
 # 
-# 
+# There is also a provision for applying micro and macro humility factors .  The macro humility factor adjusts the macro predictions by averaging in a "naive" macro model.  The micro humility factor adjusts individual (log) predictions toward the (log) mean. 
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# Parameters
+micro_humility_factor = 1     #    range from 0 (complete humility) to 1 (no humility)
+macro_humility_factor = 0.96
+jason_weight = .2
+bruno_weight = .2
+reynaldo_weight = 1 - jason_weight - bruno_weight
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns
+
+# In[ ]:
+
+
+# Get ready for lots of annoying deprecation warnings
+import statsmodels.api as sm
+
+
+# In[ ]:
+
+
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import seaborn as sns
+from sklearn import model_selection, preprocessing
+import xgboost as xgb
+import datetime
+import scipy as sp
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+
+# In[ ]:
+
+
+# Functions to use in data adjustment
+
+def scale_miss(   # Scale shifted logs and compare raw stdev to old raw stdev
+        alpha,
+        shifted_logs,
+        oldstd,
+        new_logmean
+        ):
+    newlogs = new_logmean + alpha*(shifted_logs - new_logmean)
+    newstd = np.std(np.exp(newlogs))
+    return (newstd-oldstd)**2
+    
+
+def shift_logmean_but_keep_scale(  # Or change the scale, but relative to the old scale
+        data,
+        new_logmean,
+        rescaler
+        ):
+    logdata = np.log(data)
+    oldstd = data.std()
+    shift = new_logmean - logdata.mean()
+    shifted_logs = logdata + shift
+    scale = sp.optimize.leastsq( scale_miss, 1, args=(shifted_logs, oldstd, new_logmean) )
+    alpha = scale[0][0]
+    newlogs = new_logmean + rescaler*alpha*(shifted_logs - new_logmean)
+    return np.exp(newlogs)
+
+
+# ## Fit macro model and compute average prediction
+
+# In[ ]:
+
+
+# Read data
+macro = pd.read_csv('../input/macro.csv')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+
+# Macro data monthly medians
+macro["timestamp"] = pd.to_datetime(macro["timestamp"])
+macro["year"]  = macro["timestamp"].dt.year
+macro["month"] = macro["timestamp"].dt.month
+macro["yearmonth"] = 100*macro.year + macro.month
+macmeds = macro.groupby("yearmonth").median()
+
+# Price data monthly medians
+train["timestamp"] = pd.to_datetime(train["timestamp"])
+train["year"]  = train["timestamp"].dt.year
+train["month"] = train["timestamp"].dt.month
+train["yearmonth"] = 100*train.year + train.month
+prices = train[["yearmonth","price_doc"]]
+p = prices.groupby("yearmonth").median()
+
+# Join monthly prices to macro data
+df = macmeds.join(p)
+
+
+# In[ ]:
+
+
+# Function to process Almon lags
+
+import numpy.matlib as ml
+ 
+def almonZmatrix(X, maxlag, maxdeg):
+    """
+    Creates the Z matrix corresponding to vector X.
+    """
+    n = len(X)
+    Z = ml.zeros((len(X)-maxlag, maxdeg+1))
+    for t in range(maxlag,  n):
+       #Solve for Z[t][0].
+       Z[t-maxlag,0] = sum([X[t-lag] for lag in range(maxlag+1)])
+       for j in range(1, maxdeg+1):
+             s = 0.0
+             for i in range(1, maxlag+1):       
+                s += (i)**j * X[t-i]
+             Z[t-maxlag,j] = s
+    return Z
+
+
+# In[ ]:
+
+
+# Prepare data for macro model
+y = df.price_doc.div(df.cpi).apply(np.log).loc[201108:201506]
+lncpi = df.cpi.apply(np.log)
+tblags = 5    # Number of lags used on PDL for Trade Balance
+mrlags = 5    # Number of lags used on PDL for Mortgage Rate
+cplags = 5    # Number of lags used on PDL for CPI
+ztb = almonZmatrix(df.balance_trade.loc[201103:201506].as_matrix(), tblags, 1)
+zmr = almonZmatrix(df.mortgage_rate.loc[201103:201506].as_matrix(), mrlags, 1)
+zcp = almonZmatrix(lncpi.loc[201103:201506].as_matrix(), cplags, 1)
+columns = ['tb0', 'tb1', 'mr0', 'mr1', 'cp0', 'cp1']
+z = pd.DataFrame( np.concatenate( (ztb, zmr, zcp), axis=1), y.index.values, columns )
+X = sm.add_constant( z )
+
+# Fit macro model
+eq = sm.OLS(y, X)
+fit = eq.fit()
+
+# Predict with macro model
+test_cpi = df.cpi.loc[201507:201605]
+test_index = test_cpi.index
+ztb_test = almonZmatrix(df.balance_trade.loc[201502:201605].as_matrix(), tblags, 1)
+zmr_test = almonZmatrix(df.mortgage_rate.loc[201502:201605].as_matrix(), mrlags, 1)
+zcp_test = almonZmatrix(lncpi.loc[201502:201605].as_matrix(), cplags, 1)
+z_test = pd.DataFrame( np.concatenate( (ztb_test, zmr_test, zcp_test), axis=1), 
+                       test_index, columns )
+X_test = sm.add_constant( z_test )
+pred_lnrp = fit.predict( X_test )
+pred_p = np.exp(pred_lnrp) * test_cpi
+
+# Merge with test cases and compute mean for macro prediction
+test["timestamp"] = pd.to_datetime(test["timestamp"])
+test["year"]  = test["timestamp"].dt.year
+test["month"] = test["timestamp"].dt.month
+test["yearmonth"] = 100*test.year + test.month
+test_ids = test[["yearmonth","id"]]
+monthprices = pd.DataFrame({"yearmonth":pred_p.index.values,"monthprice":pred_p.values})
+macro_mean = np.exp(test_ids.merge(monthprices, on="yearmonth").monthprice.apply(np.log).mean())
+macro_mean
+
+
+# In[ ]:
+
+
+# Naive macro model assumes housing prices will simply follow CPI
+naive_pred_lnrp = y.mean()
+naive_pred_p = np.exp(naive_pred_lnrp) * test_cpi
+monthnaive = pd.DataFrame({"yearmonth":pred_p.index.values, "monthprice":naive_pred_p.values})
+macro_naive = np.exp(test_ids.merge(monthnaive, on="yearmonth").monthprice.apply(np.log).mean())
+macro_naive
+
+
+# In[ ]:
+
+
+# Combine naive and substantive macro models
+macro_mean = macro_naive * (macro_mean/macro_naive) ** macro_humility_factor
+macro_mean
+
+
+# ## Fit Jason's model and adjust results for macro mean
+
+# In[ ]:
+
+
+# Jason/Gunja
+
+
+
+#load files
+train = pd.read_csv('../input/train.csv', parse_dates=['timestamp'])
+test = pd.read_csv('../input/test.csv', parse_dates=['timestamp'])
+macro = pd.read_csv('../input/macro.csv', parse_dates=['timestamp'])
+id_test = test.id
+
+#clean data
+bad_index = train[train.life_sq > train.full_sq].index
+train.ix[bad_index, "life_sq"] = np.NaN
+equal_index = [601,1896,2791]
+test.ix[equal_index, "life_sq"] = test.ix[equal_index, "full_sq"]
+bad_index = test[test.life_sq > test.full_sq].index
+test.ix[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.life_sq < 5].index
+train.ix[bad_index, "life_sq"] = np.NaN
+bad_index = test[test.life_sq < 5].index
+test.ix[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.full_sq < 5].index
+train.ix[bad_index, "full_sq"] = np.NaN
+bad_index = test[test.full_sq < 5].index
+test.ix[bad_index, "full_sq"] = np.NaN
+kitch_is_build_year = [13117]
+train.ix[kitch_is_build_year, "build_year"] = train.ix[kitch_is_build_year, "kitch_sq"]
+bad_index = train[train.kitch_sq >= train.life_sq].index
+train.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[test.kitch_sq >= test.life_sq].index
+test.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.kitch_sq == 0).values + (train.kitch_sq == 1).values].index
+train.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[(test.kitch_sq == 0).values + (test.kitch_sq == 1).values].index
+test.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.full_sq > 210) & (train.life_sq / train.full_sq < 0.3)].index
+train.ix[bad_index, "full_sq"] = np.NaN
+bad_index = test[(test.full_sq > 150) & (test.life_sq / test.full_sq < 0.3)].index
+test.ix[bad_index, "full_sq"] = np.NaN
+bad_index = train[train.life_sq > 300].index
+train.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
+bad_index = test[test.life_sq > 200].index
+test.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
+train.product_type.value_counts(normalize= True)
+test.product_type.value_counts(normalize= True)
+bad_index = train[train.build_year < 1500].index
+train.ix[bad_index, "build_year"] = np.NaN
+bad_index = test[test.build_year < 1500].index
+test.ix[bad_index, "build_year"] = np.NaN
+bad_index = train[train.num_room == 0].index 
+train.ix[bad_index, "num_room"] = np.NaN
+bad_index = test[test.num_room == 0].index 
+test.ix[bad_index, "num_room"] = np.NaN
+bad_index = [10076, 11621, 17764, 19390, 24007, 26713, 29172]
+train.ix[bad_index, "num_room"] = np.NaN
+bad_index = [3174, 7313]
+test.ix[bad_index, "num_room"] = np.NaN
+bad_index = train[(train.floor == 0).values * (train.max_floor == 0).values].index
+train.ix[bad_index, ["max_floor", "floor"]] = np.NaN
+bad_index = train[train.floor == 0].index
+train.ix[bad_index, "floor"] = np.NaN
+bad_index = train[train.max_floor == 0].index
+train.ix[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.max_floor == 0].index
+test.ix[bad_index, "max_floor"] = np.NaN
+bad_index = train[train.floor > train.max_floor].index
+train.ix[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.floor > test.max_floor].index
+test.ix[bad_index, "max_floor"] = np.NaN
+train.floor.describe(percentiles= [0.9999])
+bad_index = [23584]
+train.ix[bad_index, "floor"] = np.NaN
+train.material.value_counts()
+test.material.value_counts()
+train.state.value_counts()
+bad_index = train[train.state == 33].index
+train.ix[bad_index, "state"] = np.NaN
+test.state.value_counts()
+
+# brings error down a lot by removing extreme price per sqm
+train.loc[train.full_sq == 0, 'full_sq'] = 50
+train = train[train.price_doc/train.full_sq <= 600000]
+train = train[train.price_doc/train.full_sq >= 10000]
+
+# Add month-year
+month_year = (train.timestamp.dt.month + train.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+train['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+month_year = (test.timestamp.dt.month + test.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+test['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (train.timestamp.dt.weekofyear + train.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+train['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+week_year = (test.timestamp.dt.weekofyear + test.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+test['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+train['month'] = train.timestamp.dt.month
+train['dow'] = train.timestamp.dt.dayofweek
+
+test['month'] = test.timestamp.dt.month
+test['dow'] = test.timestamp.dt.dayofweek
+
+# Other feature engineering
+train['rel_floor'] = train['floor'] / train['max_floor'].astype(float)
+train['rel_kitch_sq'] = train['kitch_sq'] / train['full_sq'].astype(float)
+
+test['rel_floor'] = test['floor'] / test['max_floor'].astype(float)
+test['rel_kitch_sq'] = test['kitch_sq'] / test['full_sq'].astype(float)
+
+train.apartment_name=train.sub_area + train['metro_km_avto'].astype(str)
+test.apartment_name=test.sub_area + train['metro_km_avto'].astype(str)
+
+train['room_size'] = train['life_sq'] / train['num_room'].astype(float)
+test['room_size'] = test['life_sq'] / test['num_room'].astype(float)
+
+y_train = train["price_doc"]
+wts = 1 - .47*(y_train == 1e6)
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values)) 
+        x_train[c] = lbl.transform(list(x_train[c].values))
+        #x_train.drop(c,axis=1,inplace=True)
+        
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values)) 
+        x_test[c] = lbl.transform(list(x_test[c].values))
+        #x_test.drop(c,axis=1,inplace=True)  
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train, weight=wts)
+dtest = xgb.DMatrix(x_test)
+
+#cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20,
+#    verbose_eval=50, show_stdv=False)
+#cv_output[['train-rmse-mean', 'test-rmse-mean']].plot()
+
+#num_boost_rounds = len(cv_output)
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=350)
+
+#fig, ax = plt.subplots(1, 1, figsize=(8, 13))
+#xgb.plot_importance(model, max_num_features=50, height=0.5, ax=ax)
+
+y_predict = model.predict(dtest)
+jason_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+jason_model_raw_output.head()
+
+
+# In[ ]:
+
+
+np.exp( jason_model_raw_output.price_doc.apply(np.log).mean() )
+
+
+# In[ ]:
+
+
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+jason_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+jason_model_adjusted_output.head() 
+
+
+# ## Fit Reynaldo's model and adjust results for macro mean
+
+# In[ ]:
+
+
+# Reynaldo
+
+
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+id_test = test.id
+
+y_train = train["price_doc"]
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values)) 
+        x_train[c] = lbl.transform(list(x_train[c].values))
+        
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values)) 
+        x_test[c] = lbl.transform(list(x_test[c].values))
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+num_boost_rounds = 384  # This was the CV output, as earlier version shows
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round= num_boost_rounds)
+
+y_predict = model.predict(dtest)
+reynaldo_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+reynaldo_model_raw_output.head()
+
+
+# In[ ]:
+
+
+np.exp( reynaldo_model_raw_output.price_doc.apply(np.log).mean() )
+
+
+# In[ ]:
+
+
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+reynaldo_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+reynaldo_model_adjusted_output.head() 
+
+
+# ## Fit Bruno's model and adjust results for macro mean
+
+# In[ ]:
+
+
+# Bruno with outlier dropped
+
+
 
 # Any results you write to the current directory are saved as output.
+df_train = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
+df_test = pd.read_csv("../input/test.csv", parse_dates=['timestamp'])
+df_macro = pd.read_csv("../input/macro.csv", parse_dates=['timestamp'])
+
+df_train.drop(df_train[df_train["life_sq"] > 7000].index, inplace=True)
+
+y_train = df_train['price_doc'].values
+id_test = df_test['id']
+
+df_train.drop(['id', 'price_doc'], axis=1, inplace=True)
+df_test.drop(['id'], axis=1, inplace=True)
+
+num_train = len(df_train)
+df_all = pd.concat([df_train, df_test])
+# Next line just adds a lot of NA columns (becuase "join" only works on indexes)
+# but somewhow it seems to affect the result
+df_all = df_all.join(df_macro, on='timestamp', rsuffix='_macro')
+print(df_all.shape)
+
+# Add month-year
+month_year = (df_all.timestamp.dt.month + df_all.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+df_all['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (df_all.timestamp.dt.weekofyear + df_all.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+df_all['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+df_all['month'] = df_all.timestamp.dt.month
+df_all['dow'] = df_all.timestamp.dt.dayofweek
+
+# Other feature engineering
+df_all['rel_floor'] = df_all['floor'] / df_all['max_floor'].astype(float)
+df_all['rel_kitch_sq'] = df_all['kitch_sq'] / df_all['full_sq'].astype(float)
+
+# Remove timestamp column (may overfit the model in train)
+df_all.drop(['timestamp', 'timestamp_macro'], axis=1, inplace=True)
+
+
+factorize = lambda t: pd.factorize(t[1])[0]
+
+df_obj = df_all.select_dtypes(include=['object'])
+
+X_all = np.c_[
+    df_all.select_dtypes(exclude=['object']).values,
+    np.array(list(map(factorize, df_obj.iteritems()))).T
+]
+print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+
+# Deal with categorical values
+df_numeric = df_all.select_dtypes(exclude=['object'])
+df_obj = df_all.select_dtypes(include=['object']).copy()
+
+for c in df_obj:
+    df_obj[c] = pd.factorize(df_obj[c])[0]
+
+df_values = pd.concat([df_numeric, df_obj], axis=1)
+
+
+# Convert to numpy values
+X_all = df_values.values
+print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+df_columns = df_values.columns
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(X_train, y_train, feature_names=df_columns)
+dtest = xgb.DMatrix(X_test, feature_names=df_columns)
+
+
+num_boost_round = 489  # From Bruno's original CV, I think
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_round)
+
+y_predict = model.predict(dtest)
+bruno_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+bruno_model_raw_output.head()
 
 
 # In[ ]:
 
 
-iris = pd.read_csv("../input/Iris.csv") #load the dataset
+np.exp( bruno_model_raw_output.price_doc.apply(np.log).mean() )
 
 
 # In[ ]:
 
 
-iris.head(2) #show the first 2 rows from the dataset
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+bruno_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+bruno_model_adjusted_output.head() 
+
+
+# ## Merge the adjusted results
+
+# In[ ]:
+
+
+# Merge
+
+results = reynaldo_model_adjusted_output.merge( 
+             jason_model_adjusted_output.merge(
+                bruno_model_adjusted_output, on='id', suffixes=['_jason','_bruno'] ), on='id' )
+results["price_doc_reynaldo"] = results["price_doc"]
+results["price_doc"] = np.exp( np.log(results.price_doc_reynaldo)*reynaldo_weight +
+                               np.log(results.price_doc_jason)*jason_weight       +
+                               np.log(results.price_doc_bruno)*bruno_weight          )
+
+results.drop(["price_doc_reynaldo", "price_doc_bruno", "price_doc_jason"],axis=1,inplace=True)
+results.head()
 
 
 # In[ ]:
 
 
-iris.info()  #checking if there is any inconsistency in the dataset
-#as we see there are no null values in the dataset, so the data can be processed
+results.to_csv('sub.csv', index=False)
 
-
-# #### Removing the unneeded column
-
-# In[ ]:
-
-
-iris.drop('Id',axis=1,inplace=True) #dropping the Id column as it is unecessary, axis=1 specifies that it should be column wise, inplace =1 means the changes should be reflected into the dataframe
-
-
-# ## Some Exploratory Data Analysis With Iris
-
-# In[ ]:
-
-
-fig = iris[iris.Species=='Iris-setosa'].plot(kind='scatter',x='SepalLengthCm',y='SepalWidthCm',color='orange', label='Setosa')
-iris[iris.Species=='Iris-versicolor'].plot(kind='scatter',x='SepalLengthCm',y='SepalWidthCm',color='blue', label='versicolor',ax=fig)
-iris[iris.Species=='Iris-virginica'].plot(kind='scatter',x='SepalLengthCm',y='SepalWidthCm',color='green', label='virginica', ax=fig)
-fig.set_xlabel("Sepal Length")
-fig.set_ylabel("Sepal Width")
-fig.set_title("Sepal Length VS Width")
-fig=plt.gcf()
-fig.set_size_inches(10,6)
-plt.show()
-
-
-# The above graph shows relationship between the sepal length and width. Now we will check relationship between the petal length and width.
-
-# In[ ]:
-
-
-fig = iris[iris.Species=='Iris-setosa'].plot.scatter(x='PetalLengthCm',y='PetalWidthCm',color='orange', label='Setosa')
-iris[iris.Species=='Iris-versicolor'].plot.scatter(x='PetalLengthCm',y='PetalWidthCm',color='blue', label='versicolor',ax=fig)
-iris[iris.Species=='Iris-virginica'].plot.scatter(x='PetalLengthCm',y='PetalWidthCm',color='green', label='virginica', ax=fig)
-fig.set_xlabel("Petal Length")
-fig.set_ylabel("Petal Width")
-fig.set_title(" Petal Length VS Width")
-fig=plt.gcf()
-fig.set_size_inches(10,6)
-plt.show()
-
-
-# As we can see that the Petal Features are giving a better cluster division compared to the Sepal features. This is an indication that the Petals can help in better and accurate Predictions over the Sepal. We will check that later.
-
-# ### Now let us see how are the length and width are distributed
-
-# In[ ]:
-
-
-iris.hist(edgecolor='black', linewidth=1.2)
-fig=plt.gcf()
-fig.set_size_inches(12,6)
-plt.show()
-
-
-# ### Now let us see how the length and width vary according to the species
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,10))
-plt.subplot(2,2,1)
-sns.violinplot(x='Species',y='PetalLengthCm',data=iris)
-plt.subplot(2,2,2)
-sns.violinplot(x='Species',y='PetalWidthCm',data=iris)
-plt.subplot(2,2,3)
-sns.violinplot(x='Species',y='SepalLengthCm',data=iris)
-plt.subplot(2,2,4)
-sns.violinplot(x='Species',y='SepalWidthCm',data=iris)
-
-
-# The violinplot shows density of the length and width in the species. The thinner part denotes that there is less density whereas the fatter part conveys higher density
-
-# ### Now the given problem is a classification problem.. Thus we will be using the classification algorithms to build a model.
-# **Classification**: samples belong to two or more classes and we want to learn from already labeled data how to predict the class of unlabeled data
-# 
-# **Regression**: if the desired output consists of one or more continuous variables, then the task is called regression. An example of a regression problem would be the prediction of the length of a salmon as a function of its age and weight.
-
-# Before we start, we need to clear some ML notations.
-# 
-# **attributes**-->An attribute is a property of an instance that may be used to determine its classification. In the following dataset, the attributes are the petal and sepal length and width. It is also known as **Features**.
-# 
-# **Target variable**, in the machine learning context is the variable that is or should be the output. Here the target variables are the 3 flower species.
-
-# In[ ]:
-
-
-# importing alll the necessary packages to use the various classification algorithms
-from sklearn.linear_model import LogisticRegression  # for Logistic Regression algorithm
-from sklearn.cross_validation import train_test_split #to split the dataset for training and testing
-from sklearn.neighbors import KNeighborsClassifier  # for K nearest neighbours
-from sklearn import svm  #for Support Vector Machine (SVM) Algorithm
-from sklearn import metrics #for checking the model accuracy
-from sklearn.tree import DecisionTreeClassifier #for using Decision Tree Algoithm
-
-
-# In[ ]:
-
-
-iris.shape #get the shape of the dataset
-
-
-# Now, when we train any algorithm, the number of features and their correlation plays an important role. If there are features and many of the features are highly correlated, then training an algorithm with all the featues will reduce the accuracy. Thus features selection should be done carefully. This dataset has less featues but still we will see the correlation.
-
-# In[ ]:
-
-
-plt.figure(figsize=(7,4)) 
-sns.heatmap(iris.corr(),annot=True,cmap='cubehelix_r') #draws  heatmap with input as the correlation matrix calculted by(iris.corr())
-plt.show()
-
-
-# **Observation--->**
-# 
-# The Sepal Width and Length are not correlated
-# The Petal Width and Length are highly correlated
-# 
-# We will use all the features for training the algorithm and check the accuracy.
-# 
-# Then we will use 1 Petal Feature and 1 Sepal Feature to check the accuracy of the algorithm as we are using only 2 features that are not correlated. Thus we can have a variance in the dataset which may help in better accuracy. We will check it later.
-
-# ### Steps To Be followed When Applying an Algorithm
-# 
-#  1. Split the dataset into training and testing dataset. The testing dataset is generally smaller than training one as it will help in training the model better.
-#  2. Select any algorithm based on the problem (classification or regression) whatever you feel may be good.
-#  3. Then pass the training dataset to the algorithm to train it. We use the **.fit()** method
-#  4. Then pass the testing data to the trained algorithm to predict the outcome. We use the **.predict()** method.
-#  5. We then check the accuracy by **passing the predicted outcome and the actual output** to the model.
-
-# ### Splitting The Data into Training And Testing Dataset
-
-# In[ ]:
-
-
-train, test = train_test_split(iris, test_size = 0.3)# in this our main data is split into train and test
-# the attribute test_size=0.3 splits the data into 70% and 30% ratio. train=70% and test=30%
-print(train.shape)
-print(test.shape)
-
-
-# In[ ]:
-
-
-train_X = train[['SepalLengthCm','SepalWidthCm','PetalLengthCm','PetalWidthCm']]# taking the training data features
-train_y=train.Species# output of our training data
-test_X= test[['SepalLengthCm','SepalWidthCm','PetalLengthCm','PetalWidthCm']] # taking test data features
-test_y =test.Species   #output value of test data
-
-
-# Lets check the Train and Test Dataset
-
-# In[ ]:
-
-
-train_X.head(2)
-
-
-# In[ ]:
-
-
-test_X.head(2)
-
-
-# In[ ]:
-
-
-train_y.head()  ##output of the training data
-
-
-# ### Support Vector Machine (SVM)
-
-# In[ ]:
-
-
-model = svm.SVC() #select the algorithm
-model.fit(train_X,train_y) # we train the algorithm with the training data and the training output
-prediction=model.predict(test_X) #now we pass the testing data to the trained algorithm
-print('The accuracy of the SVM is:',metrics.accuracy_score(prediction,test_y))#now we check the accuracy of the algorithm. 
-#we pass the predicted output by the model and the actual output
-
-
-# SVM is giving very good accuracy . We will continue to check the accuracy for different models.
-# 
-# Now we will follow the same steps as above for training various machine learning algorithms.
-
-# ### Logistic Regression
-
-# In[ ]:
-
-
-model = LogisticRegression()
-model.fit(train_X,train_y)
-prediction=model.predict(test_X)
-print('The accuracy of the Logistic Regression is',metrics.accuracy_score(prediction,test_y))
-
-
-# ### Decision Tree
-
-# In[ ]:
-
-
-model=DecisionTreeClassifier()
-model.fit(train_X,train_y)
-prediction=model.predict(test_X)
-print('The accuracy of the Decision Tree is',metrics.accuracy_score(prediction,test_y))
-
-
-# ### K-Nearest Neighbours
-
-# In[ ]:
-
-
-model=KNeighborsClassifier(n_neighbors=3) #this examines 3 neighbours for putting the new data into a class
-model.fit(train_X,train_y)
-prediction=model.predict(test_X)
-print('The accuracy of the KNN is',metrics.accuracy_score(prediction,test_y))
-
-
-# ### Let's check the accuracy for various values of n for K-Nearest nerighbours
-
-# In[ ]:
-
-
-a_index=list(range(1,11))
-a=pd.Series()
-x=[1,2,3,4,5,6,7,8,9,10]
-for i in list(range(1,11)):
-    model=KNeighborsClassifier(n_neighbors=i) 
-    model.fit(train_X,train_y)
-    prediction=model.predict(test_X)
-    a=a.append(pd.Series(metrics.accuracy_score(prediction,test_y)))
-plt.plot(a_index, a)
-plt.xticks(x)
-
-
-# Above is the graph showing the accuracy for the KNN models using different values of n. 
-
-# ### We used all the features of iris in above models. Now we will use Petals and Sepals Seperately
-
-# ### Creating Petals And Sepals Training Data 
-
-# In[ ]:
-
-
-petal=iris[['PetalLengthCm','PetalWidthCm','Species']]
-sepal=iris[['SepalLengthCm','SepalWidthCm','Species']]
-
-
-# In[ ]:
-
-
-train_p,test_p=train_test_split(petal,test_size=0.3,random_state=0)  #petals
-train_x_p=train_p[['PetalWidthCm','PetalLengthCm']]
-train_y_p=train_p.Species
-test_x_p=test_p[['PetalWidthCm','PetalLengthCm']]
-test_y_p=test_p.Species
-
-
-train_s,test_s=train_test_split(sepal,test_size=0.3,random_state=0)  #Sepal
-train_x_s=train_s[['SepalWidthCm','SepalLengthCm']]
-train_y_s=train_s.Species
-test_x_s=test_s[['SepalWidthCm','SepalLengthCm']]
-test_y_s=test_s.Species
-
-
-# ### SVM
-
-# In[ ]:
-
-
-model=svm.SVC()
-model.fit(train_x_p,train_y_p) 
-prediction=model.predict(test_x_p) 
-print('The accuracy of the SVM using Petals is:',metrics.accuracy_score(prediction,test_y_p))
-
-model=svm.SVC()
-model.fit(train_x_s,train_y_s) 
-prediction=model.predict(test_x_s) 
-print('The accuracy of the SVM using Sepal is:',metrics.accuracy_score(prediction,test_y_s))
-
-
-# ### Logistic Regression
-
-# In[ ]:
-
-
-model = LogisticRegression()
-model.fit(train_x_p,train_y_p) 
-prediction=model.predict(test_x_p) 
-print('The accuracy of the Logistic Regression using Petals is:',metrics.accuracy_score(prediction,test_y_p))
-
-model.fit(train_x_s,train_y_s) 
-prediction=model.predict(test_x_s) 
-print('The accuracy of the Logistic Regression using Sepals is:',metrics.accuracy_score(prediction,test_y_s))
-
-
-# ### Decision Tree
-
-# In[ ]:
-
-
-model=DecisionTreeClassifier()
-model.fit(train_x_p,train_y_p) 
-prediction=model.predict(test_x_p) 
-print('The accuracy of the Decision Tree using Petals is:',metrics.accuracy_score(prediction,test_y_p))
-
-model.fit(train_x_s,train_y_s) 
-prediction=model.predict(test_x_s) 
-print('The accuracy of the Decision Tree using Sepals is:',metrics.accuracy_score(prediction,test_y_s))
-
-
-# ### K-Nearest Neighbours
-
-# In[ ]:
-
-
-model=KNeighborsClassifier(n_neighbors=3) 
-model.fit(train_x_p,train_y_p) 
-prediction=model.predict(test_x_p) 
-print('The accuracy of the KNN using Petals is:',metrics.accuracy_score(prediction,test_y_p))
-
-model.fit(train_x_s,train_y_s) 
-prediction=model.predict(test_x_s) 
-print('The accuracy of the KNN using Sepals is:',metrics.accuracy_score(prediction,test_y_s))
-
-
-# ### Observations:
-# 
-#  - Using Petals over Sepal for training the data gives a much better accuracy.
-#  - This was expected as we saw in the heatmap above that the correlation between the Sepal Width and Length was very low whereas the correlation between Petal Width and Length was very high. 
-
-# Thus we have just implemented some of the common Machine Learning. Since the dataset is small with very few features, I didn't cover some concepts as they would be relevant when we have many features.
-# 
-# I have compiled a notebook covering some advanced ML concepts using a larger dataset. Have a look at that tooo.
-
-# I hope the notebook was useful to you to get started with Machine Learning.
-# 
-# If  find this notebook, **Please Upvote**.
-# 
-# Thank You!!

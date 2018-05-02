@@ -1,423 +1,773 @@
 
 # coding: utf-8
 
-# One way to approach the competition is to look for a solution structure that has a good chance to yield good submission.  A solution structure is defined by a number of bag types, plus a number of occurrence of each bag type.  A bag type is defined by the number of gifts of each type it contains. For instance 3 blocks and 1 train.
+# <h1> Welcome to my Titanic Kernel! </h1>
+# <h2>This kernel will provide a analysis through the Titanic Disaster to understand the Survivors patterns</h2><br>
 # 
-# We can focus on bag types because all bags have the same capacity (50 pounds).
+# I will handle with data (<i>transform, missings, manipulation</i>), explore the data (<i>descritive and visual</i>) and also create a Deep Learning model
+
+# Are you looking for another interesting Kernels? <a href="https://www.kaggle.com/kabure/kernels">CLICK HERE</a> <br>
+# Give me your feedback and if yo like this kernel, votes up
+
+# <i>*I'm from Brazil, so english is not my first language, sorry about some mistakes</i>
+
+# # Table of Contents:
 # 
-# There is a finite number of bag types that are possible.  We define one random variables for each bag type. 
+# **1. [Introduction](#Introduction)** <br>
+# **2. [Librarys](#Librarys)** <br>
+# **3. [Knowning the data](#Known)** <br>
+# **4. [Exploring some Variables](#Explorations)** <br>
+# **5. [Preprocessing](#Prepocess)** <br>
+# **6. [Modelling](#Model)** <br>
+# **7. [Validation](#Validation)** <br>
 # 
-# All we need is an estimate the expected value and the variance of each possible bag type.  Then we use two properties to find a combination of bags that maximizes a combination of expected value and standard deviation:
+
+# <a id="Introduction"></a> <br> 
+# # **1. Introduction:** 
+# <h3> The data have 891 entries on train dataset and 418 on test dataset</h3>
+# - 10 columns in train_csv and 9 columns in train_test
 # 
-# - the expected value of a sum of random variables is the sum of the expected values of the random variables
-# - the variance of a sum of independent random variables is the sum of the variances of the random variable
+
+# <h2>Competition Description: </h2>
+# The sinking of the RMS Titanic is one of the most infamous shipwrecks in history.  On April 15, 1912, during her maiden voyage, the Titanic sank after colliding with an iceberg, killing 1502 out of 2224 passengers and crew. This sensational tragedy shocked the international community and led to better safety regulations for ships.
 # 
-# Kernels or scripts with similar approaches have been proposed by [Dominic Breuker](https://www.kaggle.com/breuker/santas-uncertain-bags/can-we-improve-by-increasing-variance) and [Ben Gorman](https://www.kaggle.com/ben519/santas-uncertain-bags/merry-christmas-y-all).
+# One of the reasons that the shipwreck led to such loss of life was that there were not enough lifeboats for the passengers and crew. Although there was some element of luck involved in surviving the sinking, some groups of people were more likely to survive than others, such as women, children, and the upper-class.
 # 
-# The difference is that here we find the optimal solution in a probabilistic sense.
+# In this challenge, we ask you to complete the analysis of what sorts of people were likely to survive. In particular, we ask you to apply the tools of machine learning to predict which passengers survived the tragedy.
+
+# <h3>Data Dictionary</h3><br>
+# Variable	Definition	Key<br>
+# <b>survival</b>	Survival	0 = No, 1 = Yes<br>
+# <b>pclass</b>	Ticket class	1 = 1st, 2 = 2nd, 3 = 3rd<br>
+# <b>sex</b>	Sex	<br>
+# <b>Age</b>	Age in years	<br>
+# <b>sibsp</b>	# of siblings / spouses aboard the Titanic	<br>
+# <b>parch</b>	# of parents / children aboard the Titanic	<br>
+# <b>ticket</b>	Ticket number	<br>
+# <b>fare</b>	Passenger fare	<br>
+# <b>cabin</b>	Cabin number	<br>
+# <b>embarked	</b>Port of Embarkation	C = Cherbourg, Q = Queenstown, S = Southampton<br>
+# <h3>Variable Notes</h3><br>
+# <b>pclass: </b>A proxy for socio-economic status (SES)<br>
+# 1st = Upper<br>
+# 2nd = Middle<br>
+# 3rd = Lower<br>
+# <b>age: </b>Age is fractional if less than 1. If the age is estimated, is it in the form of xx.5<br>
+# <b>sibsp:</b> The dataset defines family relations in this way...<br>
+# - <b>Sibling </b>= brother, sister, stepbrother, stepsister<br>
+# - <b>Spouse </b>= husband, wife (mistresses and fiancés were ignored)<br>
+# 
+# <b>parch: </b>The dataset defines family relations in this way...<br>
+# - <b>Parent</b> = mother, father<br>
+# - <b>Child </b>= daughter, son, stepdaughter, stepson<br>
+# 
+# Some children travelled only with a nanny, therefore parch=0 for them.<br>
+
+# I am using the beapproachs as possible but if you think I can do anything another best way, please, let me know.
+
+# <a id="Librarys"></a> <br> 
+# # **2. Librarys:** 
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
+import re
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+get_ipython().run_line_magic('matplotlib', 'inline')
+rcParams['figure.figsize'] = 10,8
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# First some definitions.
 
 # In[ ]:
 
 
-gift_types = ['horse', 'ball', 'bike', 'train', 'coal', 'book', 'doll', 'blocks', 'gloves']
-ngift_types = len(gift_types)
-
-horse, ball, bike, train, coal, book, doll, blocks, gloves = range(ngift_types)
+df_train = pd.read_csv("../input/train.csv")
+df_test = pd.read_csv("../input/test.csv")
 
 
-# We will use Monte Carlo simulation quite a bit. Let's agree on the number of samples to use.  Set it to a higher value to get more accurate results.
+# <a id="Known"></a> <br> 
+# # **3. First look at the data:** 
 
-# In[ ]:
-
-
-nsample=10000
-
-
-# Let's look at bags composed of a single gift type. We use a vectorized version of the original numpy distributions.
-# 
+# I will start looking the type and informations of the datasets
 
 # In[ ]:
 
 
-def gift_weights(gift, ngift, n=nsample):
-    if ngift == 0:
-        return np.array([0.0])
-    np.random.seed(2016)
-    if gift == horse:
-        dist = np.maximum(0, np.random.normal(5,2,(n, ngift))).sum(axis=1)
-    if gift == ball:
-        dist = np.maximum(0, 1 + np.random.normal(1,0.3,(n, ngift))).sum(axis=1)
-    if gift == bike:
-        dist = np.maximum(0, np.random.normal(20,10,(n, ngift))).sum(axis=1)
-    if gift == train:
-        dist = np.maximum(0, np.random.normal(10,5,(n, ngift))).sum(axis=1)
-    if gift == coal:
-        dist = 47 * np.random.beta(0.5,0.5,(n, ngift)).sum(axis=1)
-    if gift == book:
-        dist = np.random.chisquare(2,(n, ngift)).sum(axis=1)
-    if gift == doll:
-        dist = np.random.gamma(5,1,(n, ngift)).sum(axis=1)
-    if gift == blocks:
-        dist = np.random.triangular(5,10,20,(n, ngift)).sum(axis=1)
-    if gift == gloves:
-        gloves1 = 3.0 + np.random.rand(n, ngift)
-        gloves2 = np.random.rand(n, ngift)
-        gloves3 = np.random.rand(n, ngift)
-        dist = np.where(gloves2 < 0.3, gloves1, gloves3).sum(axis=1)
-    return dist
+#Looking data format and types
+print(df_train.info())
+print(df_test.info())
 
-
-# Let's find a reasonable upper bound on the number of gifts in the bag. For this we compute the expected score for bags with an increasing number of toys until the score decreases. The bag with largest score is determining the maximum value. This is fine when optimizing the expected value, as adding additional toys uses more toys without improving the objective function.
 
 # In[ ]:
 
 
-epsilon = 1
-max_type = np.zeros(ngift_types).astype('int')
+#Some Statistics
+df_train.describe()
 
-for gift, gift_type in enumerate(gift_types):
-    best_value = 0.0
-    for j in range(1, 200):
-        weights = gift_weights(gift, j, nsample)
-        raw_value = np.where(weights <= 50.0, weights, 0.0)
-        value = raw_value.mean()
-        if value > best_value:
-            best_value = value
-        else:
-            break
-    max_type[gift] = j
-max_type
-
-
-# We can now look at more general bag types. First we precompute weights of bags with a single type. The code is similar to the above one.
-# 
-# For each gift type , we create a 2D array with nsample rows, and ntype columns. Column j contains the weights of a bag made of j+1 toys of the given gift type.
 
 # In[ ]:
 
 
-def gift_distributions(gift, ngift, n=nsample):
-    if ngift == 0:
-        return np.array([0.0])
-    np.random.seed(2016)
-    if gift == horse:
-        dist = np.maximum(0, np.random.normal(5,2,(n, ngift)))
-    if gift == ball:
-        dist = np.maximum(0, 1 + np.random.normal(1,0.3,(n, ngift)))
-    if gift == bike:
-        dist = np.maximum(0, np.random.normal(20,10,(n, ngift)))
-    if gift == train:
-        dist = np.maximum(0, np.random.normal(10,5,(n, ngift)))
-    if gift == coal:
-        dist = 47 * np.random.beta(0.5,0.5,(n, ngift))
-    if gift == book:
-        dist = np.random.chisquare(2,(n, ngift))
-    if gift == doll:
-        dist = np.random.gamma(5,1,(n, ngift))
-    if gift == blocks:
-        dist = np.random.triangular(5,10,20,(n, ngift))
-    if gift == gloves:
-        gloves1 = 3.0 + np.random.rand(n, ngift)
-        gloves2 = np.random.rand(n, ngift)
-        gloves3 = np.random.rand(n, ngift)
-        dist = np.where(gloves2 < 0.3, gloves1, gloves3)
-    for j in range(1, ngift):
-        dist[:,j] += dist[:,j-1]
-    return dist
+#Take a look at the data
+print(df_train.head())
 
-distributions = dict()
+
+# <a id="Known"></a> <br> 
+# # **4. Exploring the data:** 
+
+# <h2>To try a new approach in the data, I will start the data analysis by the Name column
+
+# In[ ]:
+
+
+#Looking how the data is and searching for a re patterns
+df_train["Name"].head()
+
+
+# In[ ]:
+
+
+#GettingLooking the prefix of all Passengers
+df_train['Title'] = df_train.Name.apply(lambda x: re.search(' ([A-Z][a-z]+)\.', x).group(1))
+
+#Plotting the result
+sns.countplot(x='Title', data=df_train, palette="hls")
+plt.xticks(rotation=45)
+plt.show()
+
+
+# In[ ]:
+
+
+#Do the same on df_test
+df_test['Title'] = df_test.Name.apply(lambda x: re.search(' ([A-Z][a-z]+)\.', x).group(1))
+
+
+# In[ ]:
+
+
+#Now, I will identify the social status of each title
+
+Title_Dictionary = {
+        "Capt":       "Officer",
+        "Col":        "Officer",
+        "Major":      "Officer",
+        "Dr":         "Officer",
+        "Rev":        "Officer",
+        "Jonkheer":   "Royalty",
+        "Don":        "Royalty",
+        "Sir" :       "Royalty",
+        "the Countess":"Royalty",
+        "Dona":       "Royalty",
+        "Lady" :      "Royalty",
+        "Mme":        "Mrs",
+        "Ms":         "Mrs",
+        "Mrs" :       "Mrs",
+        "Mlle":       "Miss",
+        "Miss" :      "Miss",
+        "Mr" :        "Mr",
+        "Master" :    "Master"
+                   }
     
-for gift in range(ngift_types):
-    distributions[gift] = gift_distributions(gift, max_type[gift])
+# we map each title to correct category
+df_train['Title'] = df_train.Title.map(Title_Dictionary)
+df_test['Title'] = df_test.Title.map(Title_Dictionary)
 
-
-# We can now compute expected value of complex bags with lookups of precomputed weight distributions. With a slight change it code it is easy to compute additional statistics like the variance of the weight.
 
 # In[ ]:
 
 
-def gift_distributions(gift, ngift):
-    if ngift <= 0:
-        return 0
-    if ngift >= max_type[gift]:
-        return 51
-    return distributions[gift][:,ngift-1]
+print("Chances to survive based on titles: ")
+print(df_train.groupby("Title")["Survived"].mean())
 
-def gift_value(ntypes):
-    weights = np.zeros(nsample)
-    for gift in range(ngift_types):
-        dist = gift_distributions(gift, ntypes[gift])
-        weights += dist
-    weights = np.where(weights <= 50.0, weights, 0.0)
-    return weights.mean(), weights.std()
+#Plotting the results
+sns.countplot(x='Title', data=df_train, palette="hls",hue="Survived")
+plt.xticks(rotation=45)
+plt.show()
 
 
-# We can now generate bag types. The idea is to start with an empty bag, and to add one item at a time. We do it until the expected value of the bag decreases. When this happens then we can discard the newly created bag, as it uses more items and yields a lower expected value.
-# We use a queue and some dictionaries to keep track of what bag types are relevant.
-# 
-# Once the relevant bags are found we put all of them in a dataframe.  We remove those with less than three elements.
-# 
-# This takes a time roughly proportional to nsample.  With 10,000 is takes less than a minute.   Go grab a coffee if you set nsample to a larger value, say 100,000.
+# It's interesting... Children's and ladys first, huh?
+
+# <h1> Now I will handle the Age variable that has a high number of NaN's, using some columns to correctly input he missing Age's
 
 # In[ ]:
 
 
-from collections import deque
-
-def get_update_value(bag, bag_stats):
-    if bag in bag_stats:
-        bag_mean, bag_std = bag_stats[bag]
-    else:
-        bag_mean, bag_std = gift_value(bag)
-        bag_stats[bag] = (bag_mean, bag_std)
-    return bag_mean, bag_std
-
-def gen_bags():
-    bag_stats = dict()
-    queued = dict()
-    queue = deque()
-    bags = []
-    bag0 = (0,0,0,0,0,0,0,0,0)
-    queue.append(bag0)
-    queued[bag0] = True
-    bag_stats[bag0] = (0,0)
-    counter = 0
-    try:
-        while True:
-            if counter % 1000 == 0:
-                print(counter, end=' ')
-            counter += 1
-            bag = queue.popleft()
-            bag_mean, bag_std = get_update_value(bag, bag_stats)
-            bags.append(bag+(bag_mean, bag_std ))
-            for gift in range(ngift_types):
-                new_bag = list(bag)
-                new_bag[gift] = 1 + bag[gift]
-                new_bag = tuple(new_bag)
-                if new_bag in queued:
-                    continue
-                new_bag_mean, new_bag_std = get_update_value(new_bag, bag_stats)
-                if new_bag_mean > bag_mean:
-                    queue.append(new_bag)
-                    queued[new_bag] = True
-                    
-    except:
-        return bags
-
-    
-bags = gen_bags()
-
-nbags = len(bags)
-
-bags = pd.DataFrame(columns=gift_types+['mean', 'std'], 
-                    data=bags)
-
-bags['var'] = bags['std']**2
-
-bags = bags[bags[gift_types].sum(axis=1) >= 3].reset_index(drop=True)
-
-bags.head()
+#First I will look my distribuition without NaN's
+#I will create a df to look distribuition 
+age_high_zero_died = df_train[(df_train["Age"] > 0) & 
+                              (df_train["Survived"] == 0)]
+age_high_zero_surv = df_train[(df_train["Age"] > 0) & 
+                              (df_train["Survived"] == 1)]
 
 
-# We have about 40k bags.
+sns.distplot(age_high_zero_surv["Age"], bins=24, color='g')
+sns.distplot(age_high_zero_died["Age"], bins=24, color='r')
+plt.title("Distribuition and density by Age",fontsize=15)
+plt.xlabel("Age",fontsize=12)
+plt.ylabel("Density Died and Survived",fontsize=12)
+plt.show()
+
 
 # In[ ]:
 
 
-bags.shape[0]
+#Let's group the median age by sex, pclass and title, to have any idea and maybe input in Age NAN's
+
+age_group = df_train.groupby(["Sex","Pclass","Title"])["Age"]
+
+print(age_group.median())
 
 
-# Let's now look at the available gifts.  We one hot encode the gift type.
-
-# In[ ]:
-
-
-gifts = pd.read_csv('../input/gifts.csv')
-
-for gift in gift_types:
-    gifts[gift] = 1.0 * gifts['GiftId'].str.startswith(gift)
-
-gifts.head()
-
-
-# The number of gift of each type is easy to get.
-
-# In[ ]:
-
-
-allgifts = gifts[gift_types].sum()
-
-allgifts
-
-
-# We can now look for a combination of bag types that optimizes the expected value, or a combination of the expected value and the standard deviation.
+# This might show us a better way to input the NAN's 
 # 
-# The mathematical formulation is as follows.
-# 
-# $$
-# \begin{align}
-# & \text{maximize} && mean + \alpha \cdot std& \\
-# & \text{s.t.} 
-# && \sum_{i=1}^n g_{ij} \cdot x_i \leq capa_j && \forall j = 1,\ldots,m \\
-# &&& \sum_{i=1}^nx_i \leq 1000  \\
-# &&& \sum_{i=1}^n mean_i \cdot x_i = mean & \\
-# &&& \sum_{i=1}^n var_i \cdot x_i = var & \\
-# &&& std^2 = var & \\
-# &&& x_{i} \geq 0&& \forall i = 1,\ldots,n\\
-# \end{align}
-# $$ 
-# where:
-# - $n$ is the number of bag types
-# - $m$ the number of gift types
-# - $\alpha$ is the relative importance of std vs mean in the objective function
-# - $w_i$ the expected value of the weight of bag type $i$
-# - $var_i$ the variance of the weight of bag type $i$
-# - $g_{ij}$ the number of gifts of type $j$ in bag type $i$
-# - $capa_j$ the number of available gifts of type $j$
-# - $x_i$ is an integer decision variable that takes the value $a$ if bag type $i$ is used $a$ times
-# - $std$ a decision variable representing the standard deviation of the solution
-# - $var$ a decision variable representing the variance of the solution
-# 
-# Constraints (1) ensure that the solution does not use more gifts than available. Constraints (2) states that there are at most 1,000 bags in the solution.  Constraint (3) computes the mean the solution, constraint (4) computes the variance of the solution, and constraint (5) compute its standard deviation.
-# 
-# The trick 
-# here is that the last constraint is a quadratic constraint.  We cannot use an open source LP solver because of
-# it, which is why I use CPLEX.  CPLEX is not available on Kaggle kernel, but one can use the [feely available DoCplexCloud trial](https://developer.ibm.com/docloud/try-docloud-free/) run the following code.
-
-# In[ ]:
-
-
-from docplex.mp.model import Model
-
-def qcpmip_solve(gift_types, bags, std_coef):
-    mdl = Model('Santa')
-
-    rbags = range(bags.shape[0])
-    x_names = ['x_%d' % i for i in range(bags.shape[0])]
-    x = mdl.integer_var_list(rbags, lb=0, name=x_names)
-    
-    var = mdl.continuous_var(lb=0, ub=mdl.infinity, name='var')
-    std = mdl.continuous_var(lb=0, ub=mdl.infinity, name='std')
-    mean = mdl.continuous_var(lb=0, ub=mdl.infinity, name='mean')
-                                  
-    mdl.maximize(mean + std_coef * std)
-    
-    for gift in gift_types:
-        mdl.add_constraint(mdl.sum(bags[gift][i] * x[i] for i in rbags) <= allgifts[gift])
-        
-    mdl.add_constraint(mdl.sum(x[i] for i in rbags) <= 1000)
-
-    mdl.add_constraint(mdl.sum(bags['mean'][i] * x[i] for i in rbags) == mean)
-    
-    mdl.add_constraint(mdl.sum(bags['var'][i] * x[i] for i in rbags) == var)
-
-    mdl.add_constraint(std**2 <= var)
-    
-    mdl.parameters.mip.tolerances.mipgap = 0.00001
-    
-    s = mdl.solve(log_output=False)
-    assert s is not None
-    mdl.print_solution()
-    
-
-
-# We can now solve the problem if we have CPLEX installed. For instance, if we are only looking for the best expected value:
-
-# In[ ]:
-
-
-qcpmip_solve(gift_types, bags, 0.0)
-
-
-# Let me paste output here given it does not run on Kaggle kernel:
-# 
-#     objective: 35618.561
-#       x_14954=1
-#       x_368=63
-#       x_773=395
-#       x_3936=93
-#       x_39480=47
-#       x_36998=1
-#       x_474=24
-#       x_11628=55
-#       mean=35618.561
-#       x_2089=76
-#       x_264=46
-#       x_2091=199
-
-# We see that the best solution structure has an expected value around 35620.  I noticed that as the sample size is increased (the value of nsample), then the objective value decreases.
-
-# For instance, when using `nsample=100000`, we get
-#     
-#    
-# 
-#      objective: 35545.217
-#       x_2315=6
-#       x_36888=1
-#       x_2301=61
-#       x_39358=47
-#       x_8792=115
-#       x_5991=2
-#       x_420=2
-#       x_822=1
-#       x_315=286
-#       x_2137=303
-#       mean=35545.217
-#       var=106992.386
-#       x_418=87
-#       x_3965=89
-
-# We see that the expected value is now about 35545. When I run the code with even larger sample, for instance with nsample=1000000 I get below 35540.
-
-# If we want to maximize the expected value plus 3 times the standard deviation:
+# <b>For example: </b> an male in 2 class that is a Officer the median Age is 42. <br>
+# And we will use that to complete the missing data
 # 
 
 # In[ ]:
 
 
-qcpmip_solve(gift_types, bags, 3.0)
+#inputing the values on Age Na's
+df_train.loc[df_train.Age.isnull(), 'Age'] = df_train.groupby(['Sex','Pclass','Title']).Age.transform('median')
+
+print(df_train["Age"].isnull().sum())
 
 
-# Output with `nsample=100000` is:
+# In[ ]:
+
+
+#Let's see the result of the inputation
+sns.distplot(df_train["Age"], bins=24)
+plt.title("Distribuition and density by Age")
+plt.xlabel("Age")
+plt.show()
+
+
+# In[ ]:
+
+
+#separate by survivors or not
+g = sns.FacetGrid(df_train, col='Survived',size=5)
+g = g.map(sns.distplot, "Age")
+plt.show()
+
+
+# Now let's categorize them 
+
+# In[ ]:
+
+
+#df_train.Age = df_train.Age.fillna(-0.5)
+
+interval = (0, 5, 12, 18, 25, 35, 60, 120)
+cats = ['babies', 'Children', 'Teen', 'Student', 'Young', 'Adult', 'Senior']
+
+df_train["Age_cat"] = pd.cut(df_train.Age, interval, labels=cats)
+
+df_train["Age_cat"].head()
+
+
+# In[ ]:
+
+
+#Do the same to df_test
+
+interval = (0, 5, 12, 18, 25, 35, 60, 120)
+cats = ['babies', 'Children', 'Teen', 'Student', 'Young', 'Adult', 'Senior']
+
+df_test["Age_cat"] = pd.cut(df_test.Age, interval, labels=cats)
+
+
+# In[ ]:
+
+
+#Describe of categorical Age
+print(pd.crosstab(df_train.Age_cat, df_train.Survived))
+
+#Plotting the result
+sns.countplot("Age_cat",data=df_train,hue="Survived", palette="hls")
+plt.xlabel("Categories names")
+plt.title("Age Distribution ")
+
+
+# It look's better
+
+# In[ ]:
+
+
+#Looking the Fare distribuition to survivors and not survivors
+
+sns.distplot(df_train[df_train.Survived == 0]["Fare"], 
+             bins=50, color='r')
+sns.distplot(df_train[df_train.Survived == 1]["Fare"], 
+             bins=50, color='g')
+plt.title("Fare Distribuition by Survived", fontsize=15)
+plt.xlabel("Fare", fontsize=12)
+plt.ylabel("Density",fontsize=12)
+plt.show()
+
+
+# <br>
+# Description of Fare variable<br>
+# - Min: 0<br>
+# - Median: 14.45<br>
+# - Mean: 32.20<br>
+# - Max: 512.32<br> 
+# - Std: 49.69<br>
 # 
-#     objective: 36533.143
-#       var=113259.323
-#       mean=35523.522
-#       x_3965=100
-#       x_36888=1
-#       x_523=1
-#       x_2137=299
-#       x_315=199
-#       x_6121=49
-#       x_39358=47
-#       x_2301=200
-#       x_8768=1
-#       x_1035=95
-#       std=336.540
-#       x_418=8
+# <h3>I will create a categorical variable to treat the Fare expend</h3><br>
+# I will use the same technique used in Age but now I will use the quantiles to binning
+# 
 # 
 
-# This time we get a lower mean, but a larger std. 
+# In[ ]:
+
+
+#Filling the NA's with -0.5
+df_train.Fare = df_train.Fare.fillna(-0.5)
+
+#intervals to categorize
+quant = (-1, 0, 8, 15, 31, 600)
+
+#Labels without input values
+label_quants = ['NoInf', 'quart_1', 'quart_2', 'quart_3', 'quart_4']
+
+#doing the cut in fare and puting in a new column
+df_train["Fare_cat"] = pd.cut(df_train.Fare, quant, labels=label_quants)
+
+#Description of transformation
+print(pd.crosstab(df_train.Fare_cat, df_train.Survived))
+
+#Plotting the new feature
+sns.countplot(x="Fare_cat", hue="Survived", data=df_train, palette="hls")
+plt.title("Count of survived x Fare expending")
+
+
+# In[ ]:
+
+
+# Replicate the same to df_test
+df_test.Fare = df_test.Fare.fillna(-0.5)
+
+quant = (-1, 0, 8, 15, 31, 1000)
+label_quants = ['NoInf', 'quart_1', 'quart_2', 'quart_3', 'quart_4']
+
+df_test["Fare_cat"] = pd.cut(df_test.Fare, quant, labels=label_quants)
+
+
+# <h2>To complete this part, I will now work on "Names"
+
+# In[ ]:
+
+
+#Now lets drop the variable Fare, Age and ticket that is irrelevant now
+del df_train["Fare"]
+del df_train["Ticket"]
+del df_train["Age"]
+del df_train["Cabin"]
+del df_train["Name"]
+
+#same in df_test
+del df_test["Fare"]
+del df_test["Ticket"]
+del df_test["Age"]
+del df_test["Cabin"]
+del df_test["Name"]
+
+
+# In[ ]:
+
+
+#Looking the result of transformations
+df_train.head()
+
+
+# <h1>It's looking ok
+
+# Now, lets start explore the data
+
+# In[ ]:
+
+
+# Let see how many people die or survived
+print("Total of Survived or not: ")
+print(df_train.groupby("Survived")["PassengerId"].count())
+sns.countplot(x="Survived", data=df_train,palette="hls")
+plt.title('Total Distribuition by survived or not')
+
+
+# In[ ]:
+
+
+print(pd.crosstab(df_train.Survived, df_train.Sex))
+sns.countplot(x="Sex", data=df_train, hue="Survived",palette="hls")
+plt.title('Sex Distribuition by survived or not')
+
+
+# <h2>We can look that % dies to mens are much higher than female
+
+# <h1>Now, lets do some exploration in Pclass and Embarked to see if might have some information to build the model
+
+# In[ ]:
+
+
+# Distribuition by class
+print(pd.crosstab(df_train.Pclass, df_train.Embarked))
+sns.countplot(x="Embarked", data=df_train, hue="Pclass",palette="hls")
+plt.title('Embarked x Pclass')
+
+
+# In[ ]:
+
+
+#lets input the NA's with the highest frequency
+df_train["Embarked"] = df_train["Embarked"].fillna('S')
+
+
+# In[ ]:
+
+
+# Exploring Survivors vs Embarked
+print(pd.crosstab(df_train.Survived, df_train.Embarked))
+sns.countplot(x="Embarked", data=df_train, hue="Survived",palette="hls")
+plt.title('Class Distribuition by survived or not')
+
+
+# In[ ]:
+
+
+# Exploring Survivors vs Pclass
+print(pd.crosstab(df_train.Survived, df_train.Pclass))
+sns.countplot(x="Pclass", data=df_train, hue="Survived",palette="hls")
+plt.title('Class Distribuition by survived or not')
+
+
+# <b>Looking the graphs, is clear that 3st class and Embarked at Southampton have a high probabilities to not survive</b>
+
+# To finish the analysis I let's look the Sibsp and Parch variables
+
+# In[ ]:
+
+
+g = sns.factorplot(x="SibSp",y="Survived",data=df_train,kind="bar", size = 6, palette = "hls")
+g = g.set_ylabels("Probability(Survive)")
+
+
+# Interesting. With 1 or 2 siblings/spouses have more chance to survived the disaster
+
+# In[ ]:
+
+
+# Explore Parch feature vs Survived
+g  = sns.factorplot(x="Parch",y="Survived",data=df_train, kind="bar", size = 6,palette = "hls")
+g = g.set_ylabels("survival probability")
+
+
+# We can see a high standard deviation in the survival with 3 parents/children person's <br>
+# Also that small families (1~2) have more chance to survival than single or big families
+
+# So to Finish our exploration I will create a new column to with familiees size
+
+# In[ ]:
+
+
+#Create a new column and sum the Parch + SibSp + 1 that refers the people self
+df_train["FSize"] = df_train["Parch"] + df_train["SibSp"] + 1
+
+df_test["FSize"] = df_test["Parch"] + df_test["SibSp"] + 1
+
+
+# In[ ]:
+
+
+print(pd.crosstab(df_train.FSize, df_train.Survived))
+sns.factorplot(x="FSize",y="Survived", data=df_train, kind="bar",size=6)
+plt.show()
+
+
+# In[ ]:
+
+
+del df_train["SibSp"]
+del df_train["Parch"]
+
+del df_test["SibSp"]
+del df_test["Parch"]
+
+
+# OK, its might be enough to start with the preprocess and builting the model
 # 
-# Solution structure found this way are the best if given enough submissions, as they maximize the likelihood of a good submission.  But the competition shows that switching to a local search approach using feedback from LB is more effective.
+
+# <a id="Preprocess"></a> <br> 
+# # **5. Preprocessing :** 
+
+# In[ ]:
+
+
+df_train.head()
+
+
+# Now we might have information enough to think about the model structure
+
+# In[ ]:
+
+
+df_train = pd.get_dummies(df_train, columns=["Sex","Embarked","Age_cat","Fare_cat","Title"],                          prefix=["Sex","Emb","Age","Fare","Prefix"], drop_first=True)
+
+df_test = pd.get_dummies(df_test, columns=["Sex","Embarked","Age_cat","Fare_cat","Title"],                         prefix=["Sex","Emb","Age","Fare","Prefix"], drop_first=True)
+
+
+# In[ ]:
+
+
+#Finallt, lets look the correlation of df_train
+plt.figure(figsize=(15,12))
+plt.title('Correlation of Features for Train Set')
+sns.heatmap(df_train.astype(float).corr(),vmax=1.0,  annot=True)
+plt.show()
+
+
+# In[ ]:
+
+
+df_train.shape
+
+
+# In[ ]:
+
+
+train = df_train.drop(["Survived","PassengerId"],axis=1)
+train_ = df_train["Survived"]
+
+test_ = df_test.drop(["PassengerId"],axis=1)
+
+X_train = train.values
+y_train = train_.values
+
+X_test = test_.values
+X_test = X_test.astype(np.float64, copy=False)
+
+
+# In[ ]:
+
+
+# Feature Scaling
+from sklearn.preprocessing import StandardScaler
+sc = StandardScaler()
+X_train = sc.fit_transform(X_train)
+X_test = sc.fit_transform(X_test)
+
+
+# <a id="Model"></a> <br> 
+# # **6. Modelling : ** 
+
+# <h3>Titanic survivors prediction: <br>
+# a binary classification example</h3>
+# Two-class classification, or binary classification, may be the most widely applied kind of machine-learning problem.
+
+# In[ ]:
+
+
+from keras.models import Sequential
+from keras.layers import Dense, Activation, Dropout
+import keras
+from keras.optimizers import SGD
+import graphviz
+
+
+# <h1>Anatomy of a neural network: </h1>
+# 
+# As you saw in the previous chapters, training a neural network revolves around the following
+# objects:
+# - Layers, which are combined into a network (or model)
+# - The input data and corresponding targets
+# - The loss function, which defines the feedback signal used for learning
+# - The optimizer, which determines how learning proceeds
+# 
+# 
+# 
+# 
+# <h2> Layers: the building blocks of deep learning</h2>
+# from keras import layers<br>
+# layer = layers.Dense(32, input_dim=data_dimension)) 
+# 
+# - We can think of layers as the LEGO bricks of deep learning, a metaphor that is
+# made explicit by frameworks like Keras. Building deep-learning models in Keras is
+# done by clipping together compatible layers to form useful data-transformation pipelines.
+# 
+# 
+# <h2>What are activation functions, and why are they necessary?</h2>
+# Without an activation function like relu (also called a non-linearity), the Dense layer would consist of two linear operations—a dot product and an addition: <br><br>
+# <i>output = dot(W, input) + b</i><br><br>
+# 
+# So the layer could only learn linear transformations (affine transformations) of the
+# input data: the hypothesis space of the layer would be the set of all possible linear
+# transformations of the input data into a 16-dimensional space. 
+# 
+# 
+# <h2>Loss functions and optimizers:<br>
+# keys to configuring the learning process</h2>
+# Once the network architecture is defined, you still have to choose two more things:
+# - <b>Loss function (objective function) </b>- The quantity that will be minimized during
+# training. It represents a measure of success for the task at hand.
+# - <b>Optimizer</b> - Determines how the network will be updated based on the loss function.
+# It implements a specific variant of stochastic gradient descent (SGD).
+
+# In[ ]:
+
+
+# Creating the model
+model = Sequential()
+
+# Inputing the first layer with input dimensions
+model.add(Dense(18, 
+                activation='relu',  
+                input_dim=20,
+                kernel_initializer='uniform'))
+#The argument being passed to each Dense layer (18) is the number of hidden units of the layer. 
+# A hidden unit is a dimension in the representation space of the layer.
+
+#Stacks of Dense layers with relu activations can solve a wide range of problems
+#(including sentiment classification), and you’ll likely use them frequently.
+
+# Adding an Dropout layer to previne from overfitting
+model.add(Dropout(0.50))
+
+#adding second hidden layer 
+model.add(Dense(12,
+                kernel_initializer='uniform',
+                activation='relu'))
+
+# Adding another Dropout layer
+model.add(Dropout(0.50))
+
+# adding the output layer that is binary [0,1]
+model.add(Dense(1,
+                kernel_initializer='uniform',
+                activation='sigmoid'))
+#With such a scalar sigmoid output on a binary classification problem, the loss
+#function you should use is binary_crossentropy
+
+#Visualizing the model
+model.summary()
+
+
+# Stacks of Dense layers with relu activations can solve a wide range of problems (including sentiment classification), and you’ll likely use them frequently.
+
+# Finally, we need to choose a loss function and an optimizer. 
+
+# In[ ]:
+
+
+#Creating an Stochastic Gradient Descent
+sgd = SGD(lr = 0.01, momentum = 0.9)
+
+# Compiling our model
+model.compile(optimizer = sgd, 
+                   loss = 'binary_crossentropy', 
+                   metrics = ['accuracy'])
+#optimizers list
+#optimizers['SGD', 'RMSprop', 'Adagrad', 'Adadelta', 'Adam', 'Adamax', 'Nadam']
+
+# Fitting the ANN to the Training set
+model.fit(X_train, y_train, 
+               batch_size = 60, 
+               epochs = 30, verbose=2)
+
+
+# Because you’re facing a binary classification problem and the output of your network is a probability (you end your network with a single-unit layer with a sigmoid activation), it’s best to use the <i>binary_crossentropy</i> loss.
+
+# <h1>Evaluating the model</h1>
+
+# In[ ]:
+
+
+scores = model.evaluate(X_train, y_train, batch_size=30)
+print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
+
+
+# Not bad result to a simple model! Let's now verify the validation of our model, to see and understand the learning curve
+
+# <a id="Validation"></a> <br> 
+# # **7. Validation: ** 
+
+# In[ ]:
+
+
+# Fit the model
+history = model.fit(X_train, y_train, validation_split=0.20, 
+                    epochs=180, batch_size=10, verbose=0)
+
+# list all data in history
+print(history.history.keys())
+
+
+# Let's look this keys values further
+
+# In[ ]:
+
+
+# summarizing historical accuracy
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('Model Accuracy')
+plt.ylabel('Accuracy')
+plt.xlabel('Epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+
+# Why this occurs and how to solve this problem in graph? it's a overffiting? 
+
+# In[ ]:
+
+
+
+# summarize history for loss
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+
+# In[ ]:
+
+
+y_pred = model.predict(X_test)
+
+
+# <h1>It's my first Deep Learning implementation... I am studying about this and I will continue editing this Kernel to improve the results</h1>
+
+# Give me your feedback how can I increase this model =) 
+
+# In[ ]:
+
+
+# Trying to implementing the TensorBoard to evaluate the model
+
+callbacks = [
+    keras.callbacks.TensorBoard(log_dir='my_log_dir',
+                                histogram_freq=1,
+                                embeddings_freq=1,
+                               )
+]
+
+#history = classifier.fit(X_train, y_train,
+#                         epochs=80,
+#                         batch_size=10,
+#                         validation_split=0.2,
+#                         callbacks=callbacks)
+
+#Its backing an error 
+#ValueError: No variables to save
+
+#How to solve this ?
+

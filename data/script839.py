@@ -1,65 +1,151 @@
 
 # coding: utf-8
 
-# *This is part of Kaggle's [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning) series.*
-# 
-# # Selecting and Filtering Data
-# Your dataset had  too many variables to wrap your head around, or even to print out nicely.  How can you pare down this overwhelming amount of data to something you can understand?
-# 
-# To show you the techniques, we'll start by picking a few variables using our intuition. Later tutorials will show you statistical techniques to  automatically prioritize variables.
-# 
-# Before we can choose variables/columns, it is helpful to see a list of all columns in the dataset. That is done with the **columns** property of the DataFrame (the bottom line of code below).
+# **Basic Navigation of the FIFA 18 Complete Dataset**
 
-# In[ ]:
+# In[19]:
 
 
-import pandas as pd
-
-melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
-melbourne_data = pd.read_csv(melbourne_file_path) 
-print(melbourne_data.columns)
-
-
-# There are many ways to select a subset of your data. We'll start with two main approaches:  
-# 
-# ## Selecting a Single Column
-# You can pull out any variable (or column) with **dot-notation**.  This single column is stored in a **Series**, which is broadly like a DataFrame with only a single column of data.  Here's an example:
-
-# In[ ]:
-
-
-# store the series of prices separately as melbourne_price_data.
-melbourne_price_data = melbourne_data.Price
-# the head command returns the top few lines of data.
-print(melbourne_price_data.head())
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from subprocess import check_output
+# We'll also import seaborn, a Python graphing library
+import warnings # current version of seaborn generates a bunch of warnings that we'll ignore
+warnings.filterwarnings("ignore")
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(style="white", color_codes=True)
+# Next, we'll load the Iris flower dataset, which is in the "../input/" directory
+fifa = pd.read_csv("../input/CompleteDataset.csv") # the iris dataset is now a Pandas DataFrame
+# Any results you write to the current directory are saved as output.
 
 
-# ## Selecting Multiple Columns
-# You can select multiple columns from a DataFrame by providing a list of column names inside brackets. Remember, each item in that list should be a string (with quotes).
-
-# In[ ]:
+# In[20]:
 
 
-columns_of_interest = ['Landsize', 'BuildingArea']
-two_columns_of_data = melbourne_data[columns_of_interest]
+fifa.head()
 
 
-# We can verify that we got the columns we need with the **describe** command.
+# Listing out the column names. 
 
-# In[ ]:
-
-
-two_columns_of_data.describe()
+# In[21]:
 
 
-# # Your Turn
-# In the notebook with your code:
-# 1. Print a list of the columns
-# 2. From the list of columns, find a name of the column with the sales prices of the homes. Use the dot notation to extract this to a variable (as you saw above to create `melbourne_price_data`.)
-# 3. Use the `head` command to print out the top few lines of the variable you just created.
-# 4. Pick any two variables and store them to a new DataFrame (as you saw above to create `two_columns_of_data`.)
-# 5. Use the describe command with the DataFrame you just created to see summaries of those variables. <br>
-# 
-# ---
-# # Continue
-# Now that you can specify what data you want for a model, you are ready to **[build your first model](https://www.kaggle.com/dansbecker/your-first-scikit-learn-model)** in the next step.
+fifa.columns
+
+
+# Lets take a few columns for preliminary analysis.
+
+# In[22]:
+
+
+fifa = fifa[['Name', 'Age', 'Nationality', 'Overall', 'Wage', 'Potential', 'Club', 'Value', 'Preferred Positions']]
+fifa.head(10)
+
+
+# Crafting a new parameter for Growth = Potential - Overall
+
+# In[23]:
+
+
+fifa['Growth'] = fifa['Potential'] - fifa['Overall']
+fifa.head()
+
+
+# Plotting growth potential and overall against age
+
+# In[24]:
+
+
+fifa_growth = fifa.groupby(['Age'])['Growth'].mean()
+fifa_overall = fifa.groupby(['Age'])['Overall'].mean()
+fifa_potential = fifa.groupby(['Age'])['Potential'].mean()
+
+summary = pd.concat([fifa_growth, fifa_overall, fifa_potential], axis=1)
+
+axis = summary.plot()
+axis.set_ylabel('Rating Points')
+axis.set_title('Average Growth Potential by Age')
+
+
+# Let's find clubs with most players rated over 85
+
+# In[25]:
+
+
+cutoff = 85
+players = fifa[fifa['Overall']>cutoff]
+grouped_players = fifa[fifa['Overall']>cutoff].groupby('Club')
+number_of_players = grouped_players.count()['Name'].sort_values(ascending = False)
+
+ax = sns.countplot(x = 'Club', data = players, order = number_of_players.index)
+
+ax.set_xticklabels(labels = number_of_players.index, rotation='vertical')
+ax.set_ylabel('Number of players (Over 90)')
+ax.set_xlabel('Club')
+ax.set_title('Top players (Overall > %.i)' %cutoff)
+
+
+# Let's clean wage and value first. Using the function from [this](https://www.kaggle.com/chomi87/eda-on-fifa-2018) kernel.
+
+# In[27]:
+
+
+def extract_value_from(value):
+    out = value.replace('€', '')
+    if 'M' in out:
+        out = float(out.replace('M', ''))*1000000
+    elif 'K' in value:
+        out = float(out.replace('K', ''))*1000
+    return float(out)
+
+
+# In[28]:
+
+
+fifa['Value'] = fifa['Value'].apply(lambda x: extract_value_from(x))
+fifa['Wage'] = fifa['Wage'].apply(lambda x: extract_value_from(x))
+
+
+# Let's explore Value against Overall rating
+
+# In[36]:
+
+
+fifa_wage = fifa.groupby(['Overall'])['Wage'].mean()
+fifa_value = fifa.groupby(['Overall'])['Value'].mean()
+fifa_wage = fifa_wage.apply(lambda x: x/1000)
+fifa_value = fifa_value.apply(lambda x: x/1000000)
+fifa["Wage(by Potential)"] = fifa["Wage"]
+fifa["Value(by Potential)"] = fifa["Value"]
+fifa_wage_p = fifa.groupby(['Potential'])['Wage(by Potential)'].mean()
+fifa_value_p = fifa.groupby(['Potential'])['Value(by Potential)'].mean()
+fifa_wage_p = fifa_wage_p.apply(lambda x: x/1000)
+fifa_value_p = fifa_value_p.apply(lambda x: x/1000000)
+summary = pd.concat([fifa_wage, fifa_value, fifa_wage_p, fifa_value_p], axis=1)
+
+axis = summary.plot()
+axis.set_ylabel('Wage / Value')
+axis.set_title('Average Wage / Value by Rating')
+
+
+# Doing the same against age.
+
+# In[37]:
+
+
+fifa_wage_a = fifa.groupby(['Age'])['Wage'].mean()
+fifa_value_a = fifa.groupby(['Age'])['Value'].mean()
+fifa_wage_a = fifa_wage_a.apply(lambda x: x/1000)
+fifa_value_a = fifa_value_a.apply(lambda x: x/1000000)
+summary = pd.concat([fifa_wage_a, fifa_value_a], axis=1)
+
+axis = summary.plot()
+axis.set_ylabel('Wage / Value')
+axis.set_title('Average Age')
+

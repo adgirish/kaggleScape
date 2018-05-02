@@ -1,355 +1,161 @@
 
 # coding: utf-8
 
-# ## The notebook covers Following Topics
-#     - Missing Value Analysis
-#     - Correlation Analysis
-#     - Top Contributing Features (Through XGBoost)
-#     - Correlation Analysis 
-#     - Multicollinearity Analysis
-#     - Univariate Analysis 
-#     - Bivariate Analysis
-
-# ## Global Imports ##
+# # Introduction
+# 
+# In this kernel I aim to outline a common flaw in data augmentation/validation that I see in primarily the keras kernels for this competition. The essence of the problem is that the train/validation split is done after a one-time deterministic data augmentation is applied to grow the size of the dataset. Probably we should just be stochastically augmenting for every batch, but if we insist on augmenting data in this way, then we should do the train/validation split before augmenting. Otherwise, we will have training examples where an augmented version of the same example is in the validation set.
+# 
+# Example kernels:
+# - https://www.kaggle.com/a45632/keras-starter-4l-added-performance-graph
+# - https://www.kaggle.com/cbryant/keras-cnn-statoil-iceberg-lb-0-1995-now-0-1516
+# - https://www.kaggle.com/vincento/keras-starter-4l-0-1694-lb-icebergchallenge
+# - https://www.kaggle.com/henokanh/cnn-batchnormalization-0-1646
+# - https://www.kaggle.com/hcc1995/keras-cnn-model
+# - https://www.kaggle.com/fvzaur/iceberg-ship-classification-with-cnn-on-keras
 
 # In[ ]:
 
 
-import pylab
-import calendar
-import numpy as np
+# Let's get the imports out of the way
 import pandas as pd
-import seaborn as sn
-from scipy import stats
-import missingno as msno
-from datetime import datetime
-import matplotlib
+import numpy as np
+import cv2
+np.random.seed(1234) 
+from keras.models import Sequential
+from keras.layers import Dense, Flatten
+from keras.layers import Conv2D, MaxPooling2D
 import matplotlib.pyplot as plt
-from scipy.stats import kendalltau
-import warnings
-matplotlib.style.use('ggplot')
-pd.options.mode.chained_assignment = None
-warnings.filterwarnings("ignore")
-get_ipython().run_line_magic('matplotlib', 'inline')
 
+df_train = pd.read_json('../input/train.json')
 
-# ## Reading In Dataset ##
-
-# In[ ]:
-
-
-train = pd.read_csv('../input/train_2016_v2.csv', parse_dates=["transactiondate"])
-properties = pd.read_csv('../input/properties_2016.csv')
-
-
-# ## Shape Of The Dataset ##
-
-# In[ ]:
-
-
-print ("Shape Of Train: ",train.shape)
-print ("Shape Of Properties: ",properties.shape)
-
-
-# ## Lets Merge Train And Properties To Facilitate EDA ##
-
-# In[ ]:
-
-
-merged = pd.merge(train,properties,on="parcelid",how="left")
-
-
-# ## First Few Rows Of Data ##
-
-# In[ ]:
-
-
-merged.head(3).transpose()
-
-
-# ## Visualizing Datatypes ##
-
-# In[ ]:
-
-
-dataTypeDf = pd.DataFrame(merged.dtypes.value_counts()).reset_index().rename(columns={"index":"variableType",0:"count"})
-fig,ax = plt.subplots()
-fig.set_size_inches(20,5)
-sn.barplot(data=dataTypeDf,x="variableType",y="count",ax=ax,color="#34495e")
-ax.set(xlabel='Variable Type', ylabel='Count',title="Variables Count Across Datatype")
-
-
-# ## Missing Value Analysis ##
-
-# In[ ]:
-
-
-missingValueColumns = merged.columns[merged.isnull().any()].tolist()
-msno.bar(merged[missingValueColumns],            figsize=(20,8),color="#34495e",fontsize=12,labels=True,)
-
-
-# In[ ]:
-
-
-msno.matrix(merged[missingValueColumns],width_ratios=(10,1),            figsize=(20,8),color=(0,0, 0),fontsize=12,sparkline=True,labels=True)
-
-
-# In[ ]:
-
-
-msno.heatmap(merged[missingValueColumns],figsize=(20,20))
-
-
-# ## Top Features Selection ##
-
-# In[ ]:
-
-
-from sklearn import model_selection, preprocessing
-import xgboost as xgb
-import warnings
-warnings.filterwarnings("ignore")
-
-mergedFilterd = merged.fillna(-999)
-for f in mergedFilterd.columns:
-    if mergedFilterd[f].dtype=='object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(mergedFilterd[f].values)) 
-        mergedFilterd[f] = lbl.transform(list(mergedFilterd[f].values))
+def get_scaled_imgs(df):
+    imgs = []
+    
+    for i, row in df.iterrows():
+        #make 75x75 image
+        band_1 = np.array(row['band_1']).reshape(75, 75)
+        band_2 = np.array(row['band_2']).reshape(75, 75)
+        band_3 = band_1 + band_2 # plus since log(x*y) = log(x) + log(y)
         
-train_y = mergedFilterd.logerror.values
-train_X = mergedFilterd.drop(["parcelid", "transactiondate", "logerror"], axis=1)
+        # Rescale
+        a = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
+        b = (band_2 - band_2.mean()) / (band_2.max() - band_2.min())
+        c = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
 
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 8,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-dtrain = xgb.DMatrix(train_X, train_y, feature_names=train_X.columns.values)
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=100)
+        imgs.append(np.dstack((a, b, c)))
 
+    return np.array(imgs)
+
+
+# This is a common function that you see in the kernels. It takes in a set of 3-channel images and outputs a larger array of: the original images, then their vetical flips, then their horizontal flips. I'm not really a fan of this way of augmenting data, but that's not the point of the kernel. Assuming that you were going to do this...
 
 # In[ ]:
 
 
-featureImportance = model.get_fscore()
-features = pd.DataFrame()
-features['features'] = featureImportance.keys()
-features['importance'] = featureImportance.values()
-features.sort_values(by=['importance'],ascending=False,inplace=True)
-fig,ax= plt.subplots()
-fig.set_size_inches(20,10)
-plt.xticks(rotation=90)
-sn.barplot(data=features.head(15),x="importance",y="features",ax=ax,orient="h",color="#34495e")
+def get_more_images(imgs):
+    
+    more_images = []
+    vert_flip_imgs = []
+    hori_flip_imgs = []
+      
+    for i in range(0,imgs.shape[0]):
+        a=imgs[i,:,:,0]
+        b=imgs[i,:,:,1]
+        c=imgs[i,:,:,2]
+        
+        av=cv2.flip(a,1)
+        ah=cv2.flip(a,0)
+        bv=cv2.flip(b,1)
+        bh=cv2.flip(b,0)
+        cv=cv2.flip(c,1)
+        ch=cv2.flip(c,0)
+        
+        vert_flip_imgs.append(np.dstack((av, bv, cv)))
+        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
+      
+    v = np.array(vert_flip_imgs)
+    h = np.array(hori_flip_imgs)
+       
+    more_images = np.concatenate((imgs,v,h))
+    
+    return more_images
 
 
-# ## Correlation Analysis ##
-
-# In[ ]:
-
-
-topFeatures = features["features"].tolist()[:20]
-corrMatt = merged[topFeatures].corr()
-mask = np.array(corrMatt)
-mask[np.tril_indices_from(mask)] = False
-fig,ax= plt.subplots()
-fig.set_size_inches(20,10)
-sn.heatmap(corrMatt, mask=mask,vmax=.8, square=True)
-
-
-# ## Multicollinearity Analysis ##
-
-# In[ ]:
-
-
-from statsmodels.stats.outliers_influence import variance_inflation_factor  
-import warnings
-warnings.filterwarnings("ignore")
-
-def calculate_vif_(X):
-    variables = list(X.columns)
-    vif = {variable:variance_inflation_factor(exog=X.values, exog_idx=ix) for ix,variable in enumerate(list(X.columns))}
-    return vif
-
-
-numericalCol = []
-for f in merged.columns:
-    #print (f)
-    if merged[f].dtype!='object' and f not in ["parcelid", "transactiondate", "logerror"]:
-        numericalCol.append(f)
-mergedFilterd = merged[numericalCol].fillna(-999)
-vifDict = calculate_vif_(mergedFilterd)
-
-vifDf = pd.DataFrame()
-vifDf['variables'] = vifDict.keys()
-vifDf['vifScore'] = vifDict.values()
-vifDf.sort_values(by=['vifScore'],ascending=False,inplace=True)
-validVariables = vifDf[vifDf["vifScore"]<=5]
-variablesWithMC  = vifDf[vifDf["vifScore"]>5]
-
-fig,(ax1,ax2) = plt.subplots(ncols=2)
-fig.set_size_inches(20,8)
-sn.barplot(data=validVariables,x="vifScore",y="variables",ax=ax1,orient="h",color="#34495e")
-sn.barplot(data=variablesWithMC.head(5),x="vifScore",y="variables",ax=ax2,orient="h",color="#34495e")
-ax1.set(xlabel='VIF Scores', ylabel='Features',title="Valid Variables Without Multicollinearity")
-ax2.set(xlabel='VIF Scores', ylabel='Features',title="Variables Which Exhibit Multicollinearity")
-
-
-# ## Univariate Analysis
-# ** Dependent variable logerror follows nice normal distribution **
+# Let's use a relatively straightforward model to prove this concept.
 
 # In[ ]:
 
 
-ulimit = np.percentile(merged.logerror.values, 99)
-llimit = np.percentile(merged.logerror.values, 1)
-merged['logerror'].ix[merged['logerror']>ulimit] = ulimit
-merged['logerror'].ix[merged['logerror']<llimit] = llimit
-
-fig,ax = plt.subplots()
-fig.set_size_inches(20,5)
-sn.distplot(merged.logerror.values, bins=50,kde=False,color="#34495e",ax=ax)
-ax.set(xlabel='logerror', ylabel='VIF Score',title="Distribution Of Dependent Variable")
-
-
-# ## Bivariate Analysis ##
-
-# In[ ]:
-
-
-train["year"] = train.transactiondate.map(lambda x: str(x).split("-")[0])
-train["month"] = train.transactiondate.map(lambda x: str(x).split("-")[1])
-train["day"] = train.transactiondate.map(lambda x: str(x).split("-")[2].split()[0])
-
-traingroupedMonth = train.groupby(["month"])["logerror"].mean().to_frame().reset_index()
-traingroupedDay = train.groupby(["day"])["logerror"].mean().to_frame().reset_index()
-fig,(ax1,ax2)= plt.subplots(nrows=2)
-fig.set_size_inches(20,15)
+def get_model():
+    model=Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu' ))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Conv2D(256, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Flatten())
+    model.add(Dense(256, activation='relu'))
+    model.add(Dense(128, activation='relu'))
+    model.add(Dense(1, activation="sigmoid"))
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])   
+    return model
 
 
-sn.pointplot(x=traingroupedMonth["month"], y=traingroupedMonth["logerror"], data=traingroupedMonth, join=True,ax=ax1,color="#34495e")
-ax1.set(xlabel='Month Of The Year', ylabel='Log Error',title="Average Log Error Across Month Of 2016",label='big')
-
-sn.countplot(x=train["month"], data=train,ax=ax2,color="#34495e")
-ax2.set(xlabel='Month Of The Year', ylabel='No Of Occurences',title="No Of Occurunces Across Month In 2016",label='big')
-
+# # Typical Kernal Validation
+# 
+# Below we will use the get_more_images function as you see in a typical kernel and vadliate using the `validadtion_split` argument in Keras `model.fit()`
 
 # In[ ]:
 
 
-fig,(ax1,ax2)= plt.subplots(nrows=2)
-fig.set_size_inches(20,15)
+Xtrain = get_scaled_imgs(df_train)
+Ytrain = np.array(df_train['is_iceberg'])
 
-sn.pointplot(x=traingroupedDay["day"], y=traingroupedDay["logerror"], data=traingroupedDay, join=True,ax=ax1,color="#34495e")
-ax1.set(xlabel='Day Of The Month', ylabel='Log Error',title="Average Log Error Across Days Of The Month In 2016",label='big')
+Xtr_more = get_more_images(Xtrain) 
+Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
 
-sn.countplot(x=train["day"], data=train,ax=ax2,color="#34495e")
-ax2.set(xlabel='Day Of The Month', ylabel='No Of Occurences',title="No Of Occurences Across Days Of The Month In 2016",label='big')
-
-
-# ## No Of Storey Over The Years ##
-# **It is quite interesting to notice people started building more of 2 or 3 storey buildings After 1950**
-
-# In[ ]:
+model = get_model()
+history_1 = model.fit(Xtr_more, Ytr_more, batch_size=32, epochs=10, verbose=1, validation_split=0.25)
 
 
-fig,ax1= plt.subplots()
-fig.set_size_inches(20,10)
-merged["yearbuilt"] = merged["yearbuilt"].map(lambda x:str(x).split(".")[0])
-yearMerged = merged.groupby(['yearbuilt', 'numberofstories'])["parcelid"].count().unstack('numberofstories').fillna(0)
-yearMerged.plot(kind='bar', stacked=True,ax=ax1)
-
+# # Better Validation
+# 
+# Here I demonstrate what I believe to be a better way of doing validation. First we split our data, and then we use augmentation to increase the size. Maybe we wouldn't even augment the validation set, but we may as well for comparison purposes.
 
 # In[ ]:
 
 
-cols = ["bathroomcnt","bedroomcnt","roomcnt","numberofstories","logerror","calculatedfinishedsquarefeet"]
-mergedFiltered = merged[cols].dropna()
-for col in cols:
-    ulimit = np.percentile(mergedFiltered[col].values, 99.5)
-    llimit = np.percentile(mergedFiltered[col].values, 0.5)
-    mergedFiltered[col].ix[mergedFiltered[col]>ulimit] = ulimit
-    mergedFiltered[col].ix[mergedFiltered[col]<llimit] = llimit
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(Xtrain, Ytrain, test_size=0.25)
+
+X_train_more = get_more_images(X_train)
+y_train_more = np.concatenate([y_train, y_train, y_train])
+X_valid_more = get_more_images(X_valid)
+y_valid_more = np.concatenate([y_valid, y_valid, y_valid])
+
+model = get_model()
+history_2 = model.fit(X_train_more, y_train_more, batch_size=32, epochs=10, verbose=1,
+                     validation_data=(X_valid_more, y_valid_more))
 
 
-# ## Calculated Finished Square Feet Vs Log Error ##
+# # Comparison
+# 
+# You can see right away by sudying the `val_loss` for epoch 10 that these two situations give us different results. Let's just plot them to be sure.
 
 # In[ ]:
 
 
-plt.figure(figsize=(8,8))
-sn.jointplot(x=mergedFiltered.calculatedfinishedsquarefeet.values, y=mergedFiltered.logerror.values, size=10,kind="hex",color="#34495e")
-plt.ylabel('Log Error', fontsize=12)
-plt.xlabel('Calculated Finished Square Feet', fontsize=12)
+plt.figure(figsize=(12,8))
+plt.plot(history_1.history['val_loss'], label='bad validation')
+plt.plot(history_2.history['val_loss'], label='good validation')
+plt.title('Validation Loss by Epch')
+plt.xlabel('Epoch')
+plt.ylabel('Validation Loss')
+plt.legend()
 plt.show()
 
 
-# ## Bedroom Count Vs Log Error ##
-
-# In[ ]:
-
-
-fig,ax= plt.subplots()
-fig.set_size_inches(20,5)
-sn.boxplot(x="bedroomcnt", y="logerror", data=mergedFiltered,ax=ax,color="#34495e")
-ax.set(ylabel='Log Error',xlabel="Bedroom Count",title="Bedroom Count Vs Log Error")
-
-
-# ## Bathroom Count Vs Log Error ##
-
-# In[ ]:
-
-
-fig,ax= plt.subplots()
-fig.set_size_inches(20,5)
-sn.boxplot(x="bathroomcnt", y="logerror", data=mergedFiltered,ax=ax,color="#34495e")
-ax.set(ylabel='Log Error',xlabel="Bathroom Count",title="Bathroom Count Vs Log Error")
-
-
-# ## Room Count Vs Log Error  ##
-
-# In[ ]:
-
-
-fig,ax= plt.subplots()
-fig.set_size_inches(20,5)
-sn.boxplot(x="roomcnt", y="logerror", data=mergedFiltered,ax=ax,color="#34495e")
-ax.set(ylabel='Log Error',xlabel="Room Count",title="Room Count Vs Log Error")
-
-
-# ## No Of Storeys Vs Log Error ##
-
-# In[ ]:
-
-
-fig,ax= plt.subplots()
-fig.set_size_inches(20,5)
-sn.boxplot(x="numberofstories", y="logerror", data=mergedFiltered,ax=ax,color="#34495e")
-ax.set(ylabel='Log Error',xlabel="No Of Storeys",title="No Of Storeys Vs Log Error")
-
-
-# ## Bedroom Vs Bathroom Vs Log Error ##
-
-# In[ ]:
-
-
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import pyplot
-fig = pylab.figure()
-fig.set_size_inches(20,10)
-ax = Axes3D(fig)
-
-ax.scatter(mergedFiltered.bathroomcnt, mergedFiltered.bedroomcnt, mergedFiltered.logerror,color="#34495e")
-ax.set_xlabel('Bathroom Count')
-ax.set_ylabel('Bedroom Count')
-ax.set_zlabel('Log Error');
-pyplot.show()
-
-
-# **Stay Tuned For More Updates On The Notebook**
-
-# **Kindly Upvote If You Find It Useful**
+# I think you can see that the "bad validation" is dramatically underestimating the true validatdion loss.

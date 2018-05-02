@@ -1,157 +1,88 @@
-import numpy as np
-import csv
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation
-from keras.utils import np_utils
-from sklearn import metrics
-from sklearn.cross_validation import KFold
-from sklearn.preprocessing import StandardScaler
-
 '''
-    This demonstrates how to reach a 0.80 ROC AUC score (local 4-fold validation)
-    in the Kaggle Nile virus prediction challenge. 
+This benchmark uses xgboost and early stopping to achieve a score of 0.38019
+In the liberty mutual group: property inspection challenge
 
-    The model trains in a few seconds on CPU.
+Based on Abhishek Catapillar benchmark
+https://www.kaggle.com/abhishek/caterpillar-tube-pricing/beating-the-benchmark-v1-0
+
+@author Devin
+
+Have fun;)
 '''
 
-# let's define some utils
+import pandas as pd
+import numpy as np 
+from sklearn import preprocessing
+import xgboost as xgb
 
-def get_weather_data():
-    weather_dic = {}
-    fi = csv.reader(open("../input/weather.csv"))
-    weather_head = fi.__next__()
-    for line in fi:
-        if line[0] == '1':
-            continue
-        weather_dic[line[1]] = line
-    weather_indexes = dict([(weather_head[i], i) for i in range(len(weather_head))])
-    return weather_dic, weather_indexes
+#load train and test 
+train  = pd.read_csv('../input/train.csv', index_col=0)
+test  = pd.read_csv('../input/test.csv', index_col=0)
 
-def process_line(line, indexes, weather_dic, weather_indexes):
-    def get(name):
-        return line[indexes[name]]
-
-    date = get("Date")
-    month = float(date.split('-')[1])
-    week = int(date.split('-')[1]) * 4 + int(date.split('-')[2]) / 7
-    latitude = float(get("Latitude"))
-    longitude = float(get("Longitude"))
-    tmax = float(weather_dic[date][weather_indexes["Tmax"]])
-    tmin = float(weather_dic[date][weather_indexes["Tmin"]])
-    tavg = float(weather_dic[date][weather_indexes["Tavg"]])
-    dewpoint = float(weather_dic[date][weather_indexes["DewPoint"]])
-    wetbulb = float(weather_dic[date][weather_indexes["WetBulb"]])
-    pressure = float(weather_dic[date][weather_indexes["StnPressure"]])
-
-    return [month, week, latitude, longitude, tmax, tmin, tavg, dewpoint, wetbulb, pressure]
-
-def preprocess_data(X, scaler=None):
-    if not scaler:
-        scaler = StandardScaler()
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
-
-def shuffle(X, y, seed=1337):
-    np.random.seed(seed)
-    shuffle = np.arange(len(y))
-    np.random.shuffle(shuffle)
-    X = X[shuffle]
-    y = y[shuffle]
-    return X, y
-
-def build_model(input_dim, output_dim):
-    model = Sequential()
-    model.add(Dense(32, input_dim=input_dim))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(32))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
-
-    model.add(Dense(output_dim))
-    model.add(Activation('softmax'))
-
-    model.compile(loss='categorical_crossentropy', optimizer="adadelta")
-    return model
+labels = train.Hazard
+train.drop('Hazard', axis=1, inplace=True)
 
 
-# now the actual script
+columns = train.columns
+test_ind = test.index
 
-print("Processing training data...")
+train = np.array(train)
+test = np.array(test)
 
-rows = []
-labels = []
-fi = csv.reader(open("../input/train.csv"))
-head = fi.__next__()
-indexes = dict([(head[i], i) for i in range(len(head))])
-weather_dic, weather_indexes = get_weather_data()
-for line in fi:
-    rows.append(process_line(line, indexes, weather_dic, weather_indexes))
-    labels.append(float(line[indexes["WnvPresent"]]))
+# label encode the categorical variables
+for i in range(train.shape[1]):
+    if type(train[1,i]) is str:
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(train[:,i]) + list(test[:,i]))
+        train[:,i] = lbl.transform(train[:,i])
+        test[:,i] = lbl.transform(test[:,i])
 
-X = np.array(rows)
-y = np.array(labels)
+train = train.astype(float)
+test = test.astype(float)
 
-X, y = shuffle(X, y)
-X, scaler = preprocess_data(X)
-Y = np_utils.to_categorical(y)
+params = {}
+params["objective"] = "reg:linear"
+params["eta"] = 0.01
+params["min_child_weight"] = 5
+params["subsample"] = 0.8
+params["scale_pos_weight"] = 1.0
+params["silent"] = 1
+params["max_depth"] = 7
 
-input_dim = X.shape[1]
-output_dim = 2
+plst = list(params.items())
 
-print("Validation...")
+#Using 5000 rows for early stopping. 
+offset = 5000
 
-nb_folds = 4
-kfolds = KFold(len(y), nb_folds)
-av_roc = 0.
-f = 0
-for train, valid in kfolds:
-    print('---'*20)
-    print('Fold', f)
-    print('---'*20)
-    f += 1
-    X_train = X[train]
-    X_valid = X[valid]
-    Y_train = Y[train]
-    Y_valid = Y[valid]
-    y_valid = y[valid]
+num_rounds = 2000
+xgtest = xgb.DMatrix(test)
 
-    print("Building model...")
-    model = build_model(input_dim, output_dim)
+#create a train and validation dmatrices 
+xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
 
-    print("Training model...")
+#train using early stopping and predict
+watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=5)
+preds1 = model.predict(xgtest)
 
-    model.fit(X_train, Y_train, nb_epoch=100, batch_size=16, validation_data=(X_valid, Y_valid), verbose=0)
-    valid_preds = model.predict_proba(X_valid, verbose=0)
-    valid_preds = valid_preds[:, 1]
-    roc = metrics.roc_auc_score(y_valid, valid_preds)
-    print("ROC:", roc)
-    av_roc += roc
+#reverse train and labels and use different 5k for early stopping. 
+# this adds very little to the score but it is an option if you are concerned about using all the data. 
+train = train[::-1,:]
+labels = labels[::-1]
 
-print('Average ROC:', av_roc/nb_folds)
+xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
 
-print("Generating submission...")
+watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=5)
+preds2 = model.predict(xgtest)
 
-model = build_model(input_dim, output_dim)
-model.fit(X, Y, nb_epoch=100, batch_size=16, verbose=0)
+#combine predictions
+#since the metric only cares about relative rank we don't need to average
+preds = preds1 + preds2
 
-fi = csv.reader(open("../input/test.csv"))
-head = fi.__next__()
-indexes = dict([(head[i], i) for i in range(len(head))])
-rows = []
-ids = []
-for line in fi:
-    rows.append(process_line(line, indexes, weather_dic, weather_indexes))
-    ids.append(line[0])
-X_test = np.array(rows)
-X_test, _ = preprocess_data(X_test, scaler)
-
-preds = model.predict_proba(X_test, verbose=0)
-
-fo = csv.writer(open("keras-nn.csv", "w"), lineterminator="\n")
-fo.writerow(["Id","WnvPresent"])
-
-for i, item in enumerate(ids):
-    fo.writerow([ids[i], preds[i][1]])
+#generate solution
+preds = pd.DataFrame({"Id": test_ind, "Hazard": preds})
+preds = preds.set_index('Id')
+preds.to_csv('xgboost_benchmark.csv')

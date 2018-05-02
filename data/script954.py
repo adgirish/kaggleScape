@@ -4,168 +4,320 @@
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-import os
-from keras.layers import Dense,Input,LSTM,Bidirectional,Activation,Conv1D,GRU
-from keras.callbacks import Callback
-from keras.layers import Dropout,Embedding,GlobalMaxPooling1D, MaxPooling1D, Add, Flatten
-from keras.preprocessing import text, sequence
-from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-from keras.callbacks import EarlyStopping,ModelCheckpoint
-from keras.models import Model
-from keras.optimizers import Adam
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import roc_auc_score
-print(os.listdir("../input"))
-
-# Any results you write to the current directory are saved as output.
+import pandas as pd
+import numpy as np
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
 # In[ ]:
 
 
-EMBEDDING_FILE = '../input/glove840b300dtxt/glove.840B.300d.txt'
-train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+get_ipython().system('ls ../input/melbourne-housing-market/Melbourne_housing_extra_data.csv')
 
 
 # In[ ]:
 
 
-train["comment_text"].fillna("fillna")
-test["comment_text"].fillna("fillna")
-X_train = train["comment_text"].str.lower()
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-
-X_test = test["comment_text"].str.lower()
+dataframe =  pd.read_csv("../input/melbourne-housing-market/Melbourne_housing_extra_data.csv")
 
 
 # In[ ]:
 
 
-max_features=100000
-maxlen=150
-embed_size=300
+dataframe.dtypes
 
 
 # In[ ]:
 
 
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
+dataframe.head()
 
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
 
 
 # In[ ]:
 
 
-tok=text.Tokenizer(num_words=max_features,lower=True)
-tok.fit_on_texts(list(X_train)+list(X_test))
-X_train=tok.texts_to_sequences(X_train)
-X_test=tok.texts_to_sequences(X_test)
-x_train=sequence.pad_sequences(X_train,maxlen=maxlen)
-x_test=sequence.pad_sequences(X_test,maxlen=maxlen)
+dataframe["Date"] = pd.to_datetime(dataframe["Date"],dayfirst=True)
 
 
 # In[ ]:
 
 
-embeddings_index = {}
-with open(EMBEDDING_FILE,encoding='utf8') as f:
-    for line in f:
-        values = line.rstrip().rsplit(' ')
-        word = values[0]
-        coefs = np.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
+len(dataframe["Date"].unique())/4
+##12 Means a year of Data!
 
 
 # In[ ]:
 
 
-word_index = tok.word_index
-#prepare embedding matrix
-num_words = min(max_features, len(word_index) + 1)
-embedding_matrix = np.zeros((num_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features:
-        continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        # words not found in embedding index will be all-zeros.
-        embedding_matrix[i] = embedding_vector
+var = dataframe[dataframe["Type"]=="h"].sort_values("Date", ascending=False).groupby("Date").std()
+count = dataframe[dataframe["Type"]=="h"].sort_values("Date", ascending=False).groupby("Date").count()
+mean = dataframe[dataframe["Type"]=="h"].sort_values("Date", ascending=False).groupby("Date").mean()
 
 
 # In[ ]:
 
 
-sequence_input = Input(shape=(maxlen, ))
-x = Embedding(max_features, embed_size, weights=[embedding_matrix],trainable = False)(sequence_input)
-x = SpatialDropout1D(0.2)(x)
-x = Bidirectional(GRU(128, return_sequences=True,dropout=0.1,recurrent_dropout=0.1))(x)
-x = Conv1D(64, kernel_size = 3, padding = "valid", kernel_initializer = "glorot_uniform")(x)
-avg_pool = GlobalAveragePooling1D()(x)
-max_pool = GlobalMaxPooling1D()(x)
-x = concatenate([avg_pool, max_pool]) 
-# x = Dense(128, activation='relu')(x)
-# x = Dropout(0.1)(x)
-preds = Dense(6, activation="sigmoid")(x)
-model = Model(sequence_input, preds)
-model.compile(loss='binary_crossentropy',optimizer=Adam(lr=1e-3),metrics=['accuracy'])
+mean["Price"].plot(yerr=var["Price"],ylim=(400000,1500000))
 
 
 # In[ ]:
 
 
-batch_size = 128
-epochs = 4
-X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.9, random_state=233)
+means = dataframe[(dataframe["Type"]=="h") & (dataframe["Distance"]<13)].sort_values("Date", ascending=False).groupby("Date").mean()
+errors = dataframe[(dataframe["Type"]=="h") & (dataframe["Distance"]<13)].sort_values("Date", ascending=False).groupby("Date").std()
 
 
 # In[ ]:
 
 
-# filepath="../input/best-model/best.hdf5"
-filepath="weights_base.best.hdf5"
-checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
-early = EarlyStopping(monitor="val_acc", mode="max", patience=5)
-ra_val = RocAucEvaluation(validation_data=(X_val, y_val), interval = 1)
-callbacks_list = [ra_val,checkpoint, early]
+means.columns
 
 
 # In[ ]:
 
 
-model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),callbacks = callbacks_list,verbose=1)
-#Loading model weights
-model.load_weights(filepath)
-print('Predicting....')
-y_pred = model.predict(x_test,batch_size=1024,verbose=1)
+#fig, ax = plt.subplots()
+means.drop(["Price",
+            "Postcode",
+            
+           "Longtitude","Lattitude",
+           "Distance","BuildingArea", "Propertycount","Landsize","YearBuilt"],axis=1).plot(yerr=errors)
 
 
 # In[ ]:
 
 
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
+dataframe[dataframe["Type"]=="h"].sort_values("Date", ascending=False).groupby("Date").mean()
+
+
+# In[ ]:
+
+
+pd.set_eng_float_format(accuracy=1, use_eng_prefix=True)
+dataframe[(dataframe["Type"]=="h") & 
+          (dataframe["Distance"]<14) &
+          (dataframe["Distance"]>13.7) 
+          #&(dataframe["Suburb"] =="Northcote")
+         ].sort_values("Date", ascending=False).dropna().groupby(["Suburb","SellerG"]).mean()
+
+
+# In[ ]:
+
+
+sns.kdeplot(dataframe[(dataframe["Suburb"]=="Northcote")
+         & (dataframe["Type"]=="u")
+         & (dataframe["Rooms"] == 2)]["Price"])
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(20,15))
+my_axis = sns.kdeplot(dataframe["Price"][((dataframe["Type"]=="u") &
+                                (dataframe["Distance"]>8) &
+                                (dataframe["Distance"]<10) &
+                                (dataframe["Rooms"] > 2)#&
+                                #(dataframe["Price"] < 1000000)
+                               )])
+my_axis.axis(xmin=0, xmax=2000000)
+
+
+# In[ ]:
+
+
+sns.lmplot("Distance","Price",dataframe[(dataframe["Rooms"]<=4) & 
+                                         (dataframe["Rooms"]> 2) & 
+                                        (dataframe["Type"]=="h") &
+                                        (dataframe["Price"]< 1000000)
+                                       ].dropna(),hue="Rooms", size=10)
+
+
+# In[ ]:
+
+
+dataframe[(dataframe["Rooms"]>2) & (dataframe["Type"] == "h")& (dataframe["Landsize"] <5000)][["Landsize","Distance"]].dropna().groupby("Distance").mean().plot()
+
+
+# In[ ]:
+
+
+dataframe.columns
+
+
+# In[ ]:
+
+
+sns.pairplot(dataframe.dropna())
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize=(15,15)) 
+sns.heatmap(dataframe[dataframe["Type"] == "h"].corr(), annot=True)
+
+
+# In[ ]:
+
+
+from sklearn.cross_validation import train_test_split
+
+
+# In[ ]:
+
+
+dataframe_dr = dataframe.dropna().sort_values("Date")
+
+
+# In[ ]:
+
+
+#dataframe_dr = dataframe_dr[dataframe_dr["Type"]=="h"]
+
+
+# In[ ]:
+
+
+dataframe_dr = dataframe_dr
+
+
+# In[ ]:
+
+
+from datetime import date
+
+
+# In[ ]:
+
+
+all_Data = []
+
+
+# In[ ]:
+
+
+###########
+##Find out days since start
+days_since_start = [(x - dataframe_dr["Date"].min()).days for x in dataframe_dr["Date"]]
+
+
+# In[ ]:
+
+
+dataframe_dr["Days"] = days_since_start
+
+
+# In[ ]:
+
+
+#suburb_dummies = pd.get_dummies(dataframe_dr[["Suburb", "Type", "Method"]])
+suburb_dummies = pd.get_dummies(dataframe_dr[["Type", "Method"]])
+#suburb_dummies = pd.get_dummies(dataframe_dr[[ "Type"]])
+#suburb_dummies = pd.get_dummies(dataframe_dr[["Suburb", "Method"]])
+
+
+# In[ ]:
+
+
+all_Data = dataframe_dr.drop(["Address","Price","Date", "SellerG","Suburb","Type","Method","CouncilArea","Regionname"],axis=1).join(suburb_dummies)
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+X = all_Data
+
+
+# In[ ]:
+
+
+y = dataframe_dr["Price"]
+
+
+# In[ ]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4)
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LinearRegression
+
+
+# In[ ]:
+
+
+lm = LinearRegression()
+
+
+# In[ ]:
+
+
+lm.fit(X_train,y_train)
+
+###### 
+# In[ ]:
+
+
+print(lm.intercept_)
+
+
+# In[ ]:
+
+
+X.columns
+
+
+# In[ ]:
+
+
+coeff_df = pd.DataFrame(lm.coef_,X.columns,columns=['Coefficient'])
+ranked_suburbs = coeff_df.sort_values("Coefficient", ascending = False)
+ranked_suburbs
+
+
+# In[ ]:
+
+
+predictions = lm.predict(X_test)
+
+
+# In[ ]:
+
+
+
+plt.scatter(y_test, predictions)
+plt.ylim([200000,1000000])
+plt.xlim([200000,1000000])
+
+
+# In[ ]:
+
+
+sns.distplot((y_test-predictions),bins=50)
+
+
+# In[ ]:
+
+
+from sklearn import metrics
+
+
+# In[ ]:
+
+
+print("MAE:", metrics.mean_absolute_error(y_test, predictions))
+print('MSE:', metrics.mean_squared_error(y_test, predictions))
+print('RMSE:', np.sqrt(metrics.mean_squared_error(y_test, predictions)))
 

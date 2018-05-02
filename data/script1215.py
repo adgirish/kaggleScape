@@ -1,286 +1,317 @@
 
 # coding: utf-8
 
-# # Motivation
-# I'll use this script to provide introduction to data analysis using SQL language, which should be a must tool for every data scientist - both for getting access to data, but more interesting, as a simple tool for advance data analysis.
-# The logic behind SQL is very similar to any other tool or language that used for data analysis (excel, Pandas),  and for those that used to work with data, should be very intuitive. 
+# # Crop, Save and View Nodules in 3D
 # 
-# Feel free to response with questions, and I'll try to explain more if need.
+# Final results:
+# 
+# ![enter image description here][1]
+# 
+# This kernel shows you how to crop the nodule **with given coordinates** in patient's CT scan, how to save it in .npy and .mhd/.raw file, and how to view it in **3D**. About half of the code is learned from other kernels. (Tutorial: U-Net Segmentation Approach to Cancer Diagnosis by [Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton][2], Full Preprocessing Tutorial by [Guido Zuidhof][3], Candidate Generation and LUNA16 preprocessing by [ArnavJain][4]) The most fun part of this code is also learned from the Internet. I wanted a better way to visualize the region of interest my code generated. Then I searched online and found a method to save .mhd/.raw file posted by [Price Jackson][5], with [source code][6]. The part I found useful was built on the MIT licensed work by [Bing Jian and Baba C. Vemuri][7]. I happened to know [Fiji][8] was a good tool to view volume stacks in 3D, with original intensity values. After integrating them together, I find visualize and check the results is not that much of pain. Actually, it comes with some fun and may give you some insights on the journey. This incites me to open a kernel here, though most of the code are from others.
+# 
+# Running the code below, with given CT scan and given coordinates, will give you a cropped nodule in [19, 19, 19] dimensional numpy array, with spacing [1, 1, 1]mm. I will use LUNA16 as input data in the code. Because it comes with some annotated nodules. So I cannot run it here but I put the psedo-output in Markdown cells. The code has been tested in Python 3.5.
+# 
+# 
+#   [1]: https://i.gyazo.com/24c585876be7e54a2fc20a40fbf3b2e9.gif
+#   [2]: https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+#   [3]: https://www.kaggle.com/gzuidhof/data-science-bowl-2017/full-preprocessing-tutorial
+#   [4]: https://www.kaggle.com/arnavkj95/data-science-bowl-2017/candidate-generation-and-luna16-preprocessing
+#   [5]: https://sites.google.com/site/pjmedphys/tutorials/medical-images-in-python
+#   [6]: https://sites.google.com/site/pjmedphys/scripts
+#   [7]: https://code.google.com/archive/p/diffusion-mri/
+#   [8]: https://imagej.net/Fiji/Downloads
 
-# # Important Definitions
-# SQL is a conceptual language for working with data stored in databases. In our case, SQLite is the specific implementation.
-# Eventually, we will use SQL lunguage to write queries that would pull data from the DB, manipulate it, sort it, and extract it.
+# ### Read annotation data and define preprocessing method
 # 
-# The most important component of the DB  is its tables - that's where all the data stored. Usually the data would be devided to many tables, and not stored all in one place (so designing the data stracture propely is very important). Most of this script would handle how to work with tables.
-# Other than tables, there are some other very useful concepts/features that we won't talk about:
-# * table creation
-# * inserting / updating data in the DB
-# * functions - gets a value as an input, and returns manipulation of that value (for example function that remove white spaces)
+# Please change the input path to fit your environment
 
 # In[ ]:
 
 
-#Improts 
+import SimpleITK as sitk
+import numpy as np
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import sqlite3
-import matplotlib.pyplot as plt
+from glob import glob
+import pandas as pd
+import scipy.ndimage
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-path = "../input/"  #Insert path here
-database = path + 'database.sqlite'
+import mhd_utils_3d
 
 
-# # First we will create the connection to the DB, and see what tables we have
-# The basic structure of the query is very simple:
-# You define what you want to see after the SELECT, * means all possible columns
-# You choose the table after the FROM
-# You add the conditions for the data you want to use from the table(s) after the WHERE
+## Read annotation data and filter those without images
+# Learned from Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton
+# https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+
+# Set input path
+# Change to fit your environment
+luna_path = './LUNA16/'
+luna_subset_path = luna_path + 'subset0_samples/'
+file_list = glob(luna_subset_path + "*.mhd")
+
+df_node = pd.read_csv(luna_path+'annotations.csv')
+
+def get_filename(file_list, case):
+    for f in file_list:
+        if case in f:
+            return(f)
+
+# map file full path to each record 
+df_node['file'] = df_node['seriesuid'].map(lambda file_name: get_filename(file_list, file_name))
+df_node = df_node.dropna()
+
+## Define resample method to make images isomorphic, default spacing is [1, 1, 1]mm
+# Learned from Guido Zuidhof
+# https://www.kaggle.com/gzuidhof/data-science-bowl-2017/full-preprocessing-tutorial
+def resample(image, old_spacing, new_spacing=[1, 1, 1]):
+    
+    resize_factor = old_spacing / new_spacing
+    new_real_shape = image.shape * resize_factor
+    new_shape = np.round(new_real_shape)
+    real_resize_factor = new_shape / image.shape
+    new_spacing = old_spacing / real_resize_factor
+
+    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode = 'nearest')
+    
+    return image, new_spacing
+
+
+# ### Define methods to save data
 # 
-# The stracture, and the order of the sections matter, while spaces, new lines, capital words and indentation are there to make the code easier to read.
+# I defined a method called "save_nodule" in this part. And it is called by:
+# 
+#     save_nodule(nodule_crop, name_index)
+#     # nodule_crop is a 3 dimensional numpy array, name_index is the name of the file. I use the index in annotation.csv.
+# 
+# If your time is limited, just try to call the method with your data. If it works, then you can focus on building the model. It will save three files: **.npy**, **.mhd**, **.raw**.
 
 # In[ ]:
 
 
-conn = sqlite3.connect(database)
+#!/usr/bin/env python
+#coding=utf-8
 
-tables = pd.read_sql("""SELECT *
-                        FROM sqlite_master
-                        WHERE type='table';""", conn)
-tables
+#======================================================================
+#Program:   Diffusion Weighted MRI Reconstruction
+#Link:      https://code.google.com/archive/p/diffusion-mri
+#Module:    $RCSfile: mhd_utils.py,v $
+#Language:  Python
+#Author:    $Author: bjian $
+#Date:      $Date: 2008/10/27 05:55:55 $
+#Version:   
+#           $Revision: 1.1 by PJackson 2013/06/06 $
+#               Modification: Adapted to 3D
+#               Link: https://sites.google.com/site/pjmedphys/tutorials/medical-images-in-python
+# 
+#           $Revision: 2   by RodenLuo 2017/03/12 $
+#               Modication: Adapted to LUNA2016 data set for DSB2017
+#               Link: 
+#======================================================================
+
+import os
+import numpy
+import array
+
+def write_meta_header(filename, meta_dict):
+    header = ''
+    # do not use tags = meta_dict.keys() because the order of tags matters
+    tags = ['ObjectType','NDims','BinaryData',
+       'BinaryDataByteOrderMSB','CompressedData','CompressedDataSize',
+       'TransformMatrix','Offset','CenterOfRotation',
+       'AnatomicalOrientation',
+       'ElementSpacing',
+       'DimSize',
+       'ElementType',
+       'ElementDataFile',
+       'Comment','SeriesDescription','AcquisitionDate','AcquisitionTime','StudyDate','StudyTime']
+    for tag in tags:
+        if tag in meta_dict.keys():
+            header += '%s = %s\n'%(tag,meta_dict[tag])
+    f = open(filename,'w')
+    f.write(header)
+    f.close()
+    
+def dump_raw_data(filename, data):
+    """ Write the data into a raw format file. Big endian is always used. """
+    #Begin 3D fix
+    data=data.reshape([data.shape[0],data.shape[1]*data.shape[2]])
+    #End 3D fix
+    rawfile = open(filename,'wb')
+    a = array.array('f')
+    for o in data:
+        a.fromlist(list(o))
+    #if is_little_endian():
+    #    a.byteswap()
+    a.tofile(rawfile)
+    rawfile.close()
+    
+def write_mhd_file(mhdfile, data, dsize):
+    assert(mhdfile[-4:]=='.mhd')
+    meta_dict = {}
+    meta_dict['ObjectType'] = 'Image'
+    meta_dict['BinaryData'] = 'True'
+    meta_dict['BinaryDataByteOrderMSB'] = 'False'
+    meta_dict['ElementType'] = 'MET_FLOAT'
+    meta_dict['NDims'] = str(len(dsize))
+    meta_dict['DimSize'] = ' '.join([str(i) for i in dsize])
+    meta_dict['ElementDataFile'] = os.path.split(mhdfile)[1].replace('.mhd','.raw')
+    write_meta_header(mhdfile, meta_dict)
+
+    pwd = os.path.split(mhdfile)[0]
+    if pwd:
+        data_file = pwd +'/' + meta_dict['ElementDataFile']
+    else:
+        data_file = meta_dict['ElementDataFile']
+
+    dump_raw_data(data_file, data)
+    
+def save_nodule(nodule_crop, name_index):
+    np.save(str(name_index) + '.npy', nodule_crop)
+    write_mhd_file(str(name_index) + '.mhd', nodule_crop, nodule_crop.shape[::-1])
 
 
-# # List of countries
-# This is the most basic query.
-# The only must parts of a qeury is the SELECT and the FROM (assuming you want to pull from a table)
+# ### Read CT scan data, process and save 
 
 # In[ ]:
 
 
-countries = pd.read_sql("""SELECT *
-                        FROM Country;""", conn)
-countries
+## Collect patients with nodule and crop the nodule
+# In this code snippet, the cropped nodule is a [19, 19, 19] volume with [1, 1, 1]mm spacing.
+# Learned from Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton
+# https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+
+# Change the number in the next line to process more
+for patient in file_list[:1]:
+    print(patient)
+    
+    # Check whether this patient has nodule or not
+    if patient not in df_node.file.values:
+        print('Patient ' + patient + 'Not exist!')
+        continue
+    patient_nodules = df_node[df_node.file == patient]
+    
+    full_image_info = sitk.ReadImage(patient)
+    full_scan = sitk.GetArrayFromImage(full_image_info)
+    
+    origin = np.array(full_image_info.GetOrigin())[::-1] # get [z, y, x] origin
+    old_spacing = np.array(full_image_info.GetSpacing())[::-1] # get [z, y, x] spacing
+    
+    image, new_spacing = resample(full_scan, old_spacing)
+    
+    print('Resample Done')
+    
+
+    for index, nodule in patient_nodules.iterrows():
+        nodule_center = np.array([nodule.coordZ, nodule.coordY, nodule.coordX]) 
+        # Attention: Z, Y, X
+
+        v_center = np.rint( (nodule_center - origin) / new_spacing )
+        v_center = np.array(v_center, dtype=int)
+
+#         print(v_center)
+        window_size = 9 # This will give you the volume length = 9 + 1 + 9 = 19
+        # Why the magic number 19, I found that in "LUNA16/annotations.csv", 
+        # the 95th percentile of the nodules' diameter is about 19.
+        # This is kind of a hyperparameter, will affect your final score.
+        # Change it if you want.
+        zyx_1 = v_center - window_size # Attention: Z, Y, X
+        zyx_2 = v_center + window_size + 1
+
+#         print('Crop range: ')
+#         print(zyx_1)
+#         print(zyx_2)
+
+        # This will give you a [19, 19, 19] volume
+        img_crop = image[ zyx_1[0]:zyx_2[0], zyx_1[1]:zyx_2[1], zyx_1[2]:zyx_2[2] ]
+        
+        # save the nodule 
+        save_nodule(img_crop, index)
+    
+    print('Done for this patient!\n\n')
+print('Done for all!')
 
 
-# # List of leagues and their country 
-# JOIN is used when you want to connect two tables to each other. It works when you have a common key in each of them.
-# Understanding the concept of Keys is crucial for connecting (joining) between data set (tables). 
-# A key is uniquely identifies each record (row) in a table. 
-# It can consinst of one value (cell) - usually ID, or from a combination of values that are unique in the table.
+# Sample output:
 # 
-# When joinin between different tables, you must:
-# * Decide what type of join to use. The most common are:
-# * * (INNER) JOIN - keep only records that match the condition (after the ON) in both the tables, and records in both tables that do not match wouldn't appear in the output
-# * * LEFT JOIN - keep all the values from the first (left) table - in conjunction with the matching rows from the right table. The columns from the right table, that don't have matching value in the left, would have NULL values. 
-# * Specify the common value that is used to connect the tables (the id of the country in that case). 
-# * Make sure that at least one of the values has to be a key in its table. In our case, it's the Country.id. The League.country_id is not unique, as there can be more than one league in the same country
+#     ./LUNA16/subset0_samples/1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059.mhd
+#     Resample Done
+#     Done for this patient!
 # 
-# JOINs, and using them incorrectly, is the most common and dangerious mistake when writing complicated queries
+# 
+#     Done for all!
+
+# ### Plot in 2D
 
 # In[ ]:
 
 
-leagues = pd.read_sql("""SELECT *
-                        FROM League
-                        JOIN Country ON Country.id = League.country_id;""", conn)
-leagues
+## Plot volume in 2D
+
+import numpy as np
+from matplotlib import pyplot as plt
+
+def plot_nodule(nodule_crop):
+    
+    # Learned from ArnavJain
+    # https://www.kaggle.com/arnavkj95/data-science-bowl-2017/candidate-generation-and-luna16-preprocessing
+    f, plots = plt.subplots(int(nodule_crop.shape[0]/4)+1, 4, figsize=(10, 10))
+    
+    for z_ in range(nodule_crop.shape[0]): 
+        plots[int(z_/4), z_ % 4].imshow(nodule_crop[z_,:,:])
+    
+    # The last subplot has no image because there are only 19 images.
+    plt.show()
+    
+# Plot one example
+img_crop = np.load('25.npy')
+plot_nodule(img_crop)
 
 
-# # List of teams
-# ORDER BY defines the sorting of the output - ascending or descending (DESC)
+# Sample output:
 # 
-# LIMIT, limits the number of rows in the output - after the sorting
+# [![https://gyazo.com/31240b93448349629652fe56cfd3f48f](https://i.gyazo.com/31240b93448349629652fe56cfd3f48f.png)](https://gyazo.com/31240b93448349629652fe56cfd3f48f)
 
-# In[ ]:
+# ### Plot in 3D by Fiji
 
-
-teams = pd.read_sql("""SELECT *
-                        FROM Team
-                        ORDER BY team_long_name
-                        LIMIT 10;""", conn)
-teams
-
-
-# # List of matches
-# In this exapmle we will show only the columns that interests us, so instead of * we will use the exact names.
+# In your output path (default is the same as your working directory), there should be some .mhd/.raw files. Follow the steps below to open it in 3D viewer. (I also made a video (18min) and posted in [this discussion thread][1]. You may want to watch it if you like video tutorials. Excuse me that I'm not fluent in English. So the video is recorded kind of slow, you may want to watch it with 1.5 or 2 times speed.)
 # 
-# Some of the cells have the same name (Country.name,League.name). We will rename them using AS.
+# ### Steps to open nodules in 3D Viewer 
+# 1. Download [Fiji][2]
+# 2. Drag one .mhd file to Fiji **status bar**
 # 
-# As you can see, this query has much more joins. The reasons is because the DB is designed in a star
-# structure - one table (Match) with all the "performance" and metrics, but only keys and IDs,
-# while all the descriptive information stored in other tables (Country, League, Team)
+#     ![enter image description here][3]
 # 
-# Note that Team is joined twice. This is a tricky one, as while we are using the same table name, we basically bring two different copies (and rename them using AS). The reason is that we need to bring information about two different values (home_team_api_id, away_team_api_id), and if we join them to the same table, it would mean that they are equal to each other.
+# 3. Click on the new image window. Press "control +" to zoom in, "control -" to zoom out.
+# 4. In the **Menubar**, Click "Image > Stacks > Orthogonal Views" to see it. Scroll to go through all slices. **Notice that when your cursor moves around in the image window, the Fiji Status Bar shows you the XY coordinates and the value, this value is the same as that in Python numpy array**
+# 5. In the **Menubar**, Click "Plugins > 3D viewer", in the "Add ..." window, change "Resampling factor" to 1, click "OK", click "OK" to convert to 8-bit.
+# 6. Click on the "ImageJ 3D Viewer", In the **Menubar**, click "Edit > Adjust threshold". Drag threshold bar to around 150.
+# 7.  **Drag** the object to rotate it. Hold "shift" and **drag** to move it. Scroll to zoom. 
+# 8. In the **Menubar**, click "View > Start animation" to activate it.
+# 9. Click on the image stack, in the **Menubar**, click "Image > Adjust > threshold", check "Dark background", move the first threshold bar to around -400, click "Apply > OK > Yes". 
+# 10. Either use step 5 to open another 3D viewer, or click on the current "ImageJ 3D Viewer", in the **Menubar** click "add > from image" to add another object. Click on the object and "shift" drag to move it. Thresholding on the raw image then creating 3D object gives you different rendering. 
 # 
-# You will also note that the Team tables are joined using left join. The reason is decided that I would prefer to keep the matches in the output - even if on of the teams doesn't appear in the Team table.
+# **Sample visualizations:**
 # 
-# ORDER defines the order of the output, and comes before the LIMIT and after the WHERE
-
-# In[ ]:
-
-
-detailed_matches = pd.read_sql("""SELECT Match.id, 
-                                        Country.name AS country_name, 
-                                        League.name AS league_name, 
-                                        season, 
-                                        stage, 
-                                        date,
-                                        HT.team_long_name AS  home_team,
-                                        AT.team_long_name AS away_team,
-                                        home_team_goal, 
-                                        away_team_goal                                        
-                                FROM Match
-                                JOIN Country on Country.id = Match.country_id
-                                JOIN League on League.id = Match.league_id
-                                LEFT JOIN Team AS HT on HT.team_api_id = Match.home_team_api_id
-                                LEFT JOIN Team AS AT on AT.team_api_id = Match.away_team_api_id
-                                WHERE country_name = 'Spain'
-                                ORDER by date
-                                LIMIT 10;""", conn)
-detailed_matches
-
-
-# # Let's do some basic analytics
-# Here we are starting to look at the data at more aggregated level. Instead of looking on the raw data we will start to grouping it to different levels we want to examine.
-# In this example, we will base it on the previous query, remove the match and date information, and look at it at the country-league-season level.
+# 25 in LUNA16/annotation.csv
 # 
-# The functionality we will use for that is GROUP BY, that comes between the WHERE and ORDER
+# ![enter image description here][4]
 # 
-# Once you chose what level you want to analyse, we can devide the select statement to two:
-# * Dimensions - those are the values we describing, same that we group by later.
-# * Metrics - all the metrics have to be aggregated using functions.. 
-# The common functions are: sum(), count(), count(distinct), avg(), min(), max()
+# 26 in LUNA16/annotation.csv
 # 
-# Note - it is very important to use the same dimensions both in the select, and in the GROUP BY. Otherwise the output might be wrong.
+# ![enter image description here][5]
 # 
-# Another functionality that can be used after grouping, is HAVING. This adds another layer of filtering the data, this time the output of the table **after** the grouping. A lot of times it is used to clean the output.
 # 
-
-# In[ ]:
-
-
-leages_by_season = pd.read_sql("""SELECT Country.name AS country_name, 
-                                        League.name AS league_name, 
-                                        season,
-                                        count(distinct stage) AS number_of_stages,
-                                        count(distinct HT.team_long_name) AS number_of_teams,
-                                        avg(home_team_goal) AS avg_home_team_scors, 
-                                        avg(away_team_goal) AS avg_away_team_goals, 
-                                        avg(home_team_goal-away_team_goal) AS avg_goal_dif, 
-                                        avg(home_team_goal+away_team_goal) AS avg_goals, 
-                                        sum(home_team_goal+away_team_goal) AS total_goals                                       
-                                FROM Match
-                                JOIN Country on Country.id = Match.country_id
-                                JOIN League on League.id = Match.league_id
-                                LEFT JOIN Team AS HT on HT.team_api_id = Match.home_team_api_id
-                                LEFT JOIN Team AS AT on AT.team_api_id = Match.away_team_api_id
-                                WHERE country_name in ('Spain', 'Germany', 'France', 'Italy', 'England')
-                                GROUP BY Country.name, League.name, season
-                                HAVING count(distinct stage) > 10
-                                ORDER BY Country.name, League.name, season DESC
-                                ;""", conn)
-leages_by_season
-
-
-# In[ ]:
-
-
-df = pd.DataFrame(index=np.sort(leages_by_season['season'].unique()), columns=leages_by_season['country_name'].unique())
-
-df.loc[:,'Germany'] = list(leages_by_season.loc[leages_by_season['country_name']=='Germany','avg_goals'])
-df.loc[:,'Spain']   = list(leages_by_season.loc[leages_by_season['country_name']=='Spain','avg_goals'])
-df.loc[:,'France']   = list(leages_by_season.loc[leages_by_season['country_name']=='France','avg_goals'])
-df.loc[:,'Italy']   = list(leages_by_season.loc[leages_by_season['country_name']=='Italy','avg_goals'])
-df.loc[:,'England']   = list(leages_by_season.loc[leages_by_season['country_name']=='England','avg_goals'])
-
-df.plot(figsize=(12,5),title='Average Goals per Game Over Time')
-
-
-# In[ ]:
-
-
-df = pd.DataFrame(index=np.sort(leages_by_season['season'].unique()), columns=leages_by_season['country_name'].unique())
-
-df.loc[:,'Germany'] = list(leages_by_season.loc[leages_by_season['country_name']=='Germany','avg_goal_dif'])
-df.loc[:,'Spain']   = list(leages_by_season.loc[leages_by_season['country_name']=='Spain','avg_goal_dif'])
-df.loc[:,'France']   = list(leages_by_season.loc[leages_by_season['country_name']=='France','avg_goal_dif'])
-df.loc[:,'Italy']   = list(leages_by_season.loc[leages_by_season['country_name']=='Italy','avg_goal_dif'])
-df.loc[:,'England']   = list(leages_by_season.loc[leages_by_season['country_name']=='England','avg_goal_dif'])
-
-df.plot(figsize=(12,5),title='Average Goals Difference Home vs Out')
-
-
-# # Query Run Order
-# Now that we are familiar with most of the functionalities being used in a query, it is very important to understand the order that code runs.
 # 
-# First, order of how we write it (reminder):
-# * SELECT
-# * FROM
-# * JOIN
-# * WHERE
-# * GROUP BY
-# * HAVING
-# * ORDER BY
-# * LIMIT
 # 
-# Now, the actul order that things happens.
-# First, you can think of this part as creating a new temporal table in the memory:
-# * Define which tables to use, and connect them (FROM + JOIN)
-# * Keep only the rows that apply to the conditions (WHERE)
-# * Group the data by the required level (if need) (GROUP BY)
-# * Choose what information you want to have in the new table. It can have just rawdata (if no grouping), or combination of dimensions (from the grouping), and metrics
-# Now, you chose that to show from the table:
-# * Order the output of the new table (ORDER BY)
-# * Add more conditions that would filter the new created table (HAVING) 
-# * Limit to number of rows - would cut it according the soring and the having filtering (LIMIT)
+# **Please feel free to comment if you have questions or suggestions. Please upvote the above mentioned kernels if you find they are helpful. Please upvote this kernel if it helps you on the journey.**
 # 
-
-# # Sub Queries and Functions 
 # 
-# Using subqueries is an essential tool in SQL, as it allows manipulating the data in very advanced ways without the need of any external scripts, and especially important when your tables stractured in such a way that you can't be joined directly.
 # 
-# In our example, I'm trying to join between a table that holds player's basic details (name, height, weight), to a table that holds more attributes. The problem is that while the first table holds one row for each player, the key in the second table is player+season, so if we do a regular join, the result would be a Cartesian product, and each player's basic details would appear as many times as this player appears in the attributes table. The problem with of course is that the average would be skewed towards players that appear many times in the attribute table.
+# ## Updates:
 # 
-# The solution, is to use a subquery.  We would need to group the attributes table, to a different key - player level only (without season). Of course we would need to decide first how we would want to combine all the attributes to a single row. I used average, but one can also decide on maximum, latest season and etc. 
-# Once both tables have the same keys, we can join them together (think of the subquery as any other table, only temporal), knowing that we won't have duplicated rows after the join.
+# Changed "nodule_crop.shape" to "nodule_crop.shape[::-1]" in method "save_nodule(nodule_crop, name_index)"
 # 
-# In addition, you can see here two examples of how to use functions:
-# * Conditional function is an important tool for data manipulation. While IF statement is very popular in other languages, SQLite is not supporting it, and it's implemented using CASE + WHEN + ELSE statement. 
-# As you can see, based on the input of the data, the query would return different results.
-# 
-# * ROUND - straight sorward.
-# Every SQL languages comes with a lot of usefull functions by default.
-
-# In[ ]:
-
-
-players_height = pd.read_sql("""SELECT CASE
-                                        WHEN ROUND(height)<165 then 165
-                                        WHEN ROUND(height)>195 then 195
-                                        ELSE ROUND(height)
-                                        END AS calc_height, 
-                                        COUNT(height) AS distribution, 
-                                        (avg(PA_Grouped.avg_overall_rating)) AS avg_overall_rating,
-                                        (avg(PA_Grouped.avg_potential)) AS avg_potential,
-                                        AVG(weight) AS avg_weight 
-                            FROM PLAYER
-                            LEFT JOIN (SELECT Player_Attributes.player_api_id, 
-                                        avg(Player_Attributes.overall_rating) AS avg_overall_rating,
-                                        avg(Player_Attributes.potential) AS avg_potential  
-                                        FROM Player_Attributes
-                                        GROUP BY Player_Attributes.player_api_id) 
-                                        AS PA_Grouped ON PLAYER.player_api_id = PA_Grouped.player_api_id
-                            GROUP BY calc_height
-                            ORDER BY calc_height
-                                ;""", conn)
-players_height
-
-
-# In[ ]:
-
-
-players_height.plot(x=['calc_height'],y=['avg_overall_rating'],figsize=(12,5),title='Potential vs Height')
-
+#   [1]: https://www.kaggle.com/c/data-science-bowl-2017/discussion/28502
+#   [2]: https://imagej.net/Fiji/Downloads
+#   [3]: https://imagej.net/_images/6/67/Fiji-main-window.jpg
+#   [4]: https://i.gyazo.com/d9eea0182a10af8b8af8f6cf88c3a0e7.gif
+#   [5]: https://i.gyazo.com/3c69952f966704b4055e25bc07495748.gif

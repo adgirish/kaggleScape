@@ -1,651 +1,531 @@
 
 # coding: utf-8
 
-# **This is my first attempt on Kaggle ever. I've learned a lot from the tutorials and some other kernels. Here I incorporate my ideas and what I learned into this kernel. Please upvote if you find this useful. Feel free to leave comments below.**
-# 
-# **(09/12/2017 update) Neural network results in a score > 0.81**
-# 
-# **Let's begin now!**
+# # What this kernel is about:
+# There are visualisations of diferent image types present in train & test datasets, code is mainly from https://www.kaggle.com/mpware/stage1-eda-microscope-image-types-clustering
+# Main impact  of this kernel is creating a mosaic from train and test data. 
+# Skip to part 5 to see complited mosaics. 
+# UPD. In the comment section you can find csv with: original img id, cluster, big picture id to use on your own
 
-# In[ ]:
+# ## 1. Imports
+
+# In[1]:
 
 
-# Import all the libraries I need
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+# Import necessary modules and set global constants and variables. 
+      
+import pandas as pd                 
+import numpy as np                                       
+from sklearn.cluster import KMeans
+from scipy.ndimage.morphology import binary_fill_holes
+import cv2                         # To read and manipulate images
+import os                          # For filepath, directory handling
+import sys                         # System-specific parameters and functions
+import tqdm                        # Use smart progress meter
+import seaborn as sns              # For pairplots
+import matplotlib.pyplot as plt    # Python 2D plotting library
+import matplotlib.cm as cm         # Color map
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-# ignore Deprecation Warning
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-from sklearn.ensemble import RandomForestRegressor
-#from sklearn.ensemble import RandomForestClassifier
-#from xgboost import XGBClassifier
-#from sklearn.model_selection import cross_val_score
-#from sklearn.model_selection import GridSearchCV
-
-import keras 
-from keras.models import Sequential # intitialize the ANN
-from keras.layers import Dense      # create layers
-
-# load the data
-df_train = pd.read_csv('../input/train.csv')
-df_test = pd.read_csv('../input/test.csv')
-df = df_train.append(df_test , ignore_index = True)
-
-# some quick inspections
-df_train.shape, df_test.shape, df_train.columns.values
+# In[2]:
 
 
-# Let's look at individual features one by one:
+# Global constants.
+TRAIN_DIR = '../input/data-science-bowl-2018/stage1_train'
+TEST_DIR = '../input/data-science-bowl-2018/stage1_test'
+IMG_DIR_NAME = 'images'   # Folder name including the image
+MASK_DIR_NAME = 'masks'   # Folder name including the masks
+    
+
+# Display working/train/test directories.
+print('TRAIN_DIR = {}'.format(TRAIN_DIR))
+print('TEST_DIR = {}'.format(TEST_DIR))
+
+
+# ## 2. Functions
+
+# In[3]:
+
+
+# Collection of methods for data operations. Implemented are functions to read  
+# images/masks from files and to read basic properties of the train/test data sets.
+
+def read_image(filepath, color_mode=cv2.IMREAD_COLOR, target_size=None,space='bgr'):
+    """Read an image from a file and resize it."""
+    img = cv2.imread(filepath, color_mode)
+    if target_size: 
+        img = cv2.resize(img, target_size, interpolation = cv2.INTER_AREA)
+    if space == 'hsv':
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    return img
+
+def read_train_data_properties(train_dir, img_dir_name, mask_dir_name):
+    """Read basic properties of training images and masks"""
+    tmp = []
+    for i,dir_name in enumerate(next(os.walk(train_dir))[1]):
+
+        img_dir = os.path.join(train_dir, dir_name, img_dir_name)
+        mask_dir = os.path.join(train_dir, dir_name, mask_dir_name) 
+        num_masks = len(next(os.walk(mask_dir))[2])
+        img_name = next(os.walk(img_dir))[2][0]
+        img_name_id = os.path.splitext(img_name)[0]
+        img_path = os.path.join(img_dir, img_name)
+        mask_path = os.path.join(train_dir,dir_name,FULL_MASK_DIR_NAME,img_name_id+'_mask.png')
+        img_shape = read_image(img_path).shape
+        tmp.append(['{}'.format(img_name_id), img_shape[0], img_shape[1],
+                    img_shape[0]/img_shape[1], img_shape[2], num_masks,
+                    img_path, mask_dir,mask_path])
+
+    train_df = pd.DataFrame(tmp, columns = ['img_id', 'img_height', 'img_width',
+                                            'img_ratio', 'num_channels', 
+                                            'num_masks', 'image_path', 'mask_dir','mask_path'])
+    return train_df
+
+
+def read_test_data_properties(test_dir, img_dir_name):
+    """Read basic properties of test images."""
+    tmp = []
+    for i,dir_name in enumerate(next(os.walk(test_dir))[1]):
+
+        img_dir = os.path.join(test_dir, dir_name, img_dir_name)
+        img_name = next(os.walk(img_dir))[2][0]
+        img_name_id = os.path.splitext(img_name)[0]
+        img_path = os.path.join(img_dir, img_name)
+        img_shape = read_image(img_path).shape
+        tmp.append(['{}'.format(img_name_id), img_shape[0], img_shape[1],
+                    img_shape[0]/img_shape[1], img_shape[2], img_path])
+
+    test_df = pd.DataFrame(tmp, columns = ['img_id', 'img_height', 'img_width',
+                                           'img_ratio', 'num_channels', 'image_path'])
+    return test_df
+
+def load_raw_data(image_size=(256, 256), space = 'bgr',load_mask=True):
+    """Load raw data."""
+    # Python lists to store the training images/masks and test images.
+    x_train, y_train, x_test = [],[],[]
+
+    # Read and resize train images/masks. 
+    print('Loading and resizing train images and masks ...')
+    sys.stdout.flush()
+    for i, filename in tqdm.tqdm(enumerate(train_df['image_path']), total=len(train_df)):
+        img = read_image(train_df['image_path'].loc[i], target_size=image_size,space = space)
+        if load_mask:
+            mask = read_image(train_df['mask_path'].loc[i],
+                              color_mode=cv2.IMREAD_GRAYSCALE,
+                              target_size=image_size)
+            #mask = read_mask(train_df['mask_dir'].loc[i], target_size=image_size)
+            y_train.append(mask)
+        x_train.append(img)
+        
+    # Read and resize test images. 
+    print('Loading and resizing test images ...')
+    sys.stdout.flush()
+    for i, filename in tqdm.tqdm(enumerate(test_df['image_path']), total=len(test_df)):
+        img = read_image(test_df['image_path'].loc[i], target_size=image_size,space=space)
+        x_test.append(img)
+
+    # Transform lists into 4-dim numpy arrays.
+    x_train = np.array(x_train)
+    #if load_mask:
+    y_train = np.array(y_train)
+    #y_train = np.expand_dims(np.array(y_train), axis=4)
+    x_test = np.array(x_test)
+    print('Data loaded')
+    if load_mask:
+        return x_train, y_train, x_test
+    else:
+        return x_train, x_test
+
+def get_domimant_colors(img, top_colors=1):
+    """Return dominant image color"""
+    img_l = img.reshape((img.shape[0] * img.shape[1], img.shape[2]))
+    clt = KMeans(n_clusters = top_colors)
+    clt.fit(img_l)
+    # grab the number of different clusters and create a histogram
+    # based on the number of pixels assigned to each cluster
+    numLabels = np.arange(0, len(np.unique(clt.labels_)) + 1)
+    (hist, _) = np.histogram(clt.labels_, bins = numLabels)
+    # normalize the histogram, such that it sums to one
+    hist = hist.astype("float")
+    hist /= hist.sum()
+    return clt.cluster_centers_, hist
+
+def cluster_images_by_hsv():
+    """Clusterization based on hsv colors. Adds 'hsv_cluster' column to tables"""
+    print('Loading data')
+    x_train_hsv,x_test_hsv = load_raw_data(image_size=None,space='hsv',load_mask=False)
+    x_hsv = np.concatenate([x_train_hsv,x_test_hsv])
+    print('Calculating dominant hsv for each image')
+    dominant_hsv = []
+    for img in tqdm.tqdm(x_hsv):
+        res1, res2 = get_domimant_colors(img,top_colors=1)
+        dominant_hsv.append(res1.squeeze())
+    print('Calculating clusters')
+    kmeans = KMeans(n_clusters=3).fit(dominant_hsv)
+    train_df['HSV_CLUSTER'] = kmeans.predict(dominant_hsv[:len(x_train_hsv)])
+    test_df['HSV_CLUSTER'] = kmeans.predict(dominant_hsv[len(x_train_hsv):])
+    print('Images clustered')
+    return None
+
+def plot_images(selected_images_df,images_rows=4,images_cols=8,plot_figsize=4):
+    """Plot image_rows*image_cols of selected images. Used to visualy check clusterization"""
+    f, axarr = plt.subplots(images_rows,images_cols,figsize=(plot_figsize*images_cols,images_rows*plot_figsize))
+    for row in range(images_rows):
+        for col in range(images_cols):
+            if (row*images_cols + col) < selected_images_df.shape[0]:
+                image_path = selected_images_df['image_path'].iloc[row*images_cols + col]
+            else:
+                continue
+            img = read_image(image_path)
+            height, width, l = img.shape
+            ax = axarr[row,col]
+            ax.axis('off')
+            ax.set_title("%dx%d"%(width, height))
+            ax.imshow(img)
+
+
+# In[4]:
+
+
+# Basic properties of images/masks. 
+# train_df = read_train_data_properties(TRAIN_DIR, IMG_DIR_NAME, MASK_DIR_NAME)
+# test_df = read_test_data_properties(TEST_DIR, IMG_DIR_NAME)
+# cluster_images_by_hsv()
+# train_df.to_csv('./train_df.csv',index=False)
+# test_df.to_csv('./test_df.csv',index=False)
+
+# We don't need to compute everything (especially clusters) every time. simly load them
+train_df = pd.read_csv('../input/test-train-df/train_df.csv')
+test_df = pd.read_csv('../input/test-train-df/test_df.csv')
+
+# we need to change filepath from my filesystem to kaggle filesystem
+train_change_filepath = lambda x: '../input/data-science-bowl-2018/stage1_train/{0}/images/{0}.png'.format(x.split('/')[-1][:-4])
+test_change_filepath = lambda x: '../input/data-science-bowl-2018/stage1_test/{0}/images/{0}.png'.format(x.split('/')[-1][:-4])
+train_df.image_path = train_df.image_path.map(train_change_filepath)
+train_df.drop(['mask_dir','mask_path'],inplace=True,axis = 1)
+test_df.image_path = test_df.image_path.map(test_change_filepath)
+
+
+# In[5]:
+
+
+train_df.head()
+
+
 # 
-# ## Pclass
+# ## 3. Train & Test clusters visualization
 
-# In[ ]:
+# #### Train data
 
+# In[6]:
 
-# check if there is any NAN
-df['Pclass'].isnull().sum(axis=0)
 
+for idx in range(3):
+    print("Images in cluster {}: {}".format(idx,train_df[train_df['HSV_CLUSTER'] == idx].shape[0]))
 
-# In[ ]:
 
+# In[7]:
 
-# inspect the correlation between Pclass and Survived
-df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean()
 
+plot_images(train_df[train_df['HSV_CLUSTER'] == 0],2,4)
 
-# Pclass should be a very useful featrue
 
-# ## Name
+# In[8]:
 
-# In[ ]:
 
+plot_images(train_df[train_df['HSV_CLUSTER'] == 1],2,4)
 
-df.Name.head(10)
 
+# In[9]:
 
-# Each name has a title, which is clearly what matters since it contains information of gender or status. Let's extract the titles from these names.
 
-# In[ ]:
+plot_images(train_df[train_df['HSV_CLUSTER'] == 2],2,4)
 
 
-df['Title'] = df.Name.map( lambda x: x.split(',')[1].split( '.' )[0].strip())
+# #### Test data
 
-# inspect the amount of people for each title
-df['Title'].value_counts()
+# In[10]:
 
 
-# Looks like the main ones are "Master", "Miss", "Mr", "Mrs". Some of the others can be be merged into some of these four categories. For the rest, I'll just call them 'Others'
+for idx in range(3):
+    print("Images in cluster {}: {}".format(idx,test_df[test_df['HSV_CLUSTER'] == idx].shape[0]))
 
-# In[ ]:
 
+# In[11]:
 
-df['Title'] = df['Title'].replace('Mlle', 'Miss')
-df['Title'] = df['Title'].replace(['Mme','Lady','Ms'], 'Mrs')
-df.Title.loc[ (df.Title !=  'Master') & (df.Title !=  'Mr') & (df.Title !=  'Miss') 
-             & (df.Title !=  'Mrs')] = 'Others'
 
-# inspect the correlation between Title and Survived
-df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean()
+plot_images(test_df[test_df['HSV_CLUSTER'] == 0],2,4)
 
 
-# In[ ]:
+# In[12]:
 
 
-# inspect the amount of people for each title
-df['Title'].value_counts()
+plot_images(test_df[test_df['HSV_CLUSTER'] == 2],2,4)
 
 
-# Now we can use dummy encoding for these titles and drop the original names
+# In[13]:
 
-# In[ ]:
 
+plot_images(test_df[test_df['HSV_CLUSTER'] == 1],2,4)
 
-df = pd.concat([df, pd.get_dummies(df['Title'])], axis=1).drop(labels=['Name'], axis=1)
 
+# -----
+# ## 4. Load & Preprocess data
 
-# ## Sex
+# In[14]:
 
-# In[ ]:
 
+# Read images/masks from files and resize them. Each image and mask 
+# is stored as a 3-dim array where the number of channels is 3 and 1, respectively.
+x_train, x_test = load_raw_data(load_mask=False,image_size=None)
 
-# check if there is any NAN
-df.Sex.isnull().sum(axis=0)
 
+# In[15]:
 
-# In[ ]:
 
+x_train.shape
 
-# inspect the correlation between Sex and Survived
-df[['Sex', 'Survived']].groupby(['Sex'], as_index=False).mean()
 
+# ## 5. Mosaic hypotesis
+# Lets try to make big images from 4 small images
 
-# In[ ]:
+# In[16]:
 
 
-# map the two genders to 0 and 1
-df.Sex = df.Sex.map({'male':0, 'female':1})
+from sklearn.neighbors import NearestNeighbors
+# nn == Nearest Neighbors in the comments
 
 
-# ## Age
+# In[17]:
 
-# In[ ]:
 
+def combine_images(data,indexes):
+    """ Combines img from data using indexes as follows:
+        0 1
+        2 3 
+    """
+    up = np.hstack([data[indexes[0]],data[indexes[1]]])
+    down = np.hstack([data[indexes[2]],data[indexes[3]]])
+    full = np.vstack([up,down])
+    return full
 
-# check if there is any NAN
-df.Age.isnull().sum(axis=0)
-
-
-# There are 263 missing values! Age can probably be inferred from other features such as Title, Fare, SibSp, Parch. So I decide to come back to Age after I finish inspecting the other features.
-
-# ## SibSp and Parch 
-
-# In[ ]:
-
-
-# check if there is any NAN
-df.SibSp.isnull().sum(axis=0), df.Parch.isnull().sum(axis=0)
-
-
-# In[ ]:
-
-
-# create a new feature "Family"
-df['Family'] = df['SibSp'] + df['Parch'] + 1
-
-# inspect the correlation between Family and Survived
-df[['Family', 'Survived']].groupby(['Family'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-# inspect the amount of people for each Family size
-df['Family'].value_counts()
-
-
-# We can see that the survival rate increases with the family size, but not beyond Family = 4. Also, the amount of people in big families is much lower than those in small families. I will combine all the data with Family > 4 into one category. Since people in big families have an even lower survival rate (0.161290) than those who are alone, I decided to map data with Family > 4 to Family = 0, such that the survival rate always increases as Family increases.
-
-# In[ ]:
-
-
-df.Family = df.Family.map(lambda x: 0 if x > 4 else x)
-df[['Family', 'Survived']].groupby(['Family'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-df['Family'].value_counts()
-
-
-# ## Ticket
-
-# In[ ]:
-
-
-# check if there is any NAN
-df.Ticket.isnull().sum(axis=0)
-
-
-# In[ ]:
-
-
-df.Ticket.head(20)
-
-
-# It looks like there are two types of tickets: (1) number (2) letters + number
-# 
-# Ticket names with letters probably represent some special classes. For the numbers, the majority of tickets have their first digit = 1, 2, or 3, which probably also represent different classes. So I just keep the first element (a letter or a single-digit  number) of these ticket names
-
-# In[ ]:
-
-
-df.Ticket = df.Ticket.map(lambda x: x[0])
-
-# inspect the correlation between Ticket and Survived
-df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-# inspect the amount of people for each type of tickets
-df['Ticket'].value_counts()
-
-
-# We can see that the majority of tickets are indeed "3", "2", and "1", and their corresponding survival rates are "1" > "2" > "3". For the others, the survival rate is low except for "9","C","F","P", and "S". However, "9" and "F" are very small sample. The correlation we see here probably comes from Pclass or Fare, so let's check.
-
-# In[ ]:
-
-
-df[['Ticket', 'Fare']].groupby(['Ticket'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-df[['Ticket', 'Pclass']].groupby(['Ticket'], as_index=False).mean()
-
-
-# Indeed, there is some relation between Ticket and Fare, or between Ticket and Pclass. Also, one interesting thing is that "P" corresponds to very high Fare and Pcalss (better than "1"). This is an additional information that cannot be seen in other features. So keeping Ticket as a feature might be useful.
-# 
-# I'll come back to Ticket later. I don't further transform it now because its current form might be useful for guessing some missing values in other features. 
-
-# ## Fare
-
-# In[ ]:
-
-
-# check if there is any NAN
-df.Fare.isnull().sum(axis=0)
-
-
-# Only one missing value. Fare can probably be inferred from Ticket, Pclass, Cabin and Embarked. Let's see the corresponding values of for these features.
-
-# In[ ]:
-
-
-df.Ticket[df.Fare.isnull()]
-
-
-# In[ ]:
-
-
-df.Pclass[df.Fare.isnull()]
-
-
-# In[ ]:
-
-
-df.Cabin[df.Fare.isnull()]
-
-
-# In[ ]:
-
-
-df.Embarked[df.Fare.isnull()]
-
-
-# There is no corresponding value for Cabin, so let's look at the relation between Fare and the three features.  
-
-# In[ ]:
-
-
-# use boxplot to visualize the distribution of Fare for each Pclass
-sns.boxplot('Pclass','Fare',data=df)
-plt.ylim(0, 300) # ignore one data point with Fare > 500
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the correlation between Pclass and Fare
-df[['Pclass', 'Fare']].groupby(['Pclass']).mean()
-
-
-# In[ ]:
-
-
-# divide the standard deviation by the mean. A lower ratio means a tighter 
-# distribution of Fare in each Pclass
-df[['Pclass', 'Fare']].groupby(['Pclass']).std() / df[['Pclass', 'Fare']].groupby(['Pclass']).mean()
-
-
-# In[ ]:
-
-
-# use boxplot to visualize the distribution of Fare for each Ticket
-sns.boxplot('Ticket','Fare',data=df)
-plt.ylim(0, 300) # ignore one data point with Fare > 500
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the correlation between Ticket and Fare 
-# (we saw this earlier)
-df[['Ticket', 'Fare']].groupby(['Ticket']).mean()
-
-
-# In[ ]:
-
-
-# divide the standard deviation by the mean. A lower ratio means a tighter 
-# distribution of Fare in each Ticket type
-df[['Ticket', 'Fare']].groupby(['Ticket']).std() /  df[['Ticket', 'Fare']].groupby(['Ticket']).mean()
-
-
-# In[ ]:
-
-
-# use boxplot to visualize the distribution of Fare for each Embarked
-sns.boxplot('Embarked','Fare',data=df)
-plt.ylim(0, 300) # ignore one data point with Fare > 500
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the correlation between Embarked and Fare
-df[['Embarked', 'Fare']].groupby(['Embarked']).mean()
-
-
-# In[ ]:
-
-
-# divide the standard deviation by the mean. A lower ratio means a tighter 
-# distribution of Fare in each Embarked
-df[['Embarked', 'Fare']].groupby(['Embarked']).std() /  df[['Embarked', 'Fare']].groupby(['Embarked']).mean()
-
-
-# Looks like Fare indeed has correlation with these three features. I'll guess the missing value using the median value of (Pcalss = 3) & (Ticket = 3) & (Embarked = S)
-
-# In[ ]:
-
-
-guess_Fare = df.Fare.loc[ (df.Ticket == '3') & (df.Pclass == 3) & (df.Embarked == 'S')].median()
-df.Fare.fillna(guess_Fare , inplace=True)
-
-# inspect the mean Fare values for people who died and survived
-df[['Fare', 'Survived']].groupby(['Survived'],as_index=False).mean()
-
-
-# In[ ]:
-
-
-# visualize the distribution of Fare for people who survived and died
-grid = sns.FacetGrid(df, hue='Survived', size=4, aspect=1.5)
-grid.map(plt.hist, 'Fare', alpha=.5, bins=range(0,210,10))
-grid.add_legend()
-plt.show()
-
-
-# In[ ]:
-
-
-# visualize the correlation between Fare and Survived using a scatter plot
-df[['Fare', 'Survived']].groupby(['Fare'],as_index=False).mean().plot.scatter('Fare','Survived')
-plt.show()
-
-
-# We can see that people with lower Fare are less likely to survive. But this is certainly not a smooth curve if we don't bin the data. It would be better to feed machine learning algorithms with intervals of Fare, because using the original Fare values would likely cause over-fitting. 
-
-# In[ ]:
-
-
-# bin Fare into five intervals with equal amount of people
-df['Fare-bin'] = pd.qcut(df.Fare,5,labels=[1,2,3,4,5]).astype(int)
-
-# inspect the correlation between Fare-bin and Survived
-df[['Fare-bin', 'Survived']].groupby(['Fare-bin'], as_index=False).mean()
-
-
-# Now the correlation is clear after binning the data!
-# 
-# ## Cabin
-
-# In[ ]:
-
-
-# check if there is any NAN
-df.Cabin.isnull().sum(axis=0)
-
-
-# This is highly incomplete. We have two choices: (1) map the missing ones to a new cabin category "unknown" (2) just drop this feature. I have tried both and I decided to choose (2)
-
-# In[ ]:
-
-
-df = df.drop(labels=['Cabin'], axis=1)
-
-
-# ## Embarked
-
-# In[ ]:
-
-
-# check if there is any NAN
-df.Embarked.isnull().sum(axis=0)
-
-
-# In[ ]:
-
-
-df.describe(include=['O']) # S is the most common
-
-
-# In[ ]:
-
-
-# fill the NAN
-df.Embarked.fillna('S' , inplace=True )
-
-
-# In[ ]:
-
-
-# inspect the correlation between Embarked and Survived as well as some other features
-df[['Embarked', 'Survived','Pclass','Fare', 'Age', 'Sex']].groupby(['Embarked'], as_index=False).mean()
-
-
-# The survival rate does change between different Embarked values. However, it is due to the changes of other features. For example, people from Embarked = C are more likely to survive because they are generally richer (Pclass, Fare). People from Embarked = S has the lowest survival rate because it has the lowest fraction of female passengers, even though they are a bit richer than people from Embarked = Q.
-# 
-# I therefore decided to drop this feature as well.
-
-# In[ ]:
-
-
-df = df.drop(labels='Embarked', axis=1)
-
-
-# Now we can go back to **Age** and try to fill the missing values. Let's see how it relates to other features
-
-# In[ ]:
-
-
-# visualize the correlation between Title and Age
-grid = sns.FacetGrid(df, col='Title', size=3, aspect=0.8, sharey=False)
-grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the mean Age for each Title
-df[['Title', 'Age']].groupby(['Title']).mean()
-
-
-# In[ ]:
-
-
-# inspect the standard deviation of Age for each Title
-df[['Title', 'Age']].groupby(['Title']).std()
-
-
-# In[ ]:
-
-
-# visualize the correlation between Fare-bin and Age
-grid = sns.FacetGrid(df, col='Fare-bin', size=3, aspect=0.8, sharey=False)
-grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the mean Age for each Fare-bin
-df[['Fare-bin', 'Age']].groupby(['Fare-bin']).mean()
-
-
-# In[ ]:
-
-
-# inspect the standard deviation of Age for each Fare-bin
-df[['Fare-bin', 'Age']].groupby(['Fare-bin']).std()
-
-
-# In[ ]:
-
-
-# visualize the correlation between SibSp and Age
-grid = sns.FacetGrid(df, col='SibSp', col_wrap=4, size=3.0, aspect=0.8, sharey=False)
-grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the mean Age for each SibSp
-df[['SibSp', 'Age']].groupby(['SibSp']).mean()
-
-
-# In[ ]:
-
-
-# inspect the standard deviation of Age for each SibSp
-df[['SibSp', 'Age']].groupby(['SibSp']).std()
-
-
-# In[ ]:
-
-
-# visualize the correlation between Parch and Age
-grid = sns.FacetGrid(df, col='Parch', col_wrap=4, size=3.0, aspect=0.8, sharey=False)
-grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
-plt.show()
-
-
-# In[ ]:
-
-
-# inspect the mean Age for each Parch
-df[['Parch', 'Age']].groupby(['Parch']).mean()
-
-
-# In[ ]:
-
-
-# inspect the standard deviation of Age for each Parch
-df[['Parch', 'Age']].groupby(['Parch']).std() 
-
-
-# The change of Age as a function of Title, Fare-bin, or SibSp is quite significant, so I'll use them to guess the missing values. I use a random forest regressor to do this. 
-
-# In[ ]:
-
-
-# notice that instead of using Title, we should use its corresponding dummy variables 
-df_sub = df[['Age','Master','Miss','Mr','Mrs','Others','Fare-bin','SibSp']]
-
-X_train  = df_sub.dropna().drop('Age', axis=1)
-y_train  = df['Age'].dropna()
-X_test = df_sub.loc[np.isnan(df.Age)].drop('Age', axis=1)
-
-regressor = RandomForestRegressor(n_estimators = 300)
-regressor.fit(X_train, y_train)
-y_pred = np.round(regressor.predict(X_test),1)
-df.Age.loc[df.Age.isnull()] = y_pred
-
-df.Age.isnull().sum(axis=0) # no more NAN now
-
-
-# And then we still need to bin the data into different Age intervals, for the same reason as Fare
-
-# In[ ]:
-
-
-bins = [ 0, 4, 12, 18, 30, 50, 65, 100] # This is somewhat arbitrary...
-age_index = (1,2,3,4,5,6,7)
-#('baby','child','teenager','young','mid-age','over-50','senior')
-df['Age-bin'] = pd.cut(df.Age, bins, labels=age_index).astype(int)
-
-df[['Age-bin', 'Survived']].groupby(['Age-bin'],as_index=False).mean()
-
-
-# Now we can look at **Ticket** again 
-
-# In[ ]:
-
-
-df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-df['Ticket'].value_counts()
-
-
-# The main categories of Ticket are "1", "2", "3", "P", "S", and "C", so I will combine all the others into "4"
-
-# In[ ]:
-
-
-df['Ticket'] = df['Ticket'].replace(['A','W','F','L','5','6','7','8','9'], '4')
-
-# check the correlation again
-df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
-
-
-# In[ ]:
-
-
-# dummy encoding
-df = pd.get_dummies(df,columns=['Ticket'])
-
-
-# ## Modeling and Prediction
-# Now we can drop the features we don't need and split the data into training and test sets
-
-# In[ ]:
-
-
-df = df.drop(labels=['SibSp','Parch','Age','Fare','Title'], axis=1)
-y_train = df[0:891]['Survived'].values
-X_train = df[0:891].drop(['Survived','PassengerId'], axis=1).values
-X_test  = df[891:].drop(['Survived','PassengerId'], axis=1).values
-
-
-# (09/12/2017 update) Using NN gives better result than XGBoost and Random Forest do. 
-
-# In[ ]:
-
-
-# Initialising the NN
-model = Sequential()
-
-# layers
-model.add(Dense(units = 9, kernel_initializer = 'uniform', activation = 'relu', input_dim = 17))
-model.add(Dense(units = 9, kernel_initializer = 'uniform', activation = 'relu'))
-model.add(Dense(units = 5, kernel_initializer = 'uniform', activation = 'relu'))
-model.add(Dense(units = 1, kernel_initializer = 'uniform', activation = 'sigmoid'))
-
-# Compiling the ANN
-model.compile(optimizer = 'adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
-
-# Train the ANN
-model.fit(X_train, y_train, batch_size = 32, epochs = 200)
-
-
-# We can now get the prediction. I got a public score of 0.81339 using the output from my laptop (python 2.7), which is different from what is generated here.
-
-# In[ ]:
-
-
-y_pred = model.predict(X_test)
-y_final = (y_pred > 0.5).astype(int).reshape(X_test.shape[0])
-
-output = pd.DataFrame({'PassengerId': df_test['PassengerId'], 'Survived': y_final})
-output.to_csv('prediction-ann.csv', index=False)
+def make_mosaic(data,return_connectivity = False, plot_images = False,external_df = None):
+    """Find images with simular borders and combine them to one big image"""
+    if external_df is not None:
+        external_df['mosaic_idx'] = np.nan
+        external_df['mosaic_position'] = np.nan
+        # print(external_df.head())
+    
+    # extract borders from images
+    borders = []
+    for x in data:
+        borders.extend([x[0,:,:].flatten(),x[-1,:,:].flatten(),
+                        x[:,0,:].flatten(),x[:,-1,:].flatten()])
+    borders = np.array(borders)
+
+    # prepare df with all data
+    lens = np.array([len(border) for border in borders])
+    img_idx = list(range(len(data)))*4
+    img_idx.sort()
+    position = ['up','down','left','right']*len(data)
+    nn = [None]*len(position)
+    df = pd.DataFrame(data=np.vstack([img_idx,position,borders,lens,nn]).T,
+                      columns=['img_idx','position','border','len','nn'])
+    uniq_lens = df['len'].unique()
+    
+    for idx,l in enumerate(uniq_lens):
+        # fit NN on borders of certain size with 1 neighbor
+        nn = NearestNeighbors(n_neighbors=1).fit(np.stack(df[df.len == l]['border'].values))
+        distances, neighbors = nn.kneighbors()
+        real_neighbor = np.array([None]*len(neighbors))
+        distances, neighbors = distances.flatten(),neighbors.flatten()
+
+        # if many borders are close to one, we want to take only the closest
+        uniq_neighbors = np.unique(neighbors)
+
+        # difficult to understand but works :c
+        for un_n in uniq_neighbors:
+            # min distance for borders with same nn
+            min_index = list(distances).index(distances[neighbors == un_n].min())
+            # check that min is double-sided
+            double_sided = distances[neighbors[min_index]] == distances[neighbors == un_n].min()
+            if double_sided and distances[neighbors[min_index]] < 1000:
+                real_neighbor[min_index] = neighbors[min_index]
+                real_neighbor[neighbors[min_index]] = min_index
+        indexes = df[df.len == l].index
+        for idx2,r_n in enumerate(real_neighbor):
+            if r_n is not None:
+                df['nn'].iloc[indexes[idx2]] = indexes[r_n]
+    
+    # img connectivity graph. 
+    img_connectivity = {}
+    for img in df.img_idx.unique():
+        slc = df[df['img_idx'] == img]
+        img_nn = {}
+
+        # get near images_id & position
+        for nn_border,position in zip(slc[slc['nn'].notnull()]['nn'],
+                                      slc[slc['nn'].notnull()]['position']):
+
+            # filter obvious errors when we try to connect bottom of one image to bottom of another
+            # my hypotesis is that images were simply cut, without rotation
+            if position == df.iloc[nn_border]['position']:
+                continue
+            img_nn[position] = df.iloc[nn_border]['img_idx']
+        img_connectivity[img] = img_nn
+
+    imgs = []
+    indexes = set()
+    mosaic_idx = 0
+    
+    # errors in connectivity are filtered 
+    good_img_connectivity = {}
+    for k,v in img_connectivity.items():
+        if v.get('down') is not None:
+            if v.get('right') is not None:
+                # need down right image
+                # check if both right and down image are connected to the same image in the down right corner
+                if (img_connectivity[v['right']].get('down') is not None) and img_connectivity[v['down']].get('right') is not None:
+                    if img_connectivity[v['right']]['down'] == img_connectivity[v['down']]['right']:
+                        v['down_right'] = img_connectivity[v['right']]['down']
+                        temp_indexes = [k,v['right'],v['down'],v['down_right']]
+                        if (len(np.unique(temp_indexes)) < 4) or (len(indexes.intersection(temp_indexes)) > 0):
+                            continue
+                        # надо тут фильтровать что они не одинаковые
+                        good_img_connectivity[k] = temp_indexes
+                        indexes.update(temp_indexes)
+                        imgs.append(combine_images(data,temp_indexes))
+                        if external_df is not None:
+                            external_df['mosaic_idx'].iloc[temp_indexes] = mosaic_idx
+                            external_df['mosaic_position'].iloc[temp_indexes] = ['up_left','up_right','down_left','down_right']
+                            mosaic_idx += 1
+                        continue
+            if v.get('left') is not None:
+                # need down left image
+                if img_connectivity[v['left']].get('down') is not None and img_connectivity[v['down']].get('left') is not None:
+                    if img_connectivity[v['left']]['down'] == img_connectivity[v['down']]['left']:
+                        v['down_left'] = img_connectivity[v['left']]['down']
+                        temp_indexes = [v['left'],k,v['down_left'],v['down']]
+                        if (len(np.unique(temp_indexes)) < 4) or (len(indexes.intersection(temp_indexes)) > 0):
+                            continue
+                        good_img_connectivity[k] = temp_indexes
+                        indexes.update(temp_indexes)
+                        imgs.append(combine_images(data,temp_indexes))
+                        
+                        if external_df is not None:
+                            external_df['mosaic_idx'].iloc[temp_indexes] = mosaic_idx
+                            external_df['mosaic_position'].iloc[temp_indexes] = ['up_left','up_right','down_left','down_right']
+                            
+                            mosaic_idx += 1 
+                        continue
+        if v.get('up') is not None:
+            if v.get('right') is not None:
+                # need up right image
+                if img_connectivity[v['right']].get('up') is not None and img_connectivity[v['up']].get('right') is not None:
+                    if img_connectivity[v['right']]['up'] == img_connectivity[v['up']]['right']:
+                        v['up_right'] = img_connectivity[v['right']]['up']
+                        temp_indexes = [v['up'],v['up_right'],k,v['right']]
+                        if (len(np.unique(temp_indexes)) < 4) or (len(indexes.intersection(temp_indexes)) > 0):
+                            continue
+                        good_img_connectivity[k] = temp_indexes
+                        indexes.update(temp_indexes)
+                        imgs.append(combine_images(data,temp_indexes))
+                        
+                        if external_df is not None:
+                            external_df['mosaic_idx'].iloc[temp_indexes] = mosaic_idx
+                            external_df['mosaic_position'].iloc[temp_indexes] = ['up_left','up_right','down_left','down_right']
+                            
+                            mosaic_idx += 1 
+                        continue
+            if v.get('left') is not None:
+                # need up left image
+                if img_connectivity[v['left']].get('up') is not None and img_connectivity[v['up']].get('left') is not None:
+                    if img_connectivity[v['left']]['up'] == img_connectivity[v['up']]['left']:
+                        v['up_left'] = img_connectivity[v['left']]['up']
+                        temp_indexes = [v['up_left'],v['up'],v['left'],k]
+                        if (len(np.unique(temp_indexes)) < 4) or (len(indexes.intersection(temp_indexes)) > 0):
+                            continue
+                        good_img_connectivity[k] = temp_indexes
+                        indexes.update(temp_indexes)
+                        imgs.append(combine_images(data,temp_indexes))
+                        
+                        if external_df is not None:
+                            external_df['mosaic_idx'].iloc[temp_indexes] = mosaic_idx
+                            external_df['mosaic_position'].iloc[temp_indexes] = ['up_left','up_right','down_left','down_right']
+                            
+                            mosaic_idx += 1 
+                        continue
+
+    # same images are present 4 times (one for every piece) so we need to filter them
+    print('Images before filtering: {}'.format(np.shape(imgs)))
+    
+    # can use np. unique only on images of one size, flatten first, then select
+    flattened = np.array([i.flatten() for i in imgs])
+    uniq_lens = np.unique([i.shape for i in flattened])
+    filtered_imgs = []
+    for un_l in uniq_lens:
+        filtered_imgs.extend(np.unique(np.array([i for i in imgs if i.flatten().shape == un_l]),axis=0))
+        
+    filtered_imgs = np.array(filtered_imgs)
+    print('Images after filtering: {}'.format(np.shape(filtered_imgs)))
+    
+    if return_connectivity:
+        print(good_img_connectivity)
+    
+    if plot_images:
+        for i in filtered_imgs:
+            plt.imshow(i)
+            plt.show()
+            
+    # list of not combined images. return if you need
+    not_combined = list(set(range(len(data))) - indexes)
+    
+    if external_df is not None:
+        #un_mos_id = external_df[external_df.mosaic_idx.notnull()].mosaic_idx.unique()
+        #mos_dict = {k:v for k,v in zip(un_mos_id,range(len(un_mos_id)))}
+        #external_df.mosaic_idx = external_df.mosaic_idx.map(mos_dict)
+        ## print(temp.mosaic_idx.shape[0])
+        ## print(len(temp.mosaic_idx[temp.mosaic_idx.isnull()] ))
+        ## print(len(list(range(temp.mosaic_idx.shape[0]-len(temp.mosaic_idx[temp.mosaic_idx.isnull()]),
+        ##                     temp.mosaic_idx.shape[0]))))
+        external_df.loc[external_df[external_df['mosaic_idx'].isnull()].index,'mosaic_idx'] = range(
+            int(np.nanmax(external_df.mosaic_idx.unique())) + 1,
+            int(np.nanmax(external_df.mosaic_idx.unique())) + 1 + len(external_df.mosaic_idx[external_df.mosaic_idx.isnull()]))
+        external_df['mosaic_idx'] = external_df['mosaic_idx'].astype(np.int32)
+        if return_connectivity:
+            return filtered_imgs, external_df, good_img_connectivity
+        else:
+            return filtered_imgs, external_df
+    if return_connectivity:
+        return filtered_imgs,good_img_connectivity
+    else:
+        return filtered_imgs
+
+
+# In[18]:
+
+
+make_mosaic(x_test,return_connectivity=True,plot_images=True);
+
+
+# In[19]:
+
+
+make_mosaic(x_train,return_connectivity=False,plot_images=True);
+
+
+# In[20]:
+
+
+## This is how connectivity graph look like
+make_mosaic(x_test,return_connectivity=True,plot_images=False);
+
+
+# In[24]:
+
+
+# code which makes csv with clusters and mosaic ids for test data
+imgs, data_frame = make_mosaic(x_test,return_connectivity=False,plot_images=False,external_df=test_df);
+data_frame[['img_id','HSV_CLUSTER','mosaic_idx','mosaic_position']].head(20)
 

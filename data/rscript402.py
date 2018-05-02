@@ -1,198 +1,333 @@
 """
-Contributions from:
-DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
-https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
-JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
-https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
-hklee - weighted mean comparisons, LB 0.497, 1ST
-https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+@author: Chia-Ta Tsai
+#blended with two GBMs (XGBoost and LightGBM)
+#feature transformation was originally from the1owl's kernel, 'Natural Growth Patterns' but refactered afterward. Forked from
+#https://www.kaggle.com/the1owl/natural-growth-patterns-fractals-of-nature
 
-Also all comments for changes, encouragement, and forked scripts rock
-
-Keep the Surprise Going
+**Updates
+ver07: add garbage collect
+ver06: reverted to ver04 and added footnotes
+ver05: LB 0.2093
+ver04: LB 0.2021
 """
+from multiprocessing import Pool
+from tqdm import tqdm
+import gc
+#
+import numpy as np # linear algebra
+import pandas as pd # data processing
+import datetime as dt
+#
+from random import choice, sample, shuffle, uniform, seed
+from math import exp, expm1, log1p, log10, log2, sqrt, ceil, floor, isfinite, isnan
+from itertools import combinations
+#import for image processing
+import cv2
+from scipy.stats import kurtosis, skew
+from scipy.ndimage import laplace, sobel
+#evaluation
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.metrics import log_loss
+import xgboost as xgb
+import lightgbm as lgb
 
-import glob, re
-import numpy as np
-import pandas as pd
-from sklearn import *
-from datetime import datetime
-from xgboost import XGBRegressor
+###############################################################################
+def read_jason(file='', loc='../input/'):
 
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-# NEW FEATURES FROM Georgii Vyshnia
-stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
-stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
-lbl = preprocessing.LabelEncoder()
-for i in range(10):
-    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
-
-train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
-
-train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
-train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
-train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
-
-test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
-test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
-test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
-
-# NEW FEATURES FROM JMBULL
-train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-train['var_max_lat'] = train['latitude'].max() - train['latitude']
-train['var_max_long'] = train['longitude'].max() - train['longitude']
-test['var_max_lat'] = test['latitude'].max() - test['latitude']
-test['var_max_long'] = test['longitude'].max() - test['longitude']
-
-# NEW FEATURES FROM Georgii Vyshnia
-train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
-test['lon_plus_lat'] = test['longitude'] + test['latitude']
-
-lbl = preprocessing.LabelEncoder()
-train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
-test['air_store_id2'] = lbl.transform(test['air_store_id'])
-
-col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
-
-def RMSLE(y, pred):
-    return metrics.mean_squared_error(y, pred)**0.5
+    df = pd.read_json('{}{}'.format(loc, file))
+    df['inc_angle'] = df['inc_angle'].replace('na', -1).astype(float)
+    #print(df['inc_angle'].value_counts())
     
-model2 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8,   max_depth =10)
-#model2 = ensemble.RandomForestRegressor(n_jobs=-1,n_estimators=500)
-model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=400, subsample=0.8, 
-                      colsample_bytree=0.8, max_depth =10)
+    band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in df["band_1"]])
+    band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in df["band_2"]])
+    df = df.drop(['band_1', 'band_2'], axis=1)
+    
+    bands = np.stack((band1, band2,  0.5 * (band1 + band2)), axis=-1)
+    del band1, band2
+    
+    return df, bands
 
-#model1.fit(train[col], np.log1p(train['visitors'].values))
-model2.fit(train[col], np.log1p(train['visitors'].values))
-model3.fit(train[col], np.log1p(train['visitors'].values))
+###############################################################################
 
-#preds1 = model1.predict(train[col])
-preds2 = model2.predict(train[col])
-preds3 = model3.predict(train[col])
 
-#print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds1))
-print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds2))
-print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds3))
-#preds1 = model1.predict(test[col])
-preds2 = model2.predict(test[col])
-preds3 = model3.predict(test[col])
+def run_lgb(params={}, lgb_train=None, lgb_valid=None, lgb_test=None, test_ids=None, nr_round=2000, min_round=100, file=''):
 
-test['visitors'] = (preds2+preds3) / 2 #(preds1+preds2+preds3) / 3
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
-del train; del data;
+    print('\nLightGBM: {}'.format(params['boosting'])) 
+    model2 = lgb.train(params, 
+                       lgb_train, 
+                       nr_round, 
+                       lgb_valid, 
+                       verbose_eval=50, early_stopping_rounds=min_round)
+    
+    pred = model2.predict(lgb_test, num_iteration=model2.best_iteration)
+    #
+    subm = pd.DataFrame({'id': test_ids, 'is_iceberg': pred})
+    subm.to_csv(file, index=False, float_format='%.6f')
+    #   
+    df = pd.DataFrame({'feature':model2.feature_name(), 'importances': model2.feature_importance()})
+    
+    return pred, df
 
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
+###############################################################################
+#forked from
+#https://www.kaggle.com/the1owl/planet-understanding-the-amazon-from-space/natural-growth-patterns-fractals-of-nature/notebook
+def img_to_stats(paths):
+    
+    img_id, img = paths[0], paths[1]
+    
+    #ignored error    
+    np.seterr(divide='ignore', invalid='ignore')
+    
+    bins = 20
+    scl_min, scl_max = -50, 50
+    opt_poly = True
+    #opt_poly = False
+    
+    try:
+        st = []
+        st_interv = []
+        hist_interv = []
+        for i in range(img.shape[2]):
+            img_sub = np.squeeze(img[:, :, i])
+            
+            #median, max and min
+            sub_st = []
+            sub_st += [np.mean(img_sub), np.std(img_sub), np.max(img_sub), np.median(img_sub), np.min(img_sub)]
+            sub_st += [(sub_st[2] - sub_st[3]), (sub_st[2] - sub_st[4]), (sub_st[3] - sub_st[4])] 
+            sub_st += [(sub_st[-3] / sub_st[1]), (sub_st[-2] / sub_st[1]), (sub_st[-1] / sub_st[1])] #normalized by stdev
+            st += sub_st
+            #Laplacian, Sobel, kurtosis and skewness
+            st_trans = []
+            st_trans += [laplace(img_sub, mode='reflect', cval=0.0).ravel().var()] #blurr
+            sobel0 = sobel(img_sub, axis=0, mode='reflect', cval=0.0).ravel().var()
+            sobel1 = sobel(img_sub, axis=1, mode='reflect', cval=0.0).ravel().var()
+            st_trans += [sobel0, sobel1]
+            st_trans += [kurtosis(img_sub.ravel()), skew(img_sub.ravel())]
+            
+            if opt_poly:
+                st_interv.append(sub_st)
+                #
+                st += [x * y for x, y in combinations(st_trans, 2)]
+                st += [x + y for x, y in combinations(st_trans, 2)]
+                st += [x - y for x, y in combinations(st_trans, 2)]                
+ 
+            #hist
+            #hist = list(cv2.calcHist([img], [i], None, [bins], [0., 1.]).flatten())
+            hist = list(np.histogram(img_sub, bins=bins, range=(scl_min, scl_max))[0])
+            hist_interv.append(hist)
+            st += hist
+            st += [hist.index(max(hist))] #only the smallest index w/ max value would be incl
+            st += [np.std(hist), np.max(hist), np.median(hist), (np.max(hist) - np.median(hist))]
 
-for k, v in dfs.items(): locals()[k] = v
+        if opt_poly:
+            for x, y in combinations(st_interv, 2):
+                st += [float(x[j]) * float(y[j]) for j in range(len(st_interv[0]))]
 
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+            for x, y in combinations(hist_interv, 2):
+                hist_diff = [x[j] * y[j] for j in range(len(hist_interv[0]))]
+                st += [hist_diff.index(max(hist_diff))] #only the smallest index w/ max value would be incl
+                st += [np.std(hist_diff), np.max(hist_diff), np.median(hist_diff), (np.max(hist_diff) - np.median(hist_diff))]
+                
+        #correction
+        nan = -999
+        for i in range(len(st)):
+            if isnan(st[i]) == True:
+                st[i] = nan
+                
+    except:
+        print('except: ')
+    
+    return [img_id, st]
 
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
+def extract_img_stats(paths):
+    imf_d = {}
+    p = Pool(8) #(cpu_count())
+    ret = p.map(img_to_stats, paths)
+    for i in tqdm(range(len(ret)), miniters=100):
+        imf_d[ret[i][0]] = ret[i][1]
 
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+    ret = []
+    fdata = [imf_d[i] for i, j in paths]
+    return np.array(fdata, dtype=np.float32)
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
-    how='left')['visitors_y'].values
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
-    on='air_store_id', how='left')['visitors_y'].values
+def process(df, bands):
 
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+    data = extract_img_stats([(k, v) for k, v in zip(df['id'].tolist(), bands)]); gc.collect()
+    data = np.concatenate([data, df['inc_angle'].values[:, np.newaxis]], axis=-1); gc.collect()
 
-sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y']* 1.1)/2
-sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
+    print(data.shape)
+    return data
+
+###############################################################################
+def save_blend(preds={}, loc='./'):
+    
+    target = 'is_iceberg'
+    
+    w_total = 0.0
+    blend = None
+    df_corr = None
+    print('\nBlending...')
+    for k, v in preds.items():
+        if blend is None:
+            blend = pd.read_csv('{0}/{1}'.format(loc, k))
+            print('load: {0}, w={1}'.format(k, v))
+            
+            df_corr = pd.DataFrame({'id': blend['id'].tolist()})
+            df_corr[k[16:-4]] = blend[target]
+            
+            w_total += v
+            blend[target] = blend[target] * v
+                
+        else:
+            preds_tmp = pd.read_csv('{0}/{1}'.format(loc, k))
+            preds_tmp = blend[['id']].merge(preds_tmp, how='left', on='id')
+            print('load: {0}, w={1}'.format(k, v))
+            df_corr[k[16:-4]] = preds_tmp[target]
+            
+            w_total += v
+            blend[target] += preds_tmp[target] * v
+            del preds_tmp
+            
+    print('\n{}'.format(df_corr.corr()), flush=True)
+    #write submission
+    blend[target] = blend[target] / w_total
+    print('\nPreview: \n{}'.format(blend.head()), flush=True)
+    blend.to_csv('{}subm_blend{:03d}_{}.csv'.format(loc, len(preds), tmp), index=False, float_format='%.6f')
+
+
+###############################################################################
+if __name__ == '__main__':
+    
+    np.random.seed(1017)
+    target = 'is_iceberg'
+    
+    #Load data
+    train, train_bands = read_jason(file='train.json', loc='../input/')
+    test, test_bands = read_jason(file='test.json', loc='../input/')
+
+    train_X = process(df=train, bands=train_bands)
+    train_y = train[target].values
+
+    test_X = process(df=test, bands=test_bands)
+    
+    #results
+    freq = pd.DataFrame()
+    subms = []
+
+    #training
+    test_ratio = 0.2
+    nr_runs = 3
+    split_seed = 25
+    kf = StratifiedShuffleSplit(n_splits=nr_runs, test_size=test_ratio, train_size=None, random_state=split_seed)
+
+    for r, (train_index, test_index) in enumerate(kf.split(train_X, train_y)):
+        print('\nround {:04d} of {:04d}, seed={}'.format(r+1, nr_runs, split_seed))
+            
+        tmp = dt.datetime.now().strftime("%Y-%m-%d-%H-%M")
+        
+        x1, x2 = train_X[train_index], train_X[test_index]
+        y1, y2 = train_y[train_index], train_y[test_index]
+        #x1, x2, y1, y2 = train_test_split(train_X, train_y, test_size=test_ratio, random_state=split_seed + r)
+        print('splitted: {0}, {1}'.format(x1.shape, x2.shape), flush=True)
+        test_X_dup = test_X.copy()
+        
+        #XGB
+        xgb_train = xgb.DMatrix(x1, y1)
+        xgb_valid = xgb.DMatrix(x2, y2)
+        #
+        watchlist = [(xgb_train, 'train'), (xgb_valid, 'valid')]
+        params = {'eta': 0.02, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 'objective': 'binary:logistic', 'seed': 99, 'silent': True}
+        params['eta'] = 0.03
+        params['max_depth'] = 4
+        params['subsample'] = 0.9
+        params['eval_metric'] = 'logloss'
+        params['colsample_bytree'] = 0.8
+        params['colsample_bylevel'] = 0.8
+        params['max_delta_step'] = 3
+        #params['gamma'] = 5.0
+        #params['labmda'] = 1
+        params['scale_pos_weight'] = 1.0
+        params['seed'] = split_seed + r
+        nr_round = 2000
+        min_round = 100
+            
+        model1 = xgb.train(params, 
+                           xgb_train, 
+                           nr_round,  
+                           watchlist, 
+                           verbose_eval=50, 
+                           early_stopping_rounds=min_round)
+        
+        pred_xgb = model1.predict(xgb.DMatrix(test_X_dup), ntree_limit=model1.best_ntree_limit+45)
+        
+        #
+        file = 'subm_{}_xgb_{:02d}.csv'.format(tmp, r+1)
+        subm = pd.DataFrame({'id': test['id'].values, target: pred_xgb})
+        subm.to_csv(file, index=False, float_format='%.6f')
+        subms.append(file)    
+    
+        ##LightGBM
+        lgb_train = lgb.Dataset(x1, label=y1, free_raw_data=False)
+        lgb_valid = lgb.Dataset(x2, label=y2, reference=lgb_train, free_raw_data=False)
+        #gbdt
+        params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'is_training_metric': False, 'seed': 99}
+        params['boosting'] = 'gbdt'
+        params['metric'] = 'binary_logloss'
+        params['learning_rate'] = 0.03
+        params['max_depth'] = 5
+        params['num_leaves'] = 16 # higher number of leaves
+        params['feature_fraction'] = 0.8 # Controls overfit
+        params['bagging_fraction'] = 0.9    
+        params['bagging_freq'] = 3
+        params['seed'] = split_seed + r
+        #
+        params['verbose'] = -1
+        
+        file = 'subm_{}_lgb_{}_{:02d}.csv'.format(tmp, params['boosting'], r+1)
+        subms.append(file)
+        
+        pred, f_tmp = run_lgb(params=params, 
+                              lgb_train=lgb_train, 
+                              lgb_valid=lgb_valid, 
+                              lgb_test=test_X_dup, 
+                              test_ids=test['id'].values, 
+                              nr_round=nr_round, 
+                              min_round=min_round, 
+                              file=file)
+
+        ##LightGBM
+        #dart
+        params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'is_training_metric': False, 'seed': 99}
+        params['boosting'] = 'dart'
+        params['metric'] = 'binary_logloss'
+        params['learning_rate'] = 0.04
+        params['max_depth'] = 5
+        params['num_leaves'] = 16 # higher number of leaves
+        params['feature_fraction'] = 0.8 # Controls overfit
+        params['bagging_fraction'] = 0.9    
+        params['bagging_freq'] = 3
+        params['seed'] = split_seed + r
+        #dart
+        params['drop_rate'] = 0.1
+        params['skip_drop'] = 0.5
+        params['max_drop'] = 10
+        params['verbose'] = -1 
+        
+        file = 'subm_{}_lgb_{}_{:02d}.csv'.format(tmp, params['boosting'], r+1)
+        subms.append(file)
+        
+        pred, f_tmp = run_lgb(params=params, 
+                              lgb_train=lgb_train, 
+                              lgb_valid=lgb_valid, 
+                              lgb_test=test_X_dup, 
+                              test_ids=test['id'].values, 
+                              nr_round=nr_round, 
+                              min_round=min_round, 
+                              file=file)
+        
+    
+    #blending
+    preds = {k: 1.0 for k in subms}
+    save_blend(preds=preds)   

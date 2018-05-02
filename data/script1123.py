@@ -1,203 +1,110 @@
 
 # coding: utf-8
 
-# # Introduction
-# Alcohol is being consumed by students and the consequences of drinking alcohol on academic performance has not been fully undrestoon yet. Here, we compare and contrast alchol consumtion among male and female studenst and the effects of drinking alcholol on their academic performance.
+# # Summary functions and maps reference
+# 
+# This is the reference component to the "Summary functions and maps" section of the Advanced Pandas tutorial. For the workbook, [click here](https://www.kaggle.com/residentmario/summary-functions-and-maps-workbook).
+# 
+# This section overlaps with the comprehensive [Essential Basic Functionality](https://pandas.pydata.org/pandas-docs/stable/basics.html) section of the official `pandas` documentation.
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from subprocess import check_output
-import matplotlib
-from matplotlib import pyplot as plt
-import matplotlib.patches as mpatches
-import seaborn as sns
+import pandas as pd
+pd.set_option('max_rows', 5)
+import numpy as np
+reviews = pd.read_csv("../input/winemag-data-130k-v2.csv", index_col=0)
+reviews.head()
 
-matplotlib.style.use('fivethirtyeight')
-font = {'family' : 'sans-serif',
-        'weight' : 'normal',
-        'size'   : 16}
-matplotlib.rc('font', **font)
-matplotlib.rcParams['xtick.major.pad']='10'
-matplotlib.rcParams['ytick.major.pad']='10'
-#print(check_output(["ls", "../input"]).decode("utf8"))
 
+# ## Summary functions
+# 
+# `pandas` provides many simple "summary functions" (not an official name) which restructure the data in some useful way. For example, consider the `describe` method:
 
 # In[ ]:
 
 
-df_list = [pd.read_csv('../input/student-%s.csv'%course) for course in ['mat', 'por']]
-df_list[0]['class'] = 'mat'
-df_list[1]['class'] = 'por'
-df = df_list[0].append(df_list[1])
-F_count = df.groupby(['sex'])['school'].count()[0]
-M_count = df.groupby(['sex'])['school'].count()[1]
-#df.info()
+reviews.points.describe()
 
+
+# This method generates a high-level summary of the attributes of the given column. It is type-aware, meaning that its output changes based on the `dtype` of the input. The output above only makes sense for numerical data; for string data here's what we get:
 
 # In[ ]:
 
 
-matplotlib.style.use('fivethirtyeight')
-fig, axes = plt.subplots(3,1,figsize=(12,12))
-
-df_temp = df.groupby(['class','sex']).size().to_frame(name='Count').reset_index()
-df_temp2 = df_temp.pivot(index='class', columns='sex', values='Count')
-ax = df_temp2.plot(ax=axes[0], kind='barh', stacked=False,legend=False)#, figsize=(12,4))#, color=('black','limegreen'))
-ax.set_xlabel(" ", fontsize=20, labelpad = 20)
-ax.set_ylabel("Course", fontsize=20, labelpad = 20)
-ax.set_yticklabels(['Mathematics','Portuguese\nLanguage'])
-ax.set_xlim([0,400])
-
-i=0
-for classname, fullclassname in zip(['por','mat'], ['Portuguese Language','Mathematics']):
-    i+=1
-    print(i)
-    df_temp = df[df['class']==classname].groupby(['studytime','sex']).size().to_frame(name='Count').reset_index()
-    df_temp2 = df_temp.pivot(index='studytime', columns='sex', values='Count')
-    ax = df_temp2.plot(ax=axes[i],kind='barh', stacked=False, legend=False)#,sharex=axes[0])#, figsize=(12,4))
-    ax.set_ylabel("Study Time [hrs]", fontsize=20, labelpad = 20)
-    axes[i].set_title(fullclassname)
-#studytime - weekly study time (numeric: 1 - <2 hours, 2 - 2 to 5 hours, 3 - 5 to 10 hours, or 4 - >10 hours)
-    ax.set_yticklabels(['0-2','2-5','5-10','+10'])
-    ax.set_xlim([0,400])
-
-ax.set_xlabel("Number of Students\n", fontsize=20, labelpad = 20)
-leg = axes[0].legend(bbox_to_anchor=(1,1.2), loc='upper left', ncol=1)
-leg.set_title('Sex')
-axes[0].set_title('Registered Class and Study Time\n in Secondary School Students ')
-fig.tight_layout()
+reviews.taster_name.describe()
 
 
-
-#ax.set_title('Distribution',fontsize=20)
-
+# If you want to get some particular simple summary statistic about a column in a `DataFrame` or a `Series`, there is usually a handful `pandas` function that makes it happen. For example, to see the mean of the points allotted (e.g. how well an averagely rated wine does), we can use the `mean` function:
 
 # In[ ]:
 
 
-matplotlib.style.use('fivethirtyeight')
-fig, axes = plt.subplots(2,1,figsize=(12,8))
-i=0
-for classname, fullclassname in zip(['por','mat'], ['Portuguese Language','Mathematics']):
-    df_temp = df[df['class']==classname].groupby(['studytime','sex']).size().to_frame(name='Count').reset_index()
-    df_temp.loc[(df_temp['sex']=='M'),'Count'] = 100*df_temp[(df_temp['sex']=='M')]['Count']/M_count
-    df_temp.loc[(df_temp['sex']=='F'),'Count'] = 100*df_temp[(df_temp['sex']=='F')]['Count']/F_count
-    df_temp2 = df_temp.pivot(index='studytime', columns='sex', values='Count')
-    ax = df_temp2.plot(ax=axes[i],kind='barh', stacked=False, legend=False)#, figsize=(12,4))
-    ax.set_ylabel("Study Time [hr]", fontsize=20, labelpad = 20)
-    axes[i].set_title(fullclassname)
-    ax.set_xlim([0,100])
-    ax.set_yticklabels(['0-2','2-5','5-10','+10'])
-    i+=1
+reviews.points.mean()
 
-axes[0].set_xlabel(" ", fontsize=20, labelpad = 20)
-ax.set_xlabel("Percentage of Students [%]\n", fontsize=20, labelpad = 20)
-leg = axes[0].legend(bbox_to_anchor=(1,1.2), loc='upper left', ncol=1)
-leg.set_title('Sex')
-fig.tight_layout()
 
+# To see a list of unique values we can use the `unique` function:
 
 # In[ ]:
 
 
-matplotlib.style.use('fivethirtyeight')
-fig, axes = plt.subplots(2,1,figsize=(12,8))
+reviews.taster_name.unique()
 
-i=0
-for alc, label in zip(['Walc','Dalc'],['Weekend','Daily']):
-    df_temp = df.groupby([alc,'sex']).size().to_frame(name='Count').reset_index()
-    df_temp.loc[(df_temp['sex']=='M'),'Count'] = 100*df_temp[(df_temp['sex']=='M')]['Count']/M_count
-    df_temp.loc[(df_temp['sex']=='F'),'Count'] = 100*df_temp[(df_temp['sex']=='F')]['Count']/F_count
-    df_temp2 = df_temp.pivot(index=alc, columns='sex', values='Count')
-    ax = df_temp2.plot(ax=axes[i], kind='barh', stacked=False, legend=False)#, figsize=(12,4))
-    ax.set_xlabel("Percentage of Students [%]\n", fontsize=20, labelpad = 20)
-    ax.set_ylabel("%s Alcohol\n Consumption"%label, fontsize=20, labelpad = 20)
-    #Walc - weekend alcohol consumption (numeric: from 1 - very low to 5 - very high)
-    ax.set_yticklabels(['Very Low','Low','Moderate','High','Very High'])
-    ax.set_xlim([0,100])
-    i+=1
-axes[0].set_xlabel(" ", fontsize=20, labelpad = 20)
-ax.set_xlabel("Percentage of Students [%]\n", fontsize=20, labelpad = 20)
-leg = axes[0].legend(bbox_to_anchor=(1,1.2), loc='upper left', ncol=1)
-leg.set_title('Sex')
-fig.tight_layout()
 
+# To see a list of unique values _and_ how often they occur in the dataset, we can use the `value_counts` method:
 
 # In[ ]:
 
 
-df[(df['sex']=='F') & (df['class']=='mat')]['G3'].plot(kind='kde')#alpha=0.75, bins=20)
-ax = df[(df['sex']=='M') & (df['class']=='mat')]['G3'].plot(kind='kde',figsize=(12,4))#,alpha=0.75, bins=20)
-ax.set_xlabel("Final Grade", fontsize=24, labelpad = 20)
-ax.set_ylabel("P (Grade)", fontsize=24, labelpad = 20)
-ax.set_xlim(0,20)
-M_patch = mpatches.Patch(color='red',label='Male')
-F_patch = mpatches.Patch(color='blue', label='Female')
-ax.legend(handles=[F_patch, M_patch])
+reviews.taster_name.value_counts()
 
 
-# In[ ]:
-
-
-df[(df['sex']=='F') & (df['class']=='por')]['G3'].plot(kind='kde')#alpha=0.75, bins=20)
-ax = df[(df['sex']=='M') & (df['class']=='por')]['G3'].plot(kind='kde',figsize=(12,4))#,alpha=0.75, bins=20)
-ax.set_xlabel("Final Grade", fontsize=24, labelpad = 20)
-ax.set_ylabel("P (Grade)", fontsize=24, labelpad = 20)
-ax.set_xlim(0,20)
-M_patch = mpatches.Patch(color='red',label='Male')
-F_patch = mpatches.Patch(color='blue', label='Female')
-ax.legend(handles=[F_patch, M_patch])
-
+# ## Maps
+# 
+# A "map" is a term, borrowed from mathematics, for a function that takes one set of values and "maps" them to another set of values. In data science we often have a need for creating new representations from existing data, or for transforming data from the format it is in now to the format that we want it to be in later. Maps are what handle this work, making them extremely important for getting your work done!
+# 
+# There are two mapping functions that you will use often. The `Series` `map` is the first, and slightly simpler one. For example, suppose that we wanted to remean the scores the wines recieved to 0. We can do this as follows:
 
 # In[ ]:
 
 
-matplotlib.style.use('fivethirtyeight')
-fig, ax = plt.subplots(figsize=(12,6))
-ax = sns.swarmplot(x='Dalc',y='G3',hue='sex', data=df,dodge=True)
-ax.set_xlabel("Workday Alcohol Consumption", fontsize=24, labelpad = 20)
-ax.set_ylabel("Final Grade", fontsize=24, labelpad = 20)
-ax.set_xticklabels(['Very Low','Low','Moderate','High','Very High'],rotation=0)
-ax.set_title('Alcohol Consumption and School Performance\n')
-ax.legend(ncol=2,loc='upper right')
-fig.tight_layout()
+review_points_mean = reviews.points.mean()
+reviews.points.map(lambda p: p - review_points_mean)
 
+
+# `map` takes every value in the column it is being called on and converts it some new value using a function you provide it.
+# 
+# `map` takes a `Series` as input. The `DataFrame` `apply` function can be used to do the same thing _across_ columns, on the level of the entire dataset. Thus `apply` takes a `DataFrame` as input.
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(12,6))
-ax = sns.swarmplot(x='Walc',y='G3',hue='sex', data=df,dodge=True)
-ax.set_xlabel("Weekend Alcohol Consumption", fontsize=24, labelpad = 20)
-ax.set_ylabel("Final Grade", fontsize=24, labelpad = 20)
-ax.set_xticklabels(['Very Low','Low','Moderate','High','Very High'],rotation=0)
-ax.set_title('Alcohol Consumption and School Performance\n')
-ax.legend(ncol=2,loc='upper right')
-fig.tight_layout()
+def remean_points(srs):
+    srs.points = srs.points - review_points_mean
+    return srs
 
+reviews.apply(remean_points, axis='columns')
+
+
+# `pandas` provides many common mapping operations as built-ins. For example, here's a faster way of remeaning our points column:
 
 # In[ ]:
 
 
-sns.set_palette("rainbow")
-g = sns.factorplot(x="studytime", y="G3", hue='Dalc', data=df,
-               col="sex", kind="swarm",size=5, aspect=1,legend=False,dodge=True); 
-axes = g.axes.flatten()
-axes[0].set_title("Female")
-axes[1].set_title("Male")
-axes[0].set_xlabel("Study Time (hrs)")
-axes[1].set_xlabel("Study Time (hrs)")
-axes[0].set_xticklabels(['0-2','2-5','5-10','+10'])
-axes[1].set_xticklabels(['0-2','2-5','5-10','+10'])
-axes[0].set_ylabel("Final Grade")
-leg = plt.legend(bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
-leg.set_title('Daily\nAlcohol\nConsumption', prop={'size': 18, 'weight': 'normal'})
-for i, text in zip(range(0,6),['Very Low','Low','Moderate','High','Very High']):
-    leg.get_texts()[i].set_text(text)
+review_points_mean = reviews.points.mean()
+reviews.points - review_points_mean
 
-plt.subplots_adjust(top=.925)
-fig.tight_layout()
 
+# In this code we are performing an operation between a lot of values on the left-hand side (everything in the `Series`) and a single value on the right-hand side (the mean value). `pandas` looks at this expression and figures out that we must mean to subtract that mean value from every value in the dataset.
+# 
+# `pandas` will also understand what to do if we perform these operations between `Series` of equal length. For example, an easy way of combining country and region information in the dataset would be to do the following:
+
+# In[ ]:
+
+
+reviews.country + " - " + reviews.region_1
+
+
+# These operators are faster than the `map` or `apply` because they uses speed ups built into `pandas`. All of the standard Python operators (`>`, `<`, `==`, and so on) work in this manner.
+# 
+# However, they are not as flexible as `map` or `apply`, which can do more advanced things, like applying conditional logic, which cannot be done with addition and subtraction alone.

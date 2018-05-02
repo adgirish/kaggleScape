@@ -1,236 +1,301 @@
 
 # coding: utf-8
 
-# Here, we'll take a look at mapping the latitude and longitude data provided to us by the Two Sigma Rental Listing competition.  Next, we'll try applying K-Nearest Neighbor to the location data to see if it will actually provide any insight.  Finally, out of my own interest, I plotted the cost of living across new york city to see what the distribution looks like.
-
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-terrain = sns.color_palette(palette='terrain',n_colors=10)
-plasma = sns.color_palette(palette='plasma',n_colors=10)
-rainbow = sns.color_palette(palette='rainbow',n_colors=6)
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-from bokeh.io import output_notebook
-from bokeh.layouts import gridplot,row,column
-from bokeh.plotting import figure,show
-output_notebook()
 
-
-# We'll load in the data and take a look at its shape to get an idea of how many features and how many samples we have.
-
-# In[ ]:
-
-
-trainDF=pd.read_json('../input/train.json')
-testDF=pd.read_json('../input/test.json')
-print('Training data dimensions:',trainDF.shape)
-print('Testing data dimensions:',testDF.shape)
-
-
-# ### Interest based on geographical location
-# As they always say in real estate, "location, location, location" (Lord Harold Samuel).  We'll know that people will have preferences in terms of where they are looking.  Because of this, we should look at the interest level mapped across different areas.
-
-# In[ ]:
-
-
-p = figure(title="interest level based on geography",y_range=(40.65,40.85),x_range=(-74.05,-73.85))
-p.xaxis.axis_label = 'longitude'
-p.yaxis.axis_label = 'latitude'
-lowLat=trainDF['latitude'][trainDF['interest_level']=='low']
-lowLong=trainDF['longitude'][trainDF['interest_level']=='low']
-medLat=trainDF['latitude'][trainDF['interest_level']=='medium']
-medLong=trainDF['longitude'][trainDF['interest_level']=='medium']
-highLat=trainDF['latitude'][trainDF['interest_level']=='high']
-highLong=trainDF['longitude'][trainDF['interest_level']=='high']
-p.circle(lowLong,lowLat,size=3,color=terrain.as_hex()[1],fill_alpha=0.1,line_alpha=0.1,legend='low')
-p.circle(medLong,medLat,size=3,color=plasma.as_hex()[9],fill_alpha=0.1,line_alpha=0.1,legend='med')
-p.circle(highLong,highLat,size=3,color=plasma.as_hex()[5],fill_alpha=0.1,line_alpha=0.1,legend='high')
-show(p, notebook_handle=True)
-
-
-# If you zoom in on manhattan, you'll quickly realize that people tend to have more interest near East Village, Chelsea, Hell's Kitchen, and Upper East Side.  But the reason why it probably looks brighter in those areas is probably due to the number of requests in those areas.  So I plotted each individual color separately below.  From there, you can really see that even though there's a lot of high interest in the areas I described above, there's still quite a lot of low interests.  We will need to dig deeper into this feature to determine whether it will be useful or not.
-
-# In[ ]:
-
-
-p1 = figure(width=500, height=500, title=None,y_range=(40.65,40.85),x_range=(-74.05,-73.85))
-p1.circle(lowLong,lowLat,size=3,color=terrain.as_hex()[1],fill_alpha=0.1,line_alpha=0.1,legend='low')
-p2 = figure(width=500, height=500, title=None,y_range=(40.65,40.85),x_range=(-74.05,-73.85))
-p2.circle(medLong,medLat,size=3,color=plasma.as_hex()[9],fill_alpha=0.1,line_alpha=0.1,legend='med')
-p3 = figure(width=500, height=500, title=None,y_range=(40.65,40.85),x_range=(-74.05,-73.85))
-p3.circle(highLong,highLat,size=3,color=plasma.as_hex()[5],fill_alpha=0.1,line_alpha=0.1,legend='high')
-show(column(p1,p2,p3), notebook_handle=True)
-
-
-# ### KNN performance on longitude and latitude data
-# Since I am quite interested in whether longitutde and latitude data will perform well in our prediction task, I've decided to further pursue this option.  First I'll need to create a dataframe from just the longitutde and latitude data and our dependent variable, interest level.  
+# #Comparing European habits
+# What kind of food do Europeans consume? Do their food habits vary based on the region they belong to?
 # 
-# I feel like KNN would perform the best with this kind of data because the assumption is that people interested in apartments in one building may be interested other apartments in that building.
+# I created three regions according to the geographical place of the European countries: 
+# North Europe (United Kingdom, Denmark, Sweden and Norway),
+# Central Europe (France, Belgium, Germany, Switzerland and Netherlands) and
+# South Europe (Portugal, Greece, Italy, Spain, Croatia and Albania).
+# ##Food Categories
+# Keeping the most popular categories across the dataset, one can see in the following chart how food habits vary 
+# from north to south.
+# 
+# 
 
 # In[ ]:
 
 
-X=pd.concat([trainDF['latitude'],trainDF['longitude']],axis=1)
-y=trainDF['interest_level']
+# coding=utf8
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import seaborn as sns
+import matplotlib.pyplot as plt
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+#load food data from file
+food = pd.read_csv('../input/FoodFacts.csv', encoding='utf8')
+
+#labels: list of Strings with country names
+#returns the rows that have as country name any of the names in labels
+def get_rows_country(labels):
+    return food[food.countries.isin(labels)]
+
+#labels: list of Strings with country names
+#returns the categories and the percentage that appear in the rows of a particular country
+def get_categories_counts(labels):
+    rows = get_rows_country(labels)
+    food_country = rows.main_category_en.value_counts() / len(rows)*100
+    return food_country
+
+#France
+labels_france = ['France', 'en:FR', 'France,Europe','Belgique,France']
+french_food = get_categories_counts(labels_france)
+
+#Spain
+labels_spain = ['España','en:ES','Espagne','Spain']
+spanish_food = get_categories_counts(labels_spain)
+
+#Germany
+labels_germany = ['Deutschland','Germany','Allemagne','en:DE']
+german_food = get_categories_counts(labels_germany)
+
+#United Kingdom
+labels_uk = ['en:UK','United Kingdom','en:GB','uk','UK']
+uk_food = get_categories_counts(labels_uk)
+
+#Belgium
+labels_belgium = ['Belgique','en:BE','Belgique,France','Belgium','Belgique,France']
+belgium_food = get_categories_counts(labels_belgium)
+
+#Italia
+labels_italia = ['Italia','en:IT','Italie']
+italian_food = get_categories_counts(labels_italia)
+
+#Switzerland
+labels_switzerland = ['Suisse','Switzerland']
+suisse_food = get_categories_counts(labels_switzerland)
+
+#Netherlands
+labels_netherlands = ['Netherlands', 'Holland']
+holland_food = get_categories_counts(labels_netherlands)
+
+#Denmark
+labels_denmark = ['Denmark','Dänemark']
+dannish_food = get_categories_counts(labels_denmark)
+
+#Portugal
+labels_portugal = ['Portugal','en:portugal']
+portuguese_food = get_categories_counts(labels_portugal)
+
+#Greece
+labels_greece = ['Greece','en:GR','Grèce','en:greece']
+greek_food = get_categories_counts(labels_greece)
+
+#Sweden
+labels_sweden = ['Sweden','en:SE','en:sweden']
+swedish_food = get_categories_counts(labels_sweden)
+
+#Norway
+labels_norway = ['Norway','en:NO','en:norway']
+norwegian_food = get_categories_counts(labels_norway)
+
+#Croatia
+labels_croatia = ['Croatia','en:HR','en:croatia']
+croatian_food = get_categories_counts(labels_croatia)
+
+#Albania
+labels_albania = ['Albania','en:AL','en:albania']
+albanian_food = get_categories_counts(labels_albania)
+
+#convert each Seried to a dataframe
+french_df = pd.DataFrame({'Category':french_food.index, 'Percentage':french_food.values})
+spanish_df = pd.DataFrame({'Category':spanish_food.index, 'Percentage':spanish_food.values})
+german_df = pd.DataFrame({'Category':german_food.index, 'Percentage':german_food.values})
+uk_df = pd.DataFrame({'Category':uk_food.index, 'Percentage':uk_food.values})
+belgium_df = pd.DataFrame({'Category':belgium_food.index, 'Percentage':belgium_food.values})
+italia_df = pd.DataFrame({'Category':italian_food.index, 'Percentage':italian_food.values})
+suisse_df = pd.DataFrame({'Category':suisse_food.index, 'Percentage':suisse_food.values})
+holland_df = pd.DataFrame({'Category':holland_food.index, 'Percentage':holland_food.values})
+dannish_df = pd.DataFrame({'Category':dannish_food.index, 'Percentage':dannish_food.values})
+portuguese_df = pd.DataFrame({'Category':portuguese_food.index, 'Percentage':portuguese_food.values})
+greek_df = pd.DataFrame({'Category':greek_food.index, 'Percentage':greek_food.values})
+swedish_df = pd.DataFrame({'Category':swedish_food.index, 'Percentage':swedish_food.values})
+norwegian_df = pd.DataFrame({'Category':norwegian_food.index, 'Percentage':norwegian_food.values})
+croatian_df = pd.DataFrame({'Category':croatian_food.index, 'Percentage':croatian_food.values})
+albanian_df = pd.DataFrame({'Category':albanian_food.index, 'Percentage':albanian_food.values})
+
+
+#merge data frames per region
+#North Europe
+north_countries = [dannish_df, swedish_df, norwegian_df]
+#set the first element of the merged frame
+north = uk_df
+for country in north_countries:
+    north = pd.merge(left=north, right=country, on='Category', how='outer') #ensure outer join to keep lines with nan values
+north.loc[:,'mean'] = north.mean(axis=1)
+
+#Central Europe
+central_countries = [holland_df, german_df, french_df, suisse_df]
+central = belgium_df
+for country in central_countries:
+    central = pd.merge(left=central, right=country, on='Category', how='outer')
+central.loc[:,'mean'] = central.mean(axis=1)
+
+#South Europe
+south_countries = [portuguese_df, greek_df, italia_df, croatian_df, albanian_df]
+south = spanish_df
+for country in south_countries:
+    south = pd.merge(left=south, right=country, on='Category', how='outer')
+south.loc[:,'mean'] = south.mean(axis=1)
+
+
+frames_to_merge = [central, south]
+merged = north[['Category','mean']]
+for frame in frames_to_merge:
+    merged = pd.merge(left=merged, right=frame[['Category','mean']], on='Category', how='outer')
+
+merged.columns = ['Category', 'mean_north', 'mean_central', 'mean_south']
+
+result =  merged.head(28)
+
+fig, ax = plt.subplots(figsize=(20,10))
+pos = list(range(len(result)))
+width = 0.25
+
+#plot
+plt.barh(pos, result['mean_north'], width, color='#4957DF', edgecolor='w', label='North Europe')
+plt.barh([p + width for p in pos], result['mean_central'], width, color='#ADD8B3', edgecolor='w', label='Central Europe')
+plt.barh([p + width*2 for p in pos], result['mean_south'], width, color='#FF999F', edgecolor='w', label='South Europe')
+#x labels
+ax.xaxis.set_label_position('top')
+ax.yaxis.set_ticks_position('none')
+ax.xaxis.set_ticks_position('none')
+ax.xaxis.tick_top()
+plt.xlabel('Amount consumed (%)', fontsize=20)
+#y labels
+ax.set_yticklabels(result['Category'], alpha=0.7, fontsize=40)
+plt.tick_params(labelsize=20)
+ax.set_yticks([p + 1.5 * width for p in pos])
+ax.invert_yaxis()
+#background
+ax.patch.set_facecolor('white')
+ax.grid(False)
+#legend
+plt.legend(loc='center right',prop={'size':20})
+
+sns.despine()
+#x axis on top
+ax.xaxis.tick_top()
+
+plt.tight_layout()
+plt.show()
+
+
+# ##Ingredients
+# What about the fat, protein and carbohydrate per 100g consumption across Europe?
+# 
+# It seems that for fat and protein the quantity falls from north to south. Also, Central Europe is 
+# appeared to consume food with high amount of carbohydrate.
 
 # In[ ]:
 
 
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import train_test_split
-import scipy as sp
+#define some String variables
+fat_string = 'fat_100g'
+protein_string = 'proteins_100g'
+carbohydr_string = 'carbohydrates_100g'
 
+###North Europe###
+uk_rows = get_rows_country(labels_uk)
+dannish_rows = get_rows_country(labels_denmark)
+norwegian_rows = get_rows_country(labels_norway)
+swedish_rows = get_rows_country(labels_sweden)
+#define the first element of the north lists
+north_fat = uk_rows[fat_string]
+north_protein = uk_rows[protein_string]
+north_carbohydr = uk_rows[carbohydr_string]
+#define which countries should go in which region
+north_fat_list = [dannish_rows[fat_string], norwegian_rows[fat_string], swedish_rows[fat_string]]
+north_protein_list = [dannish_rows[protein_string], norwegian_rows[protein_string], swedish_rows[protein_string]]
+north_carbohydr_list = [dannish_rows[carbohydr_string], norwegian_rows[carbohydr_string], swedish_rows[carbohydr_string]]
+#append the lists in the corresponding region
+for l in north_fat_list:
+    north_fat.append(l)
+for l in north_protein_list:
+    north_protein.append(l)
+for l in north_carbohydr_list:
+    north_carbohydr.append(l)
 
-# First we'll split the training data into testing and training sets
+###Central Europe###
+belgium_rows = get_rows_country(labels_belgium)
+holland_rows = get_rows_country(labels_netherlands)
+german_rows = get_rows_country(labels_germany)
+french_rows = get_rows_country(labels_france)
+suisse_rows = get_rows_country(labels_switzerland)
+#same as before
+central_fat = belgium_rows[fat_string]
+central_protein = belgium_rows[protein_string]
+central_carbohydr = belgium_rows[carbohydr_string]
 
-# In[ ]:
+central_fat_list = [holland_rows[fat_string], german_rows[fat_string], french_rows[fat_string], suisse_rows[fat_string]]
+central_protein_list = [holland_rows[protein_string], german_rows[protein_string], french_rows[protein_string], suisse_rows[protein_string]]
+central_carbohydr_list = [holland_rows[carbohydr_string], german_rows[carbohydr_string], french_rows[carbohydr_string], suisse_rows[carbohydr_string]]
+for l in central_fat_list:
+    central_fat.append(l)
+for l in central_protein_list:
+    central_protein.append(l)
+for l in central_carbohydr_list:
+    central_carbohydr.append(l)
 
+###South Europe###
+spanish_rows = get_rows_country(labels_spain)
+greek_rows = get_rows_country(labels_greece)
+portuguese_rows = get_rows_country(labels_portugal)
+italian_rows = get_rows_country(labels_italia)
+croatian_rows = get_rows_country(labels_croatia)
+albanian_rows = get_rows_country(labels_albania)
+#same as before
+south_fat = spanish_rows[fat_string]
+south_protein = spanish_rows[protein_string]
+south_carbohydr = spanish_rows[carbohydr_string]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=45)
-neigh = KNeighborsClassifier(n_neighbors=9)
-neigh.fit(X_train, y_train)
+south_fat_list = [greek_rows[fat_string], portuguese_rows[fat_string], italian_rows[fat_string], croatian_rows[fat_string], albanian_rows[fat_string]]
+south_protein_list = [greek_rows[protein_string], portuguese_rows[protein_string], italian_rows[protein_string], croatian_rows[protein_string], albanian_rows[protein_string]]
+south_carbohydr_list = [greek_rows[carbohydr_string], portuguese_rows[carbohydr_string], italian_rows[carbohydr_string], croatian_rows[carbohydr_string], albanian_rows[carbohydr_string]]
+for li in south_fat_list:
+    south_fat.append(li)
+for li in south_protein_list:
+    south_protein.append(li)
+for li in south_carbohydr_list:
+    south_carbohydr.append(li)
 
+#create a frame with columns (Region, Fat, Protein, Carbohydrate) to keep the info together
+elements_df = pd.DataFrame(['North Europe', np.mean(north_fat), np.mean(north_protein), np.mean(north_carbohydr)]).T
+elements_df = pd.concat([elements_df, pd.DataFrame(['Central Europe', np.mean(central_fat), np.mean(central_protein), np.mean(central_carbohydr)]).T], ignore_index=True)
+elements_df = pd.concat([elements_df, pd.DataFrame(['South Europe', np.mean(south_fat), np.mean(south_protein), np.mean(south_carbohydr)]).T], ignore_index=True)
+elements_df.columns = ['Region', 'Fat', 'Protein', 'Carbohydrate']
 
-# I want to check what is the % accuracy in predicting the right interest level
+#plot
+fig, ax = plt.subplots(figsize=(20,10))
+#index
+pos = np.arange(3)
+#plot title
+ax.set_title('Average quantity per 100g', fontsize=20)
 
-# In[ ]:
+#auxiliary var for the colors in rgb format
+const = float(255)
+ax.plot(pos, elements_df['Fat'],  marker='o', markeredgecolor=(84/const, 170/const, 118/const), label='Fat',markersize=10)
+ax.plot(pos, elements_df['Protein'], marker='o',markeredgecolor=(84/const, 170/const, 118/const), label='Protein',markersize=10)
+ax.plot(pos, elements_df['Carbohydrate'], marker='o',markeredgecolor=(84/const, 170/const, 118/const), label='Carbohydrate',markersize=10)
 
+#plot limits
+ax.set_ylim(0,30)
+ax.set_xlim(-1,3)
+#x ticks adjustment
+ax.set_xticks(pos)
+ax.set_xticklabels(elements_df['Region'], alpha=0.7, fontsize=18)
+#legend
+plt.legend(loc='best',prop={'size':22})
+plt.tight_layout()
+plt.show()
 
-predVal=neigh.predict(X_test)
-mat=[predVal,y_test]
-df=pd.DataFrame(mat).transpose()
-df.columns=('h0','y')
-df['diff']=np.where(df.h0==df.y,1,0)
-print('% correct =',sum(df['diff'])/len(df['diff'])*100)
-
-
-#  I looked into building out the log loss function to see how much error there is in the predictions
-
-# In[ ]:
-
-
-PredProb=neigh.predict_proba(X_test)
-pred=np.asmatrix(PredProb)
-pred.columns=('high','low','medium')
-s=np.asmatrix(pd.get_dummies(y_test))
-def f(x):
-    return sp.log(sp.maximum(sp.minimum(x,1-10**-5),10**-5))
-f=np.vectorize(f)
-predf=f(pred)
-mult=np.multiply(predf,s)
-print('log loss =',np.sum(mult)/-len(y_test))
-
-
-# This log loss is quite high so let's see if we can improve this by increasing our k value.  Since, it would be annoying to change the value and run it, I figure it'll be faster to run a for loop through values of k from odd numbers between 3 to 39 (represented by j).  I also wanted to have atleast 5 samples in each k to give us a good average (represented by i).
-
-# In[ ]:
-
-
-accbig=[]
-loglossbig=[]
-
-def f(x):
-    return sp.log(sp.maximum(sp.minimum(x,1-10**-5),10**-5))
-f=np.vectorize(f)
-
-for j in range(3,40,2):
-    logloss=[]
-    acc=[]
-    for i in range(5):
-        #split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=i)
-        neigh = KNeighborsClassifier(n_neighbors=j)
-        #train classifier
-        neigh.fit(X_train, y_train)
-        
-        #find % predicted correctly for this k
-        predVal=neigh.predict(X_test)
-        mat=[predVal,y_test]
-        df=pd.DataFrame(mat).transpose()
-        df.columns=('h0','y')
-        df['diff']=np.where(df.h0==df.y,1,0)
-        acc.append(sum(df['diff'])/len(df['diff']))
-        
-        #find the logloss for this k
-        PredProb=neigh.predict_proba(X_test)
-        pred=np.asmatrix(PredProb)
-        pred.columns=('high','low','medium')
-        s=np.asmatrix(pd.get_dummies(y_test))
-        predf=f(pred)
-        mult=np.multiply(predf,s)
-        logloss.append(np.sum(mult)/-len(y_test))
-    loglossbig.append(np.mean(logloss))
-    accbig.append(np.mean(acc))
-print(accbig)
-print(loglossbig)
-
-
-# #### Now let's plot this against every K to see the decrease
-
-# In[ ]:
-
-
-plt.plot(range(3,40,2),loglossbig)
-plt.ylabel('logloss')
-plt.xlabel('k value')
-plt.title('KNN logloss on longitude and latitude')
-
-
-# In[ ]:
-
-
-plt.plot(range(3,40,2),accbig)
-plt.ylabel('% predicted correctly')
-plt.xlabel('k value')
-plt.title('KNN prediction on longitude and latitude')
-
-
-# #### Even though the performance for this isn't amazing, we can see that there are some predictive value that we can use from longtitude and latitude data
-
-# ### (sidetrack) Rent cost in NYC
-# Just for my own entertainment, I wanted to see what the pricing distribution is in this list of training samples, then I scatter plotted this for NYC and provided different price points that contained most of the data in the histogram
-
-# In[ ]:
-
-
-sns.distplot(trainDF['price'][trainDF['price']<6000])
-
-
-# In[ ]:
-
-
-Lat25=trainDF['latitude'][trainDF['price']<2500]
-Long25=trainDF['longitude'][trainDF['price']<2500]
-Lat30=trainDF['latitude'][(trainDF['price']<3000)&(trainDF['price']>=2500)]
-Long30=trainDF['longitude'][(trainDF['price']<3000)&(trainDF['price']>=2500)]
-Lat35=trainDF['latitude'][(trainDF['price']<3500)&(trainDF['price']>=3000)]
-Long35=trainDF['longitude'][(trainDF['price']<3500)&(trainDF['price']>=3000)]
-Lat40=trainDF['latitude'][(trainDF['price']<4000)&(trainDF['price']>=3500)]
-Long40=trainDF['longitude'][(trainDF['price']<4000)&(trainDF['price']>=3500)]
-Latup=trainDF['latitude'][(trainDF['price']>=4000)]
-Longup=trainDF['longitude'][(trainDF['price']>=4000)]
-
-
-# In[ ]:
-
-
-p = figure(title="Cost",y_range=(40.65,40.85),x_range=(-74.05,-73.85))
-p.xaxis.axis_label = 'latitude'
-p.yaxis.axis_label = 'longitude'
-
-p.circle(Long25,Lat25,size=3,color=rainbow.as_hex()[0],fill_alpha=0.6,line_alpha=0.6,legend='<$2500')
-p.circle(Long30,Lat30,size=3,color=rainbow.as_hex()[2],fill_alpha=0.6,line_alpha=0.6,legend='$3000')
-p.circle(Long35,Lat35,size=3,color=rainbow.as_hex()[4],fill_alpha=0.6,line_alpha=0.6,legend='$3500')
-p.circle(Long40,Lat40,size=3,color=rainbow.as_hex()[5],fill_alpha=0.6,line_alpha=0.6,legend='$4000')
-#p.circle(Latup,Longup,size=3,color=rainbow.as_hex()[5],fill_alpha=0.6,line_alpha=0.6,legend='up')
-p.legend.location = 'bottom_right'
-show(p, notebook_handle=True)
-
-
-# If you enjoyed the contents of this Notebook, please upvote =)

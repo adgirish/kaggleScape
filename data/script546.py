@@ -1,423 +1,325 @@
 
 # coding: utf-8
 
-# In this notebook, we will try and explore the basic information about the dataset given. The dataset for this competition is a relational set of files describing customers' orders over time. 
+# # About the dataset
 # 
-# **Objective:** 
+# Context
+# Our world population is expected to grow from 7.3 billion today to 9.7 billion in the year 2050. Finding solutions for feeding the growing world population has become a hot topic for food and agriculture organizations, entrepreneurs and philanthropists. These solutions range from changing the way we grow our food to changing the way we eat. To make things harder, the world's climate is changing and it is both affecting and affected by the way we grow our food – agriculture. This dataset provides an insight on our worldwide food production - focusing on a comparison between food produced for human consumption and feed produced for animals.
 # 
-# The goal of the competition is to predict which products will be in a user's next order. The dataset is anonymized and contains a sample of over 3 million grocery orders from more than 200,000 Instacart users.
+# Content
+# The Food and Agriculture Organization of the United Nations provides free access to food and agriculture data for over 245 countries and territories, from the year 1961 to the most recent update (depends on the dataset). One dataset from the FAO's database is the Food Balance Sheets. It presents a comprehensive picture of the pattern of a country's food supply during a specified reference period, the last time an update was loaded to the FAO database was in 2013. The food balance sheet shows for each food item the sources of supply and its utilization. This chunk of the dataset is focused on two utilizations of each food item available:
 # 
-# For each user, 4 and 100 of their orders are given, with the sequence of products purchased in each order
+# Food - refers to the total amount of the food item available as human food during the reference period.
+# Feed - refers to the quantity of the food item available for feeding to the livestock and poultry during the reference period.
+# Dataset's attributes:
 # 
-# Let us start by importing the necessary modules.
+# Area code - Country name abbreviation
+# Area - County name
+# Item - Food item
+# Element - Food or Feed
+# Latitude - geographic coordinate that specifies the north–south position of a point on the Earth's surface
+# Longitude - geographic coordinate that specifies the east-west position of a point on the Earth's surface
+# Production per year - Amount of food item produced in 1000 tonnes
+# 
+# This is a simple exploratory notebook that heavily expolits pandas and seaborn
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# Importing libraries
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-color = sns.color_palette()
-
 get_ipython().run_line_magic('matplotlib', 'inline')
-
-pd.options.mode.chained_assignment = None  # default='warn'
-
-
-# Let us list out the files that are present in this competition.!
-
-# In[ ]:
+# importing data
+df = pd.read_csv("../input/FAO.csv",  encoding = "ISO-8859-1")
+pd.options.mode.chained_assignment = None
 
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# Before we dive deep into the exploratory analysis, let us know a little more about the files given. To understand it better, let us first read all the files as dataframe objects and then look at the top few rows.
+# Let's see what the data looks like...
 
 # In[ ]:
 
 
-order_products_train_df = pd.read_csv("../input/order_products__train.csv")
-order_products_prior_df = pd.read_csv("../input/order_products__prior.csv")
-orders_df = pd.read_csv("../input/orders.csv")
-products_df = pd.read_csv("../input/products.csv")
-aisles_df = pd.read_csv("../input/aisles.csv")
-departments_df = pd.read_csv("../input/departments.csv")
+df.head()
 
+
+# # Plot for annual produce of different countries with quantity in y-axis and years in x-axis
 
 # In[ ]:
 
 
-orders_df.head()
+area_list = list(df['Area'].unique())
+year_list = list(df.iloc[:,10:].columns)
 
-
-# In[ ]:
-
-
-order_products_prior_df.head()
-
-
-# In[ ]:
-
-
-order_products_train_df.head()
-
-
-# As we could see, orders.csv has all the information about the given order id like the user who has purchased the order, when was it purchased, days since prior order and so on.
-# 
-# The columns present in order_products_train and order_products_prior are same. Then what is the difference between these files.?
-# 
-# As mentioned earlier, in this dataset, 4 to 100 orders of a customer are given (we will look at this later) and we need to predict the products that will be re-ordered. So the last order of the user has been taken out and divided into train and test sets. All the prior order informations of the customer are present in order_products_prior file.  We can also note that there is a column in orders.csv file called eval_set which tells us as to which of the three datasets (prior, train or test) the given row goes to.
-# 
-# Order_products*csv file has more detailed information about the products that been bought in the given order along with the re-ordered status.
-# 
-# Let us first get the count of rows in each of the three sets.
-
-# In[ ]:
-
-
-cnt_srs = orders_df.eval_set.value_counts()
-
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[1])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Eval set type', fontsize=12)
-plt.title('Count of rows in each dataset', fontsize=15)
-plt.xticks(rotation='vertical')
+plt.figure(figsize=(24,12))
+for ar in area_list:
+    yearly_produce = []
+    for yr in year_list:
+        yearly_produce.append(df[yr][df['Area'] == ar].sum())
+    plt.plot(yearly_produce, label=ar)
+plt.xticks(np.arange(53), tuple(year_list), rotation=60)
+plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, ncol=8, mode="expand", borderaxespad=0.)
 plt.show()
 
 
-# In[ ]:
-
-
-def get_unique_count(x):
-    return len(np.unique(x))
-
-cnt_srs = orders_df.groupby("eval_set")["user_id"].aggregate(get_unique_count)
-cnt_srs
-
-
-# So there are 206,209 customers in total. Out of which, the last purchase of 131,209 customers are given as train set and we need to predict for the rest 75,000 customers. 
+# Clearly, India, USA and China stand out here. So, these are the countries with most food and feed production.
 # 
-# Now let us validate the claim that 4 to 100 orders of a customer are given. 
+# Now, let's have a close look at their food and feed data
+# 
+# # Food and feed plot for the whole dataset
 
 # In[ ]:
 
 
-cnt_srs = orders_df.groupby("user_id")["order_number"].aggregate(np.max).reset_index()
-cnt_srs = cnt_srs.order_number.value_counts()
+sns.factorplot("Element", data=df, kind="count")
 
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[2])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Maximum order number', fontsize=12)
-plt.xticks(rotation='vertical')
+
+# So, there is a huge difference in food and feed production. Now, we have obvious assumptions about the following plots after looking at this huge difference.
+# 
+# # Food and feed plot for the largest producers(India, USA, China)
+
+# In[ ]:
+
+
+sns.factorplot("Area", data=df[(df['Area'] == "India") | (df['Area'] == "China, mainland") | (df['Area'] == "United States of America")], kind="count", hue="Element", size=8, aspect=.8)
+
+
+# Though, there is a huge difference between feed and food production, these countries' total production and their ranks depend on feed production.
+
+# 
+# 
+# Now, we create a dataframe with countries as index and their annual produce as columns from 1961 to 2013.
+
+# In[ ]:
+
+
+new_df_dict = {}
+for ar in area_list:
+    yearly_produce = []
+    for yr in year_list:
+        yearly_produce.append(df[yr][df['Area']==ar].sum())
+    new_df_dict[ar] = yearly_produce
+new_df = pd.DataFrame(new_df_dict)
+
+new_df.head()
+
+
+# Now, this is not perfect so we transpose this dataframe and add column names.
+
+# In[ ]:
+
+
+new_df = pd.DataFrame.transpose(new_df)
+new_df.columns = year_list
+
+new_df.head()
+
+
+# Perfect! Now, we will do some feature engineering.
+# 
+# # First, a new column which indicates mean produce of each state over the given years. Second, a ranking column which ranks countries on the basis of mean produce.
+
+# In[ ]:
+
+
+mean_produce = []
+for i in range(174):
+    mean_produce.append(new_df.iloc[i,:].values.mean())
+new_df['Mean_Produce'] = mean_produce
+
+new_df['Rank'] = new_df['Mean_Produce'].rank(ascending=False)
+
+new_df.head()
+
+
+# Now, we create another dataframe with items and their total production each year from 1961 to 2013
+
+# In[ ]:
+
+
+item_list = list(df['Item'].unique())
+
+item_df = pd.DataFrame()
+item_df['Item_Name'] = item_list
+
+for yr in year_list:
+    item_produce = []
+    for it in item_list:
+        item_produce.append(df[yr][df['Item']==it].sum())
+    item_df[yr] = item_produce
+
+
+# In[ ]:
+
+
+item_df.head()
+
+
+# # Some more feature engineering
+# 
+# This time, we will use the new features to get some good conclusions.
+# 
+# # 1. Total amount of item produced from 1961 to 2013
+# # 2. Providing a rank to the items to know the most produced item
+
+# In[ ]:
+
+
+sum_col = []
+for i in range(115):
+    sum_col.append(item_df.iloc[i,1:].values.sum())
+item_df['Sum'] = sum_col
+item_df['Production_Rank'] = item_df['Sum'].rank(ascending=False)
+
+item_df.head()
+
+
+# # Now, we find the most produced food items in the last half-century
+
+# In[ ]:
+
+
+item_df['Item_Name'][item_df['Production_Rank'] < 11.0].sort_values()
+
+
+# So, cereals, fruits and maize are the most produced items in the last 50 years
+# 
+# # Food and feed plot for most produced items 
+
+# In[ ]:
+
+
+sns.factorplot("Item", data=df[(df['Item']=='Wheat and products') | (df['Item']=='Rice (Milled Equivalent)') | (df['Item']=='Maize and products') | (df['Item']=='Potatoes and products') | (df['Item']=='Vegetables, Other') | (df['Item']=='Milk - Excluding Butter') | (df['Item']=='Cereals - Excluding Beer') | (df['Item']=='Starchy Roots') | (df['Item']=='Vegetables') | (df['Item']=='Fruits - Excluding Wine')], kind="count", hue="Element", size=20, aspect=.8)
+
+
+# # Now, we plot a heatmap of correlation of produce in difference years
+
+# In[ ]:
+
+
+year_df = df.iloc[:,10:]
+fig, ax = plt.subplots(figsize=(16,10))
+sns.heatmap(year_df.corr(), ax=ax)
+
+
+# So, we gather that a given year's production is more similar to its immediate previous and immediate following years.
+
+# In[ ]:
+
+
+f, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, sharex='col', sharey='row', figsize=(10,10))
+ax1.set(xlabel='Y1968', ylabel='Y1961')
+ax2.set(xlabel='Y1968', ylabel='Y1963')
+ax3.set(xlabel='Y1968', ylabel='Y1986')
+ax4.set(xlabel='Y1968', ylabel='Y2013')
+sns.jointplot(x="Y1968", y="Y1961", data=df, kind="reg", ax=ax1)
+sns.jointplot(x="Y1968", y="Y1963", data=df, kind="reg", ax=ax2)
+sns.jointplot(x="Y1968", y="Y1986", data=df, kind="reg", ax=ax3)
+sns.jointplot(x="Y1968", y="Y2013", data=df, kind="reg", ax=ax4)
+plt.close(2)
+plt.close(3)
+plt.close(4)
+plt.close(5)
+plt.savefig('joint.png')
+
+
+# # Heatmap of production of food items over years
+# 
+# This will detect the items whose production has drastically increased over the years
+
+# In[ ]:
+
+
+new_item_df = item_df.drop(["Item_Name","Sum","Production_Rank"], axis = 1)
+fig, ax = plt.subplots(figsize=(12,24))
+sns.heatmap(new_item_df,ax=ax)
+ax.set_yticklabels(item_df.Item_Name.values[::-1])
 plt.show()
 
 
-# So there are no orders less than 4 and is max capped at 100 as given in the data page. 
-# 
-# Now let us see how the ordering habit changes with day of week.
+# There is considerable growth in production of Palmkernel oil, Meat/Aquatic animals, ricebran oil, cottonseed, seafood, offals, roots, poultry meat, mutton, bear, cocoa, coffee and soyabean oil.
+# There has been exceptional growth in production of onions, cream, sugar crops, treenuts, butter/ghee and to some extent starchy roots.
+
+# Now, we look at clustering.
+
+# # What is clustering?
+# Cluster analysis or clustering is the task of grouping a set of objects in such a way that objects in the same group (called a cluster) are more similar (in some sense) to each other than to those in other groups (clusters). It is a main task of exploratory data mining, and a common technique for statistical data analysis, used in many fields, including machine learning, pattern recognition, image analysis, information retrieval, bioinformatics, data compression, and computer graphics.
+
+# # Today, we will form clusters to classify countries based on productivity scale
+
+# For this, we will use k-means clustering algorithm.
+# # K-means clustering
+# (Source [Wikipedia](https://en.wikipedia.org/wiki/K-means_clustering#Standard_algorithm) )
+# ![http://gdurl.com/5BbP](http://gdurl.com/5BbP)
+
+# This is the data we will use.
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8))
-sns.countplot(x="order_dow", data=orders_df, color=color[0])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Day of week', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency of order by week day", fontsize=15)
+new_df.head()
+
+
+# In[ ]:
+
+
+X = new_df.iloc[:,:-2].values
+
+X = pd.DataFrame(X)
+X = X.convert_objects(convert_numeric=True)
+X.columns = year_list
+
+
+# # Elbow method to select number of clusters
+# This method looks at the percentage of variance explained as a function of the number of clusters: One should choose a number of clusters so that adding another cluster doesn't give much better modeling of the data. More precisely, if one plots the percentage of variance explained by the clusters against the number of clusters, the first clusters will add much information (explain a lot of variance), but at some point the marginal gain will drop, giving an angle in the graph. The number of clusters is chosen at this point, hence the "elbow criterion". This "elbow" cannot always be unambiguously identified. Percentage of variance explained is the ratio of the between-group variance to the total variance, also known as an F-test. A slight variation of this method plots the curvature of the within group variance.
+# # Basically, number of clusters = the x-axis value of the point that is the corner of the "elbow"(the plot looks often looks like an elbow)
+
+# In[ ]:
+
+
+from sklearn.cluster import KMeans
+wcss = []
+for i in range(1,11):
+    kmeans = KMeans(n_clusters=i,init='k-means++',max_iter=300,n_init=10,random_state=0)
+    kmeans.fit(X)
+    wcss.append(kmeans.inertia_)
+plt.plot(range(1,11),wcss)
+plt.title('The Elbow Method')
+plt.xlabel('Number of clusters')
+plt.ylabel('WCSS')
 plt.show()
 
 
-# Seems like 0 and 1 is Saturday and Sunday when the orders are high and low during Wednesday.
-# 
-# Now we shall see how the distribution is with respect to time of the day.
+# As the elbow corner coincides with x=2, we will have to form **2 clusters**. Personally, I would have liked to select 3 to 4 clusters. But trust me, only selecting 2 clusters can lead to best results.
+# Now, we apply k-means algorithm.
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8))
-sns.countplot(x="order_hour_of_day", data=orders_df, color=color[1])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Hour of day', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency of order by hour of day", fontsize=15)
+kmeans = KMeans(n_clusters=2,init='k-means++',max_iter=300,n_init=10,random_state=0) 
+y_kmeans = kmeans.fit_predict(X)
+
+X = X.as_matrix(columns=None)
+
+
+# Now, let's visualize the results.
+
+# In[ ]:
+
+
+plt.scatter(X[y_kmeans == 0, 0], X[y_kmeans == 0,1],s=100,c='red',label='Others')
+plt.scatter(X[y_kmeans == 1, 0], X[y_kmeans == 1,1],s=100,c='blue',label='China(mainland),USA,India')
+plt.scatter(kmeans.cluster_centers_[:,0],kmeans.cluster_centers_[:,1],s=300,c='yellow',label='Centroids')
+plt.title('Clusters of countries by Productivity')
+plt.legend()
 plt.show()
 
 
-# So majority of the orders are made during day time. Now let us combine the day of week and hour of day to see the distribution.
-
-# In[ ]:
-
-
-grouped_df = orders_df.groupby(["order_dow", "order_hour_of_day"])["order_number"].aggregate("count").reset_index()
-grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'order_number')
-
-plt.figure(figsize=(12,6))
-sns.heatmap(grouped_df)
-plt.title("Frequency of Day of week Vs Hour of day")
-plt.show()
-
-
-# Seems Satuday evenings and Sunday mornings are the prime time for orders.
+# So, the blue cluster represents China(Mainland), USA and India while the red cluster represents all the other countries.
+# This result was highly probable. Just take a look at the plot of cell 3 above. See how China, USA and India stand out. That has been observed here in clustering too.
 # 
-# Now let us check the time interval between the orders.
+# You should try this algorithm for 3 or 4 clusters. Looking at the distribution, you will realise why 2 clusters is the best choice for the given data
 
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="days_since_prior_order", data=orders_df, color=color[3])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Days since prior order', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency distribution by days since prior order", fontsize=15)
-plt.show()
-
-
-# Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals).
-# 
-# Since our objective is to figure out the re-orders, let us check out the re-order percentage in prior set and train set.
-
-# In[ ]:
-
-
-# percentage of re-orders in prior set #
-order_products_prior_df.reordered.sum() / order_products_prior_df.shape[0]
-
-
-# In[ ]:
-
-
-# percentage of re-orders in train set #
-order_products_train_df.reordered.sum() / order_products_train_df.shape[0]
-
-
-# On an average, about 59% of the products in an order are re-ordered products.
-# 
-# **No re-ordered products:**
-# 
-# Now that we have seen 59% of the products are re-ordered, there will also be situations when none of the products are re-ordered. Let us check that now.
-
-# In[ ]:
-
-
-grouped_df = order_products_prior_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
-grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
-grouped_df.reordered.value_counts() / grouped_df.shape[0]
-
-
-# In[ ]:
-
-
-grouped_df = order_products_train_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
-grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
-grouped_df.reordered.value_counts() / grouped_df.shape[0]
-
-
-# About 12% of the orders in prior set has no re-ordered items while in the train set it is 6.5%.
-# 
-# Now let us see the number of products bought in each order.
-
-# In[ ]:
-
-
-grouped_df = order_products_train_df.groupby("order_id")["add_to_cart_order"].aggregate("max").reset_index()
-cnt_srs = grouped_df.add_to_cart_order.value_counts()
-
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Number of products in the given order', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# A right tailed distribution with the maximum value at 5.!
-# 
-# Before we explore the product details, let us look at the other three files as well. 
-
-# In[ ]:
-
-
-products_df.head()
-
-
-# In[ ]:
-
-
-aisles_df.head()
-
-
-# In[ ]:
-
-
-departments_df.head()
-
-
-# Now let us merge these product details with the order_prior details.
-
-# In[ ]:
-
-
-order_products_prior_df = pd.merge(order_products_prior_df, products_df, on='product_id', how='left')
-order_products_prior_df = pd.merge(order_products_prior_df, aisles_df, on='aisle_id', how='left')
-order_products_prior_df = pd.merge(order_products_prior_df, departments_df, on='department_id', how='left')
-order_products_prior_df.head()
-
-
-# In[ ]:
-
-
-cnt_srs = order_products_prior_df['product_name'].value_counts().reset_index().head(20)
-cnt_srs.columns = ['product_name', 'frequency_count']
-cnt_srs
-
-
-# Wow. Most of them are organic products.! Also majority of them are fruits. 
-# 
-# Now let us look at the important aisles.
-
-# In[ ]:
-
-
-cnt_srs = order_products_prior_df['aisle'].value_counts().head(20)
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[5])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Aisle', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# The top two aisles are fresh fruits and fresh vegetables.! 
-# 
-# **Department Distribution:**
-# 
-# Let us now check the department wise distribution.
-
-# In[ ]:
-
-
-plt.figure(figsize=(10,10))
-temp_series = order_products_prior_df['department'].value_counts()
-labels = (np.array(temp_series.index))
-sizes = (np.array((temp_series / temp_series.sum())*100))
-plt.pie(sizes, labels=labels, 
-        autopct='%1.1f%%', startangle=200)
-plt.title("Departments distribution", fontsize=15)
-plt.show()
-
-
-# Produce is the largest department. Now let us check the reordered percentage of each department. 
-# 
-# **Department wise reorder ratio:**
-
-# In[ ]:
-
-
-grouped_df = order_products_prior_df.groupby(["department"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.pointplot(grouped_df['department'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Department', fontsize=12)
-plt.title("Department wise reorder ratio", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Personal care has lowest reorder ratio and dairy eggs have highest reorder ratio.
-# 
-# **Aisle - Reorder ratio:**
-
-# In[ ]:
-
-
-grouped_df = order_products_prior_df.groupby(["department_id", "aisle"])["reordered"].aggregate("mean").reset_index()
-
-fig, ax = plt.subplots(figsize=(12,20))
-ax.scatter(grouped_df.reordered.values, grouped_df.department_id.values)
-for i, txt in enumerate(grouped_df.aisle.values):
-    ax.annotate(txt, (grouped_df.reordered.values[i], grouped_df.department_id.values[i]), rotation=45, ha='center', va='center', color='green')
-plt.xlabel('Reorder Ratio')
-plt.ylabel('department_id')
-plt.title("Reorder ratio of different aisles", fontsize=15)
-plt.show()
-
-
-# **Add to Cart - Reorder ratio:**
-# 
-# Let us now explore the relationship between how order of adding the product to the cart affects the reorder ratio.
-
-# In[ ]:
-
-
-order_products_prior_df["add_to_cart_order_mod"] = order_products_prior_df["add_to_cart_order"].copy()
-order_products_prior_df["add_to_cart_order_mod"].ix[order_products_prior_df["add_to_cart_order_mod"]>70] = 70
-grouped_df = order_products_prior_df.groupby(["add_to_cart_order_mod"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.pointplot(grouped_df['add_to_cart_order_mod'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Add to cart order', fontsize=12)
-plt.title("Add to cart order - Reorder ratio", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# **Looks like the products that are added to the cart initially are more likely to be reordered again compared to the ones added later.** This makes sense to me as well since we tend to first order all the products we used to buy frequently and then look out for the new products available. 
-# 
-# **Reorder ratio by Time based variables:**
-
-# In[ ]:
-
-
-order_products_train_df = pd.merge(order_products_train_df, orders_df, on='order_id', how='left')
-grouped_df = order_products_train_df.groupby(["order_dow"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.barplot(grouped_df['order_dow'].values, grouped_df['reordered'].values, alpha=0.8, color=color[3])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Day of week', fontsize=12)
-plt.title("Reorder ratio across day of week", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.ylim(0.5, 0.7)
-plt.show()
-
-
-# In[ ]:
-
-
-grouped_df = order_products_train_df.groupby(["order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.barplot(grouped_df['order_hour_of_day'].values, grouped_df['reordered'].values, alpha=0.8, color=color[4])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Hour of day', fontsize=12)
-plt.title("Reorder ratio across hour of day", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.ylim(0.5, 0.7)
-plt.show()
-
-
-# In[ ]:
-
-
-
-grouped_df = order_products_train_df.groupby(["order_dow", "order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
-grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'reordered')
-
-plt.figure(figsize=(12,6))
-sns.heatmap(grouped_df)
-plt.title("Reorder ratio of Day of week Vs Hour of day")
-plt.show()
-
-
-# Looks like reorder ratios are quite high during the early mornings compared to later half of the day.
-
-# **Hope it helped. Please leave your comments / suggestions.**
+# This is not the end! More is yet to come.

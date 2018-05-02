@@ -1,282 +1,146 @@
 
 # coding: utf-8
 
-# ## 1. Introduction
+# <table>
+#     <tr>
+#         <td>
+#         <center>
+#         <font size="+1">If you haven't used BigQuery datasets on Kaggle previously, check out the <a href = "https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/">Scavenger Hunt Handbook</a> kernel to get started.</font>
+#         </center>
+#         </td>
+#     </tr>
+# </table>
 # 
-# ### In this notebook, we  will show our method which can get a PB score <font color = red > 0.84211 </font>. This notebook only uses single model random forest classifier, so there is still room to improve the performance like  using ensemble methods.  
+# ___ 
 # 
-# ### Because our method based on other great minds and the intuition behind the feature engineering can be found in the following notebooks. Hence, I will omit the details and only provide the codes.
+# ## Previous days:
 # 
-# #### 1. Titanic Random Forest: 82.78%
-# #### 2. A Journey through Titanic
-# #### 3. Titanic Data Science Solutions
-# #### 4.Pytanic
+# * [**Day 1:** SELECT, FROM & WHERE](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1/)
+# * [**Day 2:** GROUP BY, HAVING & COUNT()](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2/)
+# * [**Day 3:** ORDER BY & Dates](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-3/)
+# * [**Day 4:** WITH & AS](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-4/)
+# 
+# ____
+# 
+
+# ## JOIN
+# ___
+# 
+# Whew, we've come a long way from Day 1! By now, you have the tools to get many different configurations of information from a single table. But what if your database has more than one table and you want to look at information from multiple tables?
+# 
+# That's where JOIN comes in! Today, we're going to learn about how to use JOIN to combine data from two tables. This will let us answer more types of questions. It's also one of the more complex parts of SQL. Don't worry, though, we're going to go through some examples together. 
+# 
+# ### JOIN
+# ___
+# 
+# Let's keep working with our imaginary Pets dataset, but this time let's add a second table. The first table, "Pets", has three columns, with information on the ID number of each pet, the pet's name and the type of animal it is. The new table, "Owners", has three columns, with the ID number of each owner, the name of the owner and the ID number of their pet. 
+# 
+# ![](https://i.imgur.com/W4gYoNg.png)
+# 
+# Each row in each table is associated with a single pet and we refer to the same pets in both tables. We can tell this because there are two columns (ID in the "Pets" table and Pet_ID in the "Owners" table) that have the same information in them: the ID number of the pet. We can match rows that have the same value in these columns to get information that applies to a certain pet.
+# 
+# For example, we can see by looking at the Pets table that the pet that has the ID 1 is named Dr. Harris Bonkers. We can also tell by looking at the Owners table that the name of the owner who owns the pet with the ID 1 is named Aubrey Little. We can use this information to figure out that Dr. Harris Bonkers is owned by Aubrey Little. 
+# 
+# Fortunately, we don't have to do this by hand to figure out which owner's name goes with which pet name. We can use JOIN to do this for us! JOIN allows us to create a third, new, table that has information from both tables. For example, we might want to have a single table with just two columns: one with the name of the pet and one with the name of the owner. This would look something like this: 
+# 
+# ![](https://i.imgur.com/zqQdJTI.png)
+# 
+# The syntax to create that table looks like this:
+# 
+#     SELECT p.Name AS Pet_Name, o.Name as Owner_Name
+#     FROM `bigquery-public-data.pet_records.pets` as p
+#     INNER JOIN `bigquery-public-data.pet_records.owners` as o ON p.ID = o.Pet_ID
+# Notice that since the ID column exists in both datasets, we have to clarify which one we want to use. When you're joining tables, it's a good habit to specificy which table all of your columns come from. That way you don't have to pull up the schema every time you go back to read the query.
+# 
+# The type of JOIN we're using today is called an INNER JOIN. That just means that a row will only be put in the final output table if the value in the column you're using to combine them shows up in both the tables you're joining. For example, if Tom's ID code of 4 didn't exist in the `Pets` table, we would only get 3 rows back from this query. There are other types of JOIN, but an INNER JOIN won't give you an output that's larger than your input tables, so it's a good one to start with.   
+# 
+# > **What does "ON" do?** It says which column in each table to look at to combine the tables. Here were using the "ID" column from the Pets table and the "Pet_ID" table from the Owners table.
+# 
+# Now that we've talked about the concept behind using JOIN, let's work through an example together.
+
+# ## Example: How many files are covered by each license?
+# ____
+# 
+# Today we're going to be using the GitHub Repos dataset. GitHub is an place for people to store & collaborate on different versions of their computer code. A "repo" is a collection of code associated with a specific project. 
+# 
+# Most public code on Github is shared under a specific license, which determines how it can be used and by who. For our example, we're going to look at how many different files have been released under each licenses. 
+# 
+# First, of course, we need to get our environment ready to go:
+
+# In[ ]:
+
+
+# import package with helper functions 
+import bq_helper
+
+# create a helper object for this dataset
+github = bq_helper.BigQueryHelper(active_project="bigquery-public-data",
+                                              dataset_name="github_repos")
+
+
+# Now we're ready to get started on our query. This one is going to be a bit of a beast, so stick with me! The only new syntax we'll see is around the JOIN clause, everything is something we've already learned. :)
+# 
+# First, I'm going to specify which columns I'd like to be returned in the final table that's returned to me. Here, I'm selecting the COUNT of the "path" column from the sample_files table and then calling it "number_of_files". I'm *also* specifying that I was to include the "license" column, even though there's no "license" column in the "sample_files" table.
+# 
+#         SELECT L.license, COUNT(sf.path) AS number_of_files
+#         FROM `bigquery-public-data.github_repos.sample_files` as sf
+# Speaking of the JOIN clause, we still haven't actually told SQL we want to join anything! To do this, we need to specify what type of join we want (in this case an inner join) and how which columns we want to JOIN ON. Here, I'm using ON to specify that I want to use the "repo_name" column from the each table.
+# 
+#     INNER JOIN `bigquery-public-data.github_repos.licenses` as L 
+#             ON sf.repo_name = L.repo_name
+# And, finally, we have a GROUP BY and ORDER BY clause that apply to the final table that's been returned to us. We've seen these a couple of times at this point. :)
+# 
+#         GROUP BY license
+#         ORDER BY number_of_files DESC
+#  Alright, that was a lot, but you should have an idea what each part of this query is doing. :) Without any further ado, let' put it into action.
+
+# In[ ]:
+
+
+# You can use two dashes (--) to add comments in SQL
+query = ("""
+        -- Select all the columns we want in our joined table
+        SELECT L.license, COUNT(sf.path) AS number_of_files
+        FROM `bigquery-public-data.github_repos.sample_files` as sf
+        -- Table to merge into sample_files
+        INNER JOIN `bigquery-public-data.github_repos.licenses` as L 
+            ON sf.repo_name = L.repo_name -- what columns should we join on?
+        GROUP BY L.license
+        ORDER BY number_of_files DESC
+        """)
+
+file_count_by_license = github.query_to_pandas_safe(query, max_gb_scanned=6)
+
+
+# Whew, that was a big query! But it gave us a nice tidy little table that nicely summarizes how many files have been committed under each license:  
+
+# In[ ]:
+
 
-# ## 2. Load Libraries and Raw Data
+# print out all the returned results
+print(file_count_by_license)
 
-# In[1]:
 
+# And that's how to get started using JOIN in BigQuery! There are many other kinds of joins (you can [read about some here](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#join-types)), so once you're very comfortable with INNER JOIN you can start exploring some of them. :)
 
-import pandas as pd
-import numpy as np
-import warnings
-import matplotlib.pyplot as plt
-import seaborn as sns
+# # Scavenger hunt
+# ___
+# 
+# Now it's your turn! Here is the question I would like you to get the data to answer. Just one today, since you've been working hard this week. :)
+# 
+# *  How many commits (recorded in the "sample_commits" table) have been made in repos written in the Python programming language? (I'm looking for the number of commits per repo for all the repos written in Python.
+#     * You'll want to JOIN the sample_files and sample_commits questions to answer this.
+#     * **Hint:** You can figure out which files are written in Python by filtering results from the "sample_files" table using `WHERE path LIKE '%.py'`. This will return results where the "path" column ends in the text ".py", which is one way to identify which files have Python code.
+# 
+# In order to answer these questions, you can fork this notebook by hitting the blue "Fork Notebook" at the very top of this page (you may have to scroll up). "Forking" something is making a copy of it that you can edit on your own without changing the original.
 
-from sklearn import preprocessing 
-from sklearn.model_selection import GridSearchCV 
-from sklearn.ensemble import RandomForestClassifier 
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
-from sklearn import cross_validation
+# In[ ]:
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-warnings.filterwarnings('ignore')
 
+# Your code goes here :)
 
-# In[2]:
 
 
-train = pd.read_csv("../input/train.csv")
-train.head()
-
-
-# In[3]:
-
-
-test = pd.read_csv("../input/test.csv")
-test.head()
-
-
-# ## 2. Feature Engineering
-
-# In[4]:
-
-
-train['Sex'] = train['Sex'].apply(lambda x: 1 if x == 'male' else 0)
-test['Sex'] = test['Sex'].apply(lambda x: 1 if x == 'male' else 0)
-
-
-# In[5]:
-
-
-def Name_Title_Code(x):
-    if x == 'Mr.':
-        return 1
-    if (x == 'Mrs.') or (x=='Ms.') or (x=='Lady.') or (x == 'Mlle.') or (x =='Mme'):
-        return 2
-    if x == 'Miss':
-        return 3
-    if x == 'Rev.':
-        return 4
-    return 5
-
-train['Name_Title'] = train['Name'].apply(lambda x: x.split(',')[1]).apply(lambda x: x.split()[0])
-test['Name_Title'] = test['Name'].apply(lambda x: x.split(',')[1]).apply(lambda x: x.split()[0]) 
-
-
-# In[6]:
-
-
-def Age_feature(train, test):
-    for i in [train, test]:
-        i['Age_Null_Flag'] = i['Age'].apply(lambda x: 1 if pd.isnull(x) else 0)  
-        data = train.groupby(['Name_Title', 'Pclass'])['Age']
-        i['Age'] = data.transform(lambda x: x.fillna(x.mean()))
-#         i['Age'] = data.transform(lambda x: x.fillna(x.median()))
-    return train, test
-
-
-# In[7]:
-
-
-def Family_feature(train, test):
-    for i in [train, test]:
-        i['Fam_Size'] = np.where((i['SibSp']+i['Parch']) == 0 , 'Solo',
-                           np.where((i['SibSp']+i['Parch']) <= 3,'Nuclear', 'Big'))
-        del i['SibSp']
-        del i['Parch']
-    return train, test 
-
-
-# In[8]:
-
-
-def ticket_grouped(train, test):
-    for i in [train, test]:
-        i['Ticket_Lett'] = i['Ticket'].apply(lambda x: str(x)[0])
-        i['Ticket_Lett'] = i['Ticket_Lett'].apply(lambda x: str(x))
-        i['Ticket_Lett'] = np.where((i['Ticket_Lett']).isin(['1', '2', '3', 'S', 'P', 'C', 'A']), i['Ticket_Lett'],
-                                    np.where((i['Ticket_Lett']).isin(['W', '4', '7', '6', 'L', '5', '8']),
-                                            'Low_ticket', 'Other_ticket'))
-        i['Ticket_Len'] = i['Ticket'].apply(lambda x: len(x))
-        del i['Ticket']
-    return train, test
-
-
-# In[9]:
-
-
-def Cabin_feature(train, test):
-    for i in [train, test]:
-        i['Cabin_Letter'] = i['Cabin'].apply(lambda x: str(x)[0])
-        del i['Cabin']
-    return train, test
-
-
-# In[10]:
-
-
-def cabin_num(train, test):
-    for i in [train, test]:
-        i['Cabin_num1'] = i['Cabin'].apply(lambda x: str(x).split(' ')[-1][1:])
-        i['Cabin_num1'].replace('an', np.NaN, inplace = True)
-        i['Cabin_num1'] = i['Cabin_num1'].apply(lambda x: int(x) if not pd.isnull(x) and x != '' else np.NaN)
-        i['Cabin_num'] = pd.qcut(train['Cabin_num1'],3)
-    train = pd.concat((train, pd.get_dummies(train['Cabin_num'], prefix = 'Cabin_num')), axis = 1)
-    test = pd.concat((test, pd.get_dummies(test['Cabin_num'], prefix = 'Cabin_num')), axis = 1)
-    del train['Cabin_num']
-    del test['Cabin_num']
-    del train['Cabin_num1']
-    del test['Cabin_num1']
-    return train, test
-
-
-# In[11]:
-
-
-def embarked_impute(train, test):
-    for i in [train, test]:
-        i['Embarked'] = i['Embarked'].fillna('S')
-    return train, test
-
-
-# In[12]:
-
-
-test['Fare'].fillna(train['Fare'].mean(), inplace = True)
-
-
-# In[13]:
-
-
-def dummies(train, test, columns = ['Pclass', 'Sex', 'Embarked', 'Ticket_Lett', 'Cabin_Letter', 'Name_Title', 'Fam_Size']):
-    for column in columns:
-        train[column] = train[column].apply(lambda x: str(x))
-        test[column] = test[column].apply(lambda x: str(x))
-        good_cols = [column+'_'+i for i in train[column].unique() if i in test[column].unique()]
-        train = pd.concat((train, pd.get_dummies(train[column], prefix = column)[good_cols]), axis = 1)
-        test = pd.concat((test, pd.get_dummies(test[column], prefix = column)[good_cols]), axis = 1)
-        del train[column]
-        del test[column]
-    return train, test
-
-
-# In[14]:
-
-
-def drop(train, test, bye = ['PassengerId']):
-    for i in [train, test]:
-        for z in bye:
-            del i[z]
-    return train, test
-
-
-# In[15]:
-
-
-train, test = Age_feature(train, test)
- 
-train['Name_Title'] = train['Name_Title'].apply(Name_Title_Code)
-test['Name_Title'] = test['Name_Title'].apply(Name_Title_Code)
-train = pd.get_dummies(columns = ['Name_Title'], data = train)
-test = pd.get_dummies(columns = ['Name_Title'], data = test)
-
-train, test = cabin_num(train, test)
-
-train, test = Cabin_feature(train, test)
-
-train, test = embarked_impute(train, test)
-
-train, test = Family_feature(train, test)
-
-test['Fare'].fillna(train['Fare'].mean(), inplace = True)
-
-train, test = ticket_grouped(train, test)
-
-train, test = dummies(train, test, columns = ['Pclass', 'Sex', 'Embarked', 'Ticket_Lett', 'Fam_Size','Cabin_Letter'])  
-
-train, test = drop(train, test)
-
-
-# In[16]:
-
-
-train.drop('Name',axis=1,inplace=True)
-test.drop('Name',axis=1,inplace=True)
-
-
-# ## 4. Model training
-
-# In[17]:
-
-
-
-# rf = RandomForestClassifier(max_features='auto', oob_score=True, random_state=1, n_jobs=-1)
-# param_grid = { "criterion" : ["gini", "entropy"], "min_samples_leaf" : [1, 5, 10], "min_samples_split" : [2, 4, 10, 12, 16], "n_estimators": [50, 100, 400, 700, 1000]}
-# gs = GridSearchCV(estimator=rf, param_grid=param_grid, scoring='accuracy', cv=3, n_jobs=-1)
-
-# gs = gs.fit(train.iloc[:, 1:], train.iloc[:, 0])
-
-# print(gs.best_score_)
-# print(gs.best_params_) 
-
-
-# In[18]:
-
-
-from sklearn.ensemble import RandomForestClassifier
- 
-rf = RandomForestClassifier(criterion='gini', 
-                             n_estimators=700,
-                             min_samples_split=16,
-                             min_samples_leaf=1,
-                             max_features='auto',
-                             oob_score=True,
-                             random_state=1,
-                             n_jobs=-1) 
-
-rf.fit(train.iloc[:, 1:], train.iloc[:, 0])
-print("%.4f" % rf.oob_score_)
-
-
-# In[19]:
-
-
-pd.concat((pd.DataFrame(train.iloc[:, 1:].columns, columns = ['variable']), 
-           pd.DataFrame(rf.feature_importances_, columns = ['importance'])), 
-          axis = 1).sort_values(by='importance', ascending = False)[:20]
-
-
-# ## 5. Submit
-
-# In[20]:
-
-
-submit = pd.read_csv('../input/genderclassmodel.csv')
-submit.set_index('PassengerId',inplace=True)
-
-rf_res =  rf.predict(test)
-submit['Survived'] = rf_res
-submit['Survived'] = submit['Survived'].apply(int)
-submit.to_csv('submit.csv')
-
-
-# In[21]:
-
-
-submit
-
-
-# ## 6. Learning together
-# ### If you have other techniques or expereriences to improve this PB score, I wish you could share with us. Let's learn together.
+# Please feel free to ask any questions you have in this notebook or in the [Q&A forums](https://www.kaggle.com/questions-and-answers)! 
+# 
+# Also, if you want to share or get comments on your kernel, remember you need to make it public first! You can change the visibility of your kernel under the "Settings" tab, on the right half of your screen.

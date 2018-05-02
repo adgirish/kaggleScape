@@ -1,139 +1,447 @@
 
 # coding: utf-8
 
-# <table>
-#     <tr>
-#         <td>
-#         <center>
-#         <font size="+1">If you haven't used BigQuery datasets on Kaggle previously, check out the <a href = "https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/">Scavenger Hunt Handbook</a> kernel to get started.</font>
-#         </center>
-#         </td>
-#     </tr>
-# </table>
+# Quick Introduction to this Dataset
+# ==================================
+# 
+# **Simple but informative** -- that's the goal of this dataset.  
+# 
+# This kernel will demonstrate the following:
+# 
+#  - Loading the data
+#  - Google maps
+#  - Pivot table
+#  - Simple graphs
+#  - Percent change
+#  - Seaborn heatmap
 
-# # SELECT, FROM & WHERE
 # 
-# Today, we're going to learn how to use SELECT, FROM and WHERE to get data from a specific column based on the value of another column. For the purposes of this explanation, we'll be using this imaginary database, `pet_records` which has just one table in it, called `pets`, which looks like this:
 # 
-# ![](https://i.imgur.com/Ef4Puo3.png)
+# Loading Data
+# ------------
 # 
-# ### SELECT ... FROM
-# ___
-# 
-# The most basic SQL query is to select a single column from a specific table. To do this, you need to tell SELECT which column to select and then specify what table that column is from using from. 
-# 
-# > **Do you need to capitalize SELECT and FROM?** No, SQL doesn't care about capitalization. However, it's customary to capitalize your SQL commands and it makes your queries a bit easier to read.
-# 
-# So, if we wanted to select the "Name" column from the pets table of the pet_records database (if that database were accessible as a BigQuery dataset on Kaggle , which it is not, because I made it up), we would do this:
-# 
-#     SELECT Name
-#     FROM `bigquery-public-data.pet_records.pets`
-# 
-# Which would return the highlighted data from this figure.
-# 
-# ![](https://i.imgur.com/8FdVyFP.png)
-# 
-# ### WHERE ...
-# ___
-# 
-# When you're working with BigQuery datasets, you're almost always going to want to return only certain rows, usually based on the value of a different column. You can do this using the WHERE clause, which will only return the rows where the WHERE clause evaluates to true.
-# 
-# Let's look at an example:
-# 
-#     SELECT Name
-#     FROM `bigquery-public-data.pet_records.pets`
-#     WHERE Animal = "Cat"
-# 
-# This query will only return the entries from the "Name" column that are in rows where the "Animal" column has the text "Cat" in it. Those are the cells highlighted in blue in this figure:
-# 
-# ![](https://i.imgur.com/Va52Qdl.png)
-# 
-
-# ## Example: What are all the U.S. cities in the OpenAQ dataset?
-# ___
-# 
-# Now that you've got the basics down, let's work through an example with a real dataset. Today we're going to be working with the OpenAQ dataset, which has information on air quality around the world. (The data in it should be current: it's updated weekly.)
-# 
-# To help get you situated, I'm going to run through a complete query first. Then it will be your turn to get started running your queries!
-# 
-# First, I'm going to set up everything we need to run queries and take a quick peek at what tables are in our database.
 
 # In[ ]:
 
 
-# import package with helper functions 
-import bq_helper
-
-# create a helper object for this dataset
-open_aq = bq_helper.BigQueryHelper(active_project="bigquery-public-data",
-                                   dataset_name="openaq")
-
-# print all the tables in this dataset (there's only one!)
-open_aq.list_tables()
+import pandas as pd
+import numpy as np
+import datetime
 
 
-# I'm going to take a peek at the first couple of rows to help me see what sort of data is in this dataset.
+import warnings
+warnings.filterwarnings("ignore")
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(style="white", color_codes=True)
+
+
+dateparse = lambda x: datetime.datetime.strptime(x,'%Y-%m-%d %H:%M:%S')
+
+# Read data 
+d=pd.read_csv("../input/911.csv",
+    header=0,names=['lat', 'lng','desc','zip','title','timeStamp','twp','addr','e'],
+    dtype={'lat':str,'lng':str,'desc':str,'zip':str,
+                  'title':str,'timeStamp':str,'twp':str,'addr':str,'e':int}, 
+     parse_dates=['timeStamp'],date_parser=dateparse)
+
+
+# Set index
+d.index = pd.DatetimeIndex(d.timeStamp)
+d=d[(d.timeStamp >= "2016-01-01 00:00:00")]
+
 
 # In[ ]:
 
 
-# print the first couple rows of the "global_air_quality" dataset
-open_aq.head("global_air_quality")
+d.head()
 
-
-# Great, everything looks good! Now that I'm set up, I'm going to put together a query. I want to select all the values from the "city" column for the rows there the "country" column is "us" (for "United States"). 
-# 
-# > **What's up with the triple quotation marks (""")?** These tell Python that everything inside them is a single string, even though we have line breaks in it. The line breaks aren't necessary, but they do make it much easier to read your query.
 
 # In[ ]:
 
 
-# query to select all the items from the "city" column where the
-# "country" column is "us"
-query = """SELECT city
-            FROM `bigquery-public-data.openaq.global_air_quality`
-            WHERE country = 'US'
-        """
+# Title is the category of the call
+d["title"].value_counts()
 
 
-# > **Important:**  Note that the argument we pass to FROM is *not* in single or double quotation marks (' or "). It is in backticks (\`). If you use quotation marks instead of backticks, you'll get this error when you try to run the query: `Syntax error: Unexpected string literal` 
+# ## Maps ##
 # 
-# Now I can use this query to get information from our open_aq dataset. I'm using the `BigQueryHelper.query_to_pandas_safe()` method here because it won't run a query if it's larger than 1 gigabyte, which helps me avoid accidentally running a very large query. See the [Scavenger Hunt Handbook ](https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/)for more details. 
+# If you're interested in making a Google map take a look at this  [kernel][1]
+# 
+# Here's the [code][2] to create this map. 
+# 
+# 
+# ![Google Maps on Kaggle][3]
+# 
+# 
+#   [1]: https://www.kaggle.com/mchirico/d/mchirico/montcoalert/map-of-helicopter-landings
+#   [2]: https://www.kaggle.com/mchirico/d/mchirico/montcoalert/map-of-helicopter-landings/code
+#   [3]: https://raw.githubusercontent.com/mchirico/mchirico.github.io/master/p/images/kaggleGoogleMap.png
+
+# ## Working with the Data ##
 
 # In[ ]:
 
 
-# the query_to_pandas_safe will only return a result if it's less
-# than one gigabyte (by default)
-us_cities = open_aq.query_to_pandas_safe(query)
+# There are 3 groups -- EMS, Fire, Traffic
+# We'll call these type.  This type is split on ':'
+d['type'] = d["title"].apply(lambda x: x.split(':')[0])
 
-
-# Now I've got a dataframe called us_cities, which I can use like I would any other dataframe:
 
 # In[ ]:
 
 
-# What five cities have the most measurements taken there?
-us_cities.city.value_counts().head()
+d["type"].value_counts()
 
 
-# # Scavenger hunt
-# ___
 # 
-# Now it's your turn! Here's the questions I would like you to get the data to answer:
 # 
-# * Which countries use a unit other than ppm to measure any type of pollution? (Hint: to get rows where the value *isn't* something, use "!=")
-# * Which pollutants have a value of exactly 0?
+# Pivot Table
+# -----------
 # 
-# In order to answer these questions, you can fork this notebook by hitting the blue "Fork Notebook" at the very top of this page (you may have to scroll up).  "Forking" something is making a copy of it that you can edit on your own without changing the original.
 
 # In[ ]:
 
 
-# Your code goes here :)
+# Let's create a pivot table with just EMS
+# It will be stored in a variable 'pp'
+g=d[d['type'] == 'EMS' ]
+p=pd.pivot_table(g, values='e', index=['timeStamp'], columns=['title'], aggfunc=np.sum)
+
+# Resampling every week 'W'.  This is very powerful
+pp=p.resample('W', how=[np.sum]).reset_index()
+pp.head()
 
 
+# In[ ]:
 
-# Please feel free to ask any questions you have in this notebook or in the [Q&A forums](https://www.kaggle.com/questions-and-answers)! 
+
+# That "sum" column is a pain...remove it
+
+# Let's flatten the columns 
+pp.columns = pp.columns.get_level_values(0)
+
+pp.head()
+
+
 # 
-# Also, if you want to share or get comments on your kernel, remember you need to make it public first! You can change the visibility of your kernel under the "Settings" tab, on the right half of your screen.
+# 
+# Graphs/Plots
+# ------
+# 
+
+# In[ ]:
+
+
+# Red dot with Line
+fig, ax = plt.subplots()
+
+ax.spines["top"].set_visible(False)    
+ax.spines["bottom"].set_visible(False)    
+ax.spines["right"].set_visible(False)    
+ax.spines["left"].set_visible(False)  
+
+
+
+ax.get_xaxis().tick_bottom()    
+ax.get_yaxis().tick_left() 
+plt.xticks(fontsize=12) 
+
+
+
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'k')
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'ro')
+
+
+ax.set_title("EMS: ASSAULT VICTIM")
+fig.autofmt_xdate()
+plt.show()
+
+# Note, you'll get a drop at the ends...not a complete week
+
+
+# In[ ]:
+
+
+# Remove the first and last row
+pp = pp[pp['timeStamp'] < pp['timeStamp'].max()]
+pp = pp[pp['timeStamp'] > pp['timeStamp'].min()]
+
+
+# In[ ]:
+
+
+# Get the best fitting line
+
+# Need to import for legend
+import matplotlib.lines as mlines
+
+# For best fit line
+from sklearn import linear_model
+
+# Red dot with Line
+fig, ax = plt.subplots()
+
+ax.spines["top"].set_visible(False)    
+ax.spines["bottom"].set_visible(False)    
+ax.spines["right"].set_visible(False)    
+ax.spines["left"].set_visible(False)  
+
+
+
+ax.get_xaxis().tick_bottom()    
+ax.get_yaxis().tick_left() 
+plt.xticks(fontsize=12) 
+
+
+
+# Build Linear Fit
+Y = pp['EMS: ASSAULT VICTIM'].values.reshape(-1,1)
+X=np.arange(Y.shape[0]).reshape(-1,1)
+model = linear_model.LinearRegression()
+model.fit(X,Y)
+m = model.coef_[0][0]
+c = model.intercept_[0]
+ax.plot(pp['timeStamp'],model.predict(X), color='blue',
+         linewidth=2)
+blue_line = mlines.Line2D([], [], color='blue', label='Linear Fit: y = %2.2fx + %2.2f' % (m,c))
+ax.legend(handles=[blue_line], loc='best')
+
+
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'k')
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'ro')
+
+
+ax.set_title("EMS: ASSAULT VICTIM")
+fig.autofmt_xdate()
+plt.show()
+
+
+# In[ ]:
+
+
+
+# Need to import for legend
+import matplotlib.lines as mlines
+
+fig, ax = plt.subplots()
+
+ax.spines["top"].set_visible(False)    
+ax.spines["bottom"].set_visible(False)    
+ax.spines["right"].set_visible(False)    
+ax.spines["left"].set_visible(False)  
+
+
+ax.get_xaxis().tick_bottom()    
+ax.get_yaxis().tick_left() 
+plt.xticks(fontsize=12) 
+
+
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'k')
+ax.plot_date(pp['timeStamp'], pp['EMS: ASSAULT VICTIM'],'ro')
+
+
+ax.plot_date(pp['timeStamp'], pp['EMS: VEHICLE ACCIDENT'],'g')
+ax.plot_date(pp['timeStamp'], pp['EMS: VEHICLE ACCIDENT'],'bo')
+
+
+ax.set_title("EMS: ASSAULT VICTIM vs  EMS: VEHICLE ACCIDENT")
+
+
+# Legend Stuff
+green_line = mlines.Line2D([], [], color='green', marker='o',markerfacecolor='blue',
+                          markersize=7, label='EMS: VEHICLE ACCIDENT')
+black_line = mlines.Line2D([], [], color='black', marker='o',markerfacecolor='darkred',
+                          markersize=7, label='EMS: ASSAULT VICTIM')
+
+ax.legend(handles=[green_line,black_line], loc='best')
+
+
+fig.autofmt_xdate()
+plt.show()
+
+# Note scale hides the assault increase 
+
+
+# ## Functions -- Probably more useful ##
+
+# In[ ]:
+
+
+from sklearn import linear_model
+import matplotlib.lines as mlines
+
+def plotWLine(category='EMS: ASSAULT VICTIM'):
+
+    
+    fig, ax = plt.subplots()
+
+    ax.spines["top"].set_visible(False)    
+    ax.spines["bottom"].set_visible(False)    
+    ax.spines["right"].set_visible(False)    
+    ax.spines["left"].set_visible(False)  
+
+
+
+    ax.get_xaxis().tick_bottom()    
+    ax.get_yaxis().tick_left() 
+    plt.xticks(fontsize=12) 
+
+
+
+    # Build Linear Fit
+    Y = pp[category].values.reshape(-1,1)
+    X=np.arange(Y.shape[0]).reshape(-1,1)
+    model = linear_model.LinearRegression()
+    model.fit(X,Y)
+    m = model.coef_[0][0]
+    c = model.intercept_[0]
+    ax.plot(pp['timeStamp'],model.predict(X), color='blue',
+             linewidth=2)
+    blue_line = mlines.Line2D([], [], color='blue', label='Linear Fit: y = %2.2fx + %2.2f' % (m,c))
+    
+
+    
+    # Robustly fit linear model with RANSAC algorithm
+    model_ransac = linear_model.RANSACRegressor(linear_model.LinearRegression(),random_state=23)
+    model_ransac.fit(X, Y)
+    mr = model_ransac.estimator_.coef_[0][0]
+    cr = model_ransac.estimator_.intercept_[0]
+    ax.plot(pp['timeStamp'],model_ransac.predict(X), color='green',
+             linewidth=2)
+    green_line = mlines.Line2D([], [], color='green', label='RANSAC Fit: y = %2.2fx + %2.2f' % (mr,cr))
+
+
+    
+    ax.legend(handles=[blue_line,green_line], loc='best')
+    
+
+    ax.plot_date(pp['timeStamp'], pp[category],'k')
+    ax.plot_date(pp['timeStamp'], pp[category],'ro')
+
+
+    ax.set_title(category)
+    fig.autofmt_xdate()
+    plt.show()
+    print('\n')
+
+
+    
+def plot2WLine(cat1='EMS: ASSAULT VICTIM',cat2='EMS: VEHICLE ACCIDENT'):
+    
+    fig, ax = plt.subplots()
+
+    ax.spines["top"].set_visible(False)    
+    ax.spines["bottom"].set_visible(False)    
+    ax.spines["right"].set_visible(False)    
+    ax.spines["left"].set_visible(False)  
+
+
+
+    ax.get_xaxis().tick_bottom()    
+    ax.get_yaxis().tick_left() 
+    plt.xticks(fontsize=12) 
+
+    
+
+    ax.plot_date(pp['timeStamp'], pp[cat1],'k')
+    ax.plot_date(pp['timeStamp'], pp[cat1],'ro')
+
+
+    ax.plot_date(pp['timeStamp'], pp[cat2],'g')
+    ax.plot_date(pp['timeStamp'], pp[cat2],'bo')
+
+
+    
+    
+# Build Linear Fit
+    
+    # cat 1
+    Y = pp[cat1].values.reshape(-1,1)
+    X=np.arange(Y.shape[0]).reshape(-1,1)
+    model = linear_model.LinearRegression()
+    model.fit(X,Y)
+    m = model.coef_[0][0]
+    c = model.intercept_[0]
+    ax.plot(pp['timeStamp'],model.predict(X), color='black',
+             linewidth=2)
+    
+    black_line = mlines.Line2D([], [], color='black', marker='o',markerfacecolor='darkred',
+                               markersize=7,
+                               label='%s, y = %2.2fx + %2.2f' % (cat1,m,c))
+  
+    # cat 2
+    Y = pp[cat2].values.reshape(-1,1)
+    X=np.arange(Y.shape[0]).reshape(-1,1)
+    model = linear_model.LinearRegression()
+    model.fit(X,Y)
+    m = model.coef_[0][0]
+    c = model.intercept_[0]
+    ax.plot(pp['timeStamp'],model.predict(X), color='green',
+             linewidth=2)
+    
+    green_line = mlines.Line2D([], [], color='green',marker='o',markerfacecolor='blue',
+                          markersize=7, label='%s, y = %2.2fx + %2.2f' % (cat2,m,c))
+  
+ 
+    
+    ax.set_title(cat1 + ' vs ' + cat2)
+    ax.legend(handles=[green_line,black_line], loc='best')
+
+    fig.autofmt_xdate()
+    plt.show()
+    print('\n')
+       
+    
+# Create some plots
+plotWLine('EMS: RESPIRATORY EMERGENCY')
+plotWLine('EMS: NAUSEA/VOMITING')
+plotWLine('EMS: CARDIAC EMERGENCY')
+plotWLine('EMS: FALL VICTIM')
+plotWLine('EMS: HEMORRHAGING')
+plotWLine('EMS: ALLERGIC REACTION')
+
+
+
+
+
+
+plot2WLine(cat1='EMS: ASSAULT VICTIM',cat2='EMS: VEHICLE ACCIDENT')
+
+
+# 
+# 
+# Percent Change
+# --------------
+# 
+
+# In[ ]:
+
+
+# Get percent change
+pp['EMS: ASSAULT VICTIM pc']=pp[('EMS: ASSAULT VICTIM')].pct_change(periods=1)
+
+pp[['timeStamp','EMS: ASSAULT VICTIM pc','EMS: ASSAULT VICTIM']].head(6)
+
+
+# ## Seaborn Heatmap ##
+
+# In[ ]:
+
+
+# Vehicle Accident -- yes, there is FIRE; maybe we should have include?
+# Put this in a variable 'g'
+g = d[(d.title.str.match(r'EMS:.*VEHICLE ACCIDENT.*') | d.title.str.match(r'Traffic:.*VEHICLE ACCIDENT.*'))]
+g['Month'] = g['timeStamp'].apply(lambda x: x.strftime('%m %B'))
+g['Hour'] = g['timeStamp'].apply(lambda x: x.strftime('%H'))
+p=pd.pivot_table(g, values='e', index=['Month'] , columns=['Hour'], aggfunc=np.sum)
+p.head()
+
+
+# In[ ]:
+
+
+cmap = sns.cubehelix_palette(light=2, as_cmap=True)
+ax = sns.heatmap(p,cmap = cmap)
+ax.set_title('Vehicle  Accidents - All Townships ');
+

@@ -1,367 +1,210 @@
-import re
-from time import time
-from collections import Counter
-
-import tensorflow as tf
-import pandas as pd
 import numpy as np
-
-from nltk.stem.porter import PorterStemmer
-from fastcache import clru_cache as lru_cache
-
-np.random.seed(1525)
-
-
-t_start = time()
-
-stemmer = PorterStemmer()
-
-@lru_cache(1024)
-def stem(s):
-    return stemmer.stem(s)
-
-whitespace = re.compile(r'\s+')
-non_letter = re.compile(r'\W+')
-
-def tokenize(text):
-    text = text.lower()
-    text = non_letter.sub(' ', text)
-
-    tokens = []
-
-    for t in text.split():
-        t = stem(t)
-        tokens.append(t)
-
-    return tokens
-
-class Tokenizer:
-    def __init__(self, min_df=10, tokenizer=str.split):
-        self.min_df = min_df
-        self.tokenizer = tokenizer
-        self.doc_freq = None
-        self.vocab = None
-        self.vocab_idx = None
-        self.max_len = None
-
-    def fit_transform(self, texts):
-        tokenized = []
-        doc_freq = Counter()
-        n = len(texts)
-
-        for text in texts:
-            sentence = self.tokenizer(text)
-            tokenized.append(sentence)
-            doc_freq.update(set(sentence))
-
-        vocab = sorted([t for (t, c) in doc_freq.items() if c >= self.min_df])
-        vocab_idx = {t: (i + 1) for (i, t) in enumerate(vocab)}
-        doc_freq = [doc_freq[t] for t in vocab]
-
-        self.doc_freq = doc_freq
-        self.vocab = vocab
-        self.vocab_idx = vocab_idx
-
-        max_len = 0
-        result_list = []
-        for text in tokenized:
-            text = self.text_to_idx(text)
-            max_len = max(max_len, len(text))
-            result_list.append(text)
-
-        self.max_len = max_len
-        result = np.zeros(shape=(n, max_len), dtype=np.int32)
-        for i in range(n):
-            text = result_list[i]
-            result[i, :len(text)] = text
-
-        return result    
-
-    def text_to_idx(self, tokenized):
-        return [self.vocab_idx[t] for t in tokenized if t in self.vocab_idx]
-
-    def transform(self, texts):
-        n = len(texts)
-        result = np.zeros(shape=(n, self.max_len), dtype=np.int32)
-
-        for i in range(n):
-            text = self.tokenizer(texts[i])
-            text = self.text_to_idx(text)[:self.max_len]
-            result[i, :len(text)] = text
-
-        return result
-    
-    def vocabulary_size(self):
-        return len(self.vocab) + 1
-
-
-print('reading train data...')
-df_train = pd.read_csv('../input/train.tsv', sep='\t')
-df_train = df_train[df_train.price != 0].reset_index(drop=True)
-
-price = df_train.pop('price')
-y = np.log1p(price.values)
-mean = y.mean()
-std = y.std()
-y = (y - mean) / std
-y = y.reshape(-1, 1)
-
-df_train.name.fillna('unkname', inplace=True)
-df_train.category_name.fillna('unk_cat', inplace=True)
-df_train.brand_name.fillna('unk_brand', inplace=True)
-df_train.item_description.fillna('nodesc', inplace=True)
-
-print('processing category...')
-
-def paths(tokens):
-    all_paths = ['/'.join(tokens[0:(i+1)]) for i in range(len(tokens))]
-    return ' '.join(all_paths)
-
-@lru_cache(1024)
-def cat_process(cat):
-    cat = cat.lower()
-    cat = whitespace.sub('', cat)
-    split = cat.split('/')
-    return paths(split)
-
-df_train.category_name = df_train.category_name.apply(cat_process)
-
-cat_tok = Tokenizer(min_df=55)
-X_cat = cat_tok.fit_transform(df_train.category_name)
-cat_voc_size = cat_tok.vocabulary_size()
-
-
-print('processing title...')
-
-name_tok = Tokenizer(min_df=10, tokenizer=tokenize)
-X_name = name_tok.fit_transform(df_train.name)
-name_voc_size = name_tok.vocabulary_size()
-
-
-print('processing description...')
-
-desc_num_col = 54 #v0 40
-desc_tok = Tokenizer(min_df=50, tokenizer=tokenize)
-X_desc = desc_tok.fit_transform(df_train.item_description)
-X_desc = X_desc[:, :desc_num_col]
-desc_voc_size = desc_tok.vocabulary_size()
-
-
-print('processing brand...')
-
-df_train.brand_name = df_train.brand_name.str.lower()
-df_train.brand_name = df_train.brand_name.str.replace(' ', '_')
-
-brand_cnt = Counter(df_train.brand_name[df_train.brand_name != 'unk_brand'])
-brands = sorted(b for (b, c) in brand_cnt.items() if c >= 50)
-brands_idx = {b: (i + 1) for (i, b) in enumerate(brands)}
-
-X_brand = df_train.brand_name.apply(lambda b: brands_idx.get(b, 0))
-X_brand = X_brand.values.reshape(-1, 1) 
-brand_voc_size = len(brands) + 1
-
-
-print('processing other features...')
-
-X_item_cond = (df_train.item_condition_id - 1).astype('uint8').values.reshape(-1, 1)
-X_shipping = df_train.shipping.astype('float32').values.reshape(-1, 1)
-
-
-print('defining the model...')
-
-def prepare_batches(seq, step):
-    n = len(seq)
-    res = []
-    for i in range(0, n, step):
-        res.append(seq[i:i+step])
-    return res
-
-def conv1d(inputs, num_filters, filter_size, padding='same'):
-    he_std = np.sqrt(2 / (filter_size * num_filters))
-    out = tf.layers.conv1d(
-        inputs=inputs, filters=num_filters, padding=padding,
-        kernel_size=filter_size,
-        activation=tf.nn.relu, 
-        kernel_initializer=tf.random_normal_initializer(stddev=he_std))
-    return out
-
-def dense(X, size, reg=0.0, activation=None):
-    he_std = np.sqrt(2 / int(X.shape[1]))
-    out = tf.layers.dense(X, units=size, activation=activation, 
-                     kernel_initializer=tf.random_normal_initializer(stddev=he_std),
-                     kernel_regularizer=tf.contrib.layers.l2_regularizer(reg))
-    return out
-
-def embed(inputs, size, dim):
-    std = np.sqrt(2 / dim)
-    emb = tf.Variable(tf.random_uniform([size, dim], -std, std))
-    lookup = tf.nn.embedding_lookup(emb, inputs)
-    return lookup
-
-
-name_embeddings_dim = 32
-name_seq_len = X_name.shape[1]
-desc_embeddings_dim = 32
-desc_seq_len = X_desc.shape[1]
-
-brand_embeddings_dim = 4
-
-cat_embeddings_dim = 16
-cat_seq_len = X_cat.shape[1]
-
-
-graph = tf.Graph()
-graph.seed = 1
-
-with graph.as_default():
-    place_name = tf.placeholder(tf.int32, shape=(None, name_seq_len))
-    place_desc = tf.placeholder(tf.int32, shape=(None, desc_seq_len))
-    place_brand = tf.placeholder(tf.int32, shape=(None, 1))
-    place_cat = tf.placeholder(tf.int32, shape=(None, cat_seq_len))
-    place_ship = tf.placeholder(tf.float32, shape=(None, 1))
-    place_cond = tf.placeholder(tf.uint8, shape=(None, 1))
-
-    place_y = tf.placeholder(dtype=tf.float32, shape=(None, 1))
-
-    place_lr = tf.placeholder(tf.float32, shape=(), )
-
-    name = embed(place_name, name_voc_size, name_embeddings_dim)
-    desc = embed(place_desc, desc_voc_size, desc_embeddings_dim)
-    brand = embed(place_brand, brand_voc_size, brand_embeddings_dim)
-    cat = embed(place_cat, cat_voc_size, cat_embeddings_dim)
-
-    name = conv1d(name, num_filters=13, filter_size=3)
-    name = tf.layers.dropout(name, rate=0.5)
-    name = tf.contrib.layers.flatten(name)
-    print(name.shape)
-
-    desc = conv1d(desc, num_filters=11, filter_size=3)
-    desc = tf.layers.dropout(desc, rate=0.5)
-    desc = tf.contrib.layers.flatten(desc)
-    print(desc.shape)
-
-    brand = tf.contrib.layers.flatten(brand)
-    print(brand.shape)
-
-    cat = tf.layers.average_pooling1d(cat, pool_size=cat_seq_len, strides=1, padding='valid')
-    cat = tf.contrib.layers.flatten(cat)
-    print(cat.shape)
-    
-    ship = place_ship
-    print(ship.shape)
-
-    cond = tf.one_hot(place_cond, 5)
-    cond = tf.contrib.layers.flatten(cond)
-    print(cond.shape)
-
-    out = tf.concat([name, desc, brand, cat, ship, cond], axis=1)
-    print('concatenated dim:', out.shape)
-
-    out = dense(out, 100, activation=tf.nn.relu)
-    out = tf.layers.dropout(out, rate=0.52)
-    out = dense(out, 1)
-
-    loss = tf.losses.mean_squared_error(place_y, out)
-    rmse = tf.sqrt(loss)
-    opt = tf.train.AdamOptimizer(learning_rate=place_lr)
-    train_step = opt.minimize(loss)
-
-    init = tf.global_variables_initializer()
-
-session = tf.Session(config=None, graph=graph)
-session.run(init)
-
-
-print('training the model...')
-
-for i in range(5):
-    t0 = time()
-    np.random.seed(i)
-    train_idx_shuffle = np.arange(X_name.shape[0])
-    np.random.shuffle(train_idx_shuffle)
-    batches = prepare_batches(train_idx_shuffle, 500)
-
-    if i <= 2:
-        lr = 0.0012
+import pandas as pd
+from datetime import datetime
+from sklearn.preprocessing import StandardScaler
+from sklearn.cross_validation import KFold
+from sklearn.metrics import mean_absolute_error
+from scipy.stats import skew, boxcox
+from math import exp, log
+import xgboost as xgb
+
+
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        tmin, tsec = divmod((datetime.now() - start_time).total_seconds(), 60)
+        print(' Time taken: %i minutes and %s seconds.' %
+              (tmin, round(tsec, 2)))
+
+
+def scale_data(X, scaler=None):
+    if not scaler:
+        scaler = StandardScaler()
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+
+DATA_TRAIN_PATH = '../input/train.csv'
+DATA_TEST_PATH = '../input/test.csv'
+
+
+def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
+    train_loader = pd.read_csv(path_train, dtype={'id': np.int32})
+    train = train_loader.drop(['id', 'loss'], axis=1)
+    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
+    test = test_loader.drop(['id'], axis=1)
+    ntrain = train.shape[0]
+    ntest = test.shape[0]
+    train_test = pd.concat((train, test)).reset_index(drop=True)
+    numeric_feats = train_test.dtypes[train_test.dtypes != "object"].index
+
+    # compute skew and do Box-Cox transformation
+    skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna()))
+    print("\nSkew in numeric features:")
+    print(skewed_feats)
+    # transform features with skew > 0.25 (this can be varied to find optimal value)
+    skewed_feats = skewed_feats[skewed_feats > 0.25]
+    skewed_feats = skewed_feats.index
+    for feats in skewed_feats:
+        train_test[feats] = train_test[feats] + 1
+        train_test[feats], lam = boxcox(train_test[feats])
+    features = train.columns
+    cats = [feat for feat in features if 'cat' in feat]
+    # factorize categorical features
+    for feat in cats:
+        train_test[feat] = pd.factorize(train_test[feat], sort=True)[0]
+    x_train = train_test.iloc[:ntrain, :]
+    x_test = train_test.iloc[ntrain:, :]
+    train_test_scaled, scaler = scale_data(train_test)
+    train, _ = scale_data(x_train, scaler)
+    test, _ = scale_data(x_test, scaler)
+
+    train_labels = np.log(np.array(train_loader['loss']))
+    train_ids = train_loader['id'].values.astype(np.int32)
+    test_ids = test_loader['id'].values.astype(np.int32)
+
+    return train, train_labels, test, train_ids, test_ids
+
+################################## Actual Run Code ##################################
+
+# enter the number of folds from xgb.cv
+folds = 5
+cv_sum = 0
+early_stopping = 25
+fpred = []
+xgb_rounds = []
+
+start_time = timer(None)
+
+# Load data set and target values
+train, target, test, _, ids = load_data()
+d_train_full = xgb.DMatrix(train, label=target)
+d_test = xgb.DMatrix(test)
+
+# set up KFold that matches xgb.cv number of folds
+kf = KFold(train.shape[0], n_folds=folds)
+for i, (train_index, test_index) in enumerate(kf):
+    print('\n Fold %d\n' % (i + 1))
+    X_train, X_val = train[train_index], train[test_index]
+    y_train, y_val = target[train_index], target[test_index]
+
+#######################################
+#
+# Define cross-validation variables
+#
+#######################################
+
+    params = {}
+    params['booster'] = 'gbtree'
+    params['objective'] = "reg:linear"
+    params['eval_metric'] = 'mae'
+    params['eta'] = 0.1
+    params['gamma'] = 0.5290
+    params['min_child_weight'] = 4.2922
+    params['colsample_bytree'] = 0.3085
+    params['subsample'] = 0.9930
+    params['max_depth'] = 7
+    params['max_delta_step'] = 0
+    params['silent'] = 1
+    params['random_state'] = 1001
+
+    d_train = xgb.DMatrix(X_train, label=y_train)
+    d_valid = xgb.DMatrix(X_val, label=y_val)
+    watchlist = [(d_train, 'train'), (d_valid, 'eval')]
+
+####################################
+#  Build Model
+####################################
+
+    clf = xgb.train(params,
+                    d_train,
+                    100000,
+                    watchlist,
+                    early_stopping_rounds=early_stopping)
+
+####################################
+#  Evaluate Model and Predict
+####################################
+
+    xgb_rounds.append(clf.best_iteration)
+    scores_val = clf.predict(d_valid, ntree_limit=clf.best_ntree_limit)
+    cv_score = mean_absolute_error(np.exp(y_val), np.exp(scores_val))
+    print(' eval-MAE: %.6f' % cv_score)
+    y_pred = np.exp(clf.predict(d_test, ntree_limit=clf.best_ntree_limit))
+
+####################################
+#  Add Predictions and Average Them
+####################################
+
+    if i > 0:
+        fpred = pred + y_pred
     else:
-        lr = 0.0001
+        fpred = y_pred
+    pred = fpred
+    cv_sum = cv_sum + cv_score
 
-    for idx in batches:
-        feed_dict = {
-            place_name: X_name[idx],
-            place_desc: X_desc[idx],
-            place_brand: X_brand[idx],
-            place_cat: X_cat[idx],
-            place_cond: X_item_cond[idx],
-            place_ship: X_shipping[idx],
-            place_y: y[idx],
-            place_lr: lr,
-        }
-        session.run(train_step, feed_dict=feed_dict)
+mpred = pred / folds
+score = cv_sum / folds
+print('\n Average eval-MAE: %.6f' % score)
+n_rounds = int(np.mean(xgb_rounds))
 
-    took = time() - t0
-    print('epoch %d took %.3fs' % (i, took))
+####################################
+#  Make Full Dataset Predictions
+####################################
 
+print('\n Training full dataset for %d rounds ...' % n_rounds)
+watchlist = [(d_train_full, 'train')]
+clf_full = xgb.train(
+    params, d_train_full,
+    n_rounds,
+    watchlist,
+    verbose_eval=False,)
+y_pred_full = np.exp(clf_full.predict(d_test))
 
-print('reading the test data...')
+# enter the number of iterations from xgb.cv with early_stopping turned on
+n_fixed = 376
 
-df_test = pd.read_csv('../input/test.tsv', sep='\t')
+nfixed = int(n_fixed * (1 + (1. / folds)))
+print('\n Training full dataset for %d rounds ...\n' % nfixed)
+clf_fixed = xgb.train(
+    params, d_train_full,
+    nfixed,
+    watchlist,
+    verbose_eval=False,)
+y_pred_fixed = np.exp(clf_fixed.predict(d_test))
+timer(start_time)
 
-df_test.name.fillna('unkname', inplace=True)
-df_test.category_name.fillna('unk_cat', inplace=True)
-df_test.brand_name.fillna('unk_brand', inplace=True)
-df_test.item_description.fillna('nodesc', inplace=True)
+print("#\n Writing results")
+result = pd.DataFrame(mpred, columns=['loss'])
+result["id"] = ids
+result = result.set_index("id")
+print("\n %d-fold average prediction:\n" % folds)
+print(result.head())
+result_full = pd.DataFrame(y_pred_full, columns=['loss'])
+result_full["id"] = ids
+result_full = result_full.set_index("id")
+print("\n Full dataset prediction:\n")
+print(result_full.head())
+result_fixed = pd.DataFrame(y_pred_fixed, columns=['loss'])
+result_fixed["id"] = ids
+result_fixed = result_fixed.set_index("id")
+print("\n Full datset (at CV #iterations) prediction:\n")
+print(result_fixed.head())
 
-df_test.category_name = df_test.category_name.apply(cat_process)
-df_test.brand_name = df_test.brand_name.str.lower()
-df_test.brand_name = df_test.brand_name.str.replace(' ', '_')
-
-X_cat_test = cat_tok.transform(df_test.category_name)
-X_name_test = name_tok.transform(df_test.name)
-
-X_desc_test = desc_tok.transform(df_test.item_description)
-X_desc_test = X_desc_test[:, :desc_num_col]
-
-X_item_cond_test = (df_test.item_condition_id - 1).astype('uint8').values.reshape(-1, 1)
-X_shipping_test = df_test.shipping.astype('float32').values.reshape(-1, 1)
-
-X_brand_test = df_test.brand_name.apply(lambda b: brands_idx.get(b, 0))
-X_brand_test = X_brand_test.values.reshape(-1, 1)
-
-
-print('applying the model to test...')
-
-n_test = len(df_test)
-y_pred = np.zeros(n_test)
-
-test_idx = np.arange(n_test)
-batches = prepare_batches(test_idx, 5000)
-
-for idx in batches:
-    feed_dict = {
-        place_name: X_name_test[idx],
-        place_desc: X_desc_test[idx],
-        place_brand: X_brand_test[idx],
-        place_cat: X_cat_test[idx],
-        place_cond: X_item_cond_test[idx],
-        place_ship: X_shipping_test[idx],
-    }
-    batch_pred = session.run(out, feed_dict=feed_dict)
-    y_pred[idx] = batch_pred[:, 0]
-
-y_pred = y_pred * std + mean
-y_pred = np.expm1(y_pred)
-
-
-print('writing the results...')
-
-df_out = pd.DataFrame()
-df_out['test_id'] = df_test.test_id
-df_out['price'] = y_pred
-
-df_out.to_csv('submission_tf.csv', index=False)
-
-
-t_end = time()
-took = (t_end - t_start) / 60
-print('done in %.3f minutes' % took)
+now = datetime.now()
+score = str(round((cv_sum / folds), 6))
+sub_file = 'submission_5fold-average-xgb_' + str(score) + '_' + str(
+    now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+print("\n Writing submission: %s" % sub_file)
+result.to_csv(sub_file, index=True, index_label='id')
+sub_file = 'submission_full-average-xgb_' + str(now.strftime(
+    "%Y-%m-%d-%H-%M")) + '.csv'
+print("\n Writing submission: %s" % sub_file)
+result_full.to_csv(sub_file, index=True, index_label='id')
+sub_file = 'submission_full-CV-xgb_' + str(now.strftime(
+    "%Y-%m-%d-%H-%M")) + '.csv'
+print("\n Writing submission: %s" % sub_file)
+result_fixed.to_csv(sub_file, index=True, index_label='id')

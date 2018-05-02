@@ -1,86 +1,108 @@
-import numpy as np
-import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
+import numpy, pandas, haversine, multiprocessing, math
+from datetime import timedelta
+from geopy import distance
 from sklearn import *
 import lightgbm as lgb
-from multiprocessing import *
+import xgboost as xgb
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-col = [c for c in train.columns if c not in ['id','target']]
-print(len(col))
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(len(col))
+cal = USFederalHolidayCalendar()
+holidays = [d.date() for d in cal.holidays(start='2016-01-01', end='2016-06-30').to_pydatetime()]
+business = [d.date() for d in pandas.date_range('2016-01-01', '2016-06-30') if d not in pandas.bdate_range('2016-01-01', '2016-06-30')]
+holidays_prev = [d + timedelta(days=-1) for d in holidays]
+holidays_after = [d + timedelta(days=1) for d in holidays]
 
-train = train.replace(-1, np.NaN)
-d_median = train.median(axis=0)
-d_mean = train.mean(axis=0)
-train = train.fillna(-1)
-one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
+def fdist(params):
+    i, ll = params
+    l1, l2, l3, l4 = ll
+    h = haversine.haversine((l1, l2),(l3, l4))
+    v = distance.vincenty((l1, l2),(l3, l4)).miles
+    g = distance.great_circle((l1, l2),(l3, l4)).miles
+    d =  math.degrees(math.atan2(math.sin(l3 - l2) * math.cos(l3), math.cos(l1) * math.sin(l3) - math.sin(l1) * math.cos(l3) * math.cos(l3 - l2)))
+    return [i, h, v, g, d]
 
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c: #standard arithmetic
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
-            #df[c+str('_sq')] = np.power(df[c].values,2).astype(np.float32)
-            #df[c+str('_sqr')] = np.square(df[c].values).astype(np.float32)
-            #df[c+str('_log')] = np.log(np.abs(df[c].values) + 1)
-            #df[c+str('_exp')] = np.exp(df[c].values) - 1
-    for c in one_hot:
-        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
-            for val in one_hot[c]:
-                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
-    return df
-
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+def mixer(ingredients):
+    p = multiprocessing.Pool(multiprocessing.cpu_count())
+    ll = list(enumerate(ingredients[['pickup_latitude','pickup_longitude','dropoff_latitude','dropoff_longitude']].values))
+    dist = numpy.array(sorted(p.map(fdist, ll)))
     p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
+    ingredients['hdistance'] = dist[:,1]
+    ingredients['vdistance'] = dist[:,2]
+    ingredients['gdistance'] = dist[:,3]
+    ingredients['direction'] = dist[:,4]
+    ingredients['sdistance'] = numpy.sqrt(numpy.square(ingredients['pickup_longitude'] - ingredients['dropoff_longitude']) + numpy.square(ingredients['pickup_latitude'] - ingredients['dropoff_latitude']))
+    for i in range(1,6):
+        ingredients['pickup_latitude'+str(i)] = numpy.round(ingredients['pickup_latitude'], i)
+        ingredients['pickup_longitude'+str(i)] = numpy.round(ingredients['pickup_longitude'], i)
+        ingredients['dropoff_latitude'+str(i)] = numpy.round(ingredients['dropoff_latitude'], i)
+        ingredients['dropoff_longitude'+str(i)] = numpy.round(ingredients['dropoff_longitude'], i)
+    ingredients['quarter'] = ingredients.pickup_datetime.dt.quarter
+    ingredients['month'] = ingredients.pickup_datetime.dt.month
+    ingredients['day'] = ingredients.pickup_datetime.dt.day
+    ingredients['dow'] = ingredients.pickup_datetime.dt.dayofweek
+    ingredients['wd'] = ingredients.pickup_datetime.dt.weekday
+    ingredients['hr'] = ingredients.pickup_datetime.dt.hour
+    ingredients['m'] = ingredients.pickup_datetime.dt.minute
+    ingredients['h'] = ingredients.pickup_datetime.dt.date.map(lambda x: 1 if x in holidays else 0)
+    ingredients['hp'] = ingredients.pickup_datetime.dt.date.map(lambda x: 1 if x in holidays_prev else 0)
+    ingredients['ha'] = ingredients.pickup_datetime.dt.date.map(lambda x: 1 if x in holidays_after else 0)
+    ingredients['b'] = ingredients.pickup_datetime.dt.date.map(lambda x: 1 if x in business else 0)
+    ingredients['store_and_fwd_flag'] = ingredients['store_and_fwd_flag'].map(lambda x: 0 if x =='N' else 1)
+    ingredients = pandas.merge(ingredients, weather, on = ['month', 'day', 'hr'], how = 'left').fillna(0.0)
+    layer = [l for l in ingredients.columns if l not in ['id','pickup_datetime', 'dropoff_datetime', 'trip_duration']]
+    print('Ohhh smells good...')
+    return ingredients[layer]
 
-def gini(y, pred):
-    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
-    g = 2 * metrics.auc(fpr, tpr) -1
-    return g
+flour = pandas.read_csv('../input/nyc-taxi-trip-duration/train.csv', parse_dates=['pickup_datetime'])
+flour = flour[flour.trip_duration <= 1800000].reset_index(drop=True)
+candles = numpy.log(flour['trip_duration']+1)
+frosting = pandas.read_csv('../input/nyc-taxi-trip-duration/test.csv', parse_dates=['pickup_datetime'])
+icing = frosting['id']
 
-x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
+weather = pandas.read_csv('../input/knycmetars2016/KNYC_Metars.csv', parse_dates=['Time'])
+weather['year'] = weather['Time'].dt.year
+weather['month'] = weather['Time'].dt.month
+weather['day'] = weather['Time'].dt.day
+weather['hr'] = weather['Time'].dt.hour
+weather = weather[weather['year'] == 2016][['month','day','hr','Temp.','Humidity','Pressure']]
+weather = pandas.DataFrame(weather.groupby(by=['month','day','hr'])['Temp.','Humidity','Pressure'].mean().reset_index()) 
 
-x1 = multi_transform(x1)
-x2 = multi_transform(x2)
-test = multi_transform(test)
+flour = mixer(flour)
+frosting = mixer(frosting)
 
-col = [c for c in x1.columns if c not in ['id','target']]
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(x1.values.shape, x2.values.shape)
+col = ['pickup_latitude', 'pickup_longitude','dropoff_latitude', 'dropoff_longitude']
+full = pandas.concat([flour[col], frosting[col]])
+coords = numpy.vstack((full[['pickup_latitude', 'pickup_longitude']], full[['dropoff_latitude', 'dropoff_longitude']]))
 
-#remove duplicates just in case
-tdups = multi_transform(train)
-dups = tdups[tdups.duplicated(subset=col, keep=False)]
+pca = decomposition.PCA().fit(coords)
+flour['pickup_pca0'] = pca.transform(flour[['pickup_latitude', 'pickup_longitude']])[:, 0]
+flour['pickup_pca1'] = pca.transform(flour[['pickup_latitude', 'pickup_longitude']])[:, 1]
+flour['dropoff_pca0'] = pca.transform(flour[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
+flour['dropoff_pca1'] = pca.transform(flour[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
+frosting['pickup_pca0'] = pca.transform(frosting[['pickup_latitude', 'pickup_longitude']])[:, 0]
+frosting['pickup_pca1'] = pca.transform(frosting[['pickup_latitude', 'pickup_longitude']])[:, 1]
+frosting['dropoff_pca0'] = pca.transform(frosting[['dropoff_latitude', 'dropoff_longitude']])[:, 0]
+frosting['dropoff_pca1'] = pca.transform(frosting[['dropoff_latitude', 'dropoff_longitude']])[:, 1]
 
-x1 = x1[~(x1['id'].isin(dups['id'].values))]
-x2 = x2[~(x2['id'].isin(dups['id'].values))]
-print(x1.values.shape, x2.values.shape)
+x1, x2, y1, y2 = model_selection.train_test_split(flour, candles, test_size=0.3); flour = []
 
-y1 = x1['target']
-y2 = x2['target']
-x1 = x1[col]
-x2 = x2[col]
+params = {
+    'boosting_type': 'gbdt',
+    'objective': 'regression',
+    'metric': 'l2_root',
+    'learning_rate': 0.2111,
+    'max_depth': 15
+}
+oven2 = lgb.train(params, lgb.Dataset(x1, label=y1), 2111, lgb.Dataset(x2, label=y2), verbose_eval=50, early_stopping_rounds=50)
+prep2 = oven2.predict(frosting, num_iteration=oven2.best_iteration)
+cake = pandas.DataFrame({'id': icing, 'trip_duration': numpy.exp(prep2)-1})
 
-#LightGBM
-def gini_lgb(preds, dtrain):
-    y = list(dtrain.get_label())
-    score = gini(y, preds) / gini(y, y)
-    return 'gini', score, True
+import sqlite3, io #blending
+c = sqlite3.connect('../input/dataset01/database.sqlite')
+df1 = pandas.read_sql('Select * From stacks Where Id=2', c)
+df1 = pandas.read_csv(io.StringIO(df1['file'][0]))
+df1.columns = [x+'_' if x not in ['id'] else x for x in df1.columns]
+cake = pandas.merge(cake, df1, how='left', on='id')
+cake['trip_duration'] = (cake['trip_duration'] * 0.30) + (cake['trip_duration_'] * 0.70)
 
-params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'metric': 'auc', 'is_training_metric': False, 'seed': 99}
-model2 = lgb.train(params, lgb.Dataset(x1, label=y1), 2000, lgb.Dataset(x2, label=y2), verbose_eval=50, feval=gini_lgb, early_stopping_rounds=200)
-test['target'] = model2.predict(test[col], num_iteration=model2.best_iteration)
-test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
-test[['id','target']].to_csv('lgb_submission.csv', index=False, float_format='%.5f')
+cake[['id','trip_duration']].to_csv('eat_me2.csv', index=False)

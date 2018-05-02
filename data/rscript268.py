@@ -1,142 +1,205 @@
-# This is a script I applied early in toe competition ~ LB = 3. With bounding box regression  
-# (applying this to fishes rather than whole images achieves a much better score)
-# I used this script to learn about CNNs, feature extraction and using features learned by the InceptionV3 CNN
-# to perform classificaiton using a SVM architecture.
-# Inspired (adapted heavily) from: http://blog.christianperone.com/2015/08/convolutional-neural-networks-and-feature-extraction-with-python/
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-import os
-import re
-
-import tensorflow as tf
-import tensorflow.python.platform
-from tensorflow.python.platform import gfile
-import numpy as np
 import pandas as pd
-import sklearn
-from sklearn import cross_validation
-from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.svm import SVC, LinearSVC
-import matplotlib.pyplot as plt
-import pickle
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn import svm
+import time
+import numpy as np
+from sklearn.cross_validation import train_test_split
+import lightgbm as lgb
 
-model_dir = 'latest_submission/'
-# all training images
-images_dir = 'SVM_training_set/'
-list_images = [images_dir+f for f in os.listdir(images_dir) if re.search('jpg|JPG', f)]
+def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
+                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
+    lgb_params = {
+        'boosting_type': 'gbdt',
+        'objective': objective,
+        'metric':metrics,
+        'learning_rate': 0.01,
+        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
+        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
+        'max_depth': -1,  # -1 means no limit
+        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
+        'max_bin': 255,  # Number of bucketed bin for feature values
+        'subsample': 0.6,  # Subsample ratio of the training instance.
+        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
+        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
+        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+        'subsample_for_bin': 200000,  # Number of samples for constructing bin
+        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
+        'reg_alpha': 0,  # L1 regularization term on weights
+        'reg_lambda': 0,  # L2 regularization term on weights
+        'nthread': 8,
+        'verbose': 0,
+        'metric':metrics
+    }
 
+    lgb_params.update(params)
 
-# setup tensorFlow graph initiation
-def create_graph():
-	with gfile.FastGFile(os.path.join(model_dir, 'output.pb'), 'rb') as f:
-		graph_def = tf.GraphDef()
-		graph_def.ParseFromString(f.read())
-		_ = tf.import_graph_def(graph_def, name='')
+    print("preparing validation datasets")
 
-# extract all features from pool layer of InceptionV3
-def extract_features(list_images):
-	nb_features = 2048
-	features = np.empty((len(list_images),nb_features))
-	labels = []
-	create_graph()
-	with tf.Session() as sess:
-		next_to_last_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-		for ind, image in enumerate(list_images):
-			print('Processing %s...' % (image))
-			if not gfile.Exists(image):
-				tf.logging.fatal('File does not exist %s', image)
-			image_data = gfile.FastGFile(image, 'rb').read()
-			predictions = sess.run(next_to_last_tensor,
-			{'DecodeJpeg/contents:0': image_data})
-			features[ind,:] = np.squeeze(predictions)
-			labels.append(re.split('_\d+',image.split('/')[1])[0])
-		return features, labels
+    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical_features
+                          )
+    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical_features
+                          )
 
+    evals_results = {}
 
-features,labels = extract_features(list_images)
+    bst1 = lgb.train(lgb_params, 
+                     xgtrain, 
+                     valid_sets=[xgtrain, xgvalid], 
+                     valid_names=['train','valid'], 
+                     evals_result=evals_results, 
+                     num_boost_round=num_boost_round,
+                     early_stopping_rounds=early_stopping_rounds,
+                     verbose_eval=10, 
+                     feval=feval)
 
-pickle.dump(features, open('features', 'wb'))
-pickle.dump(labels, open('labels', 'wb'))
+    n_estimators = bst1.best_iteration
+    print("\nModel Report")
+    print("n_estimators : ", n_estimators)
+    print(metrics+":", evals_results['valid'][metrics][n_estimators-1])
 
-features = pickle.load(open('features'))
-labels = pickle.load(open('labels'))
+    return bst1
 
-# run a 10-fold CV SVM using probabilistic outputs. 
-X_train, X_test, y_train, y_test = cross_validation.train_test_split(features, labels, test_size=0.1, random_state=0)
-clf = svm.SVC(kernel='linear', C=1).fit(X_train, y_train)
-clf.score(X_test, y_test)
+path = '../input/'
 
-# probabalistic SVM
-clf =  sklearn.calibration.CalibratedClassifierCV(svm)
-clf.fit(X_train, y_train)
-y_pred = clf.predict_proba(X_test)
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        'is_attributed' : 'uint8',
+        'click_id'      : 'uint32'
+        }
 
+print('load train...')
+train_df = pd.read_csv(path+"train.csv", skiprows=range(1,139903891), nrows=40000000,dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
+print('load test...')
+test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
 
-k_fold = KFold(len(labels),n_folds=10, shuffle=False, random_state=0)
-C_array=[0.001,0.01,0.1,1,10]
-C_scores=[]
+import gc
 
-for k in C_array:
-	clf = svm.SVC(kernel='linear', C=k)
-	scores= cross_val_score(clf, features, labels, cv=k_fold, n_jobs=-1)
-	C_scores.append(scores.mean())
-	print C_scores
+len_train = len(train_df)
+train_df=train_df.append(test_df)
 
-#C = 0.1 is best
+del test_df
+gc.collect()
 
-#clf = svm.LinearSVC(C=0.1)
-clf = svm.SVC(kernel='linear', C=0.1,probability=True)
+print('data prep...')
+train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
+train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
 
-# final_model = clf.fit(features, labels)
-
-final_model = CalibratedClassifierCV(clf,cv=10,method='sigmoid')
-final_model = clf.fit(features, labels)
-
-
-test_dir='latest_submission/test_stg1/test_stg1/'
-list_images = [test_dir+f for f in os.listdir(test_dir) if re.search('jpg|JPG', f)]
-
-
-def extract_features(list_images):
-	nb_features = 2048
-	features = np.empty((len(list_images),nb_features))
-	create_graph()
-	with tf.Session() as sess:
-		next_to_last_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-		for ind, image in enumerate(list_images):
-			print('Processing %s...' % (image))
-			if not gfile.Exists(image):
-				tf.logging.fatal('File does not exist %s', image)
-			image_data = gfile.FastGFile(image, 'rb').read()
-			predictions = sess.run(next_to_last_tensor,
-			{'DecodeJpeg/contents:0': image_data})
-			features[ind,:] = np.squeeze(predictions)
-		return features
+gc.collect()
 
 
-features_test = extract_features(list_images)
+#----------------------------------------------------------------
+print('group by : ip_app_channel_var_day')
+gp = train_df[['ip','app', 'channel', 'day']].groupby(by=['ip', 'app', 'channel'])[['day']].var().reset_index().rename(index=str, columns={'day': 'ip_app_channel_var_day'})
+train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
+del gp
+gc.collect()
+#-------------------------------------------------------------------------------
 
-y_pred = final_model.predict_proba(features_test)
-#y_pred = final_model.predict(features_test)
-#y_pred = final_model.predict(features_test)
+print('group by : ip_day_hour_count_chl')
+gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'qty'})
+train_df = train_df.merge(gp, on=['ip','day','hour'], how='left')
+del gp
+gc.collect()
+
+print('group by : ip_app_count_chl')
+gp = train_df[['ip','app', 'channel']].groupby(by=['ip', 'app'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_count'})
+train_df = train_df.merge(gp, on=['ip','app'], how='left')
+del gp
+gc.collect()
 
 
-image_id = [i.split('/')[3] for i in list_images]
+print('group by : ip_app_os_count_chl')
+gp = train_df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 'os'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_os_count'})
+train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
+del gp
+gc.collect()
+#-------------------------------------------------------------------------------
 
-submit = open('submit.SVM.csv','w')
-submit.write('image,ALB,BET,DOL,LAG,NoF,OTHER,SHARK,YFT\n')
+print('group by : ip_day_chl_var_hour')
+gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','channel'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'qty_var'})
+train_df = train_df.merge(gp, on=['ip','day','channel'], how='left')
+del gp
+gc.collect()
 
-for idx, id_n in enumerate(image_id):
-	probs=['%s' % p for p in list(y_pred[idx, :])]
-	submit.write('%s,%s\n' % (str(image_id[idx]),','.join(probs)))
 
-submit.close()
+print('group by : ip_app_os_var_hour')
+gp = train_df[['ip','app', 'os', 'hour']].groupby(by=['ip', 'app', 'os'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'ip_app_os_var'})
+train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
+del gp
+gc.collect()
+#-------------------------------------------------------------------------------
+
+print('group by : ip_app_chl_mean_hour')
+gp = train_df[['ip','app', 'channel','hour']].groupby(by=['ip', 'app', 'channel'])[['hour']].mean().reset_index().rename(index=str, columns={'hour': 'ip_app_channel_mean_hour'})
+train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
+del gp
+gc.collect()
+
+#---------------------------------------------------------------------------------
+print("vars and data type: ")
+train_df.info()
+train_df['qty'] = train_df['qty'].astype('uint16')
+train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
+train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
+
+print(train_df.head(5))
+test_df = train_df[len_train:]
+val_df = train_df[(len_train-3000000):len_train]
+train_df = train_df[:(len_train-3000000)]
+
+print("train size: ", len(train_df))
+print("valid size: ", len(val_df))
+print("test size : ", len(test_df))
+
+target = 'is_attributed'
+predictors = ['app','device','os', 'channel', 'hour', 'day', 'qty', 'ip_app_count', 'ip_app_os_count','qty_var', 'ip_app_os_var','ip_app_channel_var_day','ip_app_channel_mean_hour']
+categorical = ['app','device','os', 'channel', 'hour']
+
+
+sub = pd.DataFrame()
+sub['click_id'] = test_df['click_id'].astype('int')
+
+gc.collect()
+
+print("Training...")
+params = {
+    'learning_rate': 0.1,
+    #'is_unbalance': 'true', # replaced with scale_pos_weight argument
+    'num_leaves': 13,  # we should let it be smaller than 2^(max_depth)
+    'max_depth': 4,  # -1 means no limit
+    'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
+    'max_bin': 100,  # Number of bucketed bin for feature values
+    'subsample': 0.7,  # Subsample ratio of the training instance.
+    'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
+    'colsample_bytree': 0.89,  # Subsample ratio of columns when constructing each tree.
+    'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+    'scale_pos_weight':99 # because training data is extremely unbalanced 
+}
+bst = lgb_modelfit_nocv(params, 
+                        train_df, 
+                        val_df, 
+                        predictors, 
+                        target, 
+                        objective='binary', 
+                        metrics='auc',
+                        early_stopping_rounds=70, 
+                        verbose_eval=True, 
+                        num_boost_round=500, 
+                        categorical_features=categorical)
+
+del train_df
+del val_df
+gc.collect()
+
+print("Predicting...")
+sub['is_attributed'] = bst.predict(test_df[predictors])
+print("writing...")
+sub.to_csv('sub_lgb_balanced99.csv',index=False)
+print("done...")
+print(sub.info())

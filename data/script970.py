@@ -1,9 +1,15 @@
 
 # coding: utf-8
 
-# The methods used to generate the filter terms involved looking at the most frequent words/client names for clues about what types of establishments were mentioned in this data set. 
-# 
-# Developing the filters took a fair amount of "human" sleuthing while looking at TF-IDF scores, frequency counts of Client names, as well as just general knowledge of common Spanish words used to refer to certain establishment types. Especially with all the noise provided by the Clients referred to only by a proper name, the filtered data is a proportionally small figure- but, significant.
+# **INTRODUCTION**
+# * The data were obtained in a survey of students math and portuguese language courses in secondary school. It contains a lot of interesting social, gender and study information about students. You can use it for some EDA or try to predict students final grade.
+# * Correlation between features
+# * Weekly Consumption of Alcohol
+# * Final Exam Scores According to Students' alcohol consumption
+# * Students grade with grade average according to alcohol consumption
+# *  Alcohol consumption: 1 time  is very  low and 10 times are very high
+
+# <a href="http://imgbb.com/"><img src="http://image.ibb.co/eqPopQ/alc.jpg" alt="alc" border="0"></a><br /><a target='_blank' href='http://tr.imgbb.com/'>upload picture</a><br />
 
 # In[ ]:
 
@@ -14,197 +20,122 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
+import seaborn as sns # visualize
+import matplotlib.pyplot as plt
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
 from subprocess import check_output
-#print(check_output(["ls", "../input"]).decode("utf8"))
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 # Any results you write to the current directory are saved as output.
 
-# Load in the Client Name data
-# Make sure all names uppercase (there are some mixed instances)
-pd.set_option('display.max_rows', 50)
-vf = pd.read_csv('../input/cliente_tabla.csv',header=0)
-vf['NombreCliente'] = vf['NombreCliente'].str.upper()
+
+# In[ ]:
+
+
+data = pd.read_csv('../input/student-mat.csv')
 
 
 # In[ ]:
 
 
-# Begin with a scan of the Client Name Data based on Top Frequency Client Names
-# Notice there are a lot of Proper Names
-vf['NombreCliente'].value_counts()[0:200]
+# I use final grade = G3, and weekly alcohol consumption = Dalc + Walc 
+data.columns
+
+
+# **Correlation between features**
+# * For broad perspective lets look at first correlation of features.
+
+# In[ ]:
+
+
+
+plt.figure(figsize=(15,15))
+sns.heatmap(data.corr(),annot = True,fmt = ".2f",cbar = True)
+plt.xticks(rotation=90)
+plt.yticks(rotation = 0)
+
+
+# As it can be seen from correlation map only exam scoreas are highly correlated with each other. It says that if students takes almost same grade at each exams.
+
+# I am goint to combine weekdays alcohol consumption with weekend alcoho consumption.
+
+# In[ ]:
+
+
+data['Dalc'] = data['Dalc'] + data['Walc']
+
+
+# **Weekly Consumption of Alcohol**
+# * Students drink alcohol at least 2 times in a week.
+
+# In[ ]:
+
+
+# There is no student who does not consume alcohol. However, all students at least 2 times in a week consume alcohol.
+list = []
+for i in range(11):
+    list.append(len(data[data.Dalc == i]))
+ax = sns.barplot(x = [0,1,2,3,4,5,6,7,8,9,10], y = list)
+plt.ylabel('Number of Students')
+plt.xlabel('Weekly alcohol consumption')
+
+
+# **Final Exam Scores According to Students' alcohol consumption**
+# * I visualize taken total grades according to alcohol consuption
+
+# In[ ]:
+
+
+labels = ['2','3','4','5','6','7','8','9','10']
+colors = ['lime','blue','orange','cyan','grey','purple','brown','red','darksalmon']
+explode = [0,0,0,0,0,0,0,0,0]
+sizes = []
+for i in range(2,11):
+    sizes.append(sum(data[data.Dalc == i].G3))
+total_grade = sum(sizes)
+average = total_grade/float(len(data))
+plt.pie(sizes,explode=explode,colors=colors,labels=labels,autopct = '%1.1f%%')
+plt.axis('equal')
+plt.title('Total grade : '+str(total_grade))
+plt.xlabel('Students grade distribution according to weekly alcohol consumption')
+
+
+# Well, it looks like students who consume alcohol 2 times in a week more successful than others. However, it actually cannot be understood from this graph. Because number of students who consume alcohol 2 times in a week more than others. Therefore, lets look at swarm plot to understand whether alcohol affects the success or not.
+
+# **Students grade with grade average according to alcohol consumption **
+# * Final exam average grade is 10.4
+# * In order to understand whether alcohol affects students success, I compare grades with average.
+
+# In[ ]:
+
+
+ave = sum(data.G3)/float(len(data))
+data['ave_line'] = ave
+data['average'] = ['above average' if i > ave else 'under average' for i in data.G3]
+sns.swarmplot(x='Dalc', y = 'G3', hue = 'average',data= data,palette={'above average':'lime', 'under average': 'red'})
+
+
+# As it can be seen swarm plot, student who takes highest grade consumes alcohol only 2 times in a week.
+
+# In[ ]:
+
+
+sum(data[data.Dalc == 2].G3)/float(len(data[data.Dalc == 2]))
 
 
 # In[ ]:
 
 
-# Let's also generate a list of individual word frequency across all names
-def tfidf_score_list(vf2, list_len):
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    v = TfidfVectorizer()
-
-    vf2['New'] = 'na'
-    a = " ".join(vf2['NombreCliente'])
-    vf2['New'][0] = a
-
-    tfidf = v.fit_transform(vf2['New'])
-
-    feature_names = v.get_feature_names()
-
-    freq = []
-    doc = 0
-    feature_index = tfidf[doc,:].nonzero()[1]
-    tfidf_scores = zip(feature_index, [tfidf[doc, x] for x in feature_index])
-    for w, s in [(feature_names[i], s) for (i, s) in tfidf_scores]:
-            freq.append((w.encode('utf-8'),s))
-    
-    del vf2['New']
-    
-    import numpy as np
-    names = ['word','score']
-    formats = ['S50','f8']
-    dtype = dict(names = names, formats=formats)
-    array = np.array(freq, dtype=dtype)
-
-    b = np.sort(array, order='score')
-    
-    if list_len > len(b)+1:
-        list_len = len(b)+1
-    for i in range(1,list_len):
-        print(b[-i])
-
-
-# In[ ]:
-
-
-tfidf_score_list(vf, 200)
-
-
-# Again, notice the prevalence of personal names. By looking at a long enough list, however, we can start to see some other useful terms appear such as particles of speech (i.e. 'ag', 'los', 'san') or more useful words like "super", "oxxo", "mini", "comodin". If I found a word that I thought represent a type of establishment, I'd double check it by doing a single search. If that search was fruitful and had a good amount of relevant results, I'd add it to my filter. An example of a single term search is below:
-
-# In[ ]:
-
-
-print(vf[vf['NombreCliente'].str.contains('.*CAFE.*')])
-
-
-# The result is a filter derived from hand-picking the best, most common, most interesting terms I could determine.
-
-# In[ ]:
-
-
-# --- Begin Filtering for specific terms
-
-# Note that the order of filtering is significant.
-# For example: 
-# The regex of .*ERIA.* will assign "FRUITERIA" to 'Eatery' rather than 'Fresh Market'.
-# In other words, the first filters to occur have a bigger priority.
-
-def filter_specific(vf2):
-    
-    # Known Large Company / Special Group Types
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*REMISION.*','Consignment')
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*WAL MART.*','.*SAMS CLUB.*'],'Walmart', regex=True)
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*OXXO.*','Oxxo Store')
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*CONASUPO.*','Govt Store')
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*BIMBO.*','Bimbo Store')
-
-    
-
-    # General term search for a random assortment of words I picked from looking at
-    # their frequency of appearance in the data and common spanish words for these categories
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*COLEG.*','.*UNIV.*','.*ESCU.*','.*INSTI.*',                                                        '.*PREPAR.*'],'School', regex=True)
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*PUESTO.*','Post')
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*FARMA.*','.*HOSPITAL.*','.*CLINI.*'],'Hospital/Pharmacy', regex=True)
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*CAFE.*','.*CREMERIA.*','.*DULCERIA.*',                                                        '.*REST.*','.*BURGER.*','.*TACO.*', '.*TORTA.*',                                                        '.*TAQUER.*','.*HOT DOG.*',                                                        '.*COMEDOR.*', '.*ERIA.*','.*BURGU.*'],'Eatery', regex=True)
-    vf2['NombreCliente'] = vf2['NombreCliente'].str.replace('.*SUPER.*','Supermarket')
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*COMERCIAL.*','.*BODEGA.*','.*DEPOSITO.*',                                                            '.*ABARROTES.*','.*MERCADO.*','.*CAMBIO.*',                                                        '.*MARKET.*','.*MART .*','.*MINI .*',                                                        '.*PLAZA.*','.*MISC.*','.*ELEVEN.*','.*EXP.*',                                                         '.*SNACK.*', '.*PAPELERIA.*', '.*CARNICERIA.*',                                                         '.*LOCAL.*','.*COMODIN.*','.*PROVIDENCIA.*'
-                                                        ],'General Market/Mart'\
-                                                       , regex=True)
-
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*VERDU.*','.*FRUT.*'],'Fresh Market', regex=True)
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace(['.*HOTEL.*','.*MOTEL.*'],'Hotel', regex=True)
-
-
-# In[ ]:
-
-
-filter_specific(vf)
-
-
-# In[ ]:
-
-
-# --- Begin filtering for more general terms
-# The idea here is to look for names with particles of speech that would
-# not appear in a person's name.
-# i.e. "Individuals" should not contain any participles or numbers in their names.
-def filter_participle(vf2):
-    vf2['NombreCliente'] = vf2['NombreCliente'].replace([
-            '.*LA .*','.*EL .*','.*DE .*','.*LOS .*','.*DEL .*','.*Y .*', '.*SAN .*', '.*SANTA .*',\
-            '.*AG .*','.*LAS .*','.*MI .*','.*MA .*', '.*II.*', '.*[0-9]+.*'\
-    ],'Small Franchise', regex=True)
-
-
-# In[ ]:
-
-
-filter_participle(vf)
-
-
-# In[ ]:
-
-
-# Any remaining entries should be "Individual" Named Clients, there are some outliers.
-# More specific filters could be used in order to reduce the percentage of outliers in this final set.
-def filter_remaining(vf2):
-    def function_word(data):
-        # Avoid the single-words created so far by checking for upper-case
-        if (data.isupper()) and (data != "NO IDENTIFICADO"): 
-            return 'Individual'
-        else:
-            return data
-    vf2['NombreCliente'] = vf2['NombreCliente'].map(function_word)
-
-
-# In[ ]:
-
-
-filter_remaining(vf)
-
-
-# With the filtering complete, let's look at the breakdown of how the data is classified now:
-
-# In[ ]:
-
-
-vf['NombreCliente'].value_counts()
-
-
-# Finally, we can apply these new tags on the actual Training and Test data sets that have been provided!
-
-# In[ ]:
-
-
-#trdf = pd.read_csv('../input/train.csv',header=0)
-#trdf_stores = trdf.merge(vf.drop_duplicates(subset=['Cliente_ID']), how="left")
-
-
-# In[ ]:
-
-
-#tsdf = pd.read_csv('../input/test.csv',header=0)
-#tsdf_stores = tsdf.merge(vf.drop_duplicates(subset=['Cliente_ID']), how="left")
-
-
-# Write the data to file to save it for a new session....
-
-# In[ ]:
-
-
-#trdf.to_csv('../output/train_with_cnames.csv')
-#tsdf.to_csv('../output/test_with_cnames.csv')
-
+# Average grade
+list = []
+for i in range(2,11):
+    list.append(sum(data[data.Dalc == i].G3)/float(len(data[data.Dalc == i])))
+ax = sns.barplot(x = [2,3,4,5,6,7,8,9,10], y = list)
+plt.ylabel('Average Grades of students')
+plt.xlabel('Weekly alcohol consumption')
+
+
+# **CONCLUSION**
+# **If you have any suggest or question, I will be happy to hear it.**

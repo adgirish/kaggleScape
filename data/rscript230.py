@@ -1,77 +1,34 @@
-"""
-This version has improvements based on new feature engg techniques observed from different kernels. Below are few of them:
-- https://www.kaggle.com/graf10a/lightgbm-lb-0-9675
-- https://www.kaggle.com/rteja1113/lightgbm-with-count-features?scriptVersionId=2815638
-- https://www.kaggle.com/nuhsikander/lgbm-new-features-corrected?scriptVersionId=2852561
-- https://www.kaggle.com/aloisiodn/lgbm-starter-early-stopping-0-9539 (Original script)
-"""
+# This kernel have improvement from Pranav Pandya and Andy Harless
+# Pranav Kernel: https://www.kaggle.com/pranav84/xgboost-on-hist-mode-ip-addresses-dropped
+# Andy Kernel: https://www.kaggle.com/aharless/jo-o-s-xgboost-with-memory-usage-enhancements
 
-import pandas as pd
+import gc
 import time
 import numpy as np
+import pandas as pd
 from sklearn.cross_validation import train_test_split
-import lightgbm as lgb
-import gc
+import xgboost as xgb
+from xgboost import plot_importance
+import matplotlib.pyplot as plt
 
-def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
-                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
-    lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': objective,
-        'metric':metrics,
-        'learning_rate': 0.01,
-        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
-        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': -1,  # -1 means no limit
-        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 255,  # Number of bucketed bin for feature values
-        'subsample': 0.6,  # Subsample ratio of the training instance.
-        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'subsample_for_bin': 200000,  # Number of samples for constructing bin
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'reg_alpha': 0,  # L1 regularization term on weights
-        'reg_lambda': 0,  # L2 regularization term on weights
-        'nthread': 4,
-        'verbose': 0,
-        'metric':metrics
-    }
-
-    lgb_params.update(params)
-
-    print("preparing validation datasets")
-
-    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-
-    evals_results = {}
-
-    bst1 = lgb.train(lgb_params, 
-                     xgtrain, 
-                     valid_sets=[xgtrain, xgvalid], 
-                     valid_names=['train','valid'], 
-                     evals_result=evals_results, 
-                     num_boost_round=num_boost_round,
-                     early_stopping_rounds=early_stopping_rounds,
-                     verbose_eval=10, 
-                     feval=feval)
-
-    n_estimators = bst1.best_iteration
-    print("\nModel Report")
-    print("n_estimators : ", n_estimators)
-    print(metrics+":", evals_results['valid'][metrics][n_estimators-1])
-
-    return bst1
+# Change this for validation with 10% from train
+is_valid = False
 
 path = '../input/'
 
+def timeFeatures(df):
+    # Make some new features with click_time column
+    df['datetime'] = pd.to_datetime(df['click_time'])
+    df['dow']      = df['datetime'].dt.dayofweek
+    df["doy"]      = df["datetime"].dt.dayofyear
+    #df["dteom"]    = df["datetime"].dt.daysinmonth - df["datetime"].dt.day
+    df.drop(['click_time', 'datetime'], axis=1, inplace=True)
+    return df
+
+start_time = time.time()
+
+train_columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
+test_columns  = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'click_id']
 dtypes = {
         'ip'            : 'uint32',
         'app'           : 'uint16',
@@ -82,133 +39,108 @@ dtypes = {
         'click_id'      : 'uint32'
         }
 
-print('loading train data...')
-train_df = pd.read_csv(path+"train.csv", skiprows=range(1,144903891), nrows=40000000, dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
+# Read the last lines because they are more impacting in training than the starting lines
+train = pd.read_csv(path+"train.csv", skiprows=range(1,123903891), nrows=61000000, usecols=train_columns, dtype=dtypes)
+test = pd.read_csv(path+"test_supplement.csv", usecols=test_columns, dtype=dtypes)
 
-print('loading test data...')
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
+print('[{}] Finished to load data'.format(time.time() - start_time))
 
-len_train = len(train_df)
-train_df=train_df.append(test_df)
+# Drop the IP and the columns from target
+y = train['is_attributed']
+train.drop(['is_attributed'], axis=1, inplace=True)
 
-del test_df
-gc.collect()
-
-print('Extracting new features...')
-train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
-train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
-
-gc.collect()
-
-print('grouping by ip-day-hour combination...')
-gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_tcount'})
-train_df = train_df.merge(gp, on=['ip','day','hour'], how='left')
-del gp
-gc.collect()
-
-print('grouping by ip-app combination...')
-gp = train_df[['ip', 'app', 'channel']].groupby(by=['ip', 'app'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_count'})
-train_df = train_df.merge(gp, on=['ip','app'], how='left')
-del gp
-gc.collect()
-
-
-print('grouping by ip-app-os combination...')
-gp = train_df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 'os'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_os_count'})
-train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-del gp
-gc.collect()
-
-
-# Adding features with var and mean hour (inspired from nuhsikander's script)
-print('grouping by : ip_day_chl_var_hour')
-gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','channel'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'ip_tchan_count'})
-train_df = train_df.merge(gp, on=['ip','day','channel'], how='left')
-del gp
-gc.collect()
-
-print('grouping by : ip_app_os_var_hour')
-gp = train_df[['ip','app', 'os', 'hour']].groupby(by=['ip', 'app', 'os'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'ip_app_os_var'})
-train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-del gp
-gc.collect()
-
-print('grouping by : ip_app_channel_var_day')
-gp = train_df[['ip','app', 'channel', 'day']].groupby(by=['ip', 'app', 'channel'])[['day']].var().reset_index().rename(index=str, columns={'day': 'ip_app_channel_var_day'})
-train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
-del gp
-gc.collect()
-
-print('grouping by : ip_app_chl_mean_hour')
-gp = train_df[['ip','app', 'channel','hour']].groupby(by=['ip', 'app', 'channel'])[['hour']].mean().reset_index().rename(index=str, columns={'hour': 'ip_app_channel_mean_hour'})
-print("merging...")
-train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
-del gp
-gc.collect()
-
-print("vars and data type: ")
-train_df.info()
-train_df['ip_tcount'] = train_df['ip_tcount'].astype('uint16')
-train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
-train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
-
-
-test_df = train_df[len_train:]
-val_df = train_df[(len_train-2500000):len_train]
-train_df = train_df[:(len_train-2500000)]
-
-print("train size: ", len(train_df))
-print("valid size: ", len(val_df))
-print("test size : ", len(test_df))
-
-target = 'is_attributed'
-predictors = ['app','device','os', 'channel', 'hour', 'day', 
-              'ip_tcount', 'ip_tchan_count', 'ip_app_count',
-              'ip_app_os_count', 'ip_app_os_var',
-              'ip_app_channel_var_day','ip_app_channel_mean_hour']
-categorical = ['app', 'device', 'os', 'channel', 'hour', 'day']
-
+# Drop IP and ID from test rows
 sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id'].astype('int')
-
+#sub['click_id'] = test['click_id'].astype('int')
+test.drop(['click_id'], axis=1, inplace=True)
 gc.collect()
 
-print("Training...")
-start_time = time.time()
+nrow_train = train.shape[0]
+merge = pd.concat([train, test])
 
-
-params = {
-    'learning_rate': 0.15,
-    #'is_unbalance': 'true', # replaced with scale_pos_weight argument
-    'num_leaves': 7,  # 2^max_depth - 1
-    'max_depth': 3,  # -1 means no limit
-    'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-    'max_bin': 100,  # Number of bucketed bin for feature values
-    'subsample': 0.7,  # Subsample ratio of the training instance.
-    'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-    'colsample_bytree': 0.9,  # Subsample ratio of columns when constructing each tree.
-    'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-    'scale_pos_weight':99 # because training data is extremely unbalanced 
-}
-bst = lgb_modelfit_nocv(params, 
-                        train_df, 
-                        val_df, 
-                        predictors, 
-                        target, 
-                        objective='binary', 
-                        metrics='auc',
-                        early_stopping_rounds=30, 
-                        verbose_eval=True, 
-                        num_boost_round=500, 
-                        categorical_features=categorical)
-
-print('[{}]: model training time'.format(time.time() - start_time))
-del train_df
-del val_df
+del train, test
 gc.collect()
 
-print("Predicting...")
-sub['is_attributed'] = bst.predict(test_df[predictors])
-print("writing...")
-sub.to_csv('sub_lgb_balanced99.csv',index=False)
-print("done...")
+# Count the number of clicks by ip
+ip_count = merge.groupby(['ip'])['channel'].count().reset_index()
+ip_count.columns = ['ip', 'clicks_by_ip']
+merge = pd.merge(merge, ip_count, on='ip', how='left', sort=False)
+merge['clicks_by_ip'] = merge['clicks_by_ip'].astype('uint16')
+merge.drop('ip', axis=1, inplace=True)
+
+train = merge[:nrow_train]
+test = merge[nrow_train:]
+
+del test, merge
+gc.collect()
+
+print('[{}] Start to generate time features'.format(time.time() - start_time))
+
+train = timeFeatures(train)
+gc.collect()
+
+print('[{}] Start XGBoost Training'.format(time.time() - start_time))
+
+# Set the params(this params from Pranav kernel) for xgboost model
+params = {'eta': 0.3,
+          'tree_method': "hist",
+          'grow_policy': "lossguide",
+          'max_leaves': 1400,  
+          'max_depth': 0, 
+          'subsample': 0.9, 
+          'colsample_bytree': 0.7, 
+          'colsample_bylevel':0.7,
+          'min_child_weight':0,
+          'alpha':4,
+          'objective': 'binary:logistic', 
+          'scale_pos_weight':9,
+          'eval_metric': 'auc', 
+          'nthread':8,
+          'random_state': 99, 
+          'silent': True}
+          
+
+if (is_valid == True):
+    # Get 10% of train dataset to use as validation
+    x1, x2, y1, y2 = train_test_split(train, y, test_size=0.1, random_state=99)
+    dtrain = xgb.DMatrix(x1, y1)
+    dvalid = xgb.DMatrix(x2, y2)
+    del x1, y1, x2, y2 
+    gc.collect()
+    watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
+    model = xgb.train(params, dtrain, 200, watchlist, maximize=True, early_stopping_rounds = 25, verbose_eval=5)
+    del dvalid
+else:
+    dtrain = xgb.DMatrix(train, y)
+    del train, y
+    gc.collect()
+    watchlist = [(dtrain, 'train')]
+    model = xgb.train(params, dtrain, 30, watchlist, maximize=True, verbose_eval=1)
+
+del dtrain
+gc.collect()
+
+print('[{}] Finish XGBoost Training'.format(time.time() - start_time))
+
+# Plot the feature importance from xgboost
+plot_importance(model)
+plt.gcf().savefig('feature_importance_xgb.png')
+
+# Load the test for predict 
+test = pd.read_csv(path+"test.csv", usecols=test_columns, dtype=dtypes)
+test = pd.merge(test, ip_count, on='ip', how='left', sort=False)
+del ip_count
+gc.collect()
+
+sub['click_id'] = test['click_id'].astype('int')
+
+test['clicks_by_ip'] = test['clicks_by_ip'].astype('uint16')
+test = timeFeatures(test)
+test.drop(['click_id', 'ip'], axis=1, inplace=True)
+dtest = xgb.DMatrix(test)
+del test
+gc.collect()
+
+# Save the predictions
+sub['is_attributed'] = model.predict(dtest, ntree_limit=model.best_ntree_limit)
+sub.to_csv('xgb_sub.csv', float_format='%.8f', index=False)

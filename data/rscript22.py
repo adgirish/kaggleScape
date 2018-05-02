@@ -1,55 +1,127 @@
-# -*- coding: utf-8 -*-
+# coding: utf-8
+__author__ = 'Sandro Vega Pons : https://www.kaggle.com/svpons'
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import warnings
-warnings.filterwarnings('ignore')
+'''Partially based on grid_plus_classifier script:
+https://www.kaggle.com/svpons/facebook-v-predicting-check-ins/grid-plus-classifier
+'''
 
-from sklearn.metrics import fbeta_score
-
-labels = ['agriculture', 'artisinal_mine', 'bare_ground', 'blooming',
-          'blow_down', 'clear', 'cloudy', 'conventional_mine', 'cultivation',
-          'habitation', 'haze', 'partly_cloudy', 'primary', 'road', 
-          'selective_logging', 'slash_burn', 'water']
-
-def f2_score(y_true, y_pred):
-    y_true, y_pred, = np.array(y_true), np.array(y_pred)
-    return fbeta_score(y_true, y_pred, beta=2, average='samples')
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from sklearn.neighbors import KNeighborsClassifier
 
 
-def find_f2score_threshold(p_valid, y_valid, try_all=False, verbose=False):
-    best = 0
-    best_score = -1
-    totry = np.arange(0,1,0.005) if try_all is False else np.unique(p_valid)
-    for t in totry:
-        score = f2_score(y_valid, p_valid > t)
-        if score > best_score:
-            best_score = score
-            best = t
-    if verbose is True: 
-        print('Best score: ', round(best_score, 5), ' @ threshold =', best)
-    return best
+def prepare_data(df, n_cell_x, n_cell_y):
+    """
+    Feature engineering and computation of the grid.
+    """
+    #Creating the grid
+    size_x = 10. / n_cell_x
+    size_y = 10. / n_cell_y
+    eps = 0.00001  
+    xs = np.where(df.x.values < eps, 0, df.x.values - eps)
+    ys = np.where(df.y.values < eps, 0, df.y.values - eps)
+    pos_x = (xs / size_x).astype(np.int)
+    pos_y = (ys / size_y).astype(np.int)
+    df['grid_cell'] = pos_y * n_cell_x + pos_x
+    
+    #Feature engineering
+    fw = [500, 1000, 4, 3, 1./22., 2, 10] #feature weights (black magic here)
+    df.x = df.x.values * fw[0]
+    df.y = df.y.values * fw[1]
+    initial_date = np.datetime64('2014-01-01T01:01', dtype='datetime64[m]') 
+    d_times = pd.DatetimeIndex(initial_date + np.timedelta64(int(mn), 'm') 
+                               for mn in df.time.values)    
+    df['hour'] = d_times.hour * fw[2]
+    df['weekday'] = d_times.weekday * fw[3]
+    df['day'] = (d_times.dayofyear * fw[4]).astype(int)
+    df['month'] = d_times.month * fw[5]
+    df['year'] = (d_times.year - 2013) * fw[6]
 
+    df = df.drop(['time'], axis=1) 
+    return df
+    
 
-# Testing ------------------------------------------------------------------
+def process_one_cell(df_train, df_test, grid_id, th):
+    """   
+    Classification inside one grid cell.
+    """   
+    #Working on df_train
+    df_cell_train = df_train.loc[df_train.grid_cell == grid_id]
+    place_counts = df_cell_train.place_id.value_counts()
+    mask = (place_counts[df_cell_train.place_id.values] >= th).values
+    df_cell_train = df_cell_train.loc[mask]
 
-df = pd.read_csv('../input/train.csv')
+    #Working on df_test
+    df_cell_test = df_test.loc[df_test.grid_cell == grid_id]
+    row_ids = df_cell_test.index
+    
+    #Preparing data
+    le = LabelEncoder()
+    y = le.fit_transform(df_cell_train.place_id.values)
+    X = df_cell_train.drop(['place_id', 'grid_cell'], axis=1).values.astype(int)
+    X_test = df_cell_test.drop(['grid_cell'], axis = 1).values.astype(int)
+    
+    #Applying the classifier
+    clf = KNeighborsClassifier(n_neighbors=25, weights='distance', 
+                               metric='manhattan')
+    clf.fit(X, y)
+    y_pred = clf.predict_proba(X_test)
+    pred_labels = le.inverse_transform(np.argsort(y_pred, axis=1)[:,::-1][:,:3])    
+    return pred_labels, row_ids
+   
+   
+def process_grid(df_train, df_test, th, n_cells):
+    """
+    Iterates over all grid cells, aggregates the results and makes the
+    submission.
+    """ 
+    preds = np.zeros((df_test.shape[0], 3), dtype=int)
+    
+    for g_id in range(n_cells):
+        if g_id % 100 == 0:
+            print('iter: %s' %(g_id))
+        
+        #Applying classifier to one grid cell
+        pred_labels, row_ids = process_one_cell(df_train, df_test, g_id, th)
 
-label_map = {l: i for i, l in enumerate(labels)}
-inv_label_map = {i: l for l, i in label_map.items()}
+        #Updating predictions
+        preds[row_ids] = pred_labels
 
-y_true = []
-y_pred = []
+    print('Generating submission file ...')
+    #Auxiliary dataframe with the 3 best predictions for each sample
+    df_aux = pd.DataFrame(preds, dtype=str, columns=['l1', 'l2', 'l3'])  
+    
+    #Concatenating the 3 predictions for each sample
+    ds_sub = df_aux.l1.str.cat([df_aux.l2, df_aux.l3], sep=' ')
+    
+    #Writting to csv
+    ds_sub.name = 'place_id'
+    ds_sub.to_csv('sub_knn.csv', index=True, header=True, index_label='row_id')  
+      
 
-p = [0.1,0,0,0,0,0.32,0,0,0,0.1,0,0.1,0.28,0,0,0,0.1]
-
-for tags in df.tags[:2000]:
-    targets = np.zeros(17)
-    for t in tags.split(' '):
-        targets[label_map[t]] = 1 
-    y_true.append(targets)
-    p += np.random.uniform(low=0.1, high=0.8, size=(17,))
-    p /= np.sum(p)
-    y_pred.append(p)
-
-best_threshold = find_f2score_threshold(y_pred, y_true, verbose=True)
+if __name__ == '__main__':
+    """
+    """
+    print('Loading data ...')
+    df_train = pd.read_csv('../input/train.csv',
+                           usecols=['row_id','x','y','time','place_id'], 
+                           index_col = 0)
+    df_test = pd.read_csv('../input/test.csv',
+                          usecols=['row_id','x','y','time'],
+                          index_col = 0)
+ 
+    #Defining the size of the grid
+    n_cell_x = 20
+    n_cell_y = 40 
+    
+    print('Preparing train data')
+    df_train = prepare_data(df_train, n_cell_x, n_cell_y)
+    
+    print('Preparing test data')
+    df_test = prepare_data(df_test, n_cell_x, n_cell_y)
+    
+    #Solving classification problems inside each grid cell
+    th = 5 #Keeping place_ids with more than th samples.   
+    process_grid(df_train, df_test, th, n_cell_x*n_cell_y)
+                          

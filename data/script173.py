@@ -1,465 +1,343 @@
 
 # coding: utf-8
 
-# In[6]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.style.use('fivethirtyeight')
-import math
-import datetime
-
-# using Basemap for map visualization. Installed it with "conda install basemap"
-from mpl_toolkits.basemap import Basemap
-from matplotlib.animation import FuncAnimation
-from IPython.display import HTML
-
-import folium
-from folium import plugins
-from folium.plugins import HeatMap
-from folium.plugins import FastMarkerCluster
-from folium.plugins import MarkerCluster
-
-import warnings
-warnings.filterwarnings('ignore')
-
-import seaborn as sns
-import folium
-from folium import plugins
-from folium.plugins import HeatMap
-from folium.plugins import FastMarkerCluster
-from folium.plugins import MarkerCluster
-
-
-# ## About Kiva.org
-# 
-# **Kiva envisions a world where all people hold the power to create opportunity for themselves and others.**
-# 
-# Kiva is an international nonprofit, founded in 2005 and based in San Francisco, with a mission to connect people through lending to alleviate poverty. 
-# 
-# In Kaggle Datasets' inaugural Data Science for Good challenge, Kiva is inviting the Kaggle community to help them build more localized models to estimate the poverty levels of residents in the regions where Kiva has active loans. 
-# 
-# This notebook tries to explore the ways to achieve that.
-# 
-# Part 1: EDA
-
-# In[7]:
-
-
-kiva_loans=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv",parse_dates=['funded_time','date'])
-#kiva_loans.shape
-
-kiva_loans["funded_time"]=pd.to_datetime(kiva_loans.funded_time)
-kiva_loans.dropna()
-kiva_loans["funded_year"]=kiva_loans["date"].dt.year
-kiva_loans["funded_month"]=kiva_loans["date"].dt.month
-
-
-# In[8]:
-
-
-color_dict = {'Food': 'red', 'Transportation': 'pink', 'Arts': 'yellow','Services': 'blue', 'Agriculture': 'green',
-'Manufacturing': 'cyan', 'Wholesale': 'brown', 'Retail': 'Gold', 'Clothing': 'black', 'Construction': 'magenta', 'Health': 'lightgreen',
-'Education': 'crimson', 'Personal Use': 'purple', 'Housing': 'orange', 'Entertainment': 'lightblue'}
-
-loc=pd.read_csv('../input/additional-kiva-snapshot/loan_coords.csv')
-loc.rename(index=str, columns={"loan_id": "id"},inplace=True)
-#loc.head()
-
-
-# In[9]:
-
-
-kiva=pd.merge(kiva_loans, loc,on='id',how="left")
-#kiva.shape
-
-
-# ### Loan locations across the world
-
-# In[10]:
-
-
-p=kiva.plot(kind='scatter', x='longitude', y='latitude',
-                color='green',figsize=(15,10), 
-                title='Loan locations for World Map')
-p.grid(False)
-plt.savefig('Loan-location.png');
-
-
-# In[11]:
-
-
-countries_by_sectors_yearly_funded_amount_mean = kiva.groupby(['country','sector', 'funded_year'])['funded_amount'].mean().unstack()
-#print(countries_by_sectors_yearly_funded_amount_mean.shape)
-#countries_by_sectors_yearly_funded_amount_mean.head()
-
-
-# In[12]:
-
-
-Funded_Regions_BySectors = kiva.groupby(['country','sector']).first()[['latitude', 'longitude']]
-#print(Funded_Regions_BySectors.shape)
-#Funded_Regions_BySectors.head()
-
-
-# In[13]:
-
-
-#code credit: https://www.kaggle.com/pavelevap/global-warming-confirmed-basemap-animation?scriptVersionId=485498
-def get_temp_markers(countries, year):
-    
-    k=0
-    points = np.zeros(990, dtype=[('lon', float, 1),
-                                      ('lat', float, 1),
-                                      ('size',  float, 1),
-                                      ('color', object, '')])
-    cmap = plt.get_cmap('viridis')
-    for i, country in enumerate(random_countries):
-        country=country[0]
-        funds = countries_by_sectors_yearly_funded_amount_mean.loc[country]
-        sectors=funds.index
-        for j , sector in enumerate(sectors):
-            amount = funds.loc[sector].loc[year]
-            if(math.isnan(amount)):
-                break;
-            coords = Funded_Regions_BySectors.loc[country].loc[sector][['latitude', 'longitude']].values
-            lat = float(coords[0])
-            lon = float(coords[1])
-            if(math.isnan(lat)):
-                break;
-            points['lat'][k] = lat
-            if(math.isnan(lon)):
-                break;
-            points['lon'][k] = lon
-            points['size'][k] = amount/5
-            points['color'][k] = color_dict[sector]
-            k=k+1
-            #print(k," ",amount," ",lat," ",lon," ",color_dict[sector])
-    points=points[points['lat']!=0]
-    return points
-
-
-# ### Mean Funded Amount According to scetors in year 2014
-
-# In[14]:
-
-
-fig = plt.figure(figsize=(18, 15))
-cmap = plt.get_cmap('viridis')
-map = Basemap(projection='cyl')
-map.drawmapboundary()
-map.drawcoastlines(color='black')
-map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
-
-START_YEAR = 2014
-LAST_YEAR = 2017
-n_countries = 65
-random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-temp_markers = get_temp_markers(random_countries, START_YEAR)
-
-
-xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
-                   alpha=0.3, zorder=10)
-plt.title('Mean fundings by sectors for year 2014 ',fontsize=19)
-labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
-        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
-handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
-plt.legend(handles, labels,  loc = 6
-           , title='Sectors', markerscale=0.3,labelspacing=0.3)
-
-ax = plt.gca()
-leg = ax.get_legend()
-leg.legendHandles[0].set_color('green')
-leg.legendHandles[1].set_color('red')
-leg.legendHandles[2].set_color('gold')
-leg.legendHandles[3].set_color('blue')
-leg.legendHandles[4].set_color('purple')
-leg.legendHandles[5].set_color('orange')
-leg.legendHandles[6].set_color('black')
-leg.legendHandles[7].set_color('crimson')
-leg.legendHandles[8].set_color('pink')
-leg.legendHandles[9].set_color('yellow')
-leg.legendHandles[10].set_color('lightgreen')
-leg.legendHandles[11].set_color('magenta')
-leg.legendHandles[12].set_color('cyan');
-plt.savefig('Mean-fundings-by-sectors-for-year-2014.png');
-
-
-# Above plot shows mean Funded amount granted to borrowers and higher the amount higher the size of markers.
-# Colours are according to sectors.
-# 
-# ### Animated Story
-# If animation is taking time to load, kindly check output tab.
-
-# In[15]:
-
-
-get_ipython().run_line_magic('matplotlib', 'nbagg')
-
-# Create new map 
-fig = plt.figure(figsize=(18, 15))
-cmap = plt.get_cmap('viridis')
-map = Basemap(projection='cyl')
-map.drawmapboundary()
-map.drawcoastlines(color='black')
-map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
-
-
-# Create  data
-START_YEAR = 2014
-LAST_YEAR = 2017
-n_countries = 80
-random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
-
-
-# Initialize the map in base position
-temp_markers = get_temp_markers(random_countries, START_YEAR)
-xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-
-# Construct the scatter which we will update during animation
-# as the years change.
-scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
-                   alpha=0.3, zorder=10)
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-text="Mean funded Amount According to Sectors"
-title_text = plt.text(-170, -85, text,fontsize=15)
-labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
-        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
-handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
-plt.legend(handles, labels,  loc = 6
-           , title='Sectors', markerscale=0.3,labelspacing=0.3)
-
-ax = plt.gca()
-leg = ax.get_legend()
-leg.legendHandles[0].set_color('green')
-leg.legendHandles[1].set_color('red')
-leg.legendHandles[2].set_color('gold')
-leg.legendHandles[3].set_color('blue')
-leg.legendHandles[4].set_color('purple')
-leg.legendHandles[5].set_color('orange')
-leg.legendHandles[6].set_color('black')
-leg.legendHandles[7].set_color('crimson')
-leg.legendHandles[8].set_color('pink')
-leg.legendHandles[9].set_color('yellow')
-leg.legendHandles[10].set_color('lightgreen')
-leg.legendHandles[11].set_color('magenta')
-leg.legendHandles[12].set_color('#eeefff');
-
-
-
-def update(frame_number):
-    # Get an index which we can use to re-spawn the oldest year.
-    current_year = START_YEAR + (frame_number % 4)
-
-    temp_markers = get_temp_markers(random_countries, current_year)
-    xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-
-    # Update the scatter collection, with the new colors, sizes and positions.
-    scat.set_offsets(np.c_[xs, ys])
-    scat.set_color(temp_markers['color'])
-    scat.set_sizes(temp_markers['size'])
-    year_text.set_text(str(current_year))
-    text="Kiva - Mean Funded Amount to Borrowers According to Sectors"
-    title_text.set_text(text)
-
-
-
-# Construct the animation, using the update function as the animation
-# director.
-plt.title('Kiva - Mean fundings by sectors for years 2014-2017 ',fontsize=19)
-ani = FuncAnimation(fig, update, interval=1000,repeat=False,blit=True)
-#plt.show()
-
+# Colorspace
+# ==========
 
 # In[ ]:
 
 
-ani.save('anim.gif', writer='imagemagick', fps=2)
-import io
-import base64
-filename = 'anim.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
-
-
-# In[16]:
-
-
-kiva_mpi_region_locations=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_mpi_region_locations.csv")
-#kiva_mpi_region_locations.shape
-
-
-# ### World Regions with MPI 
-# OPHI  calculates the Global Multidimensional Poverty Index MPI, which has been published since 2010 in the United Nations Development Programme’s Human Development Report. 
-# 
-# Let's plot Kiva’s estimates as to the geolocation of subnational MPI regions.
-
-# In[17]:
-
-
+from PIL import Image, ImageDraw, ImageFilter
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
+import nltk
+import glob
 
-plt.figure(figsize=(12,8))
-sns.barplot(x=kiva_mpi_region_locations.world_region.value_counts().values,y=kiva_mpi_region_locations.world_region.value_counts().index)
-plt.title("World Regions")
-plt.savefig('world regions.png');
-
-
-# ### Let's zoom on african countries with MPI region locations
-
-# In[18]:
-
-
-african_countries = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
-plt.figure(figsize=(12,15))
-sns.barplot(x=african_countries.country.value_counts().values,y=african_countries.country.value_counts().index,palette="viridis")
-plt.title("African Countries")
-plt.savefig('african countries.png');
-
-
-# ## Heatmap for Multi-Dimentional Poverty index for world
-
-# In[19]:
-
-
-#remove NANs
-kiva_mpi_region_locations = kiva_mpi_region_locations.dropna(axis=0)
-
-# Create weight column, using date
-kiva_mpi_region_locations['weight'] = kiva_mpi_region_locations.MPI.multiply(15).astype(int)
-#kiva_mpi_region_locations.weight.unique()
+plt.rcParams['figure.figsize'] = (10.0, 10.0)
+images = sorted(glob.glob('../input/images_sample/**/**.jpg'))
+for im in images:
+    im = Image.open(im)
+    h, w = im.size
+    qu = im.quantize(colors=8, kmeans=4)
+    crgb = qu.convert('RGB')
+    col_rank = sorted(crgb.getcolors(h*w), reverse=True)
+    print(col_rank) #legend
+    draw = ImageDraw.Draw(im)
+    i = 0
+    for cnt, rgb in col_rank:
+        draw.rectangle([(10, i*40+10),(40, i*40+30)], fill=(rgb[0],rgb[1],rgb[2]), outline=(0,0,0))
+        draw.text((10, i*40+30), str(cnt), fill=(0,0,0))
+        i += 1
+    del draw
+    plt.imshow(im); plt.axis('off')
+    break
 
 
-# In[20]:
+# Image Statistics
+# ================
+
+# In[ ]:
 
 
-kiva_loactions_on_heatmap = folium.Map(location=[kiva_mpi_region_locations.lat.mean(), kiva_mpi_region_locations.lon.mean() ],tiles= "Stamen Terrain",
-                    zoom_start = 2) 
-
-# List comprehension to make out list of lists
-heat_data = [[[row['lat'],row['lon']] 
-                for index, row in kiva_mpi_region_locations[kiva_mpi_region_locations['weight'] == i].iterrows()] 
-                 for i in range(0,11)]
-#print(heat_data)
-# Plot it on the map
-hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
-hm.add_to(kiva_loactions_on_heatmap)
-
-hm.save('world MPI heatmap.html')
-
-# Display the map
-kiva_loactions_on_heatmap
-
-
-# 
-# Looks like Africa has got highest number of MPI Locations.
-# 
-# ### Let's zoom on Africa
-
-# In[21]:
+from PIL import ImageStat
+for im in images:
+    img = Image.open(im)
+    stats = ImageStat.Stat(img, mask=None)
+    print(stats.extrema)
+    print(stats.count)
+    print(stats.sum)
+    print(stats.sum2)
+    print(stats.mean)
+    print(stats.median)
+    print(stats.rms)
+    print(stats.var)
+    print(stats.stddev)
+    plt.imshow(img); plt.axis('off')
+    break
 
 
-heat_df =kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
+# OCR Watermarks or Floor Plans for features
+# ==========================================
 
-#remove NANs
-heat_df = heat_df.dropna(axis=0)
-
-# Create weight column, using date
-heat_df['weight'] = heat_df.MPI.multiply(15).astype(int)
-heat_df = heat_df.dropna(axis=0,subset=['lat','lon', 'weight','LocationName'])
-#heat_df.weight.unique()
+# In[ ]:
 
 
-# In[22]:
+from PIL import Image
+#import pytesseract #sudo apt-get install tesseract-ocr or submit pull request to Kaggle Docker
+import glob
 
+#images = glob.glob('../input/images_sample/**/**.jpg')
+#for im in images:
+#    img = Image.open(im) #rotate images 90 degrees
+#    t = pytesseract.image_to_string(img)
+#    if len(t)>0:
+#        print(im, '\n', t)
 
-kiva_loactions_on_heatmap_africa = folium.Map(location=[heat_df.lat.mean(), heat_df.lon.mean() ],tiles= "Stamen Terrain",
-                    zoom_start = 3) 
+"""
+../input/images_sample/6812223/6812223_906d2825311544e3ef052c315f4dddb7.jpg 
+ HABITATS
+../input/images_sample/6811964/6811964_552eab2b6974e995b419654faecc1cd8.jpg 
+ BALCONY
 
-# List comprehension to make out list of lists
-heat_data = [[[row['lat'],row['lon']] 
-                for index, row in heat_df[heat_df['weight'] == i].iterrows()] 
-                 for i in range(0,11)]
-#print(heat_data)
-# Plot it on the map
-hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
-hm.add_to(kiva_loactions_on_heatmap_africa)
-hm.save('africa MPI heatmap.html')
+Greenhouse ubwa
+a! m Mlnnv
 
-# Display the map
-kiva_loactions_on_heatmap_africa
+LIVING ROOM
+I2‘-5'n I9‘-2"
 
-
-# ### Poverty locations for South Asia as per OPHI's MPI
-# 
-# Click on cluster circle to see clustered points
-
-# In[23]:
-
-
-kiva_mpi_region_locations_africa = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region'] == 'South Asia']
-kiva_mpi_region_locations_africa.dropna(axis=0, inplace=True)
-m = folium.Map(
-    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean()],
-    tiles='Cartodb Positron',
-    zoom_start=4
-)
-
-marker_cluster = MarkerCluster(
-    name='African Locations',
-    overlay=True,
-    control=False,
-    icon_create_function=None
-)
-
-for k in range(kiva_mpi_region_locations_africa.shape[0]):
-    location = kiva_mpi_region_locations_africa.lat.values[k], kiva_mpi_region_locations_africa.lon.values[k]
-    marker = folium.Marker(location=location,icon=folium.Icon(color='green', icon='ok-sign'))
-    popup = kiva_mpi_region_locations_africa.LocationName.values[k]
-    folium.Popup(popup).add_to(marker)
-    marker_cluster.add_child(marker)
-
-marker_cluster.add_to(m)
-
-folium.LayerControl().add_to(m)
-
-m.save("marker cluster south asia.html")
+EEDROOM
+I! an IE Lo"
+../input/images_sample/6811974/6811974_39be7f428f80beda5163e909ea05a95a.jpg 
+ MLLEJRE
+../input/images_sample/6811974/6811974_197bb9515b3d7929c2848e61a050ad1a.jpg 
+ U
+BALCONY
+UV‘NG/DININE
+H M' X Wl'
 m
+m x m- E
+r ..
+KIT NT ll:
+L D
+—H Vi-
+AIH STURAE
+"""
+print('OCR..')
 
 
-# ### Clustering  locations in Africa
-# 
-# Click on cluster circle to see clustered points
+# Image Exif Tags
+# ===============
 
-# In[24]:
-
-
-#%%time
-
-m = folium.Map(
-    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean() ],
-    tiles='Cartodb Positron',
-    zoom_start=4
-)
-
-FastMarkerCluster(data=list(zip(kiva_mpi_region_locations_africa.lat.values, kiva_mpi_region_locations_africa.lon.values))).add_to(m)
-
-folium.LayerControl().add_to(m)
-m.save('africa loc cluster.html')
-
-m
+# In[ ]:
 
 
-# to be continued...
+from PIL import Image, ExifTags
+
+img = Image.open('../input/images_sample/6811960/6811960_3685d3542328b820980642535d8ccb72.jpg')
+ex = img._getexif()
+if ex != None:
+    for (k,v) in img._getexif().items():
+            print (ExifTags.TAGS.get(k), v)
+
+
+# Image Hash (Duplicate Images)
+# ===============
+
+# In[ ]:
+
+
+import numpy as np
+import imagehash, hashlib
+import random
+
+images = glob.glob('../input/images_sample/6812098/**.jpg') #just comparing two folders for demo
+images += glob.glob('../input/images_sample/6812035/**.jpg')
+
+for im in range(100):
+    im1 = random.choice(images)
+    im2 = random.choice(images)
+    h1 = imagehash.dhash(Image.open(im1))
+    h2 = imagehash.dhash(Image.open(im2))
+    feature = h1 - h2
+    if feature < 7 and im1 != im2:
+        print(feature, im1, im2)
+        imgx = np.concatenate((Image.open(im1).resize((400, 400), Image.ANTIALIAS), Image.open(im2).resize((400, 400), Image.ANTIALIAS)), axis=1)
+        plt.imshow(imgx); plt.axis('off')
+        break
+
+
+# Image and Folder Timestamps
+# ===========================
+
+# In[ ]:
+
+
+import glob, os
+from datetime import datetime as dt
+
+folders = glob.glob('../input/images_sample/*')
+s = os.stat(folders[0])
+print(folders[0],s)
+print(os.path.getatime(folders[0]), os.path.getmtime(folders[0]), os.path.getctime(folders[0]))
+print(dt.fromtimestamp(os.path.getatime(folders[0])))
+print('-'*60)
+images = glob.glob('../input/images_sample/**/**.jpg')
+s = os.stat(images[0])
+print(images[0],s)
+print(os.path.getatime(images[0]), os.path.getmtime(images[0]), os.path.getctime(images[0]))
+print(dt.fromtimestamp(os.path.getatime(images[0])))
+
+
+# Model Example
+# =============
+
+# In[ ]:
+
+
+import time; start_time = time.time()
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn import model_selection, preprocessing
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.decomposition import TruncatedSVD
+from sklearn.pipeline import FeatureUnion
+from sklearn.metrics import log_loss
+from sklearn import pipeline
+import pandas as pd
+import numpy as np
+from nltk.stem.porter import *
+stemmer = PorterStemmer()
+from bs4 import BeautifulSoup
+import random; random.seed(7)
+import xgboost as xgb
+import datetime as dt
+
+train = pd.read_json(open("../input/train.json", "r"))[:100] #limit
+y = train.interest_level.values
+n = len(train)
+
+test = pd.read_json(open("../input/test.json", "r"))[:100] #limit
+listing_id = test.listing_id.values
+
+col = [x for x in train.columns if x not in ['listing_id','interest_level','street_address']]
+print(col)
+print(len(train),len(test))
+
+def str_stem(s): 
+    if isinstance(s, str):
+        s = s.lower()
+        s = s.replace("  "," ")
+        b = BeautifulSoup(s, "lxml")
+        s = b.get_text(" ").strip()
+        s = (" ").join([z for z in s.split(" ")])
+        s = (" ").join([stemmer.stem(z) for z in s.split(" ")])
+        s = s.lower().strip()
+        return s
+    else:
+        return ""
+
+class cust_regression_vals(BaseEstimator, TransformerMixin):
+    def fit(self, x, y=None):
+        return self
+    def transform(self, df):
+        d_col_drops=['xdescription', 'ydescription']
+        df = df.drop(d_col_drops, axis=1).values
+        return df
+
+class cust_txt_col(BaseEstimator, TransformerMixin):
+    def __init__(self, key):
+        self.key = key
+    def fit(self, x, y=None):
+        return self
+    def transform(self, data_dict):
+        return data_dict[self.key].apply(str)
+    
+df_all = pd.concat((train[col], test[col]), axis=0, ignore_index=True)
+train = []
+test = []
+
+df_all['photos'] = df_all.photos.apply(len)
+
+df_all["price_be"] = df_all["price"]/df_all["bedrooms"]
+df_all["price_ba"] = df_all["price"]/df_all["bathrooms"]
+
+df_all["created"] = pd.to_datetime(df_all["created"])
+df_all["created_year"] = df_all["created"].dt.year
+df_all["created_month"] = df_all["created"].dt.month
+df_all["created_day"] = df_all["created"].dt.day
+df_all['created_hour'] = df_all["created"].dt.hour
+df_all['created_weekday'] = df_all['created'].dt.weekday
+df_all['created_week'] = df_all['created'].dt.week
+df_all['created_quarter'] = df_all['created'].dt.quarter
+df_all['created_weekend'] = ((df_all['created_weekday'] == 5) & (df_all['created_weekday'] == 6))
+df_all['created_wd'] = ((df_all['created_weekday'] != 5) & (df_all['created_weekday'] != 6))
+df_all['created'] = df_all['created'].map(lambda x: float((x - dt.datetime(1899, 12, 30)).days) + (float((x - dt.datetime(1899, 12, 30)).seconds) / 86400))
+
+df_all['x5'] = df_all['latitude'].map(lambda x : round(x,5))
+df_all['y5'] = df_all['longitude'].map(lambda x : round(x,5))
+df_all['x4'] = df_all['latitude'].map(lambda x : round(x,4))
+df_all['y4'] = df_all['longitude'].map(lambda x : round(x,4))
+df_all['x3'] = df_all['latitude'].map(lambda x : round(x,3))
+df_all['y3'] = df_all['longitude'].map(lambda x : round(x,3))
+df_all['x2'] = df_all['latitude'].map(lambda x : round(x,2))
+df_all['y2'] = df_all['longitude'].map(lambda x : round(x,2))
+
+dummies = df_all['features'].str.join(sep=',').str.lower().str.get_dummies(sep=',')
+df_all = pd.concat([df_all, dummies], axis=1)
+dummies = []
+df_all['features'] = df_all.features.apply(len)
+
+cat = ['building_id',  'description', 'display_address', 'manager_id']
+lbl = preprocessing.LabelEncoder()
+for c in cat:
+    if c in ['description']:
+        df_all['x'+c] = df_all[c].map(lambda x:str_stem(x))
+        df_all['y'+c] = df_all[c].values
+    df_all['words_of_'+c] = df_all[c].map(lambda x:len(x.strip().split(' ')))
+    df_all['len_of_'+c] = df_all[c].map(lambda x:len(x.strip()))
+    df_all[c] = lbl.fit_transform(list(df_all[c].values))
+    print(c, len(lbl.classes_))
+
+train = df_all.iloc[:n]
+test = df_all.iloc[n:]
+#df_all = []
+
+tfidf = TfidfVectorizer(stop_words ='english', max_df=0.9)
+tsvd = TruncatedSVD(n_components=25, random_state = 7)
+clf = pipeline.Pipeline([
+        ('union', FeatureUnion(
+                    transformer_list = [
+                        ('cst',  cust_regression_vals()),
+                        ('txt1', pipeline.Pipeline([('s1', cust_txt_col(key='xdescription')), ('tfidf1', tfidf), ('tsvd1', tsvd)])),
+                        ('txt2', pipeline.Pipeline([('s2', cust_txt_col(key='ydescription')), ('tfidf2', tfidf), ('tsvd2', tsvd)]))
+                        ],
+                    transformer_weights = {
+                        'cst': 1.0,
+                        'txt1': 1.0,
+                        'txt2': 1.0
+                        },
+                n_jobs = -1
+                ))])
+
+y_val = lbl.fit_transform(y)
+xtrain = pd.DataFrame(clf.fit_transform(train)).apply(pd.to_numeric)
+xtrain = xgb.DMatrix(xtrain.values, y_val)
+xtest = pd.DataFrame(clf.transform(test)).apply(pd.to_numeric)
+xtest = xgb.DMatrix(xtest.values)
+
+param = {}
+param['objective'] = 'multi:softprob'
+param['eta'] = 0.1
+#param['max_depth'] = 4
+param['silent'] = True
+param['num_class'] = 3
+param['eval_metric'] = "mlogloss"
+param['min_child_weight'] = 1
+param['subsample'] = 0.7
+param['colsample_bytree'] = 0.7
+param['seed'] = 7
+plst = list(param.items())
+nfolds = 5
+nrounds = 100
+
+model = xgb.cv(plst, xtrain, nrounds, nfolds, early_stopping_rounds=20, verbose_eval=25)
+best_rounds = np.argmin(model['test-mlogloss-mean'])
+model = xgb.train(plst, xtrain, best_rounds)
+print(log_loss(y_val, model.predict(xtrain)))
+preds = model.predict(xtest)
+out_df = pd.DataFrame(preds)
+out_df.columns = lbl.inverse_transform(out_df.columns)
+out_df["listing_id"] = listing_id
+out_df.to_csv("z09submission01.csv", index=False)
+print('Done...',(time.time()-start_time)/60)
+
+
+# Future Review
+# =============
+# - Can appliances be identified
+# - Can room be measured
+# - What kind of flooring
+# - Can windows and their view be ranked
+# - Can defects be identified
+# - Is it furnished, someone living there
+# - Has picture been photoshopped (altered)
+# - Add your own to the list on comments and fork to suggest/showcase additional features

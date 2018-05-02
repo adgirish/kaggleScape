@@ -1,432 +1,653 @@
 
 # coding: utf-8
 
-# Hello, I started studying time series one week ago and I am not an expert in machine learning. This is my first kernel! I hope to get feedback, in particular I do not know yet how to interpret the Ljung-Box test on the bottom of this notebook.  
+# # **Basic Network Analysis Tutorial**
+# *08.08.2017*
 # 
-# For this competition I noticed a couple of kernels getting stuck with the number of visitors showing a sudden increase in July 2016. That happens simply because in July 2016 there are more restaurants in the data. For this reason I thought of using the mean of visitors and practice with a seasonal ARIMAX model.
+# Update: 
+# * added Community Detection!
+# * fixed formatting issues
+# 
+# ......................................
+# * added Elevation and Temporal Travel Dependencies
+# * Fixed some minor errors
+# * added formulars
+# 
 
-# ## Recruit Restaurant Visitor Forecasting
-# Forecast restaurant visits for establishments in Japan based on historical visits and reservation data from two websites - Hot Pepper Gourmet and AirREGI. We are also given some additional metadata on the restaurants such as genre and location. Find the competition on [this link at kaggle](https://www.kaggle.com/c/recruit-restaurant-visitor-forecasting)
+# # Table of Contents
+# 
+# 1. Introduction
+# 2. Fundamental Graph Theory
+# 3. Network Properties
+# 4. Network Robustness
+# 5. Community Detection
+# 6. Application: Competition 
+# 7. Summary and Outlook
+# 8. References
+
+# # 1. Introduction
+
+# Welcome to this short introduction on how to use Network Analysis for this competition.
+#  Gain a deeper understanding of why certain taxis may have a longer trip duration than others and how to extract some useful features for your machine learning algorithm, e.g., calculate the shortest path between the pickup and dropoff point and given that, which Boroughs & Neighborhoods does the taxi traverse?  Are there any 'sensitive' roads on the path of a given taxi which may cause a longer trip time? These and more questions can be addressed by a network analysis. 
+# 
+# This notebook uses graph data from this [dataset](https://www.kaggle.com/crailtap/street-network-of-new-york-in-graphml) , specific it makes use of the Manhattan subgraph, because computation times on the full graph would be to long for Kaggle Kernels. 
+# 
+# Also i would like to encourage you to check out the awesome [OSMNX package](https://github.com/gboeing/osmnx)
+# from which i extracted the dataset and from which i make use of some functions. It is not available on Kaggle because it needs a Internet connection to download the graphs.
+# 
+# The rest of the notebook is structured as follows: First we take a look at some basic properties of the network, like how big is the network and start digging deeper to explore the generative process of the network and which roads may be important in a sense of high traffic volume and under the aspect of road closures aka attacks. Finally we will calculate useful features for the competition, like shortest paths and which boroughs it passes.
+# 
+# Here is a sneak peak of the raw New York City Street Network!
 # 
 # 
 
-# In[ ]:
+# ![](http://i.imgur.com/6YJ6gV3.jpg)
 
+# # 2. Fundamental Graph Theory
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-from IPython.core.interactiveshell import InteractiveShell
-InteractiveShell.ast_node_interactivity = "all"
-
-
-# ### Read the data
+# In this and the following sections, we will introduce some basic terminology of graph theory and try to illustrate those on the New York City Street Network or the Manhattan subgraph. 
+# We will start by defining the fundamental definition, what is a graph?
 # 
-# NB: The number of stores with reservations = number of reservations because there's one reservation per store.
-#     For this reason the mean is IMO a good normalized measure of visits, mean = # visits / # reserved stores
+# A graph **G = (V, E)**  consists of a set of **nodes** V ( or vertices, points)  and a set of **edges**  E ( links, lines) which illustrate how the nodes in the network are interacting with each other. Edges can be **directed** or ** undirected**. The number of nodes **N** is often called the **size** of the network and  states the number of objects in the model. In this example nodes are represented by way points in the OSM map from which the graph was generated, e.g., crossings and edges are roads or sub parts of roads between two nodes.
+# 
+# Each node or edge can hold different attributes, e.g., nodes can be assigned to different types like crossings or dead-ends and edges might have a certain numerical attribute like a speed limit. Edges attributes, in the case of numerical attributes, are called weights. An graph with weighted edges is called an **weighted graph**.
+# 
+# A first measurement for a node in the graph is the so called **degree**, which stands for the number of edges it has to other nodes, denoted by *k*.  One can also might ask what is the average degree in the network? But wait a second... if the degree is the number of edges it has to other nodes, don't we have to distinguish between directed and undirected edges to calculate the degree? Indeed, we need to distiguish between the **In-degree** and the **Out-degree** of a node, simply measuring how many edges are leaving a node and how many edges are coming in. This of cource depends on if the graph is direted or not. In the case of an undirected graph we can calculate the **average degree** by the following formular:
 
-# In[ ]:
+# $$ (k) = \frac{1}{N} \sum_{i = 1}^N k_i = \frac{2E}{N}$$
+
+# Similar this can be done seperatly for the in- and out-degree:
+
+# $$ (k^{in}) = \frac{1}{N} \sum_{i = 1}^N k^{in}_i =(k^{out}) = \frac{1}{N} \sum_{i = 1}^N k^{out}_i =  \frac{E}{V}$$
+
+# because $$k_i = k^{out}_i  + k^{in}_i  $$
+
+# Let's have a first look at the network (or you can call it graph) and the basic properties of it. But first we need to load the graph and import a library which is capable of doing so. In this Notebook we use networkx as the graph computing library but there are many more: [igraph](http://igraph.org/redirect.html), [osmnx](https://github.com/gboeing/osmnx) or [SNAP](http://snap.stanford.edu/). 
+
+# In[1]:
 
 
-import pandas as pd
-import matplotlib.pyplot as plt
+#For later use
 import numpy as np
 import pandas as pd
-from sklearn import *
-from datetime import datetime
-import calendar
-# 
-air = pd.read_csv('../input/air_visit_data.csv', parse_dates=[1])
-air.set_index(['visit_date'], inplace=True)
-air.index.name=None
-air.drop('air_store_id',axis=1,inplace=True)
-df2=pd.DataFrame()
-df2['visit_total'] = air.groupby(air.index,squeeze=True,sort=True)['visitors'].sum()
-df2['visit_mean'] = air.groupby(air.index,squeeze=True,sort=True)['visitors'].mean()
-df2['reserv_cnt'] = air.groupby(air.index,squeeze=True,sort=True)['visitors'].count()
-air=df2;del df2
+import seaborn as sns
+import matplotlib.pyplot as plt
+import warnings
+import networkx as nx
+warnings.filterwarnings('ignore')
 
-#Get the date info with dow and holidays
-hol=pd.read_csv('../input/date_info.csv', parse_dates=True).rename(columns={'calendar_date':'visit_date'})
-hol['visit_date'] = pd.to_datetime(hol['visit_date'])
-hol.set_index(['visit_date'], inplace=True)
-hol.index.name=None
-hol.day_of_week = hol.day_of_week.apply(list(calendar.day_name).index)
-
-#Get the test submission
-test = pd.read_csv('../input/sample_submission.csv')
-test['store_id'], test['visit_date'] = test['id'].str[:20], test['id'].str[21:]
-test.set_index('visit_date', drop=True, inplace=True)
-test.index.name=None
-
-
-# ### Explorative analysis on cumulative visits
-# I create a series with cumulative visits, that is the sum of visits to all stores/restaurants. Notice the huge increase in July 2016 (see above). The drop comes because many restaurants did not have any data before that month. Probably the registration system started "monitoring" many new restaurants/stores in that period.  
-# There is also a drop in visits and reservation counts in the beginning of the years, probably due to stores being close around new year's eve.  
-
-# In[ ]:
-
-
-#Plot the cumulative visits
-air['visit_total'].plot(legend=True);
-air['reserv_cnt'].plot(legend=True, figsize=(15,4), secondary_y=True,
-                      title='Visitors total and reservation count (with holidays)');
-for x in hol.query('holiday_flg==1').index:
-    _ = plt.axvline(x=x, color='k', alpha = 0.3);
-
-
-# Instead of the sum of visits, a better measurement is **the mean** of the cumulative visits (sum of all visits divided by number of reservations or, which is the same, the number of "active" restaurants). The series does not show the gap in July 2016 anymore, though variance seems to become smaller for some months.
-
-# In[ ]:
-
-
-air['visit_mean'].plot(figsize=(15,4), legend=True, title='Visitors mean (with holidays)')
-air['reserv_cnt'].plot(legend=True, figsize=(15,4), secondary_y=True, title='Visitors total and reservation count (with holidays)');
-for x in hol.query('holiday_flg==1').index:
-    _ = plt.axvline(x=x, color='k', alpha = 0.3);
-
-
-# Applying a seasonal decomposition using moving averages. The trend captures three peaks in the data: 
-# 
-# * Around mid-March 2016, 
-# * April 2016
-# * Just before the drop on new year's eve 2016, 
-# * Again mid-March 2017 
-# I see on wikipedia that these are the vernal equinox (around March 20), the golden week starting on April 29, Emperor's birthday :( on December 23rd and new year's day on January 1st, vernal equinox again.  
-# This sounds great, though some other holidays are hardly visible in the data. I can imagine that people has the tendency to stay home in the winter.
-# 
-# The season plot shows a strong weekly period where the lowest number of visit happen on Monday. Below I show that people mostly do reservations between Friday and Sunday.
-
-# In[ ]:
-
-
-import statsmodels.api as sm  
-from statsmodels.tsa.stattools import acf  
-from statsmodels.tsa.stattools import pacf
-from statsmodels.tsa.seasonal import seasonal_decompose
-decomposition = seasonal_decompose(air.visit_mean, freq=12)  
-fig = plt.figure()  
-fig = decomposition.plot()  
-fig.set_size_inches(15, 8)
+#load the graph with nx.read_graphml
+G = nx.read_graphml('../input/street-network-of-new-york-in-graphml/manhatten.graphml')
 
 
 # In[ ]:
 
 
-df2=air.join(hol)
-df2[df2.holiday_flg==0].groupby(hol.day_of_week,squeeze=True,sort=True)['visit_mean'].sum()
-#df2.day_of_week=df3.day_of_week.apply(lambda x: list(calendar.day_name)[x]) # equiv to air.sum(0)
+nx.info(G)
 
 
-# ### Pre-ARIMA analysis: make the series stationary
-# Stationary means that variance and autocorrelation structure not changing over time.  
-# Changes in mean happen when the series has a overall trend, e.g. it increases/decreasing. In that case use differentiation: create a new series y with the first difference y=x$_t$-x<sub>t-1</sub> (this is the "I" in ARIMA models), and take seasonal differences (which you can account for in ARIMA model).  
-# Changes is variance mean that oscillations change. To fix this a log of the series compresses oscillations.  
-# Changes in autocorrelation means that oscillations become broader (or narrower). If you have this I think you are screwed..
+# The graph has *4426* nodes and *9626* edges so the size of the network is *4426* and it states that it is an MultiDIGraph, which means the edges of the graph are **directed**, so they point to a specific node in the network. 
 # 
-# The Dickey-Fuller test helps us deciding whether a series is stationary. The test's null hypothesis is that the series is non-stationary. If the Test Statistic output of the Dickey-Fuller test is less than the Critical Value, we can reject the null hypothesis and say that the series is stationary.  
-# Below we notice that the original time series (using the mean of visits) is fairly stationary: Test Statistic=-3.796104 > Critical Value (1%) = -3.444615. Applying 1st or seasonal differentiation greatly improves the test results (Test Statistic = -6.608968 and 7.196314, respectively). A weekly periodic structure is clearly visible in the data, so I lean towards using seasonal differentiation. 
-# Takign the log of the data helps but does not seem to be a main factor in improving stationarity. This means that variance is fairly stable. 
+# Why is this so? Because our Network is the Manhattan Street Network and one property of it is that it contains one-way streets which can only be modeled as directed edges. Because we represent the edges as directed each 'normal' street is now also modeled as a directed edge which means we need to introduce two edges for each normal street, one for each direction of the street.
+# 
+#  On average the In-degree is *2.17* and the out-degree is also *2.17*, both are the same just as discussed. Average In-degree and Out-degree are always the same, but the distribution of the individual degrees can vary. To mention here is that just like for the degree, some graph porperties are defined on either directed or undirected some can be translated to both, so in order to calculate some measurements we provide also an undirected graph for the Manhattan network simply by calling the build in graph function from networkx. A graph is often called **simple graph**, if it contains no self-loops and directed edges.
 
 # In[ ]:
 
 
-from statsmodels.tsa.stattools import adfuller
-def test_stationarity(timeseries):
-    
-    #Determing rolling statistics
-    rolmean = timeseries.rolling(window=12,center=False).mean();
-    rolstd = timeseries.rolling(window=12,center=False).std();
-
-    #Plot rolling statistics:
-    fig = plt.figure(figsize=(15, 5))
-    orig = plt.plot(timeseries, color='blue',label='Original')
-    mean = plt.plot(rolmean, color='red', label='Rolling Mean')
-    std = plt.plot(rolstd, color='black', label = 'Rolling Std')
-    plt.legend(loc='best')
-    plt.title('Rolling Mean & Standard Deviation')
-    plt.show()
-    
-    #Perform Dickey-Fuller test:
-    print('Results of Dickey-Fuller Test:')
-    dftest = adfuller(timeseries, autolag='AIC')
-    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic','p-value','#Lags Used','Number of Observations Used'])
-    for key,value in dftest[4].items():
-        dfoutput['Critical Value (%s)'%key] = value
-    print(dfoutput)
-
-test_stationarity(air.visit_mean); #-3.796104
-# Log is a minor improvement, meaning that the variance is stable
-air.visit_mean_log= air.visit_mean.apply(lambda x: np.log(x))  
-'''test_stationarity(air.visit_mean_log) #-3.830754'''
-# Although I see no real global trend, 1st difference strongly improves stationarity
-air['visit_mean_diff'] = air.visit_mean - air.visit_mean.shift(1)  
-test_stationarity(air.visit_mean_diff.dropna(inplace=False)) #-6.608968e+00
-# Seasonal difference: take a weekly season improves stationarity even more
-air['visit_mean_seasonal'] = air.visit_mean - air.visit_mean.shift(7)
-test_stationarity(air.visit_mean_seasonal.dropna(inplace=False)) #-7.196314e+00
-# Seasonal and 1st difference is even better, but we were already well within the 1% confidence interval
-air['visit_mean_seasonal_diff'] = air.visit_mean_diff - air.visit_mean_diff.shift(7)
-test_stationarity(air.visit_mean_seasonal_diff.dropna(inplace=False)) #-9.427797e+00
+G_simple = nx.Graph(G)
+nx.info(G_simple)
 
 
-# mmm, let's stick to the seasonal series with **no 1st difference**. We will run auto-SARIMAX later and see if it makes sense. 
-# 
-# Let's run autocorrelation ACF and partial autocorrelation PACF for find the details fo the model. I will use the guidelines [here](http://people.duke.edu/~rnau/arimrule.htm).
-# 
-# The following ACF on the mean visits has a repeated pattern. That's our 7-day seasonal term. I should add to the model seasonal differenciation in the term **seasonal\_order=( , 1, ,7)**.  
-# If ACF was positive and decreasing over time, the series would be the typical candidate for applying 1st difference. But not here. This confirms the observation we made on the Dickey-Fuller test where the 1st difference was more stationary but not that much. I should add a **order=( , 0, ) term** to the model. Also try a constant term **trend='c'** in the model for the non-zero mean value.
+# Interesting! The number of nodes is still *4426* but the number of edges is decreased to only *788* edges. Also the degree went up to *3.56*. One should not be surprised why the new degree is not just in + out-degree, the simplified network merged multiple edges between two nodes to reduce itself into a undirected network, but for a directed network one can always state degree, in-degree and out-degree!  Indeed his degree seems more convenient, because of the grid like structure in Manhattan. 
+# So let's have a close look on the distribution of the node degress of our graph for simplified network as for the directed case.
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(12,8))
-ax1 = fig.add_subplot(211)
-fig = sm.graphics.tsa.plot_acf(air.visit_mean, lags=40, alpha=.05, ax=ax1)
-ax2 = fig.add_subplot(212)
-fig = sm.graphics.tsa.plot_pacf(air.visit_mean, lags=40, alpha=.05, ax=ax2)
-print("ACF and PACF of the visit mean:")
+from collections import Counter
+degree_dic = Counter(G_simple.degree().values())
+
+degree_hist = pd.DataFrame({"degree": list(degree_dic.values()),
+                            "Number of Nodes": list(degree_dic.keys())})
+plt.figure(figsize=(20,10))
+sns.barplot(y = 'degree', x = 'Number of Nodes', 
+              data = degree_hist, 
+              color = 'darkblue')
+plt.xlabel('Node Degree', fontsize=30)
+plt.ylabel('Number of Nodes', fontsize=30)
+plt.tick_params(axis='both', which='major', labelsize=20)
+plt.show()
 
 
-# This is the ACF of the first difference, confriming the 7-day seasonal term. 
+# Ok, so most of the nodes tend to have a degree of *3* or *4* which comes from the grid like structure of Manhattan. And this is confirmed by plotting the distributions for the directed case, most nodes with 2 outgoing edges have also two incoming edges!
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(12,8))
-ax1 = fig.add_subplot(211)
-fig = sm.graphics.tsa.plot_acf(air.visit_mean_diff[1:], lags=40, alpha=.05, ax=ax1)
+ins = list((G.in_degree()).values())
+outs = list((G.out_degree()).values())
+degrees = pd.DataFrame({"in-degree": ins, "out-degree": outs})
+
+fig = sns.jointplot(x="in-degree",y="out-degree",data=degrees,kind="kde", color = 'darkblue',size=8)
 
 
-# The ACF and PACF below are plotted the seasonal difference data.
+# Given the number of nodes and edges one can ask, what is the structure of the network and how does it look like?
+# A first measure of the structure of a network is the so called **density** which measure how many links from all possible links within the network are realized. The density is *0* if there are no edges, called **empty graph** and *1* if we have a **complete Graph**, all possible links between nodes are established.
+
+# $$dens_{undirected} = \frac{2E}{N(N-1)}$$
 # 
-# The PACF of the seasonal differenced series is positive at lag=1 (the series appears slightly "underdifferenced"). I should probably add one AR term to the model **order=(2, , )**. Only one AR term because the term at lag=2 cuts off and enters the 95% confidence interval. 
-# 
-# As for the PACF, the ACF of the seasonal differenced series is overdifferentiated at lag = 1 and cuts off (which I looked on the internet and means "go to zero") at lag=2. I should probably add one MA term to the model **order=( , , 2)**.
-# 
-# The ACF of the differenced series is negative at lag 7, suggesting to add a seasonal MA term **seasonal\_order=(0, , 1, )** to the model. This situation is likely to occur if a seasonal difference has been used, which should be done if the data has a stable and logical seasonal pattern. If the peak was positive I would have added a season AR term. The link above suggests to avoid using more than one or two seasonal parameters (SAR+SMA) in the same model to avoid overfitting and/or problems in estimation.
-# 
+# $$dens_{directed} = \frac{E}{N(N-1)}$$
 # 
 
 # In[ ]:
 
 
-print("ACF and PACF of the 7-day differenced visit mean:")
-fig = plt.figure(figsize=(12,8))
-ax1 = fig.add_subplot(211)
-fig = sm.graphics.tsa.plot_acf(air.visit_mean_seasonal[8:], lags=40, alpha=.05, ax=ax1)
-ax2 = fig.add_subplot(212)
-fig = sm.graphics.tsa.plot_pacf(air.visit_mean_seasonal[8:], lags=40, alpha=.05, ax=ax2)
+nx.density(G)
 
 
-# More things to keep in mind:  
-# Rule 9: If there is a unit root in the AR part of the model--i.e., if the sum of the AR coefficients is almost exactly 1--you should reduce the number of AR terms by one and increase the order of differencing by one.  
-# Rule 10: If there is a unit root in the MA part of the model--i.e., if the sum of the MA coefficients is almost exactly 1--you should reduce the number of MA terms by one and reduce the order of differencing by one.  
-# Rule 11: If the long-term forecasts* appear erratic or unstable, there may be a unit root in the AR or MA coefficients.
-
-# ### SARIMA model 
-# [SARIMAX](http://www.statsmodels.org/dev/generated/statsmodels.tsa.statespace.sarimax.SARIMAX.html) = Seasonal Auto Regressive Integrated Moving Average (without eXogenous regressors).  
-# First some helper functions to calculate errors, plot SARIMAX models, and do a grid search on the hyperparamenters of SARIMAX
+# Having a density of *0.00049* makes sense because in a street network not all nodes can be connected to all other nodes.  Enough text for now, let's plot the graph!
 
 # In[ ]:
 
 
-#sklearn.metrics .mean_squared_log_error seems to exist but I cannot load it..
-from sklearn.metrics import mean_squared_error
-def mean_squared_log_error(y_pred, y_true, **dict):
-    '''Assume y_true starts earlier than y_pred, y_true is NaN free, and NaN in y_pred are only in the beginning'''
-    indafterNaN = y_pred.first_valid_index()
-    if (y_true.index[0] > y_pred.index[0]): return "Check indices of prediction and true value"
-    ind1stcommon = y_true.index[y_true.index==y_pred.index[0]]
-    indstart = max(indafterNaN, ind1stcommon)
-    indend = y_true.index[-1]
-    return mean_squared_error(np.log(y_true[indstart:indend]+1), 
-                              np.log(y_pred[indstart:indend]+1) )**0.5
+#import osmnx 
+#ox.plot_graph(G,fig_height= 12, node_size=10, node_zorder=2, node_color = '#808080')
 
-def plotSARIMAX(labels, pred):
-    fig = plt.figure(figsize=(12, 8))
-    layout = (2, 2)
-    ax1 = plt.subplot2grid(layout, (0, 0), colspan=2)
-    ax3 = plt.subplot2grid(layout, (1, 0))
-    ax4 = plt.subplot2grid(layout, (1, 1))
-    labels.plot(ax=ax1);
-    pred.plot(ax=ax1, title='MSE: %.4f'% mean_squared_log_error(pred, labels))
-    ax3 = sm.graphics.tsa.plot_acf(results.resid, lags=40, alpha=.05, ax=ax3, title="ACF of residuals")
-    ax4 = sm.graphics.tsa.plot_pacf(results.resid, lags=40, alpha=.05, ax=ax4, title="PACF of residuals")
-    plt.tight_layout()
-    print("ACF and PACF of residuals")
 
+# ![](http://i.imgur.com/N9RIXA2.png)
+
+# Nice! This gives us a nice overview of how Manhattan looks like. But such awesome figures like this made with osmnx are not always the case. If we plot the graph with the build in draw function from networkx, our nodes are just plotting according to some layout we choose:
 
 # In[ ]:
 
 
-from scipy.optimize import brute
-from sklearn.metrics import mean_squared_error
+nx.draw(G, pos=nx.spring_layout(G), node_size=0.01, width=0.1)
 
-def autoSARIMAX(endog, exog=None, date_train_end=None, pred_days=[-12,12], verbose=True,        ranges=(slice(1,3),slice(0,1),slice(1,3),  slice(0,2),slice(1,2),slice(1,2),slice(7,8))):
-    #Instantiate my version of the grid with parameters and scores
-    global grid
-    grid = []
-    #Get indices up to which you do train and prediction 
-    if date_train_end is None:
-        ind_train = endog.index[-1]
+
+# Wow, doesn't look much like the Manhattan street network right? One should keep in mind to never trust a graph Visualization as it can lead to false impressions on the properties of the graph. Talking about properties, what attributes do our nodes have? 
+
+# In[ ]:
+
+
+# we cant not just access the nodes with G(0) orso, we must call them by their id
+# G.nodes() returns a list of all node ids, e.g., '42459137'
+
+G[G.nodes()[1]]
+
+
+# Each node is a dictionary containing nodes to which it is connected with properties as how many lanes the street has, if it is a oneway street or not, the name of the street and in some cases even the maximum allowed speed.
+# 
+# 
+
+# # 3. Network Properties
+
+# In this section we will talk about some basic measurements which will give us some feedback about the structure of the graph. This will include what is the average shortest path distance between nodes, in which way are the nodes in the network connected to each other and how strong is the connection between a node and his neighbours.
+
+# We will start by defining what the **shortest path** between two nodes *i* and *j*  in the network is. 
+# The shortest path *d(i,j)*, as the name suggests, is just the path in the network between nodes  *i* and *j* which has the fewest edges. In the case of an undirected network, the shortest path between *i* and *j* is always the same regardless from which node we start, however in an undirected network this does not hold true and the shortest path between the nodes can vary depending from which node we start. On the bases of the shortest path we can define many more measurements, e.g., the longest shortest path in the network is called the **diameter** of the graph and gives us a feeling of how far things are seperated in the graph. We will compute the diameter on the simple graph for computation time.
+# 
+
+# In[ ]:
+
+
+nx.diameter(G_simple)
+
+
+# The function returns a number of *88* edges which lie on the longest shortest path.
+# Besides the longest shortest path we can also ask what is the average shortest path length denoted by: 
+
+# $$ a =  \sum_{i ,j \in E} \frac{d(i,j)}{N(N-1)}$$, where *d(i,j)*  is the shortest path.
+
+# In[ ]:
+
+
+nx.average_shortest_path_length(G_simple)
+
+
+# Coming back to the question of what is the structure of our network, one can ask what is the generative process behind the network? Is the network random? or does it follow some underlying laws on how it is created.
+# 
+# Here we introduce the **Scale-Free Property**, which states that 'real' networks do have a certain underlying creation process, like the WWW there some nodes do get more attention than others and therefore manage to build much more edges than other nodes., resulting in some nodes which have a much higher degree compared to other nodes. 
+# 
+# These nodes with a very high degree in the network are called **hubs**. One can think of Twitter as a Social Network there prominent people represent hubs, having much more edges to other nodes than the average user.
+# But does our network follow the Scale-Free Property because it is a 'real' network? Let's plot the degree distributions to find out!
+
+# In[ ]:
+
+
+from collections import Counter
+import collections
+import scipy as sp
+from scipy import stats
+import matplotlib.pyplot as plt
+
+in_degrees  = G.in_degree() 
+in_h = Counter(in_degrees.values())
+in_dic = collections.OrderedDict(sorted(in_h.items()))
+in_hist = list(in_dic.values())
+in_values =list(in_dic.keys())
+
+out_degrees  = G.out_degree() 
+out_h =  Counter(out_degrees.values())
+out_dic = collections.OrderedDict(sorted(out_h.items()))
+out_hist = list(out_dic.values())
+out_values =list(out_dic.keys())
+
+mu = 2.17
+sigma = sp.sqrt(mu)
+mu_plus_sigma = mu + sigma
+x = range(0,10)
+prob = stats.poisson.pmf(x, mu)*4426
+
+plt.figure(figsize=(12, 8)) 
+plt.grid(True)
+plt.loglog(out_values,out_hist,'ro-')  # in-degree
+plt.loglog(in_values,in_hist,'bv-')  # in-degree
+plt.plot(x, prob, "o-", color="black")
+plt.legend(['In-degree','Out-degree','Poission'])
+plt.xlabel('Degree')
+plt.ylabel('Number of  nodes')
+plt.title('Manhatten Street Network')
+plt.xlim([0,2*10**2])
+plt.show()
+
+
+# If a graphs degree distribution follows the scale free property on a log-log scale plot like above, the data points should form approximately a straight line indicating the presents of hubs. In our figure in the cell above this is clearly not the case. As already plotted, the degree distributions follow a Poisson Distribution which is typical for a random network. 
+# 
+# So what can we say about the Manhattan Street Network? It has more edges than nodes, and the fact that it is not scale-free means the absents of hub nodes and it follows a Poisson Distribution like random networks do.
+# 
+# Now we can ask the question, is it good for a road network that its degree distribution does not have the scale free property and is even random? How does this influences the **robustness** of the network in a sense that what happens if specific roads are closed, how does this influnces the traffic flow?
+# 
+# 
+# 
+
+# # 4. Network Robustness
+
+# What does it take to break down  all the movement in Manhattan? What roads are sensible in a sense that if these roads are closed the impact on the whole network traffic flow is drastic. Network Robustness tries to define measurements which try to capture how robust  a network is to attacks, failures or something like a traffic jam. 
+# 
+# In this section some basic measurements will be introduced and tested on the Manhattan subgraph.
+# 
+# 
+
+# ###Node Connectivity
+
+# The **Node Connectivity** describes the number of nodes we must delete from the Graph G until it is **disconnected**. **Connected** means that if every node in our graph G can reach any other node in the network via edges. If this is not the case the graph is disconnected. An important property of any graph should to be that it is not easily to disconnect. This is some kind of vague definition, especially for a road network  as there might be dead-end roads, removing the connecting node of the dead-end would immediately make our graph G disconnected. 
+# 
+# Here it is time in introduce also the notation of a **simple graph** which is a graph without directed edges or self-loops.  Many measurements in libraries are only calculated on simple graphs because it simplifies calculations or the measurements are just not defined on directed graphs.
+# 
+# For the next few sections we treat our graph as undirected to illustrate these measurements:
+
+# In[ ]:
+
+
+#create two simple graphs from our original directed graph
+G_simple = nx.Graph(G)
+G_simple2 = nx.Graph(G)
+
+
+nx.node_connectivity(G_simple)
+
+
+# As aspected the output of  the node connectivity function is 1, meaning our graph is disconnected after removing just 1 node. But does this matter? No, because the size of the removed subgraph is just a single node and the rest of the network is still connected. If however the size of the resulting disconnected part is relatively big, this indicates a problem in the structure of the network.
+
+# ###Algebraic Connectivity
+
+# Basically our network is nothing else as a matrix containing 1's if two nodes are connected to each other.
+# Graphs can be differently defined as matrices and one of these matrices is the so called Laplacian matrix, which has special properties in the eigenspace. Its eigenvalues are non negative and if ordered the smallest one eigenvalue is zero. The second smallest eigenvalue of the Laplacian matrix is called the **algebraic connectivity** or the **Fiedler value**. It is directly indicater for the robustness of the network have the properties that:
+#  
+# 
+#  1. The algebraic connectivity is equal to zero if and only if the graph is disconnected.
+#  2. The algebraic connectivity of an  graph is not greater than the node connectivity. 
+
+# In[ ]:
+
+
+nx.algebraic_connectivity(G_simple)
+
+
+# According to its properties we can say, that the graph is connected because the algebraic connectivity is *0.00034* and < node connectivity.
+
+# ### Betweenness Centrality
+
+# Betweenness Centrality can be measure for nodes or edges and it defines the fraction of all shortest paths in the network passing through the edge/ node for which it is calculated.  
+# 
+# Roads with a very high betweenness centrality lie on many shortest paths in the network and should be considered to be important roads in the network which may have increased traffic volume. 
+# 
+
+# In[ ]:
+
+
+#compute the betweeness centrality on one of the simple graphs, this can take a while
+between =  nx.betweenness_centrality(G_simple)
+
+
+# In the cell above we created two simple graphs and calculated the betweeness-centrality for each node in the network. We can now tell which nodes in the network play an important role as they are traversed more often. Let's find out which is on the most shortest path in the network: 
+
+# In[ ]:
+
+
+#G_projected = ox.project_graph(G)
+#max_node, max_bc = max(between.items(), key=lambda x: x[1])
+#max_node, max_bc
+
+
+# (42431099, 0.2170387058765219)
+
+# In Manhatten the node with ID 42431099 has  the highest betweenness centrality and 21.7% of all shortest paths running through it. This needs to be plotted!
+
+# ![](http://i.imgur.com/fnNk9Zf.png)
+
+# In[ ]:
+
+
+G['42431099']
+
+
+# So the node  with the highest betweenness centrality is located in West End!
+
+# Now it may be interesting so see how all nodes betweenness centrality looks an one map and maybe there are some patterns  to detect! We plot the centrality for each node from low (dark violet) to high (light yellow).
+
+# ![](http://i.imgur.com/BfvPPMS.png)
+
+# ![](http://i.imgur.com/aSCjx77.jpg)
+
+# #Network Attacks
+
+# Now we know some basic robustness measurements, so it is time to see how robust is our network really?
+# For this we will attack the networks nodes with two approaches:
+# 
+#  1.  Delete nodes according to the calculated betweenness centrality, going from high scoring nodes to low scoring ones 
+#  2.  Random node failures, deleting nodes by random
+# 
+# Deleting nodes will have the effect that the **giant component**, the largest connected component in the graph, will shrink and some nodes might have a specific role in this process which cause a drastic shrinkage of the giant component.
+# 
+
+# In[ ]:
+
+
+'''
+import operator
+from random import shuffle
+from random import randrange
+from random import randint
+import random
+import matplotlib.ticker as mtick
+
+sorted_x = sorted(between.items(), key=operator.itemgetter(1), reverse=True)
+rand_x = list(range(0,4426 ))
+
+random.shuffle(rand_x)
+between_giant = []
+between_rand = []
+avg_degs = []
+
+for x in range(3000):
+ 
+        remove = sorted_x[x]      
+        remove2 = sorted_x[rand_x[x]]
+        G_simple.remove_nodes_from(remove)
+        G_simple2.remove_nodes_from(remove2)
+             
+        giant = len(max(nx.connected_component_subgraphs(G_simple), key=len))
+        giant2 = len(max(nx.connected_component_subgraphs(G_simple2), key=len))
+
+        between_giant.append(giant)
+        between_rand.append(giant2)
+
+y1 = between_giant
+y2 = between_giant
+
+y1= y1[ :-1]
+y2= y2[1: ]
+
+perc = np.linspace(0,100,len(between_giant))
+fig = plt.figure(1, (12,8))
+ax = fig.add_subplot(1,1,1)
+
+ax.plot(perc, between_giant)
+ax.plot(perc, between_rand)
+
+fmt = '%.0f%%' # Format you want the ticks, e.g. '40%'
+xticks = mtick.FormatStrFormatter(fmt)
+ax.xaxis.set_major_formatter(xticks)
+ax.set_xlabel('Fraction of Nodes Removed')
+ax.set_ylabel('Giant Component Size')
+ax.legend(['betweenness','random'])
+plt.show()
+'''
+
+
+# ![](http://i.imgur.com/78lVvsQ.png)
+
+# Ok, what does the figure above tells us? First of all, deleting nodes which play an important role in the network leads to a faster shrinkage of the giant component than just deleting nodes by random! But only at a given percentage level! At the beginning it doesn't matter if the nodes are picked at random or by their importance, this indicates the robustness of the network. However, at a point there about 10 percent of the nodes are removed deleting specific important nodes lead to a much faster reduction in the giants component size. So these nodes must play an important role in combining the nodes of the network!
+# 
+# Interestingly after only deleting about 50% of the nodes the size of the giant component rapidly reaches a size of almost zero nodes. 
+# 
+# Would the network be more robust if the network would contain hubs? Or Would this make the network even more prone to attacks? Leave a comment below what you think!
+
+# # 5. Community Detection
+
+# This section introduces Community Detection, one of my favorite topics in network analysis.
+# The goal of Community Detection is to find subgraphs aka communities in a given graph which we want to analyse.
+# 
+# We start by defining what exactly is a community? Well, there is no 'one' or 'right' defintion of community, because it really depends on the kind of graph you want to analyse and what question you want to answer. A common definition based on the graphs structure is, that a community is a group of nodes which are higly connected within this group, but are less connected to other nodes which are not in this group. But as said this is not the only definition you can use, sometimes you can define communities based on a given node attribute or a combination of both, graph based and attributes. 
+# 
+# For this section we will use the infamous [Zachary's karate club](https://en.wikipedia.org/wiki/Zachary%27s_karate_club) network, because it is less computional expensive and also very easy to draw. The short story behind the network is, that a conflict between an instructor and an admin led to the split of the club into two seperate ones. 
+# 
+# Because the networkx library is not so convenient for community detection, we will switch to igraph for this section, which has more algorithms for this topic, but first we have a look at the network!
+# 
+
+# In[2]:
+
+
+import networkx as nx
+import matplotlib.pyplot as plt
+import igraph as ig
+import random
+np.random.seed(3)
+
+G1=nx.karate_club_graph()
+nx.draw_spring(G1)
+
+
+# Most of the existing community detection algorithms work only on undirected graphs, so we will convert the networkx graph to igraph and also make it undirected.
+
+# In[ ]:
+
+
+#convert from networkx to igraph 
+G2 = ig.Graph.Adjacency((nx.to_numpy_matrix(G1) > 0).tolist())
+
+#make the igraph graph undirected :D
+G2.to_undirected()
+
+
+# In the following we will discuss a bunch of algorithms which are more or less used in practice.
+
+# ### Girvan–Newman algorithm
+
+# In[ ]:
+
+
+np.random.seed(3)
+
+dendrogram = G2.community_edge_betweenness()
+# convert it into a flat clustering
+clusters = dendrogram.as_clustering(2)
+# get the membership vector
+membership = clusters.membership
+
+nx.draw_spring(G1, cmap = plt.get_cmap('jet'), node_color = membership, node_size=120, with_labels=False)
+
+
+# ### Modularity Maximization
+
+# In[ ]:
+
+
+np.random.seed(3)
+
+dendrogram = G2.community_fastgreedy()
+# convert it into a flat clustering
+clusters = dendrogram.as_clustering(2)
+# get the membership vector
+membership = clusters.membership
+
+nx.draw_spring(G1, cmap = plt.get_cmap('jet'), node_color = membership, node_size=120, with_labels=False)
+
+
+# ### Leading Eigenvector
+
+# In[ ]:
+
+
+np.random.seed(3)
+
+dendrogram = G2.community_leading_eigenvector(2)
+#get membership
+membership  = dendrogram.membership
+
+
+nx.draw_spring(G1, cmap = plt.get_cmap('jet'), node_color = membership, node_size=120, with_labels=False)
+
+
+# # 6. Application: Competition 
+
+# In this last Section we will see how to compute the shortest path for our taxi trip data and how to add one could possible make use of all kind of centrality measures as features.
+
+# ## Shortest Paths
+# 
+# First of all we need two functions which will compute the nearest node in the network for a given taxi pick-up and or drop-off point
+
+# In[ ]:
+
+
+#taken from. https://github.com/gboeing/osmnx
+def great_circle_vec(lat1, lng1, lat2, lng2, earth_radius=6371009):
+
+    phi1 = np.deg2rad(90 - lat1)
+
+    phi2 = np.deg2rad(90 - lat2)
+
+    theta1 = np.deg2rad(lng1)
+    theta2 = np.deg2rad(lng2)
+
+    cos = (np.sin(phi1) * np.sin(phi2) * np.cos(theta1 - theta2) + np.cos(phi1) * np.cos(phi2))
+    arc = np.arccos(cos)
+
+    distance = arc * earth_radius
+   
+    return distance
+
+
+def get_nearest_node(G, point, return_dist=False):
+
+    coords = np.array([[node, data['x'], data['y']] for node, data in G.nodes(data=True)])
+    df = pd.DataFrame(coords, columns=['node', 'x', 'y']).set_index('node')
+    df['reference_y'] = point[0]
+    df['reference_x'] = point[1]
+
+    distances = great_circle_vec(lat1=df['reference_y'],
+                                 lng1=df['reference_x'],
+                                 lat2=df['x'].astype('float'),
+                                 lng2=df['y'].astype('float'))
+  
+    nearest_node = int(distances.idxmin())
+  
+    if return_dist:
+        return nearest_node, distances.loc[nearest_node]
     else:
-        ind_train = np.where(endog.index==date_train_end)[0][0]
-    #Brute optimization
-    resultsbrute = brute(runSARIMAX, ranges=ranges, args=(endog,exog,(ind_train,pred_days),), full_output=True, finish=None)
-    #First coefficients run two times for some reason or another
-    del grid[0]
-    #Print/Plot results
-    if verbose:
-        print("Best parameters: {}".format([int(p) for p in resultsbrute[0]]))
-        print("Best score:          {}".format(resultsbrute[1]))
-        gr = plotautoSARIMAX(resultsbrute, verbose)
-    return resultsbrute, gr
+        return nearest_node
 
-def plotautoSARIMAX(resultsbrute, verbose=True):
-    #Print/Plot results
-    if not verbose: return None
-    #Plot scores by parameter values
-    gr = pd.DataFrame({'params':[''.join(str(n) for n in g[0]) for g in grid], 'score': [row[1] for row in grid], 'aic': [row[2] for row in grid]})
-    print("All parameters and scores: \n")
-    print(gr.head(1000).to_string())
-    ax1 = gr.plot('params','score',rot=90, grid=True, figsize=(15,4))
-    ax2 = gr.plot('params','aic',rot=90, secondary_y=True,ax=ax1)
-    ax1.set_ylabel('Score');ax2.set_ylabel('AIC');
-    plt.xticks(range(len(gr)), gr.params, rotation=90);
-    return gr
 
-def runSARIMAX(coeffs, *args):
-    endog = args[0]
-    exog = args[1]
-    #Process the row indices for training and prediction
-    ind_train = args[2][0]
-    pred_days = args[2][1]
-    ind_pred = [len(endog)+pred_days[0], len(endog)+pred_days[1]]
-    if ind_pred[0] > ind_train: 
-        #ind_pred[0]=ind_train
-        raise ValueError('Make sure prediction bounds begin at least at len(endog): pred_days[0] must be <= %i ' % (ind_train-len(endog)))
-    exog_train, exog_pred, start_params = None, None, list()
-    if exog is not None:
-        if ind_pred[1] > len(exog):
-            raise ValueError('Make sure prediction bounds end  <= len(exog): pred_days[1] must be <= %i ' % (len(exog)-len(endog)))
-        exog_train = exog[:ind_train]
-        exog_cols = 1 if len(exog.shape) == 1 else exog.shape[1]
-        start_params.extend(0.1*np.ones(exog_cols-1))
-        exog_pred = exog[ind_pred[0]-1:ind_pred[1]]
-        exog_pred = pd.DataFrame(exog_pred)
+# In[ ]:
+
+
+#load the training data
+train = pd.read_csv('../input/nyc-taxi-trip-duration/train.csv')
+
+
+#go through the dataset and calculate the shortest path
+for index, row in train[24:25].iterrows():
+
+    pick_point = ( row['pickup_longitude'],row['pickup_latitude'])
+    drop_point = ( row['dropoff_longitude'],row['dropoff_latitude'])
+    
+    pick_node = get_nearest_node(G, pick_point)
+    drop_node = get_nearest_node(G, drop_point)
+   
+    try:
+        route = nx.shortest_path(G, str(pick_node), str(drop_node))
+        #plot the shortest path on the graph
+        #fig, ax = ox.plot_graph_route(G, route,fig_height=15, node_size=1)
+        print("Shortest Path:")
+        print(route)
+        gsub = G.subgraph(route)
         
-    #Get the hyperparameters
-    order = coeffs[0:3].tolist()
-    seasonal_order = coeffs[3:7].tolist()
-    trend = 'c' if (order[1]==0) else 'n'
-    #Train SARIMAX and fit it on data, predict to get scores
-    try:        
-        mod = sm.tsa.statespace.SARIMAX(endog[:ind_train], exog_train,                                         trend=trend, order=order, seasonal_order=seasonal_order)
-        start_params.extend(0.1*np.ones( len(mod.params_complete)))
-        fit = mod.fit(start_params=start_params)
-        pred = fit.predict(start=ind_pred[0], end=ind_pred[1], exog=exog_pred)
-        aic = fit.aic
-        score = mean_squared_log_error(pred[:-pred_days[0]], endog[ind_pred[0]:])        
-        if np.isnan(aic): aic, score = np.inf, np.inf
-    except:  #Tip: Try to set starting paramenters in .fit()
-        import sys        
-        print("Error:", sys.exc_info())        
-        print("{},{},'{}', len(start_params)={}\n".format(coeffs[0:3], coeffs[3:], trend, len(start_params)))
-        aic, score = np.inf, np.inf
-    #Sorry but I don't like the grid in the output of brute resultsbrute[2]
-    global grid
-    grid.append([coeffs,score,aic])
-    return score
-
-#Quick example
-#resbrute, gr = autoSARIMAX(endog=air.visit_mean, exog=None, date_train_end="2017-03-26", pred_days=[-28,66],\
-#                             ranges=(slice(1,2),slice(0,1),slice(1,2),  slice(0,2),slice(1,2),slice(1,2),slice(7,8)))
-
-#resbrute, gr=autoSARIMAX(endog=air.visit_mean, exog=hol.holiday_flg, date_train_end="2017-03-26", pred_days = [-28,39],\
-#                    ranges=(slice(1,2),slice(0,1),slice(1,2),  slice(0,1),slice(1,2),slice(1,2),slice(7,8)))
+        s_len = sum([float(d['length']) for u, v, d in gsub.edges(data=True)])
+        print("Length in Km:")
+        print(s_len/1000)
+        
+    except:
+        print("Some Error")
+        #handle error
+        pass
+    
+    #the corresponding node betweenness scores for each edge in the shortest path
+    print("Betweenness Centrality for each node on the path")
+    node_bet = []
+    for node in route:
+        node_bet.append(between[node])
+    print(node_bet)
+    print(np.asarray(node_bet).sum())
+    print("betweeness sum")
+    print(sum(node_bet))
+    print("have to check why this is not < 1 ")
 
 
-# Run grid search on Seasonal ARIMA models to explore the best ones
-
-# In[ ]:
-
-
-resbrute, gr = autoSARIMAX(endog=air.visit_mean, exog=None, date_train_end="2017-03-26", pred_days = [-28,39],                             ranges=(slice(1,3),slice(0,2),slice(1,3),  slice(0,2),slice(1,2),slice(1,2),slice(7,8)))
-#Not shown, but the SMA parameter is important to keep to 1
-
-
-# The autoSARIMAX function evaluates models based on the mean squared log error used in the competition, but the aic Akaike information criterion estimating the quality of the statistical model is also plotted. The two scores seem to be in reasonable agreement.  
-# Interestingly, 1st differentiation (the second 'd' hyperparamenter) does not seem to be necessary to obtain a good model. This confirms the analysis above. Because overdifferentiating is bad, I will stick to d=0: **( , 0, )x( , 1, , 7)**.   
-# Although I do not show it the second to last term (SMA) is important and should be at least 1: **( , , )x( , , 1, )**. When I evaluate models with SMA=0 they are always worse and show an ugly zig zag plot.  
-# The model we had from our analysis is **(2,0,2)x(0,1,1,7)**. Model **(2,0,2)x(1,1,1,7)** next to it in the plot has a slightly better Akaike Information Criterion score. Other models with more complexity (e.g. 2031117 or 3021117) are slightly better, but I'd rather keep the model simple.  
-# I am tempted to choose model **(1,0,2)x(1,1,1,7)**, which is simpler and with a decent score. Probably in this model the first hyperparamenter AR=1 (instead of AR=2 from our analysis above) is compensated by the fourth hyperparamenter SAR=1 (instead of SAR=0 from our analysis). I will go for this model.   
+# What the code above is doing is, it calculates the nearest point for the the dropoff and pickup point and calculates the shortest path between those. In addition one can then retrieve for each node on the path the corresponding betweenness score and because these values are already normalized, we can sum them up and get a feature for our machine learning algorithm, in range between 0 and 1, which describes how important this shortest path in comparison to all over is. This can be done for a variety of normalized measurements!
 # 
-# Running SARIMAX **(1,0,2)x(1,1,1,7)**: the weekly oscillations are nicely captured but the autocorrelation plots show some structure in the residuals. Notice that in my plots predictions (green time series) are entirely calculated on untrained region of the plot so that I can estimate predictions and true values where they overlap. Training the model on the whole labels would lead to better match in the overlapping region but the model would be prone to overfitting.
+# The following image is just an example for a shortest path in the New York Network, the code above is for the Manhattan subgraph.
 
-# In[ ]:
+# ![](http://i.imgur.com/XwsiJ9b.jpg)
 
+# Looks like someone took a taxi trip from the Upper East Side to John F. Kennedy International Airport!
 
-mod = sm.tsa.statespace.SARIMAX(air.visit_mean[:450], trend='c', order=(1,0,2), seasonal_order=(1,1,1,7))
-results = mod.fit()
-#Predict on future data and on time periods already known for evaluation with RMSLE
-pred = results.predict(start=450, end=516)
-print(results.summary())
-#Plot
-plotSARIMAX(air.visit_mean, pred)
-
-
-# Adding 1st order differentiation does not work (you get nan coefficients, not shown)
+# ## Which Boroughs does the shortest path intersect?
 # 
-# ### SARIMAX with eXogenous dataset
+# TODO: add Code for loading shapefiles and plott
+
+# ![](http://i.imgur.com/JwlwiQH.png)
+
+# ## Add Elevation as an Node Attribute 
 # 
-# Let's introduce holidays in the fit. The holidays column can be assed to the X of SARIMAX as eXogenous regressors. I first run the optimizer on SARIMAX
+# Google has a nice api for retrieving the elevation for a pair of coordinates. This can be incorporated in the nodes attributes.
+# TODO: add code and how we can recalculate the shortest path given this new attribute as a measaure of resistens.
+# I know this looks like mountains :D but this is not the case. Blue represents sea level and the mountain chain is about 50m above the sea level. So Manhattan is not as flat as you might think!
+
+# ![](http://i.imgur.com/rqqpV6B.png)
+
+# ## How far can you travel?
+# 
+# Say you are in the middel of New York City, the following Image shows you how far you can travel assuming an average travel speed of 30 km/h. Each Isoline represents a time boundary starting from 5 to 35 minutes.
+# TODO: add code 
+
+# ![](http://i.imgur.com/HowEmgm.png)
+
+# # 7. Summary and Conclusion
+
+# Network Analysis can lead to useful insights into the problem and can be used to craft new features for your machine learning algorithm. Hope you found this helpful and maybe you will start digging a bit deeper into the world of Network Analysis :D 
+# 
+# Coming Next: 
+# 
+#  1.  Find all Boroughs / neighborhoods passing through an single shortest path
+#  2. Community Detection
 # 
 
-# In[ ]:
-
-
-resbrute, gr=autoSARIMAX(endog=air.visit_mean, exog=hol.holiday_flg, date_train_end="2017-03-26", pred_days=[-28,39],                    ranges=(slice(1,3),slice(0,2),slice(1,3),  slice(0,2),slice(1,2),slice(1,2),slice(7,8)))
-
-
-# The results for the optimization using holidays as exogenous regressors shows a very similar behavior as before. I stick to model (2,0,2)x(1,1,1,7).  
-# Now I fit that model. In the plot of the time series notice that the prediction is already much better. I don't show that but if you start the prediction earlier than shown below it would capture the peak on new year's eve. Our forecast now predicts a peak on the weekend of the golden week in April 2017, which is very plausible
-
-# In[ ]:
-
-
-modx = sm.tsa.statespace.SARIMAX(air.visit_mean[:450], trend='c', exog=hol.holiday_flg[:450],                                 order=(1,0,2), seasonal_order=(1,1,1,7))
-resultsx = modx.fit(start_params=0.1*np.ones( len(modx.param_terms)-2+ 2*2 ))
-#Predict on future data and on time periods already known for evaluation with RMSLE
-predx = resultsx.predict(start=450, end=516, exog=pd.DataFrame(hol.holiday_flg[450:]))
-print(resultsx.summary())
-plotSARIMAX(air.visit_mean, predx)
-
-
-# In[ ]:
-
-
-resbrute, gr = autoSARIMAX(endog=air.visit_mean, exog=hol, date_train_end="2017-03-26", pred_days=[-28,39],                    ranges=(slice(1,3),slice(0,2),slice(1,3),  slice(0,2),slice(1,2),slice(1,2),slice(7,8)))
-
-
-# From the plot of auto-SARIMAX above notice that the relative did not change much. The (1, 0, 2)x(1, 2, 1, 7) model used so far shows a dip and only more complex models get lower than that. 
-# The plot below shows that adding the day of the week column as exogenous regressors does not change the error and quality of the fit so much. Maybe that is because we already have a season of 7 days.  
-# The autocorrelation of residuals has not improved and shows some structure.
-
-# In[ ]:
-
-
-modx2 = sm.tsa.statespace.SARIMAX(air.visit_mean[:450], trend='c', exog=hol[:450], order=(1,0,2), seasonal_order=(1,1,1,7))
-resultsx2 = modx2.fit(start_params=0.1*np.ones( len(modx2.params_complete)))
-#Predict on future data and on time periods already known for evaluation with RMSLE
-predx2 = resultsx2.predict(start=450, end=516, exog=hol[450:])
-print(resultsx2.summary())
-plotSARIMAX(air.visit_mean, predx2)
-
-
-# **Todo**
+# # 8. References
 # 
-# * I have the feeling that including the number of open restaurants/reservations (or similar) will certainly be necessary when moving to the visitor data without mean, and it might help as exogenous model will improve modeling certain periods
-# * I was expecting more reservations in the summer, but maybe Japanese people go on vacation? I thought they had to work all the time
-# * Repeat the analysis after aggregating restaurants by regions and cuisine. How much will the models differ?
-# * Better the ACF of residuals
-# * Better understand Ljung-Box test: shouldn't there be a critical value? How to interpret Prob(Q)?
-# 
+
+#  1. https://github.com/gboeing/osmnx
+#  2. Barabási, Albert-László. Network science. Cambridge university press, 2016.
+#  3. Newman, Mark. Networks: an introduction. Oxford university press, 2010.
+#  4. https://arxiv.org/pdf/1311.5064.pdf

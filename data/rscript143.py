@@ -1,465 +1,213 @@
-from __future__ import division
-import cv2
+"""
+Contributions from:
+DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
+https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
+JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
+https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
+hklee - weighted mean comparisons, LB 0.497, 1ST
+https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+
+Also all comments for changes, encouragement, and forked scripts rock
+
+Keep the Surprise Going
+"""
+
+import glob, re
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Flatten, Merge, merge
-from keras.layers import Input, Activation, Dense, Flatten
-from keras.layers.convolutional import Conv2D, MaxPooling2D, AveragePooling2D
-from multi_gpu import make_parallel #Available here https://github.com/kuza55/keras-extras/blob/master/utils/multi_gpu.py
-from keras.layers.normalization import BatchNormalization
-from keras import backend as K
-import os
-from sklearn.utils import shuffle
-import random
-from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from sklearn.metrics import fbeta_score
-from keras.optimizers import Adam, SGD
+from sklearn import *
+from datetime import datetime
+from xgboost import XGBRegressor
+import h2o
+from h2o.automl import H2OAutoML
+h2o.init()
+
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
+
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+
+#sure it can be compressed...
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+# NEW FEATURES FROM Georgii Vyshnia
+stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
+stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
+lbl = preprocessing.LabelEncoder()
+for i in range(4):
+    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    stores['air_area_name' +str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
+
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+
+train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
+test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
+
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+
+train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
+
+train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
+train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
+train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
+
+test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
+test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
+test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
+
+# NEW FEATURES FROM JMBULL
+train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+train['var_max_lat'] = train['latitude'].max() - train['latitude']
+train['var_max_long'] = train['longitude'].max() - train['longitude']
+test['var_max_lat'] = test['latitude'].max() - test['latitude']
+test['var_max_long'] = test['longitude'].max() - test['longitude']
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
+# NEW FEATURES FROM Georgii Vyshnia
+train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
+test['lon_plus_lat'] = test['longitude'] + test['latitude']
 
-def fbeta_loss(y_true, y_pred):
-    beta_squared = 4
+lbl = preprocessing.LabelEncoder()
+train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
+test['air_store_id2'] = lbl.transform(test['air_store_id'])
 
-    tp = K.sum(y_true * y_pred) + K.epsilon()
-    fp = K.sum(y_pred) - tp
-    fn = K.sum(y_true) - tp
+train = train.fillna(-999)
+test = test.fillna(-999)
 
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
+train['visitors'] = np.log1p(train['visitors'].values)
 
-    result = 1 - (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall + K.epsilon())
+print('Pre-processing done!')
 
-    return result
+htrain = h2o.H2OFrame(train)
+htest = h2o.H2OFrame(test)
 
-def fbeta_score_K(y_true, y_pred):
-    beta_squared = 4
+htrain.drop(['id', 'air_store_id', 'visit_date'])
+htest.drop(['id', 'air_store_id', 'visit_date'])
 
-    tp = K.sum(y_true * y_pred) + K.epsilon()
-    fp = K.sum(y_pred) - tp
-    fn = K.sum(y_true) - tp
+x =htrain.columns
+y ='visitors'
+x.remove(y)
 
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
+def RMSLE(y_, pred):
+    return metrics.mean_squared_error(y_, pred)**0.5
 
-    result = (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall + K.epsilon())
+print('Starting h2o autoML model!')  
 
-    return result
+aml = H2OAutoML(max_runtime_secs = 3350)
+aml.train(x=x, y =y, training_frame=htrain, leaderboard_frame = htest)
 
-def rotate(img):
-    rows = img.shape[0]
-    cols = img.shape[1]
-    angle = np.random.choice((10, 20, 30))#, 40, 50, 60, 70, 80, 90))
-    rotation_M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
-    img = cv2.warpAffine(img, rotation_M, (cols, rows))
-    return img
+print('Generate predictions...')
+htrain.drop(['visitors'])
+preds = aml.leader.predict(htrain)
+preds = preds.as_data_frame()
+print('RMSLE H2O automl leader: ', RMSLE(train['visitors'].values, preds))
 
-def rotate_bound(image, size):
-    #credits http://www.pyimagesearch.com/2017/01/02/rotate-images-correctly-with-opencv-and-python/
-    (h, w) = image.shape[:2]
-    (cX, cY) = (w // 2, h // 2)
+preds = aml.leader.predict(htest)
+preds = preds.as_data_frame()
 
-    angle = np.random.randint(10,180)
+test['visitors'] = preds
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
+del train; del data; del htrain; del htest;
 
-    M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
-    cos = np.abs(M[0, 0])
-    sin = np.abs(M[0, 1])
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
-    # compute the new bounding dimensions of the image
-    nW = int((h * sin) + (w * cos))
-    nH = int((h * cos) + (w * sin))
+for k, v in dfs.items(): locals()[k] = v
 
-    # adjust the rotation matrix to take into account translation
-    M[0, 2] += (nW / 2) - cX
-    M[1, 2] += (nH / 2) - cY
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
 
-    output = cv2.resize(cv2.warpAffine(image, M, (nW, nH)), (size, size))
-    return output
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
-def perspective(img):
-    rows = img.shape[0]
-    cols = img.shape[1]
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
 
-    shrink_ratio1 = np.random.randint(low=85, high=110, dtype=int) / 100
-    shrink_ratio2 = np.random.randint(low=85, high=110, dtype=int) / 100
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
-    zero_point = rows - np.round(rows * shrink_ratio1, 0)
-    max_point_row = np.round(rows * shrink_ratio1, 0)
-    max_point_col = np.round(cols * shrink_ratio2, 0)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
+    how='left')['visitors_y'].values
 
-    src = np.float32([[zero_point, zero_point], [max_point_row-1, zero_point], [zero_point, max_point_col+1], [max_point_row-1, max_point_col+1]])
-    dst = np.float32([[0, 0], [rows, 0], [0, cols], [rows, cols]])
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
+    on='air_store_id', how='left')['visitors_y'].values
 
-    perspective_M = cv2.getPerspectiveTransform(src, dst)
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
 
-    img = cv2.warpPerspective(img, perspective_M, (cols,rows))#, borderValue=mean_pix)
-    return img
-
-def shift(img):
-    rows = img.shape[0]
-    cols = img.shape[1]
-
-    shift_ratio1 = (random.random() * 2 - 1) * np.random.randint(low=3, high=15, dtype=int)
-    shift_ratio2 = (random.random() * 2 - 1) * np.random.randint(low=3, high=15, dtype=int)
+sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y']* 1.1)/2
+sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
 
-    shift_M = np.float32([[1,0,shift_ratio1], [0,1,shift_ratio2]])
-    img = cv2.warpAffine(img, shift_M, (cols, rows))#, borderValue=mean_pix)
-    return img
-
-def batch_generator_train(zip_list, img_size, batch_size, is_train=True, shuffle=True):
-    number_of_batches = np.ceil(len(zip_list) / batch_size)
-    if shuffle == True:
-        random.shuffle(zip_list)
-    counter = 0
-    while True:
-        if shuffle == True:
-            random.shuffle(zip_list)
-
-        batch_files = zip_list[batch_size*counter:batch_size*(counter+1)]
-        image_list = []
-        mask_list = []
-
-        for file, mask in batch_files:
-
-            image = cv2.imread(file) #cv2.resize(cv2.imread(file), (img_size,img_size)) / 255.
-            image = image[:, :, [2, 1, 0]] - mean_pix
+print('Leaderboard : ', aml.leaderboard)
 
-            rnd_flip = np.random.randint(2, dtype=int)
-            rnd_rotate = np.random.randint(2, dtype=int)
-            rnd_zoom = np.random.randint(2, dtype=int)
-            rnd_shift = np.random.randint(2, dtype=int)
-
-            if (rnd_flip == 1) & (is_train == True):
-                rnd_flip = np.random.randint(3, dtype=int) - 1
-                image = cv2.flip(image, rnd_flip)
-
-            if (rnd_rotate == 1) & (is_train == True):
-                image = rotate_bound(image, img_size)
-
-            if (rnd_zoom == 1) & (is_train == True):
-                image = perspective(image)
-
-            if (rnd_shift == 1) & (is_train == True):
-                image = shift(image)
-
-            image_list.append(image)
-            mask_list.append(mask)
-
-        counter += 1
-        image_list = np.array(image_list)
-        mask_list = np.array(mask_list)
-
-        yield (image_list, mask_list)
-
-        if counter == number_of_batches:
-            if shuffle == True:
-                random.shuffle(zip_list)
-            counter = 0
-
-def batch_generator_test(zip_list, img_size, batch_size, shuffle=True):
-    number_of_batches = np.ceil(len(zip_list)/batch_size)
-    print(len(zip_list), number_of_batches)
-    counter = 0
-    if shuffle:
-        random.shuffle(zip_list)
-    while True:
-        batch_files = zip_list[batch_size*counter:batch_size*(counter+1)]
-        image_list = []
-        mask_list = []
-
-        for file, mask in batch_files:
-
-            image = cv2.resize(cv2.imread(file), (img_size, img_size))
-            image = image[:, :, [2, 1, 0]] - mean_pix
-            image_list.append(image)
-            mask_list.append(mask)
-
-        counter += 1
-        image_list = np.array(image_list)
-        mask_list = np.array(mask_list)
-
-        yield (image_list, mask_list)
-
-        if counter == number_of_batches:
-            random.shuffle(zip_list)
-            counter = 0
-
-def predict_generator(files, img_size, batch_size):
-    number_of_batches = np.ceil(len(files) / batch_size)
-    print(len(files), number_of_batches)
-    counter = 0
-    int_counter = 0
-
-    while True:
-            beg = batch_size * counter
-            end = batch_size * (counter + 1)
-            batch_files = files[beg:end]
-            image_list = []
-
-            for file in batch_files:
-                int_counter += 1
-                image = cv2.resize(cv2.imread(file), (img_size, img_size))
-                image = image[:, :, [2, 1, 0]] - mean_pix
-
-                rnd_flip = np.random.randint(2, dtype=int)
-                rnd_rotate = np.random.randint(2, dtype=int)
-                rnd_zoom = np.random.randint(2, dtype=int)
-                rnd_shift = np.random.randint(2, dtype=int)
-
-                if rnd_flip == 1:
-                    rnd_flip = np.random.randint(3, dtype=int) - 1
-                    image = cv2.flip(image, rnd_flip)
-
-                if rnd_rotate == 1:
-                    image = rotate_bound(image, img_size)
-
-                if rnd_zoom == 1:
-                    image = perspective(image)
-
-                if rnd_shift == 1:
-                    image = shift(image)
-
-                image_list.append(image)
-
-            counter += 1
-
-            image_list = np.array(image_list)
-
-            yield (image_list)
-
-
-def f2_score(y_true, y_pred):
-    y_true, y_pred, = np.array(y_true), np.array(y_pred)
-    score = fbeta_score(y_true, y_pred, beta=2, average='samples')
-    return score
-
-GLOBAL_PATH = 'D:/G/Amazon/'
-TRAIN_FOLDER = 'D:/g/amazon/train-jpg-res/' #All train files resized to 224*224
-TEST_FOLDER = 'D:/G/Amazon/test-jpg/' #All test files in one folder
-F_CLASSES = GLOBAL_PATH + 'train_v2.csv'
-
-df_train = pd.read_csv(F_CLASSES)
-df_test = pd.read_csv(GLOBAL_PATH + 'sample_submission_v4.csv')
-
-labels = ['blow_down',
-          'bare_ground',
-          'conventional_mine',
-          'blooming',
-          'cultivation',
-          'artisinal_mine',
-          'haze',
-          'primary',
-          'slash_burn',
-          'habitation',
-          'clear',
-          'road',
-          'selective_logging',
-          'partly_cloudy',
-          'agriculture',
-          'water',
-          'cloudy']
-label_map = {'agriculture': 14,
-             'artisinal_mine': 5,
-             'bare_ground': 1,
-             'blooming': 3,
-             'blow_down': 0,
-             'clear': 10,
-             'cloudy': 16,
-             'conventional_mine': 2,
-             'cultivation': 4,
-             'habitation': 9,
-             'haze': 6,
-             'partly_cloudy': 13,
-             'primary': 7,
-             'road': 11,
-             'selective_logging': 12,
-             'slash_burn': 8,
-             'water': 15}
-
-flatten = lambda l: [item for sublist in l for item in sublist]
-
-x_train = []
-x_test = []
-y_train = []
-
-
-for f, tags in tqdm(df_train.values, miniters=1000):
-    img = TRAIN_FOLDER + '{}.jpg'.format(f)
-    targets = np.zeros(17)
-    for t in tags.split(' '):
-        targets[label_map[t]] = 1
-    x_train.append(img)
-    y_train.append(targets)
-
-
-x_train, x_holdout, y_train, y_holdout = x_train[3000:-1], x_train[:3000], y_train[3000:-1], y_train[:3000]
-
-x_train, y_train = shuffle(x_train, y_train, random_state = 24)
-
-part = 0.85
-split = int(round(part*len(y_train)))
-x_train, x_valid, y_train, y_valid = x_train[:split], x_train[split:], y_train[:split], y_train[split:]
-print('x tr: ', len(x_train))
-
-#define callbacks
-callbacks = [ModelCheckpoint('amazon_2007.hdf5', monitor='val_loss', save_best_only=True, verbose=2, save_weights_only=False),
-             ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=2, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0.0000001),
-             EarlyStopping(monitor='val_loss', patience=5, verbose=0)]
-
-BATCH = 128
-IMG_SIZE = 224
-mean_pix = np.array([102.9801, 115.9465, 122.7717]) #It is BGR
-
-from keras.applications import ResNet50
-
-#Compile model and set non-top layets non-trainable (warm-up)
-base_model = ResNet50(include_top=False, input_shape=(IMG_SIZE,IMG_SIZE,3), pooling='avg', weights='imagenet')
-for layer in base_model.layers:
-    layer.trainable = False
-
-x = base_model.output
-x = Dense(2048, activation='relu')(x)
-x = Dropout(0.25)(x)
-output = Dense(17, activation='sigmoid')(x)
-
-optimizer = Adam(0.001, decay=0.0003)
-model = Model(inputs=base_model.inputs, outputs=output)
-model = make_parallel(model, 2)
-
-model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
-
-model.fit_generator(generator=batch_generator_train(list(zip(x_train, y_train)), IMG_SIZE, BATCH),
-                          steps_per_epoch=np.ceil(len(x_train)/BATCH),
-                          epochs=1,
-                          verbose=1,
-                          validation_data=batch_generator_train(list(zip(x_valid, y_valid)), IMG_SIZE, 16),
-                          validation_steps=np.ceil(len(x_valid)/16),
-                          callbacks=callbacks,
-                          initial_epoch=0)
-
-
-#Compile model and set all layers trainable
-optimizer = Adam(0.0001, decay=0.00000001)
-model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
-model.load_weights('amazon_2007.hdf5', by_name=True)
-for layer in base_model.layers:
-    layer.trainable = True
-
-BATCH = 32
-model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
-model.fit_generator(generator=batch_generator_train(list(zip(x_train, y_train)), IMG_SIZE, BATCH),
-                          steps_per_epoch=np.ceil(len(x_train)/BATCH),
-                          epochs=50,
-                          verbose=1,
-                          validation_data=batch_generator_train(list(zip(x_valid, y_valid)), IMG_SIZE, 16),
-                          validation_steps=np.ceil(len(x_valid)/16),
-                          callbacks=callbacks,
-                          initial_epoch=0)
-
-model.load_weights('amazon_2007.hdf5')
-
-
-x_val = []
-y_val = []
-x_hld = []
-y_hld = []
-x_test = []
-y_test = []
-
-
-#====================== validation set est =================================
-for f, tags in tqdm(list(zip(x_valid, y_valid)), miniters=1000):
-    y_val.append(tags)
-
-p_valid = model.predict_generator(batch_generator_test(list(zip(x_valid, y_valid)), IMG_SIZE, 8, shuffle=False), steps=np.ceil(len(x_valid)/8))
-
-print('val_set: ', fbeta_score(np.array(y_val), np.array(p_valid) > 0.2, beta=2, average='samples'))
-#===========================================================================
-
-def optimise_f2_thresholds(y, p, verbose=True, resolution=100):
-    #credits https://www.kaggle.com/c/planet-understanding-the-amazon-from-space/discussion/32475
-  def mf(x):
-    p2 = np.zeros_like(p)
-    for i in range(17):
-      p2[:, i] = (p[:, i] > x[i]).astype(np.int)
-    score = fbeta_score(y, p2, beta=2, average='samples')
-    return score
-
-  x = [0.2]*17
-  for i in range(17):
-    best_i2 = 0
-    best_score = 0
-    for i2 in range(resolution):
-      i2 /= resolution
-      x[i] = i2
-      score = mf(x)
-      if score > best_score:
-        best_i2 = i2
-        best_score = score
-    x[i] = best_i2
-    if verbose:
-      print(i, best_i2, best_score)
-
-  return x
-
-X = optimise_f2_thresholds(np.array(y_val), np.array(p_valid))
-
-#====================== holdout set est =================================
-for f, tags in tqdm(list(zip(x_holdout, y_holdout)), miniters=1000):
-    img = cv2.resize(cv2.imread(f), (IMG_SIZE, IMG_SIZE))
-    x_hld.append(img)
-    y_hld.append(tags)
-
-if len(x_holdout) % 2 > 0:
-    x_hld.append(x_hld[0])
-    y_hld.append(y_hld[0])
-
-x_hld = np.array(x_hld, np.float16)
-
-p_valid = model.predict(x_hld, batch_size=28, verbose=2)
-print('holdout set: ', f2_score(np.array(y_hld), np.array(p_valid) > 0.2))
-print('holdout set w/ thresh: ', f2_score(np.array(y_hld), np.array(p_valid) > 0.19))
-#===========================================================================
-
-
-for f, tags in tqdm(df_test.values, miniters=1000):
-    img = TEST_FOLDER + '{}.jpg'.format(f)
-    x_test.append(img)
-
-batch_size_test = 32
-len_test = len(x_test)
-x_tst = []
-yfull_test = []
-
-
-TTA_steps = 30
-
-for k in range(0, TTA_steps):
-    print(k)
-    probs = model.predict_generator(predict_generator(x_test,IMG_SIZE,batch_size_test), steps=np.ceil(len(x_test)/batch_size_test),verbose=1)
-    yfull_test.append(probs)
-    k += 1
-
-result = np.array(yfull_test[0])
-
-for i in range(1, TTA_steps):
-    result += np.array(yfull_test[i])
-result /= TTA_steps
-
-res = pd.DataFrame(result, columns=labels)
-preds = []
-
-for i in tqdm(range(res.shape[0]), miniters=1000):
-    a = res.ix[[i]]
-    a = a.apply(lambda x: x > X, axis=1)
-    a = a.transpose()
-    a = a.loc[a[i] == True]
-    ' '.join(list(a.index))
-    preds.append(' '.join(list(a.index)))
-
-print(len(preds))
-
-df_test['tags'] = preds
-df_test = df_test[:-57]
-df_test.to_csv('submission.csv', index=False)
+print(' H2O automl leader performace : ', aml.leader)

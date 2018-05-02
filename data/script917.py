@@ -1,132 +1,83 @@
 
 # coding: utf-8
 
-# In this notebook I show two methods to encode location features (longitude, latitude) to get a "neighborhood" proxy feature.
+# The Standard
+# ============
+# 
+# [http://dicom.nema.org/standard.html][1]
+# 
+# 
+#   [1]: http://dicom.nema.org/standard.html
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
 import pandas as pd
+import dicom, glob
+import multiprocessing
+
+images = sorted(glob.glob('../input/sample_images/**/*.dcm'))
+#images = glob.glob('../input/stage1/**/*.dcm')
+images = pd.DataFrame([[i, i.split('/')[3], i.split('/')[4], None, []] for i in images], columns=['path','id','image', 'series_no', 'pixels'])
+#train = pd.read_csv('../input/stage1_labels.csv')
+#test = pd.read_csv('../input/stage1_sample_submission.csv')
+#print(len(images), len(train), len(test))
+
+
+# In[ ]:
+
+
+#https://www.kaggle.com/gzuidhof/data-science-bowl-2017/full-preprocessing-tutorial
+from skimage import measure, morphology
+import scipy.ndimage, os
+import pickle
+
+for i in images.id.unique():
+    i = '0bd0e3056cbf23a1cb7f0f0b18446068' #remove
+    path = '../input/sample_images/' + i
+    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
+    slices.sort(key = lambda x: int(x.InstanceNumber))
+    image = np.stack([s.pixel_array for s in slices])
+    pickle.dump(image, open('' + str(i)+'.pkl', 'wb'))
+    image = pickle.loads(open('' + str(i)+'.pkl','rb').read())
+    print(image.shape, i)
+    break
+
+
+# In[ ]:
+
+
+from PIL import Image, ImageDraw
+from PIL import ImageFont
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-import seaborn as sns
-from sklearn.cluster import KMeans
+get_ipython().run_line_magic('matplotlib', 'inline')
 
+image = pickle.loads(open('0bd0e3056cbf23a1cb7f0f0b18446068.pkl','rb').read())
 
-# ### Load dataset
+def set_color(mu):
+    c = int((550 + mu)/100*255)
+    return (c,0,c)
 
-# In[ ]:
+im = Image.new('RGBA', (int(image.shape[1] + image.shape[0]/10), int(image.shape[2] + image.shape[0]/10)))
+d = ImageDraw.Draw(im)
+for z in range(0,image.shape[0], 10):
+    for x in range(image.shape[2]-10):
+        for y in range(image.shape[1]-10):
+            mu = image[z][y][x] -1024
+            if -550<mu and mu<-450: #lung
+                im.putpixel((int(x+z/10), int(y+z/10)), set_color(mu))
+                #fill surrounding
+                for o1 in range(1,10):
+                    for o2 in range(1,10):
+                        mu2 = image[z][y+o1][x+o2] -1024
+                        if -100<mu2 and mu2<-50: #fat
+                            im.putpixel((int(x+o1+z/10), int(y+o2+z/10)), (255,182,193))
+                        if 30<mu2 and mu2<45: #blood
+                            im.putpixel((int(x+o1+z/10), int(y+o2+z/10)), (255,0,0))
+                        if -1010<mu2 and mu2<-990: #air
+                            im.putpixel((int(x+o1+z/10), int(y+o2+z/10)), (135,206,235))
+            if mu>500: #bone
+                im.putpixel((int(x+z/10), int(y+z/10)), (35,35,35))
+plt.imshow(im); plt.axis('off')
 
-
-df = pd.read_json('../input/train.json')[['longitude','latitude','interest_level','price']]
-df['response'] = 0.
-df.loc[df.interest_level=='medium', 'response'] = 0.5
-df.loc[df.interest_level=='high', 'response'] = 1
-
-
-# ### Outlier removal
-# 
-# If you take a look to the location coordinates you'll notice a few outliers far away from NY city center. I'll start by excluding them using a recursive approach. At each iteration all the listings with |z-score|>3 are excluded. The removal algorithm stops once all the listings have |z-score|<3.
-
-# In[ ]:
-
-
-# Show location coordinates before oulier removal
-fig, ax = plt.subplots(1, 2, figsize=(9,6))
-print('Length before removing ouliers', len(df))
-ax[0].plot(df.longitude, df.latitude, '.');
-ax[0].set_title('Before outlier removal');
-ax[0].set_xlabel('Longitude');
-ax[0].set_ylabel('Latitude');
-# Outlier removal
-for i in ['latitude', 'longitude']:
-    while(1):
-        x = df[i].median()
-        ix = abs(df[i] - x) > 3*df[i].std()
-        if ix.sum()==0: # no more outliers -> stop
-            break
-        df.loc[ix, i] = np.nan # exclude outliers
-# Keep only non-outlier listings
-df = df.loc[df[['latitude', 'longitude']].isnull().sum(1) == 0, :]
-print('Length after removing ouliers', len(df))
-# Show location coordinates after outlier removal
-ax[1].plot(df.longitude, df.latitude, '.');
-ax[1].set_title('After outlier removal');
-ax[1].set_xlabel('Longitude');
-ax[1].set_ylabel('Latitude');
-
-
-# ### Neighborhoods
-# Here, I'll use Kmeans to cluster listings based on their coordinates. I'll show the results of using 5, 10, 20 and 40 "neighborhoods".
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(4,1,figsize=(9,30))
-for ix, ncomp in enumerate([5, 10, 20, 40]):
-    r = KMeans(ncomp, random_state=1)
-    # Normalize (longitude, latitude) before K-means
-    temp = df[['longitude', 'latitude']].copy()
-    temp['longitude'] = (temp['longitude']-temp['longitude'].mean())/temp['longitude'].std()
-    temp['latitude'] = (temp['latitude']-temp['latitude'].mean())/temp['latitude'].std()
-    # Fit k-means and get labels
-    r.fit(temp[['longitude', 'latitude']])
-    df['labels'] = r.labels_
-    # Plot results
-    cols = sns.color_palette("Set2", n_colors=ncomp, desat=.5)
-    cl = [cols[i] for i in r.labels_]
-    area = 12
-    ax[ix].scatter(df.longitude, df.latitude, s=area, c=cl, alpha=0.5);
-    ax[ix].set_title('Number of components: ' + str(ncomp))
-    ax[ix].set_xlabel('Longitude')
-    ax[ix].set_ylabel('Latitude')
-    # Show aggregated volume and interest at each neighborhood
-    x = df.groupby('labels')[['longitude','latitude','response']].mean().sort_values(['response'])
-    x = pd.concat([x, df['labels'].value_counts()], axis=1).sort_values(['response'])
-    cols = sns.color_palette("RdBu_r", ncomp)[::-1]
-    for i in range(ncomp):
-        props = dict(boxstyle='round', facecolor=cols[i], alpha=0.8)
-        ax[ix].text(x.longitude.values[i], x.latitude.values[i], 
-                str(np.array(np.round(x.response.values,2), '|S8')[i])+'\n'+str(np.array(x['labels'].values, '|S8')[i]), 
-                fontsize=9, verticalalignment='center', horizontalalignment='center', bbox=props);
-
-
-# ### Supervised encoding of location coordinates
-# The aim of this analysis is to provide a way to numericaly encode listing locations based on the mean location interest. I'll proceed as follows:
-# 
-# - Define a fixed grid of 40 points both for 'latitude' and 'longitude' values
-# - At each square defined by two consecutive longitude and latitude breaks compute the mean interest of the listings within the square
-
-# In[ ]:
-
-
-res = 40 # grid size
-min_n = 30 # minimum size to perform inference
-# Define grids
-nx = np.linspace(df.longitude.min(), df.longitude.max(), res)
-ny = np.linspace(df.latitude.min(), df.latitude.max(), res)
-# Encode
-Y = pd.DataFrame()
-for i in range(res-1):
-    for j in range(res-1):
-        # Identify listings within the square
-        ix = (df.longitude >= nx[i])&(df.longitude < nx[i+1])&(df.latitude >= ny[j])&(df.latitude < ny[j+1])
-        # Compute mean interest if the number of listings is greated than 'min_n'
-        if ix.sum() > min_n:
-            y = df.loc[ix, :].mean() # mean interest
-            y['n'] = ix.sum() # volume
-            Y = pd.concat([Y, y], axis=1)
-Y = Y.transpose()
-# Show results
-cols = sns.color_palette("RdBu_r", 5)
-cl = [cols[i] for i in np.digitize(Y.response.values, Y.response.quantile(np.arange(1/5., 1, 1/5.)))]
-area = 12 + 5*np.log1p(Y.n - min_n)
-fig, ax = plt.subplots(1, 1, figsize=(9,9))
-ax.scatter(Y.longitude, Y.latitude, s=area, c=cl, alpha=0.5);
-
-
-# Any feedback or comment will be appreciated! Upvote if you found it interesting :)
-# 
-# Thanks!

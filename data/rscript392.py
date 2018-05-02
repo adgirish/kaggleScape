@@ -1,168 +1,362 @@
-
-''' 
-Author: Danijel Kivaranovic 
-Title: Neural network (Keras) with sparse data
-'''
-
-## import libraries
+import gc
 import numpy as np
-np.random.seed(123)
-
 import pandas as pd
-import subprocess
-from scipy.sparse import csr_matrix, hstack
-from sklearn.metrics import mean_absolute_error
-from sklearn.preprocessing import StandardScaler
-from sklearn.cross_validation import KFold
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
-from keras.layers.normalization import BatchNormalization
-from keras.layers.advanced_activations import PReLU
+import xgboost as xgb
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.metrics import matthews_corrcoef
+from operator import itemgetter
 
-## Batch generators ##################################################################################################################################
+# per raddar, all date features except for stations 24+25 are identical
 
-def batch_generator(X, y, batch_size, shuffle):
-    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
-    number_of_batches = np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    if shuffle:
-        np.random.shuffle(sample_index)
-    while True:
-        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
-        X_batch = X[batch_index,:].toarray()
-        y_batch = y[batch_index]
-        counter += 1
-        yield X_batch, y_batch
-        if (counter == number_of_batches):
-            if shuffle:
-                np.random.shuffle(sample_index)
-            counter = 0
-
-def batch_generatorp(X, batch_size, shuffle):
-    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    while True:
-        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
-        X_batch = X[batch_index, :].toarray()
-        counter += 1
-        yield X_batch
-        if (counter == number_of_batches):
-            counter = 0
-
-########################################################################################################################################################
-
-## read data
-train = pd.read_csv('input/train.csv')
-test = pd.read_csv('input/test.csv')
-
-index = list(train.index)
-print index[0:10]
-np.random.shuffle(index)
-print index[0:10]
-train = train.iloc[index]
-'train = train.iloc[np.random.permutation(len(train))]'
-
-## set test loss to NaN
-test['loss'] = np.nan
-
-## response and IDs
-y = np.log(train['loss'].values+200)
-id_train = train['id'].values
-id_test = test['id'].values
-
-## stack train test
-ntrain = train.shape[0]
-tr_te = pd.concat((train, test), axis = 0)
-
-## Preprocessing and transforming to sparse data
-sparse_data = []
-
-f_cat = [f for f in tr_te.columns if 'cat' in f]
-for f in f_cat:
-    dummy = pd.get_dummies(tr_te[f].astype('category'))
-    tmp = csr_matrix(dummy)
-    sparse_data.append(tmp)
-
-f_num = [f for f in tr_te.columns if 'cont' in f]
-scaler = StandardScaler()
-tmp = csr_matrix(scaler.fit_transform(tr_te[f_num]))
-sparse_data.append(tmp)
-
-del(tr_te, train, test)
-
-## sparse train and test data
-xtr_te = hstack(sparse_data, format = 'csr')
-xtrain = xtr_te[:ntrain, :]
-xtest = xtr_te[ntrain:, :]
-
-print('Dim train', xtrain.shape)
-print('Dim test', xtest.shape)
-
-del(xtr_te, sparse_data, tmp)
-
-## neural net
-def nn_model():
-    model = Sequential()
+def get_date_features():
+    directory = '../input/'
+    trainfile = 'train_date.csv'
     
-    model.add(Dense(400, input_dim = xtrain.shape[1], init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(0.4))
+    for i, chunk in enumerate(pd.read_csv(directory + trainfile,
+                                          chunksize=1,
+                                          low_memory=False)):
+        features = list(chunk.columns)
+        break
+
+    seen = np.zeros(52)
+    rv = []
+    for f in features:
+        if f == 'Id' or 'S24' in f or 'S25' in f:
+            rv.append(f)
+            continue
+            
+        station = int(f.split('_')[1][1:])
+#        print(station)
         
-    model.add(Dense(200, init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())    
-    model.add(Dropout(0.2))
+        if seen[station]:
+            continue
+        
+        seen[station] = 1
+        rv.append(f)
+        
+    return rv
+        
+usefuldatefeatures = get_date_features()
+
+def get_mindate():
+    directory = '../input/'
+    trainfile = 'train_date.csv'
+    testfile = 'test_date.csv'
     
-    model.add(Dense(50, init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())    
-    model.add(Dropout(0.2))
+    features = None
+    subset = None
     
-    model.add(Dense(1, init = 'he_normal'))
-    model.compile(loss = 'mae', optimizer = 'adadelta')
-    return(model)
+    for i, chunk in enumerate(pd.read_csv(directory + trainfile,
+                                          usecols=usefuldatefeatures,
+                                          chunksize=50000,
+                                          low_memory=False)):
+        print(i)
+        
+        if features is None:
+            features = list(chunk.columns)
+            features.remove('Id')
+        
+        df_mindate_chunk = chunk[['Id']].copy()
+        df_mindate_chunk['mindate'] = chunk[features].min(axis=1).values
+        
+        if subset is None:
+            subset = df_mindate_chunk.copy()
+        else:
+            subset = pd.concat([subset, df_mindate_chunk])
+            
+        del chunk
+        gc.collect()
 
-## cv-folds
-nfolds = 10
-folds = KFold(len(y), n_folds = nfolds, shuffle = True, random_state = 111)
+    for i, chunk in enumerate(pd.read_csv(directory + testfile,
+                                          usecols=usefuldatefeatures,
+                                          chunksize=50000,
+                                          low_memory=False)):
+        print(i)
+        
+        df_mindate_chunk = chunk[['Id']].copy()
+        df_mindate_chunk['mindate'] = chunk[features].min(axis=1).values
+        subset = pd.concat([subset, df_mindate_chunk])
+        
+        del chunk
+        gc.collect()      
+        
+    return subset
 
-## train models
-i = 0
-nbags = 10
-nepochs = 55
-pred_oob = np.zeros(xtrain.shape[0])
-pred_test = np.zeros(xtest.shape[0])
 
-for (inTr, inTe) in folds:
-    xtr = xtrain[inTr]
-    ytr = y[inTr]
-    xte = xtrain[inTe]
-    yte = y[inTe]
-    pred = np.zeros(xte.shape[0])
-    for j in range(nbags):
-        model = nn_model()
-        fit = model.fit_generator(generator = batch_generator(xtr, ytr, 128, True),
-                                  nb_epoch = nepochs,
-                                  samples_per_epoch = xtr.shape[0],
-                                  verbose = 0)
-        pred += np.exp(model.predict_generator(generator = batch_generatorp(xte, 800, False), val_samples = xte.shape[0])[:,0])-200
-        pred_test += np.exp(model.predict_generator(generator = batch_generatorp(xtest, 800, False), val_samples = xtest.shape[0])[:,0])-200
-    pred /= nbags
-    pred_oob[inTe] = pred
-    score = mean_absolute_error(np.exp(yte)-200, pred)
-    i += 1
-    print('Fold ', i, '- MAE:', score)
+df_mindate = get_mindate()
 
-print('Total - MAE:', mean_absolute_error(np.exp(y)-200, pred_oob))
+df_mindate.sort_values(by=['mindate', 'Id'], inplace=True)
 
-## train predictions
-df = pd.DataFrame({'id': id_train, 'loss': pred_oob})
-df.to_csv('preds_oob.csv', index = False)
+df_mindate['mindate_id_diff'] = df_mindate.Id.diff()
 
-## test predictions
-pred_test /= (nfolds*nbags)
-df = pd.DataFrame({'id': id_test, 'loss': pred_test})
-df.to_csv('submission_keras_shift_perm.csv', index = False)
+midr = np.full_like(df_mindate.mindate_id_diff.values, np.nan)
+midr[0:-1] = -df_mindate.mindate_id_diff.values[1:]
+
+df_mindate['mindate_id_diff_reverse'] = midr
+
+def mcc(tp, tn, fp, fn):
+    sup = tp * tn - fp * fn
+    inf = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+    if inf == 0:
+        return 0
+    else:
+        return sup / np.sqrt(inf)
+
+
+def eval_mcc(y_true, y_prob, show=False):
+    idx = np.argsort(y_prob)
+    y_true_sort = y_true[idx]
+    n = y_true.shape[0]
+    nump = 1.0 * np.sum(y_true)  # number of positive
+    numn = n - nump  # number of negative
+    tp = nump
+    tn = 0.0
+    fp = numn
+    fn = 0.0
+    best_mcc = 0.0
+    best_id = -1
+    mccs = np.zeros(n)
+    for i in range(n):
+        if y_true_sort[i] == 1:
+            tp -= 1.0
+            fn += 1.0
+        else:
+            fp -= 1.0
+            tn += 1.0
+        new_mcc = mcc(tp, tn, fp, fn)
+        mccs[i] = new_mcc
+        if new_mcc >= best_mcc:
+            best_mcc = new_mcc
+            best_id = i
+    if show:
+        best_proba = y_prob[idx[best_id]]
+        y_pred = (y_prob > best_proba).astype(int)
+        return best_proba, best_mcc, y_pred
+    else:
+        return best_mcc
+
+
+def mcc_eval(y_prob, dtrain):
+    y_true = dtrain.get_label()
+    best_mcc = eval_mcc(y_true, y_prob)
+    return 'MCC', best_mcc
+
+
+def create_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    for i, feat in enumerate(features):
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+    outfile.close()
+
+
+def get_importance(gbm, features):
+    create_feature_map(features)
+    importance = gbm.get_fscore(fmap='xgb.fmap')
+    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
+    return importance
+
+
+def LeaveOneOut(data1, data2, columnName, useLOO=False):
+    grpOutcomes = data1.groupby(columnName)['Response'].mean().reset_index()
+    grpCount = data1.groupby(columnName)['Response'].count().reset_index()
+    grpOutcomes['cnt'] = grpCount.Response
+    if(useLOO):
+        grpOutcomes = grpOutcomes[grpOutcomes.cnt > 1]
+    grpOutcomes.drop('cnt', inplace=True, axis=1)
+    outcomes = data2['Response'].values
+    x = pd.merge(data2[[columnName, 'Response']], grpOutcomes,
+                 suffixes=('x_', ''),
+                 how='left',
+                 on=columnName,
+                 left_index=True)['Response']
+    if(useLOO):
+        x = ((x*x.shape[0])-outcomes)/(x.shape[0]-1)
+        #  x = x + np.random.normal(0, .01, x.shape[0])
+    return x.fillna(x.mean())
+
+
+def GrabData():
+    directory = '../input/'
+    trainfiles = ['train_categorical.csv',
+                  'train_date.csv',
+                  'train_numeric.csv']
+    testfiles = ['test_categorical.csv',
+                 'test_date.csv',
+                 'test_numeric.csv']
+
+    cols = [['Id',
+             'L1_S24_F1559', 'L3_S32_F3851',
+             'L1_S24_F1827', 'L1_S24_F1582',
+             'L3_S32_F3854', 'L1_S24_F1510',
+             'L1_S24_F1525'],
+            ['Id',
+             'L3_S30_D3496', 'L3_S30_D3506',
+             'L3_S30_D3501', 'L3_S30_D3516',
+             'L3_S30_D3511'],
+            ['Id',
+             'L1_S24_F1846', 'L3_S32_F3850',
+             'L1_S24_F1695', 'L1_S24_F1632',
+             'L3_S33_F3855', 'L1_S24_F1604',
+             'L3_S29_F3407', 'L3_S33_F3865',
+             'L3_S38_F3952', 'L1_S24_F1723',
+             'Response']]
+    traindata = None
+    testdata = None
+    for i, f in enumerate(trainfiles):
+        print(f)
+        subset = None
+        for i, chunk in enumerate(pd.read_csv(directory + f,
+                                              usecols=cols[i],
+                                              chunksize=50000,
+                                              low_memory=False)):
+            print(i)
+            if subset is None:
+                subset = chunk.copy()
+            else:
+                subset = pd.concat([subset, chunk])
+            del chunk
+            gc.collect()
+        if traindata is None:
+            traindata = subset.copy()
+        else:
+            traindata = pd.merge(traindata, subset.copy(), on="Id")
+        del subset
+        gc.collect()
+    del cols[2][-1]  # Test doesn't have response!
+    for i, f in enumerate(testfiles):
+        print(f)
+        subset = None
+        for i, chunk in enumerate(pd.read_csv(directory + f,
+                                              usecols=cols[i],
+                                              chunksize=50000,
+                                              low_memory=False)):
+            print(i)
+            if subset is None:
+                subset = chunk.copy()
+            else:
+                subset = pd.concat([subset, chunk])
+            del chunk
+            gc.collect()
+        if testdata is None:
+            testdata = subset.copy()
+        else:
+            testdata = pd.merge(testdata, subset.copy(), on="Id")
+        del subset
+        gc.collect()
+        
+    traindata = traindata.merge(df_mindate, on='Id')
+    testdata = testdata.merge(df_mindate, on='Id')
+        
+    testdata['Response'] = 0  # Add Dummy Value
+    visibletraindata = traindata[::2]
+    blindtraindata = traindata[1::2]
+    print(blindtraindata.columns)
+    for i in range(2):
+        for col in cols[i][1:]:
+            print(col)
+            blindtraindata.loc[:, col] = LeaveOneOut(visibletraindata,
+                                                     blindtraindata,
+                                                     col, False).values
+            testdata.loc[:, col] = LeaveOneOut(visibletraindata,
+                                               testdata, col, False).values
+    del visibletraindata
+    gc.collect()
+    testdata.drop('Response', inplace=True, axis=1)
+    return blindtraindata, testdata
+
+
+def Train():
+    train, test = GrabData()
+    print('Train:', train.shape)
+    print('Test', test.shape)
+    features = list(train.columns)
+    features.remove('Response')
+    features.remove('Id')
+    print(features)
+    num_rounds = 50
+    params = {}
+    params['objective'] = "binary:logistic"
+    params['eta'] = 0.021
+    params['max_depth'] = 7
+    params['colsample_bytree'] = 0.82
+    params['min_child_weight'] = 3
+    params['base_score'] = 0.005
+    params['silent'] = True
+
+    print('Fitting')
+    trainpredictions = None
+    testpredictions = None
+
+    dvisibletrain = \
+        xgb.DMatrix(train[features],
+                    train.Response,
+                    silent=True)
+    dtest = \
+        xgb.DMatrix(test[features],
+                    silent=True)
+
+    folds = 1
+    for i in range(folds):
+        print('Fold:', i)
+        params['seed'] = i
+        watchlist = [(dvisibletrain, 'train'), (dvisibletrain, 'val')]
+        clf = xgb.train(params, dvisibletrain,
+                        num_boost_round=num_rounds,
+                        evals=watchlist,
+                        early_stopping_rounds=20,
+                        feval=mcc_eval,
+                        maximize=True
+                        )
+        limit = clf.best_iteration+1
+        # limit = clf.best_ntree_limit
+        predictions = \
+            clf.predict(dvisibletrain, ntree_limit=limit)
+
+        best_proba, best_mcc, y_pred = eval_mcc(train.Response,
+                                                predictions,
+                                                True)
+        print('tree limit:', limit)
+        print('mcc:', best_mcc)
+        print(matthews_corrcoef(train.Response,
+                                y_pred))
+        if(trainpredictions is None):
+            trainpredictions = predictions
+        else:
+            trainpredictions += predictions
+        predictions = clf.predict(dtest, ntree_limit=limit)
+        if(testpredictions is None):
+            testpredictions = predictions
+        else:
+            testpredictions += predictions
+        imp = get_importance(clf, features)
+        print('Importance array: ', imp)
+
+    best_proba, best_mcc, y_pred = eval_mcc(train.Response,
+                                            trainpredictions/folds,
+                                            True)
+    print(matthews_corrcoef(train.Response,
+                            y_pred))
+
+    submission = pd.DataFrame({"Id": train.Id,
+                               "Prediction": trainpredictions/folds,
+                               "Response": train.Response})
+    submission[['Id',
+                'Prediction',
+                'Response']].to_csv('rawtrainxgbsubmission'+str(folds)+'.csv',
+                                    index=False)
+
+    submission = pd.DataFrame({"Id": test.Id.values,
+                               "Response": testpredictions/folds})
+    submission[['Id', 'Response']].to_csv('rawxgbsubmission'+str(folds)+'.csv',
+                                          index=False)
+    y_pred = (testpredictions/folds > .08).astype(int)
+    submission = pd.DataFrame({"Id": test.Id.values,
+                               "Response": y_pred})
+    submission[['Id', 'Response']].to_csv('xgbsubmission'+str(folds)+'.csv',
+                                          index=False)
+
+if __name__ == "__main__":
+    print('Started')
+    Train()
+    print('Finished')
+

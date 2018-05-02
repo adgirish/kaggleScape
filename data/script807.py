@@ -1,282 +1,391 @@
 
 # coding: utf-8
 
-# ## Introduction
-# In this kernel, I'll demonstrate how to use Sohier's [BigQuery helper module](https://github.com/SohierDane/BigQuery_Helper/blob/master/bq_helper.py) to safely query the largest BigQuery dataset we've made available on Kaggle, [GitHub Repos](https://www.kaggle.com/github/github-repos). Weighing in at 3TB total, you can see how it would be easy for me to quickly exhaust my 5TB/30-day quota scanning lots of large tables. 
-# 
-# The `bq_helper` module simplifies the common read-only tasks we can do using the BigQuery Python client library on Kaggle and makes it a cinch to manage resource usage. This helper class works only in Kernels because we handle authentication on our side. This means you don't need to worry about anything like managing credentials or entering in credit card information to have fun learning how to work with BigQuery datasets.
-# 
-# You'll learn how to do the following:
-# 
-# 1. Create a `BigQueryHelper` object
-# 2. Understand the tables in the dataset
-# 3. Estimate the size of your queries before you make them
-# 4. Query safely, convert to `pandas.dataframe`, and visualize results
-# 
-# By the end of this kernel, you'll not only learn a lot about querying BigQuery datasets safely, but we'll also find out the most popular licenses used by open source projects on GitHub. Let's go!
-
-# In[1]:
-
-
-import pandas as pd
-# https://github.com/SohierDane/BigQuery_Helper
-from bq_helper import BigQueryHelper
-
-
-# ### Creating a BigQueryHelper object
-# To start, we use `bq_helper` to create a `BigQueryHelper` object. This requires the project name and dataset name as its two arguments. You can find out the project name and dataset name by clicking on the "Data" tab of this kernel. Select any table and you'll see the first two parts of the address (in the blue BigQuery Table box) separated by `.` correspond to the project and dataset names respectively:
-# 
-# * `bigquery-public-data`
-# * `github_repos`
-# 
-# Let's create a `BigQueryHelper` object for the GitHub dataset:
-
-# In[2]:
-
-
-bq_assistant = BigQueryHelper("bigquery-public-data", "github_repos")
-
-
-# If you're following along in your own kernel, click on the "Environment Variables" tab in the console at the bottom of the editor pane. You'll now see a `BigQueryHelper` object in your environment.
-# 
-# ### Get to know your data with simple read-only functions
-# 
-# Now that we have our `BigQueryHelper` object for the GitHub dataset, there are a few super simple read-only functions we can use to learn more about the data including:
-# 
-# * Listing tables
-# * Getting table schema
-# * Inspecting table rows
-# 
-# Next, the simplest read-only task we can do is list all of the tables in the dataset. You can of course preview the tables by looking at the "Data" tab, too.
-
-# In[3]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.list_tables()')
-
-
-# Good. We confirm that we see the same 9 tables that are shown in our "Data" tab. 
-# 
-# The GitHub BigQuery dataset doesn't have column-level descriptions for any of its tables (otherwise you could also look at them in the "Data" tab file previews), but if it did, looking at table schema using `bq_helper` would show them:
-
-# In[4]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.table_schema("licenses")')
-
-
-# Finally, while you can preview the first 100 rows in the table previews in the "Data" tab, there's also an efficient way to look at the first few rows using `bq_helper`.
-# 
-# Because `SELECT *` will scan all rows of the columns you specify (and potentially burn lots of quota), it's best practice to avoid using it especially just to explore your data. Here's how you can look at the first few rows using `head` which uses the efficient `list_rows` function [as Sohier notes](https://www.kaggle.com/sohier/introduction-to-the-bq-helper-package). Let's try it out on the `licenses` table:
-
-# In[5]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.head("licenses", num_rows=10)')
-
-
-# So far, these are the helper functions available in `bq_helper` that will let you get to safely know your data a bit before writing queries. Feel free to let us know if you'd like to see more functionality by opening an issue or submitting a PR to the [GitHub repo](https://github.com/SohierDane/BigQuery_Helper).
-# 
-# ### Estimating query size
-# 
-# Now for the really cool part. We're eager to start analyzing the GitHub BigQuery dataset to uncover insights into open source software development, but we should be careful about how much data we scan in our queries. Let's make those free 5TB count!
-# 
-# Fortunately, the `bq_helper` module gives us tools to very easily estimate the size of our queries before we get ahead of ourselves. We simply write a `QUERY` using BigQuery's Standard SQL syntax then call the `estimate_query_size` function which will return the size of the query in GB. Let's give it a try.
-# 
-# [In this kernel](https://www.kaggle.com/mrisdal/github-commit-messages), I wrote a query which `SELECTS` 2000 rather short commit messages from the `commits` table. Let's use `estimate_query_size` to see how much data it scans.
-
-# In[7]:
-
-
-QUERY = """
-        SELECT message
-        FROM `bigquery-public-data.github_repos.commits`
-        WHERE LENGTH(message) > 6 AND LENGTH(message) <= 20
-        LIMIT 2000
-        """
-
-
-# In[8]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.estimate_query_size(QUERY)')
-
-
-# The above query would cost me nearly 18GB to run now. Now you can see why it's extremely helpful to know this without needing to actually expend the quota! Note that the query obviously doesn't return an object that's 17.6GB--it's only returning 2000 very short commit messages.
-# 
-# Let's experiment with estimating the size of a query that returns twice as many results:
-
-# In[9]:
-
-
-QUERY = """
-        SELECT message
-        FROM `bigquery-public-data.github_repos.commits`
-        WHERE LENGTH(message) > 6 AND LENGTH(message) <= 20
-        LIMIT 4000 -- twice as many commit messages
-        """
-
-
-# In[10]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.estimate_query_size(QUERY)')
-
-
-# Ah hah. See how it returns the same exact size estimate? This illustrates how using `LIMIT` to reduce the amount of data the query returns doesn't actually change how much data the query is scanning. The latter is what really counts against your quota.
-# 
-# Let's do one more experiment. What about the `WHERE` clause that I included? Let's remove that AND `LIMIT` and see if it increases the amount of data my query scans:
-
-# In[11]:
-
-
-get_ipython().run_cell_magic('time', '', 'QUERY = """\n        SELECT message\n        FROM `bigquery-public-data.github_repos.commits`\n        """')
-
-
-# In[12]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.estimate_query_size(QUERY)')
-
-
-# Again, we're scanning the same 17.6GB which we now clearly know is the full size of the `message` field. The lesson here that I hope you'll take away is that the data you're scanning is NOT equivalent to the data you expect the query to return as its result. I encourage you to [check out BigQuery's best practices docs](https://cloud.google.com/bigquery/docs/best-practices) for more information.
-# 
-# Don't be discouraged by this. There is some good news! When you _do_ make a query request, your results will be cached for some time by default. So as long as you're in the same interactive notebook session, you can run the same cell/query multiple times without expending multiples of the quota cost. Whew! This is especially helpful because when you click "New Snapshot" to save your work, your kernel will be freshly executed from top to bottom.
-# 
-# ### Executing queries safely
-# 
-# Now that we're comfortable with the huge amounts of data at our fingertips and know we can confidently estimate the size of our queries, let's actually fetch some data!
-# 
-# The `query_to_pandas_safe` function is another `bq_helper` function that makes the call to execute our query. It has two advantages over using the base BigQuery Python client library:
-# 
-# * By default it won't execute a query with a size estimate over 1GB
-# * It returns a convenient pandas dataframe
-# 
-# Let's try out `query_to_pandas_safe` on our first query. If it works correctly, the query will fail to execute as we know it scans 17.6GB of data.
-
-# In[14]:
-
-
-QUERY = """
-        SELECT message
-        FROM `bigquery-public-data.github_repos.commits`
-        WHERE LENGTH(message) > 6 AND LENGTH(message) <= 20
-        LIMIT 2000
-        """
-
-
-# In[15]:
-
-
-get_ipython().run_cell_magic('time', '', 'df = bq_assistant.query_to_pandas_safe(QUERY)')
-
-
-# Thanks to `query_to_pandas_safe` we didn't actually execute a query that was larger than 1GB. Relief! If we were comfortable making a larger query, we would simply add an argument `max_gb_scanned`. To successfully execute this query, I would add `max_gb_scanned=18`.
-# 
-# ### Putting it all together in four steps
-# 
-# We've come a long way in learning how to safely handle large datasets in BigQuery. Let's see if we can put it all together to make a reasonably sized query, get a pandas dataframe back, and visualize the results. Boom.
-# 
-# Returning to my question at the beginning of this kernel, I want to know the licenses most frequently used by projects on GitHub. After writing my query, I will:
-# 
-# 1. Estimate the size of my query to make sure it's not too huge
-# 2. Execute my query using `query_to_pandas_safe` to get my results in a pandas dataframe
-# 3. Explore the results
-# 3. Visualize the results
-
-# In[17]:
-
-
-QUERY = """
-        SELECT license, COUNT(*) AS count
-        FROM `bigquery-public-data.github_repos.licenses`
-        GROUP BY license
-        ORDER BY COUNT(*) DESC
-        """
-
-
-# #### Step 1. Estimate the size of the query I've written above.
-
-# In[18]:
-
-
-get_ipython().run_cell_magic('time', '', 'bq_assistant.estimate_query_size(QUERY)')
-
-
-# Executing this query will only cost me 0.02 GB which I'm comfortable with given my 5TB 30-day quota. 
-# 
-# #### Step 2. Use `query_to_pandas_safe` to get the results back as a pandas dataframe:
-
-# In[19]:
-
-
-get_ipython().run_cell_magic('time', '', 'df = bq_assistant.query_to_pandas_safe(QUERY)')
-
-
-# Ahh, perfect silence. Because my query scanned less than 1GB of data, it executed without canceling. 
-# 
-# #### Step 3. Explore the results of the query
-# 
-# Now that our results are in a pandas dataframe, the data is super easy to manipulate. Let's check out the size of our dataframe and compare to the amount of data we know we scanned (0.02GB):
-
 # In[ ]:
 
 
-print('Size of dataframe: {} Bytes'.format(int(df.memory_usage(index=True, deep=True).sum())))
-
-
-# Much, much smaller! Again, this is to reiterate that the data you scan is much different from the results you get back from your query. This is again because BigQuery is scanning the entire contents of the `license` field in the `licenses` table. 
-# 
-# Now we can take a look at the first few rows returned:
-
-# In[ ]:
-
-
-df.head()
-
-
-# It's clear that the MIT license is the most popular among open source projects in the GitHub BigQuery dataset. How many licenses did we return, anyway?
-
-# In[ ]:
-
-
-df.shape
-
-
-# We've got the counts for each of fifteen licenses used in the dataset.
-# 
-# #### Step 4. Visualize the results
-# 
-# The results of our query (and our efforts learning BigQuery) will all become real once we visualize them! I'm going to use `matplotlib` with `seaborn` to create a bar plot showing the count of GitHub projects by type of license.
-
-# In[ ]:
-
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.style.use('ggplot')
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+mushrooms = pd.read_csv('../input/mushrooms.csv')
 
 
 # In[ ]:
 
 
-sns.set_context("notebook", font_scale=1.5, rc={"lines.linewidth": 2.5})
-
-f, g = plt.subplots(figsize=(12, 9))
-g = sns.barplot(x="license", y="count", data=df, palette="Blues_d")
-g.set_xticklabels(g.get_xticklabels(), rotation=30)
-plt.title("Popularity of Licenses Used by Open Source Projects on GitHub")
-plt.show(g)
+mushrooms.head()
 
 
-# Beautiful! We already knew that MIT was the most popular license by far, but here we see it in plain contrast to the next most common licenses, Apache 2.0 and GPL 2.0 and 3.0. For the record, this kernel is Apache 2.0-licensed. :)
-# 
-# ## Conclusion
-# 
-# I hope you've enjoyed this kernel and learned at least something new. I know I felt confident about exploring this massive 3TB dataset knowing the functions available to me in `bq_helper` would prevent me from accidentally exceeding my quota. Here are some additional resources for working with BigQuery datasets in Kaggle Kernels:
-# 
-# * New to SQL? Learn this practical language by signing up for our [5-day SQL Scavenger Hunt](https://www.kaggle.com/sql-scavenger-hunt) which starts February 15th
-# * [A collection of all BigQuery resources on Kaggle](https://www.kaggle.com/product-feedback/48573)
-# * [Learn more about the BigQuery Python client library here](https://www.kaggle.com/sohier/beyond-queries-exploring-the-bigquery-api)
-# * Explore [all BigQuery datasets available on Kaggle](https://www.kaggle.com/datasets?filetype=bigQuery)--each has its own "starter kernel" for you to fork
+# In[ ]:
+
+
+#Idea: 1) Pick two features for classification (cap color, odor)
+#      2) Run some statistical analysis
+#      3) Assign numerical values to the letter values in order to feed the Logistic Regression Algo.
+
+
+# In[ ]:
+
+
+mushrooms.shape
+
+
+# In[ ]:
+
+
+mushrooms.describe()
+
+
+# In[ ]:
+
+
+'To visualize the number of mushrooms for each cap color categorize. We will build a bar chart'
+
+
+# In[ ]:
+
+
+#Obtain total number of mushrooms for each 'cap-color' (Entire DataFrame)
+cap_colors = mushrooms['cap-color'].value_counts()
+m_height = cap_colors.values.tolist() #Provides numerical values
+cap_colors.axes #Provides row labels
+cap_color_labels = cap_colors.axes[0].tolist() #Converts index object to list
+
+#=====PLOT Preparations and Plotting====#
+ind = np.arange(10)  # the x locations for the groups
+width = 0.7        # the width of the bars
+colors = ['#DEB887','#778899','#DC143C','#FFFF99','#f8f8ff','#F0DC82','#FF69B4','#D22D1E','#C000C5','g']
+#FFFFF0
+fig, ax = plt.subplots(figsize=(10,7))
+mushroom_bars = ax.bar(ind, m_height , width, color=colors)
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Cap Color",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Mushroom Cap Color Quantity',fontsize=22)
+ax.set_xticks(ind) #Positioning on the x axis
+ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
+                  fontsize = 12)
+
+#Auto-labels the number of mushrooms for each bar color.
+def autolabel(rects,fontsize=14):
+    """
+    Attach a text label above each bar displaying its height
+    """
+    for rect in rects:
+        height = rect.get_height()
+        ax.text(rect.get_x() + rect.get_width()/2., 1*height,'%d' % int(height),
+                ha='center', va='bottom',fontsize=fontsize)
+autolabel(mushroom_bars)        
+plt.show() #Display bars. 
+
+
+# In[ ]:
+
+
+'Following bar chart shows the # of mushrooms which are edible or poisonous based on cap-color'
+
+
+# In[ ]:
+
+
+poisonous_cc = [] #Poisonous color cap list
+edible_cc = []    #Edible color cap list
+for capColor in cap_color_labels:
+    size = len(mushrooms[mushrooms['cap-color'] == capColor].index)
+    edibles = len(mushrooms[(mushrooms['cap-color'] == capColor) & (mushrooms['class'] == 'e')].index)
+    edible_cc.append(edibles)
+    poisonous_cc.append(size-edibles)
+                        
+#=====PLOT Preparations and Plotting====#
+width = 0.40
+fig, ax = plt.subplots(figsize=(12,7))
+edible_bars = ax.bar(ind, edible_cc , width, color='#ADFF2F')
+poison_bars = ax.bar(ind+width, poisonous_cc , width, color='#DA70D6')
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Cap Color",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Edible and Poisonous Mushrooms Based on Cap Color',fontsize=22)
+ax.set_xticks(ind + width / 2) #Positioning on the x axis
+ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
+                  fontsize = 12)
+ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
+autolabel(edible_bars, 10)
+autolabel(poison_bars, 10)
+plt.show()
+print(edible_cc)
+print(poisonous_cc)
+
+
+# In[ ]:
+
+
+'The next bar chart shows the number of mushrooms based on "odor"'
+
+
+# In[ ]:
+
+
+#Obtain total number of mushrooms for each 'odor' (Entire DataFrame)
+odors = mushrooms['odor'].value_counts()
+odor_height = odors.values.tolist() #Provides numerical values
+odor_labels = odors.axes[0].tolist() #Converts index labels object to list
+
+#=====PLOT Preparations and Plotting====#
+width = 0.7 
+ind = np.arange(9)  # the x locations for the groups
+colors = ['#FFFF99','#ADFF2F','#00BFFF','#FA8072','#FFEBCD','#800000','#40E0D0','#808080','#2E8B57']
+
+fig, ax = plt.subplots(figsize=(10,7))
+odor_bars = ax.bar(ind, odor_height , width, color=colors)
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Odor",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Mushroom Odor and Quantity',fontsize=22)
+ax.set_xticks(ind) #Positioning on the x axis
+ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
+                  fontsize = 12)
+ax.legend(odor_bars, ['none: no smell','foul: rotten eggs', 'fishy: fresh fish','spicy: pepper',
+                      'almond: nutlike kernel', 'anise: sweet herbal', 'pungent: vinegar',
+                     'creosote: smoky chimney', 'musty: mold mildew'],fontsize=17)
+autolabel(odor_bars)        
+plt.show() #Display bars. 
+
+
+# In[ ]:
+
+
+'Following bar: # of mushrooms which are edible|poisonous based on odor'
+
+
+# In[ ]:
+
+
+poisonous_od = [] #Poisonous odor list
+edible_od = []    #Edible odor list
+for odor in odor_labels:
+    size = len(mushrooms[mushrooms['odor'] == odor].index)
+    edibles = len(mushrooms[(mushrooms['odor'] == odor) & (mushrooms['class'] == 'e')].index)
+    edible_od.append(edibles)
+    poisonous_od.append(size-edibles)
+                        
+#=====PLOT Preparations and Plotting====#
+width = 0.40
+fig, ax = plt.subplots(figsize=(12,7))
+edible_bars = ax.bar(ind, edible_od , width, color='#ADFF2F')
+poison_bars = ax.bar(ind+width, poisonous_od , width, color='#DA70D6')
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Odor",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Edible and Poisonous Mushrooms Based on Odor',fontsize=22)
+ax.set_xticks(ind + width / 2) #Positioning on the x axis
+ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
+                  fontsize = 12)
+ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
+autolabel(edible_bars, 10)
+autolabel(poison_bars, 10)
+plt.show()
+print(edible_od)
+print(poisonous_od)
+
+
+# In[ ]:
+
+
+'***Th0ugHT[0]: According to my expectations, at least some of the "not nose friendly" mushrooms'
+'could be edible. However, the above contradicts that thought. All smelly and stingy mushrooms' 
+'are poisonous. To my surprise all the almond and anise mushrooms are edible. Finally, we must be'
+'careful for mushrooms with no smell, there seems to be a small chance of getting poisoned.***'
+
+
+# In[ ]:
+
+
+'Pie Chart: Show the type of mushroom population.'
+'Double Pie Chart: Show edibles and poisonous percentages of mushrrom population types.'
+
+
+# In[ ]:
+
+
+#Get the population types and its values for Single Pie chart
+populations = mushrooms['population'].value_counts()
+pop_size = populations.values.tolist() #Provides numerical values
+pop_types = populations.axes[0].tolist() #Converts index labels object to list
+print(pop_size)
+# Data to plot
+pop_labels = 'Several', 'Solitary', 'Scattered', 'Numerous', 'Abundant', 'Clustered'
+colors = ['#F38181','#EAFFD0','#95E1D3','#FCE38A','#BDE4F4','#9EF4E6']
+explode = (0, 0.1, 0, 0, 0, 0)  # explode 1st slice
+fig = plt.figure(figsize=(12,8))
+# Plot
+plt.title('Mushroom Population Type Percentange', fontsize=22)
+patches, texts, autotexts = plt.pie(pop_size, explode=explode, labels=pop_labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=150)
+for text,autotext in zip(texts,autotexts):
+    text.set_fontsize(14)
+    autotext.set_fontsize(14)
+
+plt.axis('equal')
+plt.show()
+
+
+# In[ ]:
+
+
+#DOUBLE PIE CHART
+poisonous_pop = [] #Poisonous population type list
+edible_pop = []    #Edible population type list
+for pop in pop_types: 
+    size = len(mushrooms[mushrooms['population'] == pop].index)
+    edibles = len(mushrooms[(mushrooms['population'] == pop) & (mushrooms['class'] == 'e')].index)
+    edible_pop.append(edibles) #Gets edibles
+    poisonous_pop.append(size-edibles) #Gets poisonous
+combine_ed_poi = []
+for i in range(0,len(edible_pop)): #Combines both edible and poisonous in a single list. 
+    combine_ed_poi.append(edible_pop[i])
+    combine_ed_poi.append(poisonous_pop[i])
+#print(edible_pop) print(poisonous_pop) print(combine_ed_poi)
+
+#Preparations for DOUBLE pie chart.
+fig = plt.subplots(figsize=(13,8))
+plt.title('Edible & Poisonous Mushroom Population Type Percentage', fontsize=22)
+percentages_e_p = ['14.67%','35.06%','13.10%', '7.98%','10.83%','4.53%','4.92%','0%','4.73%','0%',
+                  '3.55%','0.64%'] #Percetanges for edible and poisonous
+#===First pie===
+patches1, texts1 = plt.pie(combine_ed_poi,radius = 2, labels= percentages_e_p,
+                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
+for i in range(0,len(texts1)):
+    if(i%2==0):
+        texts1[i].set_color('#7CB721') #Color % labels with dark green
+    else:
+        texts1[i].set_color('#AE59AB') # " " dark purple
+    texts1[i].set_fontsize(14)         #make labels bigger
+#===Second pie===
+patches2, texts2, autotexts2 = plt.pie(pop_size, colors=colors, radius = 1.5,
+        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
+for aut in autotexts2:
+    aut.set_fontsize(14)  #Inner autotext fontsize
+    aut.set_horizontalalignment('center') #Center
+#==Set 2 Legends to the plot.
+first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
+second_ledgend = plt.legend(patches2, pop_labels, loc="best",fontsize=13)
+plt.gca().add_artist(first_legend) #To display two legends
+#Align both pie charts in the same position
+plt.axis('equal')
+plt.show()
+
+
+# # Mushroom Habitat
+# ### Let's see where you can find those mushrooms and find out if they want to be eaten or not according to their habitat. (Please don't go eating random mushrooms you find >.<)
+
+# In[ ]:
+
+
+#Get the habitat types and its values for a Single Pie chart
+habitats = mushrooms['habitat'].value_counts()
+hab_size = habitats.values.tolist() #Provides numerical values
+hab_types = habitats.axes[0].tolist() #Converts index labels object to list
+print(habitats)
+# Data to plot
+hab_labels = 'Woods', 'Grasses', 'Paths', 'Leaves', 'Urban', 'Meadows', 'Waste'
+colors = ['#F5AD6F','#EAFFD0','#FFFF66','#84D9E2','#C0C0C0','#DE7E7E', '#FFB6C1']
+explode = (0, 0, 0, 0, 0, 0,0.5)  # explode 1st slice
+fig = plt.figure(figsize=(12,8))
+# Plot
+plt.title('Mushroom Habitat Type Percentange', fontsize=22)
+patches, texts, autotexts = plt.pie(hab_size, explode=explode, labels=hab_labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=360)
+for text,autotext in zip(texts,autotexts):
+    text.set_fontsize(14)
+    autotext.set_fontsize(14)
+
+plt.axis('equal')
+plt.show()
+
+
+# In[ ]:
+
+
+#DOUBLE PIE CHART
+poisonous_hab = [] #Poisonous habitat type list
+edible_hab = []    #Edible habitat type list
+for hab in hab_types: 
+    size = len(mushrooms[mushrooms['habitat'] == hab].index)
+    edibles = len(mushrooms[(mushrooms['habitat'] == hab) & (mushrooms['class'] == 'e')].index)
+    edible_hab.append(edibles) #Gets edibles
+    poisonous_hab.append(size-edibles) #Gets poisonous
+combine_ed_poi = []
+for i in range(0,len(edible_hab)): #Combines both edible and poisonous in a single list. 
+    combine_ed_poi.append(edible_hab[i])
+    combine_ed_poi.append(poisonous_hab[i])
+print(edible_hab) 
+print(poisonous_hab) 
+print(combine_ed_poi)
+
+#Preparations for DOUBLE pie chart.
+fig = plt.subplots(figsize=(13,8))
+plt.title('Edible & Poisonous Mushroom Habitat Type Percentage', fontsize=22)
+percentages_e_p = ['23.14%','15.61%','17.33%', '9.11%','1.67%','12.41%','2.95%','7.29%','1.18%','3.35%',
+                  '3.15%','0.44%','2.36%','0%'] #Percetanges for edible and poisonous
+#===First pie===
+patches1, texts1= plt.pie(combine_ed_poi,radius = 2, labels=percentages_e_p,
+                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
+for i in range(0,len(texts1)):
+    if(i%2==0):
+        texts1[i].set_color('#7CB721') #Color % labels with dark green
+    else:
+        texts1[i].set_color('#AE59AB') # " " dark purple
+    texts1[i].set_fontsize(14)         #make labels bigger
+#===Second pie===
+patches2, texts2, autotexts2 = plt.pie(hab_size, colors=colors, radius = 1.5,
+        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
+for aut in autotexts2:
+    aut.set_fontsize(14)  #Inner autotext fontsize
+    aut.set_horizontalalignment('center') #Center
+#==Set 2 Legends to the plot.
+first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
+second_ledgend = plt.legend(patches2, hab_labels, loc="best",fontsize=13)
+plt.gca().add_artist(first_legend) #To display two legends
+#Align both pie charts in the same position
+plt.axis('equal')
+plt.show()
+
+
+# ### How strange...mushrooms with habitat 'waste' are edible. I wouldn't do it. Urban, leaves or path mushrooms are mostly poisionous. And if you ever go out to the woods or find a mushroom in the grass there is always the probability that it might not be edible.
+
+# In[ ]:
+
+
+#Let's pick a random sample of the dataset of 500 mushrooms
+mushrooms_sample = mushrooms.loc[np.random.choice(mushrooms.index, 1000, False)]
+
+
+# In[ ]:
+
+
+#Get all unique cap-colors
+mushrooms_sample['cap-color'].unique()
+
+
+# In[ ]:
+
+
+#mushrooms_sample.groupby('cap-color', 0).nunique()
+
+#Get 'cap-color' Series
+capColors = mushrooms_sample['cap-color']
+
+#Get the total number of mushrooms for each unique cap color. 
+capColors.value_counts()
+

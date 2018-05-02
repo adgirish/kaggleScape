@@ -1,291 +1,378 @@
 
 # coding: utf-8
 
+# How does the traffic of Taxi rides change along the day?
 # 
-# ![Hackerrank-code-like-a-girl](https://camo.githubusercontent.com/bcb153b5a4eaa2bf3f97776188c6d0d9f2ff6ce5/68747470733a2f2f64336b65757a6562326372686b6e2e636c6f756466726f6e742e6e65742f6861636b657272616e6b2f6173736574732f7374796c6567756964652f6c6f676f5f776f72646d61726b2d66356335656236316162306131353463336564396564613234643062396533312e737667)
+# In order to answer this question, I would use K-means clustering to cluster New York into different groups based on location, and analyze the traffic into and out of every cluster as a function of the time along the day. One can expect that residential areas would have more incoming traffic in the evening, whereas commercial areas would mostly attract people during the day, and areas with rich nightlife would show more traffic in the night. 
 # 
-# Hackerrank is a programming community platform for coders ! It helds competition and programming challenges to brush up/hone coding skills in various languages  (including Java, C++, PHP, Python, SQL, JavaScript)  ! Not unlike Kaggle which is focused on Data Scientist/Machine Learning engineers, Hackerrank is a good way to practice and show your skills to potential employers.
-# It is part of the growing gamification trend within competitive computer programming. We could ask ourselves what insights about women in tech the data provided by Hackerrank survey reveal !
-# 
-# As a young 2017 Graduate in Computer Science and Data Science and Woman in Tech myself, I am curious to see which trends we'll uncover :) Plus, I also wanted to gain more experience in data viz with Python. ^^
-# 
-# **RECAP **
-# The data set we are releasing here is the full dataset of 25K responses from Hackerrank developer survey, which includes both students and professionals.
-# 
-# **Methodology for the survey **
-# * A total of 25,090 professional and student developers completed our 10-minute online survey.
-# * The survey was live from October 16 through November 1, 2017.
-# * The survey was hosted by SurveyMonkey and we recruited respondents via email from our community of over 3.4 million members and through social media sites.
-# * We removed responses that were incomplete as well as obvious spam submissions.
-# * Not every question was shown to every respondent, as some questions were specifically for those involved in hiring. The codebook (HackerRank-Developer-Survey-2018-Codebook.csv) highlights under what conditions some questions were shown.
-# * The Women In Tech 2018 report is based only on the 14K responses from professionals
-# * Respondents who identified as students (q8Student=1; N=10351) were excluded from this report.
-# * Respondents who identify as “non-binary” (q3Gender=3; N=76) were excluded from the male-female comparisons.
-# 
-# 
-# 
-# **Women in Tech**
-# 
-# 
-# We know that Women in Tech are a minority, but what is the current situation in the past years ? More and more countries are putting effort into making women go into tech, has the situation improved from the past ? Let us get more in depth with this quick survey dataset !
-# 
-# ![](https://i1.wp.com/nmtechcouncil.org/wp-content/uploads/cover-graphic.jpeg?resize=700%2C367&ssl=1)
-# 
-# Summary
-# 
-# * [Q1 - Which languages are the most popular ?](#Q1)
-# * [Q2 - Age distribution ?](#Q2)
-# * [Q3 - At which age do they begin coding, differences between genders ?](#Q2)
-# * [Q4 - Countries of Respondents ?](#Q3)
-# * [Q5 - Top countries characteristics - age began coding ?](#Q5)
-# 
-# 
-# 
-# 
+# This can be helpful in duration prediction, as we can learn what are the likely destinations for each area during different times of the day.
 
-# In[3]:
+# In[ ]:
 
 
 import os
-import numpy as np
 import pandas as pd
+import numpy as np
+from matplotlib.pyplot import *
 import matplotlib.pyplot as plt
-import seaborn as sns
-plt.style.use('ggplot')
-import plotly
-import  plotly.offline as py
-py.init_notebook_mode(connected=True)
-#import plotly.plotly as py
-import plotly.graph_objs as go
+from matplotlib import animation
+from matplotlib import cm
+from sklearn.cluster import KMeans
+from sklearn.neighbors import KNeighborsClassifier
+from dateutil import parser
+import io
+import base64
+from IPython.display import HTML
+from imblearn.under_sampling import RandomUnderSampler
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# In[4]:
+# ### Read the data
+
+# In[ ]:
 
 
-df=pd.read_csv('../input/HackerRank-Developer-Survey-2018-Values.csv', parse_dates=['StartDate','EndDate'])
-df_n = pd.read_csv('../input/HackerRank-Developer-Survey-2018-Numeric.csv', parse_dates=['StartDate','EndDate'])
-df_women = df[df.q3Gender == 'Female']
-df_men = df[df.q3Gender != 'Female']
+df = pd.read_csv('../input/train.csv')
 
 
-# In[5]:
+# In[ ]:
 
 
-df.shape
+df.head()
 
 
-# In[6]:
+# ### Remove rides to and from far away areas
+
+# In[ ]:
 
 
-df = df.dropna(axis=0, how='all')
-df.shape
+xlim = [-74.03, -73.77]
+ylim = [40.63, 40.85]
+df = df[(df.pickup_longitude> xlim[0]) & (df.pickup_longitude < xlim[1])]
+df = df[(df.dropoff_longitude> xlim[0]) & (df.dropoff_longitude < xlim[1])]
+df = df[(df.pickup_latitude> ylim[0]) & (df.pickup_latitude < ylim[1])]
+df = df[(df.dropoff_latitude> ylim[0]) & (df.dropoff_latitude < ylim[1])]
 
 
-# In[7]:
+# ### Plot rides
+
+# In[ ]:
 
 
-#c = 0 
-#for i in df.columns : 
-#    print(i + " "+ str(c))
-#    c+= 1
+longitude = list(df.pickup_longitude) + list(df.dropoff_longitude)
+latitude = list(df.pickup_latitude) + list(df.dropoff_latitude)
+plt.figure(figsize = (10,10))
+plt.plot(longitude,latitude,'.', alpha = 0.4, markersize = 0.05)
+plt.show()
 
-df.head(1)
+
+# In[ ]:
 
 
-# <a id='Q1'></a>
-# ## **Let's explore which languages are the most popular amongst the respondents classified by gender ! **
+loc_df = pd.DataFrame()
+loc_df['longitude'] = longitude
+loc_df['latitude'] = latitude
+
+
+# ### Cluster
 # 
-# I will go back to think about this section later...
+# Let's cluster New York City based on the pick-up and drop-off points of each taxi ride
 
-# In[8]:
-
-
-prog = df[df.columns[139:163]]
-prog['Gender'] = df['q3Gender']
-prog = prog.dropna(axis=0, how='all')
-prog.columns
+# In[ ]:
 
 
-# In[9]:
+kmeans = KMeans(n_clusters=15, random_state=2, n_init = 10).fit(loc_df)
+loc_df['label'] = kmeans.labels_
+
+loc_df = loc_df.sample(200000)
+plt.figure(figsize = (10,10))
+for label in loc_df.label.unique():
+    plt.plot(loc_df.longitude[loc_df.label == label],loc_df.latitude[loc_df.label == label],'.', alpha = 0.3, markersize = 0.3)
+
+plt.title('Clusters of New York')
+plt.show()
 
 
-prog[0:5]
+# As we can see, the clustering results in a partition which is somewhat similar to the way NY is divided into different neighborhoods. We can see Upper East and West side of Central park in gray and pink respectively. West midtown in blue, Chelsea and West Village in brown, downtown area in blue, East Village and SoHo in purple.
+# 
+# The airports JFK and La LaGuardia have there own cluster, and so do Queens and Harlem. Brooklyn is divided into 2 clusters, and the Bronx has too few rides to be separated from Harlem. 
+#  
+# Let's plot the cluster centers:
+
+# In[ ]:
 
 
-# In[59]:
+fig,ax = plt.subplots(figsize = (10,10))
+for label in loc_df.label.unique():
+    ax.plot(loc_df.longitude[loc_df.label == label],loc_df.latitude[loc_df.label == label],'.', alpha = 0.4, markersize = 0.1, color = 'gray')
+    ax.plot(kmeans.cluster_centers_[label,0],kmeans.cluster_centers_[label,1],'o', color = 'r')
+    ax.annotate(label, (kmeans.cluster_centers_[label,0],kmeans.cluster_centers_[label,1]), color = 'b', fontsize = 20)
+ax.set_title('Cluster Centers')
+plt.show()
 
 
-for i in prog.columns[:-1] :
-    print(i + ": "+str(prog[i].isnull().sum()))
+# In[ ]:
 
 
-# In[84]:
+df['pickup_cluster'] = kmeans.predict(df[['pickup_longitude','pickup_latitude']])
+df['dropoff_cluster'] = kmeans.predict(df[['dropoff_longitude','dropoff_latitude']])
+df['pickup_hour'] = df.pickup_datetime.apply(lambda x: parser.parse(x).hour )
 
 
-colors = ["blue", "orange", "greyish", "faded green", "dusty purple"]
-fig, ax = plt.subplots(figsize=(20,20), ncols=5, nrows=5)
-count = 0
-times = 0
-for i in prog.columns[:-1]:
-    #sns.regplot(x='value', y='wage', data=df_melt, ax=axs[count])
-    sns.countplot(x=str(i), hue="Gender", data=prog, palette = sns.xkcd_palette(colors), ax=ax[times][count])
-    count += 1
-    if count == 5 :
-        times += 1
-        count = 0
-
-    
+# In[ ]:
 
 
-# **To be continued**
-
-# <a id='Q2'></a>
-# # Let's see how many women there are and the age distribution for both. The AgeBeginCoding value might also be interesting 
-
-# In[43]:
+clusters = pd.DataFrame()
+clusters['x'] = kmeans.cluster_centers_[:,0]
+clusters['y'] = kmeans.cluster_centers_[:,1]
+clusters['label'] = range(len(clusters))
 
 
-trace1 = go.Bar(
-    x=df_men['q2Age'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_men['q2Age'].value_counts().tolist(),np.sum(df_men['q2Age'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Men Respondents'
-)
-trace2 = go.Bar(
-    x=df_women['q2Age'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_women['q2Age'].value_counts().tolist(),np.sum(df_women['q2Age'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Female Respondents'
-)
-
-data = [trace1, trace2]
-layout = go.Layout(
-    barmode='group'
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='grouped-bar')
+# In[ ]:
 
 
-# In[44]:
+loc_df = loc_df.sample(5000)
 
 
-trace1 = go.Bar(
-    x=df_men['q1AgeBeginCoding'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_men['q1AgeBeginCoding'].value_counts().tolist(),np.sum(df_men['q1AgeBeginCoding'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Men Respondents'
-)
-trace2 = go.Bar(
-    x=df_women['q1AgeBeginCoding'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_women['q1AgeBeginCoding'].value_counts().tolist(),np.sum(df_women['q1AgeBeginCoding'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Female Respondents'
-)
+# ## Taxi rides from one cluster to another
+# 
+# And the following animation, every arrow represents rides from one cluster to another. The width of the arrow is proportional to the relative amount of trips in the relevant hour.
 
-data = [trace1, trace2]
-layout = go.Layout(
-    barmode='group'
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='grouped-bar')
+# In[ ]:
 
 
-# ## We can see that women tend to learn later on compared to men, especially regarding the "11-15 years-old" (22% for men and 13.8% for women) begineers category. More than the half of women learn between 16-20 years old. 
+fig, ax = plt.subplots(1, 1, figsize = (10,10))
 
-# In[45]:
-
-
-#df['time']=(df['EndDate']-df['StartDate']).astype('timedelta64[m]')
-
-
-# <a id='Q3'></a>
-# # Let's draw a global map to see from where are the majority of our respondents
-
-# In[46]:
+def animate(hour):
+    ax.clear()
+    ax.set_title('Absolute Traffic - Hour ' + str(int(hour)) + ':00')    
+    plt.figure(figsize = (10,10));
+    for label in loc_df.label.unique():
+        ax.plot(loc_df.longitude[loc_df.label == label],loc_df.latitude[loc_df.label == label],'.', alpha = 1, markersize = 2, color = 'gray');
+        ax.plot(kmeans.cluster_centers_[label,0],kmeans.cluster_centers_[label,1],'o', color = 'r');
 
 
-focus_country = df['CountryNumeric'].value_counts().to_frame()
-print("our TOP 10 country respondents is :") 
-print(focus_country.head(10).index)
+    for label in clusters.label:
+        for dest_label in clusters.label:
+            num_of_rides = len(df[(df.pickup_cluster == label) & (df.dropoff_cluster == dest_label) & (df.pickup_hour == hour)])
+            dist_x = clusters.x[clusters.label == label].values[0] - clusters.x[clusters.label == dest_label].values[0]
+            dist_y = clusters.y[clusters.label == label].values[0] - clusters.y[clusters.label == dest_label].values[0]
+            pct = np.true_divide(num_of_rides,len(df))
+            arr = Arrow(clusters.x[clusters.label == label].values, clusters.y[clusters.label == label].values, -dist_x, -dist_y, edgecolor='white', width = 15*pct)
+            ax.add_patch(arr)
+            arr.set_facecolor('g')
 
 
-# In[47]:
+ani = animation.FuncAnimation(fig,animate,sorted(df.pickup_hour.unique()), interval = 1000)
+plt.close()
+ani.save('animation.gif', writer='imagemagick', fps=2)
+filename = 'animation.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
 
 
-data = [ dict(
-        type = 'choropleth',
-        locations = focus_country.index,
-        locationmode = 'country names',
-        z = focus_country['CountryNumeric'],
-        text = focus_country['CountryNumeric'],
-        colorscale = [[0,"rgb(5, 10, 172)"],[0.35,"rgb(40, 60, 190)"],[0.5,"rgb(70, 100, 245)"],\
-            [0.6,"rgb(90, 120, 245)"],[0.7,"rgb(106, 137, 247)"],[1,"rgb(220, 220, 220)"]],
-        autocolorscale = False,
-        reversescale = True,
-        marker = dict(
-            line = dict (
-                color = 'rgb(180,180,180)',
-                width = 1
-            ) ),
-        colorbar = dict(
-            autotick = False,
-            tickprefix = '',
-            title = 'Respondents'),
-      ) ]
+# In[ ]:
 
+
+fig, ax = plt.subplots(1, 1, figsize = (10,10))
+
+def animate(hour):
+    ax.clear()
+    ax.set_title('Relative Traffic - Hour ' + str(int(hour)) + ':00')    
+    plt.figure(figsize = (10,10))
+    for label in loc_df.label.unique():
+        ax.plot(loc_df.longitude[loc_df.label == label],loc_df.latitude[loc_df.label == label],'.', alpha = 1, markersize = 2, color = 'gray')
+        ax.plot(kmeans.cluster_centers_[label,0],kmeans.cluster_centers_[label,1],'o', color = 'r')
+
+
+    for label in clusters.label:
+        for dest_label in clusters.label:
+            num_of_rides = len(df[(df.pickup_cluster == label) & (df.dropoff_cluster == dest_label) & (df.pickup_hour == hour)])
+            dist_x = clusters.x[clusters.label == label].values[0] - clusters.x[clusters.label == dest_label].values[0]
+            dist_y = clusters.y[clusters.label == label].values[0] - clusters.y[clusters.label == dest_label].values[0]
+            pct = np.true_divide(num_of_rides,len(df[df.pickup_hour == hour]))
+            arr = Arrow(clusters.x[clusters.label == label].values, clusters.y[clusters.label == label].values, -dist_x, -dist_y, edgecolor='white', width = pct)
+            ax.add_patch(arr)
+            arr.set_facecolor('g')
+
+
+ani = animation.FuncAnimation(fig,animate,sorted(df.pickup_hour.unique()), interval = 1000)
+plt.close()
+ani.save('animation.gif', writer='imagemagick', fps=2)
+filename = 'animation.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+
+
+# We can see that in the morning most of the traffic is in Manhattan island.
+# 
+# The share of taxis  travelling to Brooklyn area, mostly Williamsburg, becomes much larger in the late evening. Since there's no similar movement in the morning hours (in the opposite direction), this is unlikely to be the result of commuting.  Instead, and since the traffic is mostly seen after 22:00, these are probably people going out.
+# 
+# Since the arrows represent the relative traffic in the relevant hour, it is also possible that the increasing width of the arrows leading to Brooklyn may simply be a result of the reduction in the rides in Manhattan, due to the commercial character of big parts of it. But when looking at the absolute traffic, the arrows from Manhattan to Brooklyn are barely seen for the most part of the day.
+# 
+# In the very early morning, most of the traffic is to and from the two airports. As we can learn from the absolute graph, this is merely the result of decrease in traffic in the other parts of town. 
+
+# ## Neighborhood Analysis
+# 
+# Le't manually assign the neighborhood name to each cluster
+# 
+
+# In[ ]:
+
+
+neighborhood = {-74.0019368351: 'Chelsea',-73.837549761: 'Queens',-73.7854240738: 'JFK',-73.9810421975:'Midtown-North-West',-73.9862336241: 'East Village',
+                -73.971273324:'Midtown-North-East',-73.9866739677: 'Brooklyn-parkslope',-73.8690098118: 'LaGuardia',-73.9890572967:'Midtown',-74.0081765545: 'Downtown'
+                ,-73.9213024854: 'Queens-Astoria',-73.9470256923: 'Harlem',-73.9555565018: 'Uppe East Side',
+               -73.9453487097: 'Brooklyn-Williamsburgt',-73.9745967889:'Upper West Side'}
+
+
+# In[ ]:
+
+
+rides_df = pd.DataFrame(columns = neighborhood.values())
+rides_df['name'] = neighborhood.values()
+
+neigh = KNeighborsClassifier(n_neighbors=1)
+neigh.fit(np.array(list(neighborhood.keys())).reshape(-1, 1), list(neighborhood.values()))
+
+
+# In[ ]:
+
+
+df['pickup_neighborhood'] = neigh.predict(df.pickup_longitude.reshape(-1,1))
+df['dropoff_neighborhood'] = neigh.predict(df.dropoff_longitude.reshape(-1,1))
+
+for col in rides_df.columns[:-1]:
+    rides_df[col] = rides_df.name.apply(lambda x: len(df[(df.pickup_neighborhood == x) & (df.dropoff_neighborhood == col)]))
+
+
+# Now let's plot a heatmap and look where do passengers go to and from (These are aggregate values of all rides):
+
+# In[ ]:
+
+
+import plotly.offline as py
+import plotly.graph_objs as go
+py.init_notebook_mode(connected=True)
+
+trace = go.Heatmap(z= np.array(rides_df.as_matrix()),
+                  x = rides_df.columns[:-1],
+                  y = rides_df.columns)
 layout = dict(
-    title = 'Number of respondents by country',
-    geo = dict(
-        showframe = True,
-        showcoastlines = True,
-        projection = dict(
-            type = 'Mercator'
-        )
-    )
-)
-
-fig = dict( data=data, layout=layout )
-py.iplot( fig, validate=False, filename='d3-world-map' )
-
-
-# Source here : https://plot.ly/python/choropleth-maps/
-
-# ### **It's surprising to see Ghana winning the race, a map of beginning of code per country would be useful to see if every country needs to put on efforts (?) I will also explore the career/ school degrees and specialty of the individuals #To follow**
-
-# <a id='Q5'></a>
-# ## **Let's see the age at which the top countries respondents learned to code **
-
-# In[83]:
+    title = ' <b>Neighborhoods Interaction</b>',
+    titlefont = dict(
+    size = 30,
+    color = ('rgb(100,100,100)')),
+    margin = dict(t=100,r=100,b=100,l=150),
+        yaxis = dict(
+            title = ' <b> From </b>'),
+        xaxis = dict(
+            title = '<b> To </b>'))
+data=[trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename='labelled-heatmap')
 
 
-df_men_c = [0,0,0]
-df_women_c = [0,0,0]
-count = 0
-for i in focus_country.head(3).index : 
-    df_men_c[count] = df_men[df_men['CountryNumeric'] == i]
-    df_women_c[count] = df_women[df_women['CountryNumeric'] == i]
-    print('N° of Male respondents for '+ i + ' is : '+ str(df_men_c[count].shape[0]))
-    print('N° of Female respondents for '+ i + ' is : '+ str(df_women_c[count].shape[0]))
-    
-    trace1 = go.Bar( 
-    x=df_men_c[count]['q1AgeBeginCoding'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_men_c[count]['q1AgeBeginCoding'].value_counts().tolist(),np.sum(df_men_c[count]['q1AgeBeginCoding'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Men Respondents in '+i
-    )
-    trace2 = go.Bar(
-    x=df_women_c[count]['q1AgeBeginCoding'].value_counts().index.tolist(),
-    y=np.multiply(np.divide(df_women_c[count]['q1AgeBeginCoding'].value_counts().tolist(),np.sum(df_women_c[count]['q1AgeBeginCoding'].value_counts().tolist())).tolist(),100).tolist(),
-    name='Female Respondents in '+i
-    )
-
-    data = [trace1, trace2]
-    layout = go.Layout(
-        barmode='group'
-    )
-
-    fig = go.Figure(data=data, layout=layout)
-    py.iplot(fig, filename='grouped-bar')
-    count = count + 1
+# In[ ]:
 
 
-# We observe that most people learn to code between 16 and 20 years old. However, we also notice that in India the 2nd most represented group of beginners is 21-25 years old ! that is not the case in Ghana and USA where 2nd most seems to be 11-15 years. however girls are underrepresented in the USA for the 11-15 years old category. Maybe USA and India should put effort to make them learn to code earlier ?
+# fig,ax = plt.subplots(figsize = (12,12))
+# cax = ax.matshow(rides_df.drop('name',axis = 1),interpolation='nearest',cmap=cm.afmhot)
+# cbar = fig.colorbar(cax)
+# ax.grid('off')
+# ax.set_xticks(range(len(rides_df)))
+# ax.set_xticklabels(rides_df.name, rotation =90,fontsize = 15)
+# ax.set_yticks(range(len(rides_df)))
+# ax.set_yticklabels(rides_df.name,fontsize = 15)
+# ax.set_xlabel('To', fontsize = 25)
+# ax.set_ylabel('From', fontsize = 25)
+# ax.set_title('Neighborhoods Interaction', y=1.35, fontsize = 30)
 
-# ## Let's see if people who started to code continued. to be continued :) Don't hesitate to comment and upvote if you liked this kernel !
+
+# In[ ]:
+
+
+rides_df.index = rides_df.name
+rides_df = rides_df.drop('name', axis = 1)
+
+
+# We can see that center Manhattan neighborhoods are the most taxi-crowded, with Upper East side as the leader. We also see that the most common ride is within the cluster (which can not be seen in the animation). 
+# 
+# The heatmap is fairly symmetrical, meaning that there aren't clusters that significantly have more pickups than dropoffs or the other way around. Let's zoom on it:
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(figsize = (12,12))
+for i in range(len(rides_df)):  
+    ax.plot(rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i],'o', color = 'b')
+    ax.annotate(rides_df.index.tolist()[i], (rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i]), color = 'b', fontsize = 12)
+
+ax.plot([0,250000],[0,250000], color = 'r', linewidth = 1)
+ax.grid('off')
+ax.set_xlim([0,250000])
+ax.set_ylim([0,250000])
+ax.set_xlabel('Outbound Taxis')
+ax.set_ylabel('Inbound Taxis')
+ax.set_title('Inbound and Outbound rides for each cluster')
+
+
+# We can see that the inbound-outbound ratio for each neighborhood is relatively balanced.
+# 
+# The two airports have more outbound rides than inbound, which makes sense - drivers would probably go to the airport even without passengers, to have the chance to take people into the city. The residential area - Quuens, Brooklyn and Harlem have more inbound ride, whereas the more commercial and touristic areas have more outbound. with Upper East and West, being both commercial and residential, almost on the curve.
+# 
+# It seems that people would go into Manhattan by alternative means of transportation, but are more likely to get out of it by a cab. 
+
+# ## Winter vs Summer
+
+# In[ ]:
+
+
+df['pickup_month'] = df.pickup_datetime.apply(lambda x: parser.parse(x).month )
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,figsize = (12,12))
+
+rides_df = pd.DataFrame(columns = neighborhood.values())
+rides_df['name'] = neighborhood.values()
+rides_df.index = rides_df.name
+
+
+for col in rides_df.columns[:-1]:
+    rides_df[col] = rides_df.name.apply(lambda x: len(df[(df.pickup_neighborhood == x) & (df.dropoff_neighborhood == col) & (df.pickup_month == 6)]))
+for i in range(len(rides_df)):  
+    ax[0].plot(rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i],'o', color = 'b')
+    ax[0].annotate(rides_df.index.tolist()[i], (rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i]), color = 'b', fontsize = 12)
+
+ax[0].grid('off')
+ax[0].set_xlabel('Outbound Taxis')
+ax[0].set_ylabel('Inbound Taxis')
+ax[0].set_title('Inbound and Outbound rides for each cluster - June')
+ax[0].set_xlim([0,40000])
+ax[0].set_ylim([0,40000])
+ax[0].plot([0,40000],[0,40000])
+
+
+for col in rides_df.columns[:-1]:
+    rides_df[col] = rides_df.name.apply(lambda x: len(df[(df.pickup_neighborhood == x) & (df.dropoff_neighborhood == col) & (df.pickup_month == 1)]))
+rides_df = rides_df.drop('name', axis = 1)
+for i in range(len(rides_df)):  
+    ax[1].plot(rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i],'o', color = 'b')
+    ax[1].annotate(rides_df.index.tolist()[i], (rides_df.sum(axis = 1)[i],rides_df.sum(axis = 0)[i]), color = 'b', fontsize = 12)
+
+ax[1].grid('off')
+ax[1].set_xlabel('Outbound Taxis')
+ax[1].set_ylabel('Inbound Taxis')
+ax[1].set_title('Inbound and Outbound rides for each cluster - January')
+ax[1].set_xlim([0,40000])
+ax[1].set_ylim([0,40000])
+ax[1].plot([0,40000],[0,40000])
+
+
+# As we can see, the patterns are almost identical regardless of the month. snowy January vs humid and touristic June produce very similar Taxi patterns

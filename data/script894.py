@@ -1,456 +1,229 @@
 
 # coding: utf-8
 
-# # INTRODUCTION
-# * This is my first publishing dataset experience so I am little excited :)
-# * In this kernel contrary to my other kernels there will not be a tutorial. However there will be interesting exploratory data analysis because of dataset. 
-# * Dataset includes top 23 users (+ me) in kernel rank from  20/11/2017 to 17/12/2017. (day/month/year). While collecting this data I was not in the top 23 (I was at 48) but of course I add myself into record :)
-# * Content: 
-#     * KERNEL and DISCUSSION LEVELS
-#     * NUMBER of KERNEL MEDALS
-#     * NUMBER of DISCUSSION MEDALS
-#     * CORRELATION BETWEEN KERNEL POINTS and FOLLOWERS
-#     * CORRELATION BETWEEN DISCUSSION NUMBER, DISCUSSION MEDAL and FOLLOWERS
-#     * KERNEL RANK CHANGE of EACH USERS
-#     * NUMBER of FOLLOWERS CHANGE of EACH USERS
-#     * MONTHLY KERNEL POINT CHANGE
-#     *  CURRENT KERNEL RANKING
-#     * WHAT CAN KERNEL RANK BE 6 MONTHS LATER?
+# #INTRODUCTION
+# 
+# In a nutshell, I will be using a Principal Component Analysis (PCA) based approach to analysing the IMDB dataset and then implementing some KMeans clustering to provide visualisations of any related clusters I find in the dataset. Some caveats : I will not be attempting to run any predictive models ( XGBoosting, SVM, Regression... that sort of thing). This notebook will purely be an exploratory and hopefully concise enough attempt to explain the idea of PCA as well as using a clustering method (KMeans) to extract meaningful relations out of it. 
+# 
+# A very high-level description of PCA is that it serves as a dimensionality reduction method on the features of our original dataset by projecting these features onto a lower dimension. Therefore if our original dataset contains 72 columns ( i.e features) and we manage to reduce these 72 columns down to 9 columns image the gains in time and processing speeds! However the question is how do we get the new data out of the PCA-reduced 9 columns? Via a clustering method!! In this case, I will use KMeans - more to come below. This notebook is organised as follows : 
+# 
+#  1. Filtering the Dataset to remove Null values and get only numerical columns. Standardising the features 
+#  2. Using the measure of **Explained Variance** to motivate and inform our search on getting the right number of PCA projections. Refer to Sebastian Raschka's awesome piece on Explained variance ( and PCA in general) here : http://sebastianraschka.com/Articles/2015_pca_in_3_steps.html. My notebook heavily borrows from his article so I need to give it a shout-out.
+#  3. Implementing Principal Component Analysis 
+#  4. Using KMeans clustering to investigate relationships in the PCA projections (if there are any at all) and creating visualisations using the said clusters.
+#  5. Pseudo means of extracting KMeans clusters and use those as new features (meta features) in your predictions - STILL UNDER PROGRESS
 
 # In[ ]:
 
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-from wordcloud import WordCloud
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from sklearn.decomposition import PCA # Principal Component Analysis module
+from sklearn.cluster import KMeans # KMeans clustering 
+import matplotlib.pyplot as plt # Python defacto plotting library
+import seaborn as sns # More snazzy plotting library
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-import warnings
-warnings.filterwarnings('ignore')
-# Any results you write to the current directory are saved as output.
 
+# Let's import the movie dataset with imagination. The dataset will be called "movie" and let's inspect the first 5 rows of the dataframe with .head()
 
 # In[ ]:
 
 
-# Read Data
-data = pd.read_excel("../input/kaggle_user_data.xlsx")
-# data_last is the data at 2017-12-17 (y/m/d)
-data_last = data.loc[data["date"] == "2017-12-17"]
-# data_first is the data at 2017-11-20 (y/m/d)
-data_first = data.loc[data["date"] == "2017-11-20"]
-# We will use them later
+movie = pd.read_csv('../input/movie_metadata.csv') # reads the csv and creates the dataframe called movie
+movie.head()
 
 
-# There are 21 features(columns). 
-# 1. date: Date of the record. From 20.11.2017 to 17.12.2017. (day.month.year), 
-# 1. name: Name of the users, 
-# 1. kernel_gold: Number of gold medal that is won at kernel ranking, 
-# 1. kernel_silver: Number of silver medal that is won at kernel ranking, 
-# 1. kernel_bronze: Number of bronze medal that is won at kernel ranking, 
-# 1. kernel_points: Number of kernel points in kernel ranking,
-# 1. followers: Number of followers of users, 
-# 1. following: Number of following, 
-# 1. run_activity: Number of daily run activity,
-# 1. comment_activity: Number of daily comment activity, 
-# 1. datasets: Number of published datasets, 
-# 1. kernel_rank: Number of kernel rank, 
-# 1. kernel_level: Kernel level like kernel master or kernel expert, 
-# 1. discussion_level: Discussion level like discussion master or discussion expert, 
-# 1. kernel_number: Number of published kernel, 
-# 1.  discussion_number: Number of discussion 
-# 1. discussion_rank: Discussion rank 
-# 1. discussion_gold: Number of gold medal that is won at discussion ranking, 
-# 1. discussion_silver: Number of silver medal that is won at discussion ranking, 
-# 1. discussion_bronze: Number of bronze medal that is won at discussion ranking, 
-# 1. competition_rank: Competition rank
-
-# In[ ]:
-
-
-# Lets look at what is inside in data
-data.head(24)
-
-
-# ## KERNEL and DISCUSSION LEVELS
-# * Lets start with the kernel and discussion levels
-# * The question is that what is the kernel and discussion levels of the top 23 users + me.
-# * We will use word cloud and count plot
-
-# In[ ]:
-
-
-# Concat kernel_level and discussion_level columns and use WordCloud
-lis = pd.concat([data["kernel_level"],data["discussion_level"]])
-plt.subplots(figsize=(12,12))
-wordcloud = WordCloud(
-                          background_color='white',
-                          width=512,
-                          height=384
-                         ).generate(" ".join(lis))
-plt.imshow(wordcloud)
-plt.axis('off')
-plt.show()
-
-
-# In[ ]:
-
-
-# Although WordCloud is cool. It does not give any numeric values therefore lets use count plot
-# Kernel level of top 23
-sns.countplot(data_last.kernel_level,palette=sns.light_palette("navy", reverse=True))
-plt.show()
-# Discussion level of top 23
-sns.countplot(data_last.discussion_level,palette=sns.dark_palette("purple"))
-plt.show()
-
-
-# ## NUMBER of KERNEL MEDALS
-# * Lets start with number of medals that are kernel gold, silver, bronze and total kernel medal.
-# * At gold, silver and bronze medals, I use seaborn library but in total kernel medal I use interactive bar plot in plotly library.
-
-# In[ ]:
-
-
-# Number of gold medal (kernel)
-new_index = (data_last['kernel_gold'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['kernel_gold'],
-                palette=sns.color_palette("YlOrBr", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,14,1))
-plt.ylabel("Number of Gold Medal")
-plt.title('Kernel Gold Medal',color = "gold")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of silve medal (kernel)
-new_index = (data_last['kernel_silver'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-silver = ["#cacaca", "#cacaca", "#cacaca", "#c0c0c0", "#c0c0c0", "#c0c0c0","#b6b6b6", "#b6b6b6", "#b6b6b6", "#acacac", "#acacac", "#acacac","#a3a3a3", "#a3a3a3", "#a3a3a3", "#999999", "#999999", "#999999","#8f8f8f", "#8f8f8f", "#8f8f8f", "#858585", "#858585", "#858585"]
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['kernel_silver'],
-                palette=sns.color_palette(silver))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,12,1))
-plt.ylabel("Number of Silver Medal")
-plt.title('Kernel Silver Medal',color = "silver")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of Bronze medal (kernel)
-new_index = (data_last['kernel_bronze'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['kernel_bronze'],
-                palette=sns.color_palette("OrRd", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,56,2))
-plt.ylabel("Number of Bronze Medal")
-plt.title('Kernel Bronze Medal',color = "firebrick")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of total Medal (kernel)
-data_last["kernal_total_medal"] = data_last["kernel_gold"]+data_last["kernel_silver"]+data_last["kernel_bronze"]
-new_index = (data_last['kernal_total_medal'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-sorted_data["kernel_rank_point"] = "kernel rank: " + sorted_data["kernel_rank"].astype("str")+" ,kernel point: "+sorted_data["kernel_points"].astype("str")
-trace0 = go.Bar(
-    x=sorted_data.name,
-    y=sorted_data['kernal_total_medal'],
-    text=sorted_data["kernel_rank_point"] ,
-    marker=dict(
-        color='rgb(34,34,87)',
-        line=dict(
-            color='rgb(0,0,255)',
-            width=1.5,
-        )
-    ),
-    opacity=0.6
-)
-
-data = [trace0]
-layout = go.Layout(
-    title='Kernel Total Medal',
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='text-hover-bar')
-
-
-# ## NUMBER of DISCUSSION MEDALS
-# * Lets start with number of medals that are kernel gold, silver, bronze and total kernel medal.
-# * At gold, silver and bronze medals, I use seaborn library but in total kernel medal I use interactive bar plot in plotly library.
-
-# In[ ]:
-
-
-# Number of gold medal (discussion)
-new_index = (data_last['discussion_gold'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['discussion_gold'],
-                palette=sns.color_palette("YlOrBr", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,sorted_data["discussion_gold"].max()+1,2))
-plt.ylabel("Number of Gold Medal")
-plt.title('Discussion Gold Medal',color = "gold")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of silve medal (Discussion)
-new_index = (data_last['discussion_silver'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-silver = ["#cacaca", "#cacaca", "#cacaca", "#c0c0c0", "#c0c0c0", "#c0c0c0","#b6b6b6", "#b6b6b6", "#b6b6b6", "#acacac", "#acacac", "#acacac","#a3a3a3", "#a3a3a3", "#a3a3a3", "#999999", "#999999", "#999999","#8f8f8f", "#8f8f8f", "#8f8f8f", "#858585", "#858585", "#858585"]
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['discussion_silver'],
-                palette=sns.color_palette(silver))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,sorted_data['discussion_silver'].max()+1,2))
-plt.ylabel("Number of Silver Medal")
-plt.title('Discussion Silver Medal',color = "silver")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of Bronze medal (Discussion)
-new_index = (data_last['discussion_bronze'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['discussion_bronze'],
-                palette=sns.color_palette("OrRd", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,data_last['discussion_bronze'].max()+20,20))
-plt.ylabel("Number of Bronze Medal")
-plt.title('Discussion Bronze Medal',color = "firebrick")
-plt.show()
-
-
-# In[ ]:
-
-
-# Number of total Medal (Discussion)
-data_last["dis_total_medal"] = data_last["discussion_gold"]+data_last["discussion_silver"]+data_last["discussion_bronze"]
-new_index = (data_last['dis_total_medal'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-sorted_data["disc_rank"] = "discussion rank: " + sorted_data["discussion_rank"].astype("str")
-trace0 = go.Bar(
-    x=sorted_data.name,
-    y=sorted_data['dis_total_medal'],
-    text=sorted_data["disc_rank"] ,
-    marker=dict(
-        color='rgb(238,205,69)',
-        line=dict(
-            color='rgb(255,0,0)',
-            width=1.5,
-        )
-    ),
-    opacity=0.6
-)
-
-data = [trace0]
-layout = go.Layout(
-    title='Discussion Total Medal',
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='text-hover-bar')
-
-
-# ## CORRELATION BETWEEN KERNEL POINTS and FOLLOWERS
-# * Now lets look at correlation between followers and kernel points. In order to look at this I use the data of  **Anisotropic** who is the first in kernel rank. 
-# * As you can see and guess number of followers and kernel points are correlated with each other.
-
-# In[ ]:
-
-
-## Joint plot  Anisotropic
-data = pd.read_excel("../input/kaggle_user_data.xlsx")
-data_Anisotropic = data.loc[data["name"] == "Anisotropic"]
-sns.jointplot("kernel_points", "followers", data=data_Anisotropic,kind="kde", space=0, color="g")
-plt.show()
-
-
-# ## CORRELATION BETWEEN DISCUSSION NUMBER, DISCUSSION MEDAL and FOLLOWERS
-# * Now lets look at correlation between discussion number, medals and followers. In order to look at this I use the data of  **CPMP** who is the first in kernel rank. 
-# * As you can see and guess number of followers, discussion number and medals are correlated with each other.
-
-# In[ ]:
-
-
-# # Pair plot CPMP
-data_CPMP = data.loc[data["name"] == "CPMP"]
-data_CPMP["total_discussion_medal"] = data_CPMP["discussion_gold"]+data_CPMP["discussion_silver"]+data_CPMP["discussion_bronze"]
-g = sns.pairplot(data_CPMP.loc[:,["discussion_number",  "total_discussion_medal","followers"]])
-g = g.map_upper(plt.scatter,color ="purple" )
-g = g.map_lower(sns.kdeplot, cmap=sns.cubehelix_palette(light=1, as_cmap=True))
-g = g.map_diag(sns.kdeplot, lw=3, legend=True)
-
-
-# ## KERNEL RANK CHANGE of EACH USERS
-# * Lets look at kernel rank change of each user in one month. By the way  I take records almost 27 days actually it is not 1 month but in kernel I always use the word "one month".
-
-# In[ ]:
-
-
-## kernel_rank change of each people
-f,ax1 = plt.subplots(figsize =(15,12))
-data["date_str"] = data["date"].astype("str")
-c = 0
-color = 0
-color_list =['white','blue','blueviolet','brown','burlywood','cadetblue','chartreuse','chocolate','coral','cornflowerblue','hotpink','crimson','cyan','darkblue','darkcyan','darkgoldenrod','darkgray','darkgreen','darkkhaki','darkmagenta','darkolivegreen','darkorange','darkorchid','steelblue','turquoise','yellowgreen'
-]
-for each in data["name"].unique():
-    sns.pointplot(x='date_str',y='kernel_rank',data=data.loc[data["name"] == each],alpha=0.8, color= color_list[color],scale=0.5)
-    plt.text(27.5,49-c,each,fontsize = 10,fontweight = "bold",style = 'normal',color = color_list[color])
-    c = c+1.2
-    color = color + 1
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(1,49,1))
-plt.xlabel('Date',fontsize = 10,color='black')
-plt.ylabel('Kernel Rank',fontsize = 15,color='black')
-plt.title('Kernel Rank Change of Each People',fontsize = 20,color='red')
-plt.show()
-
-
-# ## NUMBER of FOLLOWERS CHANGE of EACH USERS
-
-# In[ ]:
-
-
-## number of follower change of each people
-plt.style.use('dark_background')
-f,ax1 = plt.subplots(figsize =(15,12))
-data["date_str"] = data["date"].astype("str")
-c = 0
-color = 0
-color_list =['white','blue','blueviolet','brown','burlywood','cadetblue','chartreuse','chocolate','coral','cornflowerblue','hotpink','crimson','cyan','darkblue','darkcyan','darkgoldenrod','darkgray','darkgreen','darkkhaki','darkmagenta','darkolivegreen','darkorange','darkorchid', 'steelblue','turquoise','yellowgreen'
-]
-for each in data["name"].unique():
-    sns.pointplot(x='date_str',y='followers',data=data.loc[data["name"] == each],alpha=0.8, color= color_list[color],scale=0.5)
-    plt.text(27.5,1600-c,each,fontsize = 10,style = 'italic',color = color_list[color])
-    c = c+40
-    color = color + 1
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(25,1700,125))
-plt.xlabel('Date',fontsize = 10,color='white')
-plt.ylabel('Number of Followers',fontsize = 15,color='white')
-plt.title('Number of Followers Change of Each User',fontsize = 20,color='white')
-plt.grid(False)
-
-
-# ## FOLLOWERS and FOLLOWING
-# * Now lets look at followers and following of each users.
-
-# In[ ]:
-
-
-# followers vs following
-plt.subplots(figsize =(15,12))
-melted = pd.melt(frame=data,id_vars = 'name', value_vars= ['followers','following'])
-plt.xticks(rotation= 90)
-ax = sns.barplot(x="name", y="value", hue="variable", data=melted,errwidth=None )
-plt.xlabel('Users')
-plt.ylabel('Number of Followers and Following')
-plt.title('Followers vs Following')
-plt.show()
-
-
-# ## MONTHLY KERNEL POINT CHANGE
-# * In this part, I look at monthly point change of each user. By the way writing **user** makes me feel bad. It is not sincere. Is there any word like **kernelers** or some other thing? Until anyone asnwer, I use *kernelers*
+# # 1. DATA FILTERING AND CLEANSING
+# **Filtering for Numerical values only**
 # 
+# As observed from the dataframe above, some columns contain numbers while others, words. Let's do some filtering to extract only the numbered columns and not the ones with words ( just for the purpose of this exercise). To do so I will create a Python list containing the numbered column names "num_list"
 
 # In[ ]:
 
 
-# monthly point change
-data_last["montly_kernel_point"] = data_last["kernel_points"].values-data_first["kernel_points"].values
-
-new_index = (data_last['montly_kernel_point'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-ax= sns.barplot(x=sorted_data.name, y=sorted_data['montly_kernel_point'],
-                palette=sns.color_palette("Set2", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(-30,250,10))
-plt.ylabel("Monthly Kernel Point Change")
-plt.xlabel("Kernelers")
-plt.title('Change in Kernel Point in One Month',color = "white")
-plt.show()
+str_list = [] # empty list to contain columns with strings (words)
+for colname, colvalue in movie.iteritems():
+    if type(colvalue[1]) == str:
+         str_list.append(colname)
+# Get to the numeric columns by inversion            
+num_list = movie.columns.difference(str_list)         
 
 
-# ## CURRENT KERNEL RANKING
-# * In this part lets look at current (17.12.2017) ranking.
+# Using the magic of Pandas dataframe filtering, we can create a new dataframe (movie_num) containing just the numbers as such : 
 
 # In[ ]:
 
 
-# current rank
-data_last["name_with_rank"]= data_last.name+" "+data_last.kernel_rank.values.astype("str")
-new_index = (data_last['kernel_points'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-plt.figure(figsize=(15,10))
-sns.barplot(x=sorted_data.name_with_rank, y=sorted_data['kernel_points'],
-                palette=sns.color_palette("Set2", len(sorted_data)))
-plt.xticks(rotation= 90)
-plt.yticks(np.arange(0,1300,50))
-plt.ylabel("Kernel Point")
-plt.xlabel("Kernelers with Rank")
-plt.title('Current Kernel Rank (17.12.2017) ',color = "white")
-plt.show()
+movie_num = movie[num_list]
+#del movie # Get rid of movie df as we won't need it now
+movie_num.head()
 
 
-# ## WHAT CAN KERNEL RANK BE 6 MONTHS LATER?
-# * In this part I take montly kernel point change, multiply it with 6 and add it onto current kernel point.
-# * The numbers next to the kernelers' names are kernel rank at 17.12.2017.
+# **Removal of Null values**
+
+# Now since there still exists 'NaN' values in our dataframe, and these are Null values, we have to do something about them. In here, I will just do the naive thing of replacing these NaNs with zeros as such:
 
 # In[ ]:
 
 
+movie_num = movie_num.fillna(value=0, axis=1)
 
-# 6 months later
-data_last["6_months_later_kernel_points"] = data_last["kernel_points"] + data_last["montly_kernel_point"]*6
-new_index = (data_last['6_months_later_kernel_points'].sort_values(ascending=False)).index.values
-sorted_data = data_last.reindex(new_index)
-f,ax = plt.subplots(figsize = (12,15))
-sns.barplot(x=sorted_data['kernel_points'],y=sorted_data.name_with_rank,color='blue',alpha = 0.7,label='Actual kernel points')
-sns.barplot(x=sorted_data['6_months_later_kernel_points'],y=sorted_data.name_with_rank,color='green',alpha = 0.5,label='6 months later kernel points' )
 
-ax.legend(loc='lower right',frameon = True)
-ax.set(xlabel='Kernel Points 6 month later', ylabel='Kernelers',title = "Predicted Kernel Points and Ranks 6 Months Later ")
+# **Standardisation** 
+# 
+# Finally we mentioned that we have to find some sort of way to standardise the data and for this, we use sklearn's StandardScaler.
+
+# In[ ]:
+
+
+X = movie_num.values
+# Data Normalization
+from sklearn.preprocessing import StandardScaler
+X_std = StandardScaler().fit_transform(X)
+
+
+# Let's look at some hexbin visualisations first to get a feel for how the correlations between the different features compare to one another. In the hexbin plots, the lighter in color the hexagonal pixels, the more correlated one feature is to another.
+
+# In[ ]:
+
+
+movie.plot(y= 'imdb_score', x ='duration',kind='hexbin',gridsize=35, sharex=False, colormap='cubehelix', title='Hexbin of Imdb_Score and Duration',figsize=(12,8))
+movie.plot(y= 'imdb_score', x ='gross',kind='hexbin',gridsize=45, sharex=False, colormap='cubehelix', title='Hexbin of Imdb_Score and Gross',figsize=(12,8))
+
+
+# From the Hexbin plots, one can tell see that the correlation between IMDB score and gross is one that is quite obvious to explain while an interesting result thrown up is that of the score and the duration. ( Interesting!)
+
+# Anyway now - time for the customary heatmap per the tradition of most notebooks on Principal Component Analysis. The heatmap is generated to visually show how strongly correlated the values of the dataframe's columns are to one another. Therefore in this matrix the squares that are of a darker colour are more strongly correlated compared to the ones of lighter colour. 
+
+# In[ ]:
+
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(12, 10))
+plt.title('Pearson Correlation of Movie Features')
+# Draw the heatmap using seaborn
+sns.heatmap(movie_num.astype(float).corr(),linewidths=0.25,vmax=1.0, square=True, cmap="YlGnBu", linecolor='black', annot=True)
+
+
+# As we can see from the heatmap, there are regions (features) where we can see quite positive linear correlations amongst each other, given the darker shade of the colours - top left-hand corner and bottom right quarter. This is a good sign as it means we may be able to find linearly correlated features for which we can perform PCA projections on.
+
+# # 2. EXPLAINED VARIANCE MEASURE
+# As alluded to in the Introduction, I will be using a particular measure called Explained Variance which will be useful in this context to help us determine the number of PCA projection components we should be looking at. Again this section heavily borrows from Sebastian Raschka's article on Principal Component Analysis so please follow his link for a much more detailed explanation on explained variance than I can do justice to : http://sebastianraschka.com/Articles/2015_pca_in_3_steps.html
+
+# In[ ]:
+
+
+# Calculating Eigenvectors and eigenvalues of Cov matirx
+mean_vec = np.mean(X_std, axis=0)
+cov_mat = np.cov(X_std.T)
+eig_vals, eig_vecs = np.linalg.eig(cov_mat)
+
+
+# Now having obtained the eigenvalues and eigenvectors, we will group them together by creating a list of eigenvalue, eigenvector tuples (immutable Python data objects). Following on from this we will sort the list  in order of Highest eigenvalue to lowest eigenvalue and then use the eigenvalues to calculate both the individual explained variance and the cumulative explained variance for visualisation.
+
+# In[ ]:
+
+
+# Create a list of (eigenvalue, eigenvector) tuples
+eig_pairs = [ (np.abs(eig_vals[i]),eig_vecs[:,i]) for i in range(len(eig_vals))]
+
+# Sort from high to low
+eig_pairs.sort(key = lambda x: x[0], reverse= True)
+
+# Calculation of Explained Variance from the eigenvalues
+tot = sum(eig_vals)
+var_exp = [(i/tot)*100 for i in sorted(eig_vals, reverse=True)] # Individual explained variance
+cum_var_exp = np.cumsum(var_exp) # Cumulative explained variance
+
+
+# Now time to plot the explained variance graphs to see how our contributions look like. The cumulative explained variance is visualised in a blue step-plot while the individual explained variance is plotted via green bar charts as follows: 
+
+# In[ ]:
+
+
+# PLOT OUT THE EXPLAINED VARIANCES SUPERIMPOSED 
+plt.figure(figsize=(10, 5))
+plt.bar(range(16), var_exp, alpha=0.3333, align='center', label='individual explained variance', color = 'g')
+plt.step(range(16), cum_var_exp, where='mid',label='cumulative explained variance')
+plt.ylabel('Explained variance ratio')
+plt.xlabel('Principal components')
+plt.legend(loc='best')
 plt.show()
 
 
-# # CONCLUSION
-# * I am sure there are more and interesting things to exploratory. 
-# * Maybe kaggle can share remaining datasets about users.
-# * **If you have any question suggestion or something else, I will be appreciate to hear them.**
+# From the plot above, it can be seen that approximately 90% of the variance can be explained with the 9 principal components. Therefore for the purposes of this notebook, let's implement PCA with 9 components ( although to ensure that we are not excluding useful information, one should really go for 95% or greater variance level which corresponds to about 12 components).
+
+# # 3. PRINCIPAL COMPONENT ANALYSIS 
+# Having roughly identified how many components/dimensions we would like to project on, let's now implement sklearn's PCA module. 
+# 
+# The first line of the code contains the parameters "n_components" which states how many PCA components we want to project the dataset onto. Since we are going implement PCA with 9 components, therefore we set n_components = 9.  
+# 
+# The second line of the code calls the "fit_transform" method, which fits the PCA model with the standardised movie data X_std and applies the dimensionality reduction on this dataset. 
+
+# In[ ]:
+
+
+pca = PCA(n_components=9)
+x_9d = pca.fit_transform(X_std)
+
+
+# Awesome. Having now applied our specific PCA model with the movie dataset, let's visualise the first 2 projection components as a 2D scatter plot to see if we can get a quick feel for the underlying data. 
+
+# In[ ]:
+
+
+plt.figure(figsize = (9,7))
+plt.scatter(x_9d[:,0],x_9d[:,1], c='goldenrod',alpha=0.5)
+plt.ylim(-10,30)
+plt.show()
+
+
+# As a quick aside, my aim (or hope) in carrying out this quick and dirty plotting is to see if we can observe distinct clusters already present within the plots which would be able to tell us if our PCA-transformed data can indeed be linearly separable into different groups for later use as our new features. 
+# 
+# However from the 2D plot above of the first 2 PCA projections, the first visual impression is that there does not seem to be any discernible clusters. However keeping in mind that our PCA projections contain another 7 components, perhaps looking at plots with the other components may be fruitful. For now, let us assume that will be trying a 3-cluster (just as a naive guess) KMeans to see if we are able to visualise any distinct clusters.
+
+# #4. VISUALISATIONS WITH KMEANS CLUSTERING
+# A simple KMeans will now be applied to the PCA projection data. Each cluster will be visualised with a different colour so hopefully we will be able to pick out clusters by eye. 
+# 
+# To start off, we set up a KMeans clustering with sklearn's KMeans() and call the "fit_predict" method to compute cluster centers and predict cluster indices for the first and third PCA projections (to see if we can observe any appreciable clusters). We then define our own colour scheme and plot the scatter diagram as follows:
+
+# In[ ]:
+
+
+# Set a 3 KMeans clustering
+kmeans = KMeans(n_clusters=3)
+# Compute cluster centers and predict cluster indices
+X_clustered = kmeans.fit_predict(x_9d)
+
+# Define our own color map
+LABEL_COLOR_MAP = {0 : 'r',1 : 'g',2 : 'b'}
+label_color = [LABEL_COLOR_MAP[l] for l in X_clustered]
+
+# Plot the scatter digram
+plt.figure(figsize = (7,7))
+plt.scatter(x_9d[:,0],x_9d[:,2], c= label_color, alpha=0.5) 
+plt.show()
+
+
+# This KMeans plot looks more promising now as if our simple clustering model assumption turns out to be right, we can observe 3 distinguishable clusters via this color visualisation scheme.
+# 
+# Now, the plot above was only for 2 PCA projections out of the 9 projections that we currently have. However I would also like to generate a KMeans visualisation for other possible combinations of the projections against one another. I will use Seaborn's convenient **pairplot** function to do the job. Basically pairplot automatically plots all the features in the dataframe (in this case our PCA projected movie data) in pairwise manner. I will pairplot the first 3 projections against one another and the resultant plot is given below:
+
+# In[ ]:
+
+
+# Create a temp dataframe from our PCA projection data "x_9d"
+df = pd.DataFrame(x_9d)
+df = df[[0,1,2]] # only want to visualise relationships between first 3 projections
+df['X_cluster'] = X_clustered
+
+
+# In[ ]:
+
+
+# Call Seaborn's pairplot to visualize our KMeans clustering on the PCA projected data
+sns.pairplot(df, hue='X_cluster', palette= 'Dark2', diag_kind='kde',size=1.85)
+
+
+# # Conclusion

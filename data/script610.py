@@ -1,362 +1,644 @@
 
 # coding: utf-8
 
-# # A Laconic Approach - EDA (Version 1)
-# In this notebook, I will be doing exploratory data analysis for given data for text normalization in laconic fashion. The task given to us in this competition is to convert written text into spoken forms, for example - 6ft will be converted into 6 feets, or $1.13 will convert into one dollar and thirteen cents.  I will work first by taking a glimpse of dataset shared and then go towards features extraction or rule based approach or selecting a RNN for this task. ** Lastly I will explain my analysis in laconic fashion, less words and more information**
+# # Visualizing K-Means with Leaf Dataset
 # 
-# - PS - My Second public kernel, do upvote if you find this analysis useful.
+# This script is about perhaps the simplest and most popular **unsupervised learning algorithm** out there: the K-Means clustering algorithm.
 # 
+# In this script we will apply K-Means on a small dataset of 1600 binary leaf images with different shapes and try to get a feel for the distribution of leaf images using different visualizations that clarify different aspects about how one can interpret K-Means results.
 # 
-
-# ## Loading packages 
-
-# In[ ]:
-
-
-import pandas as pd  #pandas for using dataframe and reading csv 
-import numpy as np   #numpy for vector operations and basic maths 
-import re            #for processing regular expressions
-import datetime      #for datetime operations
-import calendar      #for calendar for datetime operations
-import time          #to get the system time
-import scipy         #for other dependancies
-from sklearn.cluster import KMeans # for doing K-means clustering
-import math          #for basic maths operations
-import seaborn as sns#for making plots
-import matplotlib.pyplot as plt # for plotting
-import os            # for operating system commands
-import plotly.plotly as py # for Ploting 
-import plotly.graph_objs as go # for ploting 
-import plotly # for ploting 
-plotly.offline.init_notebook_mode() # for using plotly in offline mode
-
-
-# ## Importing input data
-# **Train** - The dataset provided has following fields 
-# 1. Setence_id - it signifies the id of sentence
-# 2. Token id - it signifies the word's id inside that particular sentence 
-# 3. class - TBU
-# 4. before/ after - they shows how the token is getting changed after
+# We will then continue to see if the K-Means features (distances from cluster centers) are informative in terms of classifying leafs and determine what is the optimal K (number of clusters) for the sake of leaf type classification.
 # 
-# **Test** - It won't have the field after 
+# **Note:** This script is a follow-up script to the [PCA script][1] which is very similar but about PCA.
+# 
+#   [1]: https://www.kaggle.com/selfishgene/visualizing-pca-with-leaf-dataset
 
 # In[ ]:
 
 
-s = time.time()
-train_df = pd.read_csv("../input/en_train.csv")
-test_df = pd.read_csv("../input/en_test.csv")
-end = time.time()
-print("time taken by above cell is {}.".format(end -s))
-train_df.head()
+import pandas as pd
+import numpy as np
+import matplotlib
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+from sklearn import model_selection
+from sklearn import decomposition
+from sklearn import linear_model
+from sklearn import cluster
+from sklearn import ensemble
+from sklearn import neighbors
+from sklearn.preprocessing import LabelEncoder
+from sklearn.neighbors import KernelDensity
+from sklearn.manifold import TSNE
+from sklearn.metrics import accuracy_score
+
+from skimage.transform import rescale
+from scipy import ndimage as ndi
+
+matplotlib.style.use('fivethirtyeight')
+
+
+# ## Data loading and preparation phases
+# For the sake of the script not being too cluttered, I've hidden the code and hidden an intermediate pre-processing phase. Anyone who is interested is welcome to  unhide the code and uncomment to see what is going on.
+# 
+# The main assumption of this pre-processing stage is that the absolute sizes of the leafs matter, and not just their shape i.e. leafs with different sizes are most definitely different types of leafs. not sure if it's actually important, but just in case
+
+# In[ ]:
+
+
+#%% load the data
+dataDir   = '../input/'
+trainData = pd.read_csv(dataDir + 'train.csv')
+classEncoder = LabelEncoder()
+trainLabels  = classEncoder.fit_transform(trainData.loc[:,'species'])
+trainIDs     = np.array(trainData.loc[:,'id'])
+
+# show some random images
+plt.figure(figsize=(14,12))
+plt.suptitle('Original Images (with variable image sizes)', fontsize=22)
+for k in range(28):
+    randTrainInd = np.random.randint(len(trainIDs))
+    randomID = trainIDs[randTrainInd]
+    imageFilename = dataDir + 'images/' + str(randomID) + '.jpg'
+    plt.subplot(4,7,k+1); plt.imshow(mpimg.imread(imageFilename), cmap='gray')
+    plt.title(classEncoder.classes_[trainLabels[randTrainInd]], fontsize=10); plt.axis('off')
 
 
 # In[ ]:
 
 
-train_seq = train_df.copy() # storing an original copy for later use
+#%% preprocess images
 
+# go over training images and store them in a list
+numImages = 1584
 
-# ## Sanity check -
-# Let's check three things - 
-# 1. Number of rows in training and test dataets provided in this competition
-# 2. Number of sentence in training and test dataets provided in this competition
-# 3. Number of Nulls in training and test data and column wise nulls distribution
-
-# In[ ]:
-
-
-start = time.time()
-print("Total number of rows in given training data is {}.".format(train_df.shape[0]))
-print("Total number of sentence in given training data is {}".format(len(set(train_df.sentence_id))))
-print("Total number of Nulls in given training data is \n{}.".format(train_df.isnull().sum()))
-print("Total number of rows in given test data is {}.".format(test_df.shape[0]))
-print("Total number of sentence in given test data is {}".format(len(set(test_df.sentence_id))))
-print("Total number of Nulls in given test data is \n{}.".format(test_df.isnull().sum()))
-end = time.time()
-print("Time taken by above cell is {}.".format(end - start))
-
-
-# ## Lets explore given variables in training data 
-# **1. Sentence_id and Token_id ** - Let's plot a hoistogram and check the number of words in a given sentence and their frequency 
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-start = time.time()
-sns.set(style="white", palette="muted", color_codes=True)
-f, axes = plt.subplots(1, 1, figsize=(11, 7), sharex=True)
-sns.despine(left=True)
-temp_tr = pd.DataFrame(train_df.groupby('sentence_id')['token_id'].count())
-sns.distplot(temp_tr['token_id'], axlabel = 'Number of words in a sentence', label = 'Number of words in a sentence', color="r")
-plt.setp(axes, yticks=[])
-plt.tight_layout()
-end = time.time()
-print("Min and Max of word per sentence is {} and {}.".format(temp_tr.token_id.min(),temp_tr.token_id.max()))
-del temp_tr
-print("Time taken by above cell is {}.".format((end-start)))
-plt.show()
-
-
-# **Findings** 
-# - From the above plot, it is clear that the most of the sentence has less than or equal to 30 tokenper sentence and very few sentence s have more than  30 token per sentence. 
-# - Minimum words per sentence is 2 
-# - Maximum words per sentence is 256
-
-# **2. Class** - Lets make box plots of classes and check the distributions of class variable
-
-# In[ ]:
-
-
-start = time.time()
-temp_tr = pd.DataFrame(train_df.groupby('class')['token_id'].count())
-temp_tr = temp_tr.reset_index()
-X = list(temp_tr['class'])
-Y = list(temp_tr['token_id'])
-data = [go.Bar(
-            x=X,
-            y=Y
-    )]
-del temp_tr
-plotly.offline.iplot(data, filename='basic-bar')
-end = time.time()
-print("Total number of different classes in training data is {}.".format(len(X)))
-print("Time taken by above cell is {}.".format((end-start)))
-
-
-# ** Findings - **
-# - We can see that most frequent classes are plain, punct, letters, verbatim, date and cardinal ( total 6) 
-# - Rest 10 classes are occuring very less frequently 
-# - ** Class vaiable isn't present in test data => We have to assign class variable to test (you got it, right ? - cool  ;) )**
-
-# **3. Lets see change before/ after with class** - 
-# - Lets create a flag variable for token and check if before after is same or not 
-# - Summarize over class varaible and see the effect of class type on normalization
-
-# In[ ]:
-
-
-# Lets first assign a variable change as 0 and if there is any change we will modify this change varaible to 1
-start = time.time()
-def isChange(row):
-    """function to check if before after is getting changed or not"""
-    chan = 0 
-    if row['before'] == row['after']:
-        chan = 0
+shapesMatrix = np.zeros((2,numImages))
+listOfImages = []
+for k in range(numImages):
+    imageFilename = dataDir + 'images/' + str(k+1) + '.jpg'
+    currImage = mpimg.imread(imageFilename)
+    shapesMatrix[:,k] = np.shape(currImage)
+    listOfImages.append(currImage)
+    
+# calculate the shape of an image that will contain all original images within it
+maxShapeSize = shapesMatrix.max(axis=1)
+for k in range(len(maxShapeSize)):
+    if maxShapeSize[k] % 2 == 0:
+        maxShapeSize[k] += 311
     else:
-        chan = 1
-    return chan
-train_df['change'] = 0
-train_df['change'] = train_df.apply(lambda row: isChange(row), axis = 1)
-end = time.time()
-print("Time taken by above cell is {}.".format((end-start)))
-train_df.head()
+        maxShapeSize[k] += 310
+    
+    
+# place all original images at the center of the large reference frame
+fullImageMatrix3D = np.zeros(np.hstack((maxShapeSize, np.shape(shapesMatrix[1]))).astype(int),dtype=np.dtype('u1'))
+destXc = (maxShapeSize[1]+1)/2; destYc = (maxShapeSize[0]+1)/2
+for k, currImage in enumerate(listOfImages):
+    Yc, Xc = ndi.center_of_mass(currImage)
+    Xd = destXc - Xc; Yd = destYc - Yc
+    rowIndLims = (int(round(Yd)),int(round(Yd)+np.shape(currImage)[0]))
+    colIndLims = (int(round(Xd)),int(round(Xd)+np.shape(currImage)[1]))
+    fullImageMatrix3D[rowIndLims[0]:rowIndLims[1],colIndLims[0]:colIndLims[1],k] = currImage
+
+'''
+# make sure nothing was ruined in the process
+plt.figure(figsize=(14,7))
+plt.suptitle('Processed Images (fixed size)', fontsize=22)
+for k in range(28):
+    randInd = np.random.randint(np.shape(fullImageMatrix3D)[2])
+    plt.subplot(4,7,k+1); plt.imshow(fullImageMatrix3D[:,:,randInd], cmap='gray'); plt.axis('off')
+'''
+
+# re crop according to rows and columns that don't have zeros in them in any image
+xValid = fullImageMatrix3D.mean(axis=2).sum(axis=0) > 0
+yValid = fullImageMatrix3D.mean(axis=2).sum(axis=1) > 0
+xLims = (np.nonzero(xValid)[0][0],np.nonzero(xValid)[0][-1])
+yLims = (np.nonzero(yValid)[0][0],np.nonzero(yValid)[0][-1])
+fullImageMatrix3D = fullImageMatrix3D[yLims[0]:yLims[1],xLims[0]:xLims[1],:]
+
+# make sure nothing was ruined in the process
+plt.figure(figsize=(14,7))
+plt.suptitle('Final Processed Images (with fixed image size)', fontsize=22)
+for k in range(28):
+    randInd = np.random.randint(np.shape(fullImageMatrix3D)[2])
+    plt.subplot(4,7,k+1); plt.imshow(fullImageMatrix3D[:,:,randInd], cmap='gray'); plt.axis('off')
+    if randInd < len(trainLabels):
+        plt.title(classEncoder.classes_[trainLabels[randInd]], fontsize=10)
+    else:
+        plt.title('test data sample', fontsize=10)
+        
+# scale down all images to be in normal size
+rescaleFactor = 0.15
+
+scaledDownImage = rescale(fullImageMatrix3D[:,:,0],rescaleFactor)
+scaledDownImages = np.zeros(np.hstack((np.shape(scaledDownImage),
+                                       np.shape(fullImageMatrix3D)[2])),dtype=np.dtype('f4'))
+for imInd in range(np.shape(fullImageMatrix3D)[2]):
+    scaledDownImages[:,:,imInd] = rescale(fullImageMatrix3D[:,:,imInd],rescaleFactor)
+    
+del fullImageMatrix3D
 
 
-# In[ ]:
-
-
-start = time.time()
-temp_chn = train_df.loc[train_df['change']==1]
-temp_nchn = train_df.loc[train_df['change']==0]
-
-temp_tr1 = pd.DataFrame(temp_chn.groupby('class')['token_id'].count())
-temp_tr1 = temp_tr1.reset_index()
-X1 = list(temp_tr1['class'])
-Y1 = list(temp_tr1['token_id'])
-
-temp_tr2 = pd.DataFrame(temp_nchn.groupby('class')['token_id'].count())
-temp_tr2 = temp_tr2.reset_index()
-X2 = list(temp_tr2['class'])
-Y2 = list(temp_tr2['token_id'])
-trace1 = go.Bar(
-    x=X1,
-    y=Y1,
-    name='Change'
-)
-trace2 = go.Bar(
-    x=X2,
-    y=Y2,
-    name='NO Change'
-)
-
-data = [trace1, trace2]
-layout = go.Layout(
-    barmode='group'
-)
-
-fig = go.Figure(data=data, layout=layout)
-plotly.offline.iplot(fig, filename='grouped-bar')
-end = time.time()
-print("Time taken by above cell is {}.".format((end-start)))
-
-
-# ** Findings ** - 
-# - Most of the things that are getting changed are in all the difference classes but in plain and punct, and few in verbatim
-# - Implies most of the data that is given to us in this competition is not changing and is redundent 
-# - **Cardinal is changing => cardinal is getting spoken in english, 24 becomes twenty-four**
-# - ** Date is changing => date 2Jan or 2/01/2001 is spoken as second January two thousand one**
-# - ** Same is the case with letters, time, telephone** 
-
-# **4. Class vs changes of token in sentence** - Lets plot changes in sentence grouped by over class and see the distribution using swarmplots in seaborn packages 
-# - first plot is when the token_id change is considered as it is
-# - second plot, limit on y is set, for better visulization of data 
+# ## Define a Kmeans Model class that will help us visualize things
+# 
+# This is long, so I've hidden the code, but if you are intereseted in delving deeper and looking at the implementation then please unhide or better yet fork the script and try playing around by editing the code.
 
 # In[ ]:
 
 
-start = time.time()
-temp_tr = pd.DataFrame(train_df.groupby(['class', 'sentence_id', 'change'])['token_id'].count())
-temp_tr.reset_index(inplace = True)
-sns.set(style="ticks")
-sns.set_context("poster")
-sns.boxplot(x="class", y="token_id", hue="change", data=temp_tr, palette="PRGn")
-plt.ylim(0, 150)
-sns.despine(offset=10, trim=True)
-end = time.time()
-print("Time taken by above cell is {}.".format((end-start)))
+class KmeansModel:
 
+    def __init__(self, X, numClusters=10, objectPixels=None):
+        '''
+        inputs: 
+            X                       - numSamples x numDimentions matrix
+            numClusters             - number of clusters to use
+            objectPixels (optional) - an binnary mask image used for presentation
+                                      will be used as Im[objectPixels] = dataSample
+                                      must satisfy objectPixels.ravel().sum() = X.shape[1]
+        '''
+        numDataSamples = X.shape[0]
+        self.numClusters = numClusters        
+        if objectPixels is None:
+            self.objectPixels = np.ones((1,X.shape[1]),dtype=np.bool)
+        else:
+            self.objectPixels = objectPixels
+        assert(self.objectPixels.ravel().sum() == X.shape[1])
+
+        KmeansModel = cluster.KMeans(n_clusters=numClusters, n_init=5)
+        self.dataRepresentation = KmeansModel.fit_transform(X)
+        self.KmeansModel = KmeansModel
+        
+        # calculate cluster frequency
+        clusterInds = KmeansModel.labels_
+        clusterFrequency = []
+        for clusterInd in range(numClusters):
+            clusterFrequency.append((clusterInds == clusterInd).sum()/float(numDataSamples))
+        self.clusterFrequency = np.array(clusterFrequency)
+        self.sortedTemplatesByFrequency = np.flipud(np.argsort(clusterFrequency))
+
+    def RepresentUsingModel(self, X, representationMethod='distFromAllClusters'):
+        
+        if representationMethod == 'distFromAllClusters':
+            return self.KmeansModel.transform(X)
+        if representationMethod == 'clusterIndex':
+            return self.KmeansModel.predict(X)
+        if representationMethod == 'oneHotClusterIndex':
+            clusterAssignment = self.KmeansModel.predict(X)
+            X_transformed = np.zeros((X.shape[0],self.numClusters))
+            for sample in range(X.shape[0]):
+                X_transformed[sample,clusterAssignment[sample]] = 1
+            return X_transformed
+
+    def ReconstructUsingModel(self, X_transformed, representationMethod='distFromAllClusters'):
+
+        if representationMethod == 'clusterIndex':
+            clusterAssignment = X_transformed
+        if representationMethod == 'oneHotClusterIndex':
+            clusterAssignment = np.argmax(X_transformed,axis=1)
+        if representationMethod == 'distFromAllClusters':
+            clusterAssignment = np.argmin(X_transformed,axis=1)
+
+        X_reconstructed = np.zeros((X_transformed.shape[0],self.KmeansModel.cluster_centers_.shape[1]))
+        for sample in range(X_transformed.shape[0]):
+            X_reconstructed[sample,:] = self.KmeansModel.cluster_centers_[clusterAssignment[sample],:]
+                
+        return X_reconstructed
+        
+    def InterpretUsingModel(self, X, representationMethod='clusterIndex'):
+        return self.ReconstructUsingModel(                        self.RepresentUsingModel(X,representationMethod),representationMethod)
+
+    # shows the cluster centers
+    def ShowTemplates(self, numTemplatesToShow=16):
+        numTemplatesToShow = min(numTemplatesToShow, self.numClusters)
+        
+        numFigRows = np.ceil(np.sqrt(numTemplatesToShow)); 
+        numFigCols = np.ceil(np.sqrt(numTemplatesToShow));
+        numTemplatesPerFigure = int(numFigRows*numFigCols)
+        numFigures = int(np.ceil(float(numTemplatesToShow)/numTemplatesPerFigure))
+                
+        for figureInd in range(numFigures):
+            plt.figure()
+            for plotInd in range(numTemplatesPerFigure):
+                templateInd = self.sortedTemplatesByFrequency[numTemplatesPerFigure*figureInd + plotInd]
+                if templateInd >= self.numClusters:
+                    break
+                templateImage = np.zeros(np.shape(self.objectPixels))
+                templateImage[self.objectPixels] =                         self.KmeansModel.cluster_centers_[templateInd,:].ravel()
+
+                plt.subplot(numFigRows,numFigCols,plotInd+1)
+                if np.shape(self.objectPixels)[0] == 1:
+                    plt.plot(templateImage)
+                else:
+                    plt.imshow(templateImage,cmap='hot'); plt.axis('off')
+                plt.title(str(100*self.clusterFrequency[templateInd])[:4] + '% frequency');
+            plt.tight_layout()
+            
+    # shows several random model reconstructions
+    def ShowReconstructions(self, X, numReconstructions=6):
+        assert(np.shape(X)[1] == self.objectPixels.ravel().sum())
+        numSamples = np.shape(X)[0]
+        numReconstructions = min(numReconstructions, numSamples)
+        
+        originalImage      = np.zeros(np.shape(self.objectPixels))
+        reconstructedImage = np.zeros(np.shape(self.objectPixels))
+        
+        numReconstructionsPerFigure = min(6, numReconstructions)
+        numFigures = int(np.ceil(float(numReconstructions)/numReconstructionsPerFigure))
+        
+        for figureInd in range(numFigures):
+            plt.figure()
+            for plotCol in range(numReconstructionsPerFigure):
+                dataSampleInd = np.random.randint(numSamples)
+                originalImage[self.objectPixels] = X[dataSampleInd,:].ravel()
+                reconstructedImage[self.objectPixels] =                         self.InterpretUsingModel(np.reshape(X[dataSampleInd,:],[1,-1])).ravel()
+                diffImage = abs(originalImage - reconstructedImage)
+                
+                # original image
+                plt.subplot(3,numReconstructionsPerFigure,0*numReconstructionsPerFigure+plotCol+1)
+                if np.shape(self.objectPixels)[0] == 1:
+                    plt.plot(originalImage); plt.title('original signal')
+                else:
+                    plt.imshow(originalImage, cmap='gray'); 
+                    plt.title('original image'); plt.axis('off')
+                    
+                # reconstred image
+                plt.subplot(3,numReconstructionsPerFigure,1*numReconstructionsPerFigure+plotCol+1)
+                if np.shape(self.objectPixels)[0] == 1:
+                    plt.plot(reconstructedImage); plt.title('reconstructed signal')
+                else:
+                    plt.imshow(reconstructedImage, cmap='gray'); 
+                    plt.title('reconstructed image'); plt.axis('off')
+
+                # diff image
+                plt.subplot(3,numReconstructionsPerFigure,2*numReconstructionsPerFigure+plotCol+1)
+                if np.shape(self.objectPixels)[0] == 1:
+                    plt.plot(diffImage); plt.title('abs difference signal')
+                else:
+                    plt.imshow(diffImage, cmap='gray'); 
+                    plt.title('abs difference image'); plt.axis('off')
+            plt.tight_layout()
+
+
+    # shows distrbution along the distance from a particular cluster and several examples for that distance
+    def ShowSingleTemplateDistances(self, X, listOfTemplates=[0,1]):
+
+        showAsTraces = (np.shape(self.objectPixels)[0] == 1)
+        assert(all([(x in range(self.numClusters)) for x in listOfTemplates]))
+                
+        X_rep = self.RepresentUsingModel(X, representationMethod='distFromAllClusters')
+        
+        percentilesToShow = [1,5,10,30,60,99]
+        numReadDataSamplePerPercentile = 4
+        representationPercentiles = []
+        for percentile in percentilesToShow:
+            representationPercentiles.append(np.percentile(self.dataRepresentation, percentile, axis=0))
+        medianRepVec =  np.percentile(self.dataRepresentation, 50, axis=0)
+
+        for templateInd in listOfTemplates:
+            plt.figure(); gs = gridspec.GridSpec(numReadDataSamplePerPercentile+2,
+                                                 len(percentilesToShow))
+
+            # calculate the Gaussian smoothed distribution of values along the eignevector direction
+            sigmaOfKDE = (representationPercentiles[-1][templateInd] - 
+                          representationPercentiles[1][templateInd])/100.0
+            pdfStart   = representationPercentiles[1][templateInd]  - 15*sigmaOfKDE
+            pdfStop    = representationPercentiles[-1][templateInd] + 15*sigmaOfKDE
+            xAxis = np.linspace(pdfStart,pdfStop,200)
+            PDF_Model = KernelDensity(kernel='gaussian',                             bandwidth=sigmaOfKDE).fit(self.dataRepresentation[:,templateInd].reshape(-1,1))
+            logPDF = PDF_Model.score_samples(xAxis.reshape(-1,1))
+            percentileValuesToShow =                 [representationPercentiles[x][templateInd] for x in range(len(representationPercentiles))]
+            percentilesToShowLogPDF =                 PDF_Model.score_samples(np.array(percentileValuesToShow).reshape(-1,1))
+
+            # show distribution of distance from current template and red dots at the list of precentiles to show 
+            plt.subplot(gs[0,:])
+            plt.fill(xAxis, np.exp(logPDF), fc='b', alpha=0.9);
+            plt.scatter(percentileValuesToShow, np.exp(percentilesToShowLogPDF), c='r',s=40);
+            plt.title(str(100*self.clusterFrequency[templateInd])[:4] + '% assignment frequency');
+
+            for plotCol, currPrecentile in enumerate(percentilesToShow):                
+                currPrecentileRepVec              = medianRepVec.copy()
+                currPrecentileRepVec[templateInd] = representationPercentiles[plotCol][templateInd]
+                
+                currPrecentileImage = np.zeros(np.shape(self.objectPixels))
+                currPrecentileRepVec = currPrecentileRepVec[:,np.newaxis].T
+                currPrecentileImage[self.objectPixels] =                             self.ReconstructUsingModel(currPrecentileRepVec).ravel()
+                
+                # show the median image with current precentile as activation of the curr image
+                plt.subplot(gs[1,plotCol]);
+                if showAsTraces:
+                    plt.plot(currPrecentileImage); 
+                    plt.title('precentile: ' + str(percentilesToShow[plotCol]) + '%')
+                else:
+                    plt.imshow(currPrecentileImage, cmap='hot'); 
+                    plt.title('precentile: ' + str(percentilesToShow[plotCol]) + '%'); plt.axis('off')
+
+                # find the most suitible candidates in X for current precentile
+                distFromPercentile = abs(X_rep[:,templateInd] - 
+                                         representationPercentiles[plotCol][templateInd])
+                X_inds = np.argpartition(distFromPercentile,                                          numReadDataSamplePerPercentile)[:numReadDataSamplePerPercentile]
+                for k, X_ind in enumerate(X_inds):
+                    currNearestPrecentileImage = np.zeros(np.shape(self.objectPixels))
+                    currNearestPrecentileImage[self.objectPixels]  = X[X_ind,:].ravel()
+                    
+                    plt.subplot(gs[2+k,plotCol]);
+                    if showAsTraces:
+                        plt.plot(currNearestPrecentileImage); 
+                        plt.title('NN with closest percentile');
+                    else:
+                        plt.imshow(currNearestPrecentileImage, cmap='gray'); 
+                        plt.title('NN with closest percentile'); plt.axis('off')
+            plt.tight_layout()
+            
+            
+    def ShowDataScatterPlotsWithTSNE(self, X=None, y=None, tSNE_perplexity=30.0, colorMap='Paired'):
+        # show the distance from 2 most frequent clusters and the tSNE of the entire "distance form template" space 
+        
+        if X is None:
+            X_rep = self.dataRepresentation
+        else:
+            X_rep = self.RepresentUsingModel(X)
+            
+        if y is None:
+            y = np.ones(X_rep.shape[0])
+            
+        tSNE_KmeansModel = TSNE(n_components=2, perplexity=tSNE_perplexity, random_state=0)
+        X_rep_tSNE = tSNE_KmeansModel.fit_transform(X_rep)
+        
+        # take the two most frequent patterns
+        mostFrequent = self.sortedTemplatesByFrequency[:2]
+        
+        plt.figure()
+        plt.subplot(1,2,1); 
+        plt.scatter(X_rep[:,mostFrequent[0]],                     X_rep[:,mostFrequent[1]],c=y,cmap=colorMap,s=10,alpha=0.9)
+        plt.title('"distance form template" representation'); 
+        plt.xlabel('distance from template 1'); plt.ylabel('distance from template 2')
+        plt.subplot(1,2,2); 
+        plt.scatter(X_rep_tSNE[:,0],X_rep_tSNE[:,1],c=y,cmap=colorMap,s=15,alpha=0.9)
+        plt.title('t-SNE of Kmeans representation'); plt.xlabel('t-SNE axis1'); plt.ylabel('t-SNE axis2')
+
+
+    def ShowTemplatesInPCASpace(self, X, y=None, tSNE_perplexity=30.0, colorMap='Paired'):
+        # show the templates in the 2PC space and the tSNE of the entire PCA space
+        
+        # build PCA model and project the data onto the PCA space
+        PCAModel = decomposition.PCA(n_components=60, whiten=False)
+        X_rep = PCAModel.fit_transform(X)
+                
+        # project the Kmeans templates onto the PCA space
+        templates_rep = PCAModel.transform(templateModel.KmeansModel.cluster_centers_)
+        
+        if y is None:
+            y = self.RepresentUsingModel(X, representationMethod='clusterIndex')
+            
+        tSNE_PCAModel = TSNE(n_components=2, perplexity=tSNE_perplexity, random_state=0)
+        X_rep_tSNE = tSNE_PCAModel.fit_transform(np.vstack((X_rep,templates_rep))) 
+        
+        plt.figure()
+        plt.subplot(1,2,1); plt.scatter(X_rep[:,0],X_rep[:,1],c=y,cmap=colorMap,s=15,alpha=0.9)
+        plt.scatter(templates_rep[:,0],templates_rep[:,1],c='k',cmap=colorMap,s=50)
+        plt.title('PCA representation'); plt.xlabel('PC1 coeff'); plt.ylabel('PC2 coeff')
+        
+        nC = templates_rep.shape[0]        
+        plt.subplot(1,2,2); 
+        plt.scatter(X_rep_tSNE[:-nC,0],                    X_rep_tSNE[:-nC,1],c=y,cmap=colorMap,s=15,alpha=0.9)
+        plt.scatter(X_rep_tSNE[-nC:,0],                    X_rep_tSNE[-nC:,1],c='k',cmap=colorMap,s=50)
+        plt.title('t-SNE of PCA representation'); plt.xlabel('t-SNE axis1'); plt.ylabel('t-SNE axis2')
+
+
+# ## Now lets apply k-means and look at the cluster centers
+# 
+# We'll think of each image as a point in a high dimensional space, and each cluster center is a different point in the high dimensional image space.
+# 
+# 
+# ----------
+# 
+# For K = 4:
+# --------------
 
 # In[ ]:
 
 
-start = time.time()
-temp_tr = pd.DataFrame(train_df.groupby(['class', 'sentence_id', 'change'])['token_id'].count())
-temp_tr.reset_index(inplace = True)
-sns.set(style="ticks")
-sns.set_context("poster")
-sns.boxplot(x="class", y="token_id", hue="change", data=temp_tr, palette="PRGn")
-plt.ylim(0, 15)
-sns.despine(offset=10, trim=True)
-end = time.time()
-print(temp_tr['class'].unique())
-print("Time taken by above cell is {}.".format((end-start)))
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (12,9)
+
+objectPixels = np.ones((np.shape(scaledDownImages)[0],np.shape(scaledDownImages)[1])) == 1
+sampleDim = np.shape(scaledDownImages)[0]*np.shape(scaledDownImages)[1]
+X = scaledDownImages.reshape(sampleDim,-1).T
+
+templateModel = KmeansModel(X, numClusters=4, objectPixels=objectPixels)
+templateModel.ShowTemplates(numTemplatesToShow=4)
 
 
-# In[ ]:
-
-
-start = time.time()
-fig, ax = plt.subplots(nrows=2, sharex=True, sharey=True)
-temp_tr1 = pd.DataFrame(temp_chn.groupby('sentence_id')['token_id'].count())
-temp_tr2 = pd.DataFrame(temp_nchn.groupby('sentence_id')['token_id'].count())
-sns.distplot(temp_tr1['token_id'], ax=ax[0], color='blue', label='With Change')
-sns.distplot(temp_tr2['token_id'], ax=ax[1], color='green', label='Without Change')
-ax[0].legend(loc=0)
-ax[1].legend(loc=0)
-plt.show()
-end = time.time()
-print("Time taken by above cell is {}.".format((end-start)))
-
-
-# **Findings ** - 
-# - From the above plot, it is clear that the distribution of sentences having change is somewhat similar to complete data 
-# - Distribution of data for which there is no change is completely different than dist of complete data 
+# We can see that the centers are basically just large or small leaves, elongated either vertically and horizontally
+# 
+# ----------
+# 
+# Now let's try doing it for **K = 9**:
+# -------------------------------------
 
 # In[ ]:
 
 
-print("Fraction of token in complete data that are being changed are {}.".format(temp_tr1.shape[0]*100/train_df.shape[0]))
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (12,9)
+
+templateModel = KmeansModel(X, numClusters=9, objectPixels=objectPixels)
+templateModel.ShowTemplates(numTemplatesToShow=9)
 
 
-# **Findings ** - 
-# - Fraction of data that is being changed is around ~4%, and anyway plain class data is redundent, **be careful of the class**
-
-# In[ ]:
-
-
-# lets check overlap between train and test 
-train_list = train_df['before'].tolist()
-test_list = test_df['before'].tolist()
-s1 = set(train_list)
-s2 = set(test_list)
-common = s1.intersection(s2)
-print("Common tokens between train and test is {}".format(len(common)/len(s2)))
-
+# Oh, now we start seeing some more specificity in the cluster centers
+# 
+# 
+# ----------
+# 
+# Let's try also for **K=16**:
+# ----------------------------
 
 # In[ ]:
 
 
-def Assign(test, train):
-    """ function to assign results"""
-    token_dict = {}
-    token_dict = dict(zip(train.before, train.after))
-    #test['after'] = ''
-    print("test shape {}".format(test.shape[0]))
-    train.sort_values('before', ascending = True, inplace = True)
-    train.drop_duplicates(subset='before', keep='first', inplace=True)
-    train_new = train[['before', 'after']]
-    print(train_new.head())
-    print(test.head())
-    test_new = pd.merge(test, train_new, how = 'left', on = 'before')
-    print(test_new.head())
+matplotlib.rcParams['font.size'] = 10
+matplotlib.rcParams['figure.figsize'] = (11,9)
 
-    #test_new['after'] = list(map(str, test_new['after']))
-    def isNaN(num):
-        return num != num
-    test_new.after = np.where(isNaN(test_new.after), test_new.before, test_new.after)
-    return(test_new)
+templateModel = KmeansModel(X, numClusters=16, objectPixels=objectPixels)
+templateModel.ShowTemplates(numTemplatesToShow=16)
 
-start = time.time()
-sub = Assign(test_df, train_df)
-end = time.time()
-sub.head(5)
-#sub1.shape[0]
 
+# OK, we can clearly see templates here that are very much leaf type specific
+# 
+# ----------
+# 
+# Finally, let's try for **K=36**:
+# --------------------------------
 
 # In[ ]:
 
 
-def submission(row):
-    a = str(row['sentence_id'])+ "_"+ str(row['token_id'])
-    return(a)
+matplotlib.rcParams['font.size'] = 9
+matplotlib.rcParams['figure.figsize'] = (13,10)
 
-sub['id'] = sub.apply(lambda row: submission(row), axis =1)
-sub[['id', 'after']].to_csv("mahesh_common_token.csv", index = False)
-
-
-# ## Data preprocessing for Seq2Seq Modeling using RNN 
-# My plan is now is to make a RNN for seq2seq modelling, As there can be contextual information and to capture that you must have the idea of context which can only be there is you are seeing sequences and not the words. Now for sequence to sequence modelling the first task is to convert the output sequence to correct output format. 
-
-# In[ ]:
+templateModel = KmeansModel(X, numClusters=36, objectPixels=objectPixels)
+templateModel.ShowTemplates(numTemplatesToShow=36)
 
 
-# I am defining the functions and will work on it later when I get time
-print(train_seq.head(2))
-def words_to_sequence(train_sub):
-    """function takes the input dataframe and outputs a df which has sequence/sentences"""
-    seq_ids = list(train_sub.sentence_id.unique())
-    seq_df = pd.DataFrame(columns = ['sentence_id', 'before', 'after'])
-    for i in seq_ids:
-        temp = train_sub.loc[train_sub['sentence_id']==i]
-        before_ = list(temp.before)
-        #print(before_)
-        before_list = ' '.join(word for word in before_)
-        #print(before_list)
-        after_ = list(temp.after)
-        after_list = ' '.join(word for word in after_)
-        seq_dict = {}
-        seq_dict['sentence_id'] =i
-        seq_dict['before'] = before_list
-        seq_dict['after'] = after_list
-        seq_temp = pd.DataFrame([seq_dict], columns=seq_dict.keys())
-        seq_df = seq_df.append(seq_temp, ignore_index=True)
-    return(seq_df)   
-
-
-train_sub_seq = words_to_sequence(train_seq.loc[train_seq.sentence_id < 25].copy())
-train_sub_seq.head(10)
-
+# Now we can see even more clearly templates that are leaf type specific. this gives us hope regarding the possibility of using these features later for classification purposes.
+# 
+# 
+# ----------
+# let's see how good of an approximation can these 36 templates be for several specific leaf images. 
+# Meaning, we'll show a leaf image, it's closest template amount the 36 templates, and the difference between these images. 
+# 
+# ## Model Reconstructions: 
 
 # In[ ]:
 
 
-def seq_to_words(seq_df):
-    """function to convert seq dataframe to input kind of df"""
-    return(words_df)
+matplotlib.rcParams['font.size'] = 8
+matplotlib.rcParams['figure.figsize'] = (12,5)
 
-# Will finish this function later..
+templateModel.ShowReconstructions(X, numReconstructions=6)
 
 
-# # To be continued ....
+# We can see that the reconstructions are OK but far from perfect
+# 
+# ----------
+# 
+# ## Now let's visualize how these cluster center look like in the original high dimensional space
+# 
+# For this purpose we first apply PCA to reduce dimensionality of the images and then show the data once in the space of the first two principal components and in the full PCA space as visualized by t-SNE.
+# 
+# The cluster centers are in black, and the data points are colored according to cluster assignment
+
+# In[ ]:
+
+
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (12,8)
+
+templateModel.ShowTemplatesInPCASpace(X, y=None, tSNE_perplexity=15.0, colorMap='Paired')
+
+
+# ## Show the distribution of distances of data samples from the most frequent template
+# This will help us get a feel for what what different distances represent by plotting several examples that are distant from that template by approximately that amount
+
+# In[ ]:
+
+
+matplotlib.rcParams['font.size'] = 7
+matplotlib.rcParams['figure.figsize'] = (13,9)
+
+mostFrequentClusterInd = templateModel.sortedTemplatesByFrequency[0]
+templateModel.ShowSingleTemplateDistances(X, listOfTemplates=[mostFrequentClusterInd])
+
+
+# From here we can see that all similar patterns (more to the left) are similar in the same way, and that all dissimilar patterns (more to the right) are different in their own unique way.
+# Well, even though it's a very good quote, it isn't actually what we see in this dataset.
+#  
+# What we do see is something a little bit surprising, if we think about it from the geometric point of view. points (leaf images) that are far away from a specific point (a template) can theoretically be far away in many different directions and therefore one would expect large diversity among all images that are at the same distance from a specific template. This is only a little bit the case. We can also see some similarities between equally distant points relative to a template. What this means is that this feature "distance from template i" can be informative beyond just a binary type "like template i" vs "not like template i" feature.
+# 
+# ----------
+# ## Let's look at another such feature (distance from 10th most frequent template):
+
+# In[ ]:
+
+
+matplotlib.rcParams['font.size'] = 7
+matplotlib.rcParams['figure.figsize'] = (13,9)
+
+mediumFrequencyClusterInd = templateModel.sortedTemplatesByFrequency[10]
+templateModel.ShowSingleTemplateDistances(X, listOfTemplates=[mediumFrequencyClusterInd])
+
+
+# Again, we see similar things happen in this feature as well.
+# 
+# ----------
+# ## Visualize "distance from cluster centers" feature space
+# Plot the scatter of distance from the two most frequent clusters, and the low dimensional t-SNE representation of the entire "distance from clusters" space. the colors indicate the leaf type.
+
+# In[ ]:
+
+
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (12,8)
+
+X_train = X[trainIDs-1,:]
+y_train = trainLabels
+
+templateModel.ShowDataScatterPlotsWithTSNE(X=X_train, y=y_train, tSNE_perplexity=15.0, colorMap='Paired')
+
+
+# Interesting! 
+# 
+# 
+# ----------
+# ## Show Model Accuracy as function of number of clusters used
+# Now, similar to what we did for PCA, let's try to see what is the classification accuracy using k-means features for several different values of K and several differnt classifiers
+
+# In[ ]:
+
+
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (12,8)
+
+numClustersToUse = [1,2,4,8,16,32,64]
+
+logReg = linear_model.LogisticRegression(C=10.0)
+kNN = neighbors.KNeighborsClassifier(n_neighbors=7)
+RF = ensemble.RandomForestClassifier(n_estimators=100)
+
+logRegMeanAccuracy = []; kNN_MeanAccuracy = []; RF_MeanAccuracy = []
+logRegAccuracyStd  = []; kNN_AccuracyStd  = []; RF_AccuracyStd  = []
+
+for k in numClustersToUse:
+    stratifiedCV = model_selection.StratifiedKFold(n_splits=5, random_state=1)
+    logRegAccuracy = []; kNN_Accuracy = []; RF_Accuracy = []
+    
+    templateModel = KmeansModel(X_train, numClusters=k)
+    X_kmeans_train = templateModel.RepresentUsingModel(X_train, representationMethod='distFromAllClusters')
+    
+    for trainInds, validInds in stratifiedCV.split(X_kmeans_train, y_train):
+        X_train_cv = X_kmeans_train[trainInds,:]
+        X_valid_cv = X_kmeans_train[validInds,:]
+
+        y_train_cv = y_train[trainInds]
+        y_valid_cv = y_train[validInds]
+
+        logReg.fit(X_train_cv, y_train_cv)
+        kNN.fit(X_train_cv, y_train_cv)
+        RF.fit(X_train_cv, y_train_cv)
+    
+        logRegAccuracy.append(accuracy_score(y_valid_cv, logReg.predict(X_valid_cv)))
+        kNN_Accuracy.append(accuracy_score(y_valid_cv, kNN.predict(X_valid_cv)))
+        RF_Accuracy.append(accuracy_score(y_valid_cv, RF.predict(X_valid_cv)))
+
+    logRegMeanAccuracy.append(np.array(logRegAccuracy).mean())
+    logRegAccuracyStd.append(np.array(logRegAccuracy).std())
+
+    kNN_MeanAccuracy.append(np.array(kNN_Accuracy).mean())
+    kNN_AccuracyStd.append(np.array(kNN_Accuracy).std())
+
+    RF_MeanAccuracy.append(np.array(RF_Accuracy).mean()) 
+    RF_AccuracyStd.append(np.array(RF_Accuracy).std())
+        
+plt.figure()
+plt.errorbar(x=numClustersToUse, y=logRegMeanAccuracy, yerr=logRegAccuracyStd)
+plt.errorbar(x=numClustersToUse, y=kNN_MeanAccuracy  , yerr=kNN_AccuracyStd)
+plt.errorbar(x=numClustersToUse, y=RF_MeanAccuracy   , yerr=RF_AccuracyStd)
+plt.xlim(min(numClustersToUse)-1,max(numClustersToUse)+1); plt.legend(['Logistic Regression','k Nearest Neighbor','Random Forest'],loc=2)
+plt.xlabel('num Clusters'); plt.ylabel('validation accuracy'); plt.title('accuracy as function of num Clusters')
+
+
+# ## Summery 
+# 
+# If we compare what we see here with what we saw in the [PCA case][1], we see two main points:
+# 
+#  1. PCA and K-Means image features are similarly useful in terms of classification.
+#  2. The order between Logistic Regression and Random Forest has switched here compared to PCA case.
+# 
+# Even though these finding cannot be generalized because they heavily depend of this particular data distribution, we can speculate that there might be something complementary that Random Forest adds to the PCA feature representation, and that k-means features add to the classification abilities of the Logistic Regression classifier.
+# 
+# Anyway, I hope this script has shed some light about what k-means is about for some of you.
+# 
+#   [1]: https://www.kaggle.com/selfishgene/visualizing-pca-with-leaf-dataset

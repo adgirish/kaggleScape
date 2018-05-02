@@ -1,194 +1,202 @@
 
 # coding: utf-8
 
-# In this tutorial, we'll try to forecast transactions data and poke around open source [Prophet](https://facebook.github.io/prophet/) library released by Facebook. We'll learn  how to integrate holiday periods and optimize the model by playing parameters.
+# ## Introduction
 # 
-# Prophet is a procedure for forecasting time series data. It is based on an additive model where non-linear trends are fit with yearly and weekly seasonality, plus holidays. It works best with daily periodicity data with at least one year of historical data. Prophet is robust to missing data, shifts in the trend, and large outliers. You can learn more about from the [docs](https://facebook.github.io/prophet/docs/quick_start.html).
+# We will show how to use the  [Hungarian method](https://en.wikipedia.org/wiki/Hungarian_algorithm) to improve an existing solution. Let's forget the twins for a moment and look at the vast majority (99.6%) of the rest. Each kid should receive one gift so it is clearly an assigment problem and the objective function is linear.
+# It is not even an NP hard problem we could use polinomial algorithms to solve it.
 # 
-# Let's start loading libraries and data.
+# The only problem is that we have 10^6 points so an O(n^3) algorithm might not be feasible. Scipy.optimize has [linear_sum_assignment](https://docs.scipy.org/doc/scipy-0.18.1/reference/generated/scipy.optimize.linear_sum_assignment.html) let's use that on small random subsets of the large input space.
+# 
+# We will use [Vlad Golubev](https://www.kaggle.com/golubev)'s [submission](https://www.kaggle.com/golubev/c-submission) as the baseline submission to improve. You could start with a better solution with [Selfish Gene](https://www.kaggle.com/selfishgene)'s nice [heuristics](https://www.kaggle.com/selfishgene/nothing-fancy-just-some-heuristics-0-9372).
 
 # In[ ]:
 
 
-# Load libraries
-import numpy as np
-RANDOM_SEED = 42
-np.random.seed(RANDOM_SEED)
+import os
 import pandas as pd
-pd.set_option('display.max_rows', 10)
-pd.set_option('display.max_columns', 70)
-import plotly.offline as py
-import plotly.graph_objs as go
-py.init_notebook_mode()
-
-from fbprophet import Prophet
-
-get_ipython().run_line_magic('time', "df_transactions = pd.read_csv('../input/transactions.csv')")
-get_ipython().run_line_magic('time', "df_holidays_events = pd.read_csv('../input/holidays_events.csv')")
-
-print('Data and libraries are loaded.')
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+import datetime as dt
+from collections import defaultdict, Counter
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+import datetime as dt
+plt.rcParams['figure.figsize'] = [16, 10]
+plt.rcParams['font.size'] = 16
+import seaborn as sns
 
 
 # In[ ]:
 
 
-df_transactions
+N_CHILDREN = 1000000
+N_GIFT_TYPE = 1000
+N_GIFT_QUANTITY = 1000
+N_GIFT_PREF = 1000
+N_CHILD_PREF = 10
+TWINS = int(0.004 * N_CHILDREN)
 
-
-# If we look at the transactions data, transactions are grouped by store no. We'll simplify this for now and group them by date. We can clearly see seasonality and holiday effect on total transactions.
-
-# In[ ]:
-
-
-transactions = df_transactions.groupby('date')['transactions'].sum()
-py.iplot([go.Scatter(
-    x=transactions.index,
-    y=transactions
-)])
-
-
-# Now, let's try the prophet library and see how well it predicts. But before that, we should prepare the data. According to docs:
-# 
-# > Prophet follows the sklearn model API. We create an instance of the Prophet class and then call its fit and predict methods.
-# > The input to Prophet is always a dataframe with two columns: **ds** and **y**. The ds (datestamp) column must contain a date or datetime (either is fine). The **y** column must be numeric, and represents the measurement we wish to forecast.
-# 
-
-# In[ ]:
-
-
-transactions = pd.DataFrame(transactions).reset_index()
-transactions.columns = ['ds', 'y']
-transactions
+CHILD_PREF = pd.read_csv('../input/santa-gift-matching/child_wishlist.csv', header=None).drop(0, 1).values
+GIFT_PREF = pd.read_csv('../input/santa-gift-matching/gift_goodkids.csv', header=None).drop(0, 1).values
 
 
 # In[ ]:
 
 
-m = Prophet()
-m.fit(transactions)
-future = m.make_future_dataframe(periods=365)
-forecast = m.predict(future)
-forecast
+GIFT_HAPPINESS = {}
+for g in range(N_GIFT_TYPE):
+    GIFT_HAPPINESS[g] = defaultdict(lambda: 1. / (2 * N_GIFT_PREF))
+    for i, c in enumerate(GIFT_PREF[g]):
+        GIFT_HAPPINESS[g][c] = -1. * (N_GIFT_PREF - i) / N_GIFT_PREF
+
+CHILD_HAPPINESS = {}
+for c in range(N_CHILDREN):
+    CHILD_HAPPINESS[c] = defaultdict(lambda: 1. / (2 * N_CHILD_PREF))
+    for i, g in enumerate(CHILD_PREF[c]):
+        CHILD_HAPPINESS[c][g] = -1. * (N_CHILD_PREF - i) / N_CHILD_PREF
+
+GIFT_IDS = np.array([[g] * N_GIFT_QUANTITY for g in range(N_GIFT_TYPE)]).flatten()
 
 
 # In[ ]:
 
 
-py.iplot([
-    go.Scatter(x=transactions['ds'], y=transactions['y'], name='y'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat'], name='yhat'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill='tonexty', mode='none', name='upper'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='none', name='lower'),
-    go.Scatter(x=forecast['ds'], y=forecast['trend'], name='Trend')
-])
+def my_avg_normalized_happiness(pred):
+    total_child_happiness = 0
+    total_gift_happiness = np.zeros(1000)
+    for c, g in pred:
+        total_child_happiness +=  -CHILD_HAPPINESS[c][g]
+        total_gift_happiness[g] += -GIFT_HAPPINESS[g][c]
+    nch = total_child_happiness / N_CHILDREN
+    ngh = np.mean(total_gift_happiness) / 1000
+    print('normalized child happiness', nch)
+    print('normalized gift happiness', ngh)
+    return nch + ngh
 
 
 # In[ ]:
 
 
-# Calculate root mean squared error.
-print('RMSE: %f' % np.sqrt(np.mean((forecast.loc[:1682, 'yhat']-transactions['y'])**2)) )
-
-
-# As we see in the graph above, prediction is fairly well and aligns with the data's up and downs. You can zoom in the graph by selecting a zoom area with mouse.
-# 
-# But the trend is fairly rigid, it misses the sub trends in mid-years. The trend is rising at first half of the year and a little bit slowing down after that. Let's make the trend a little bit flexible. If the trend changes are being overfit (too much flexibility) or underfit (not enough flexibility), you can adjust the strength of the sparse prior using the input argument **changepoint_prior_scale**. By default, this parameter is set to 0.05. Increasing it will make the trend more flexible. (https://facebook.github.io/prophet/docs/trend_changepoints.html)
-
-# In[ ]:
-
-
-m = Prophet(changepoint_prior_scale=2.5)
-m.fit(transactions)
-future = m.make_future_dataframe(periods=365)
-forecast = m.predict(future)
+def optimize_block(child_block, current_gift_ids):
+    gift_block = current_gift_ids[child_block]
+    C = np.zeros((BLOCK_SIZE, BLOCK_SIZE))
+    for i in range(BLOCK_SIZE):
+        c = child_block[i]
+        for j in range(BLOCK_SIZE):
+            g = GIFT_IDS[gift_block[j]]
+            C[i, j] = CHILD_HAPPINESS[c][g] + GIFT_HAPPINESS[g][c]
+    row_ind, col_ind = linear_sum_assignment(C)
+    return (child_block[row_ind], gift_block[col_ind])
 
 
 # In[ ]:
 
 
-# Calculate root mean squared error.
-print('RMSE: %f' % np.sqrt(np.mean((forecast.loc[:1682, 'yhat']-transactions['y'])**2)) )
-py.iplot([
-    go.Scatter(x=transactions['ds'], y=transactions['y'], name='y'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat'], name='yhat'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill='tonexty', mode='none', name='upper'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='none', name='lower'),
-    go.Scatter(x=forecast['ds'], y=forecast['trend'], name='Trend')
-])
-
-
-# Now we'll add more seasonality to the model. As we see, prophet calculates weekly and yearly seasonality. We don't need daily seasonality, because we don't have intra-day data for this tutorial. Just adding monthly seasonality should be enough.
-
-# In[ ]:
-
-
-m = Prophet(changepoint_prior_scale=2.5)
-m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
-m.fit(transactions)
-future = m.make_future_dataframe(periods=365)
-forecast = m.predict(future)
+BLOCK_SIZE = 400
+INITIAL_SUBMISSION = '../input/c-submission/cpp_sub.csv'
+N_BLOCKS = (N_CHILDREN - TWINS) / BLOCK_SIZE
+print('Block size: {}, n_blocks {}'.format(BLOCK_SIZE, N_BLOCKS))
 
 
 # In[ ]:
 
 
-# Calculate root mean squared error.
-print('RMSE: %f' % np.sqrt(np.mean((forecast.loc[:1682, 'yhat']-transactions['y'])**2)) )
-py.iplot([
-    go.Scatter(x=transactions['ds'], y=transactions['y'], name='y'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat'], name='yhat'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill='tonexty', mode='none', name='upper'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='none', name='lower'),
-    go.Scatter(x=forecast['ds'], y=forecast['trend'], name='Trend')
-])
+subm = pd.read_csv(INITIAL_SUBMISSION)
+initial_anh = my_avg_normalized_happiness(subm[['ChildId', 'GiftId']].values.tolist())
+print(initial_anh)
+subm['gift_rank'] = subm.groupby('GiftId').rank() - 1
+subm['gift_id'] = subm['GiftId'] * 1000 + subm['gift_rank']
+subm['gift_id'] = subm['gift_id'].astype(np.int64)
+current_gift_ids = subm['gift_id'].values
 
 
-# Now it's time to add effects of holiday events into our model. We need to adjust data format first. Prophet needs two columns (holiday and ds) and a row for each occurrence of the holiday. We could also include columns lower_window and upper_window which extend the holiday out to `[lower_window, upper_window]` days around the date. But, I think data is arranged well and we don't have to pay so much attention to that.
+# ## Single iteration
 
 # In[ ]:
 
 
-df_holidays_events
-
-
-# In[ ]:
-
-
-holidays = df_holidays_events[df_holidays_events['transferred'] == False][['description', 'date']]
-holidays.columns = ['holiday', 'ds']
-#holidays['lower_window'] = 0
-#holidays['upper_window'] = 0
-holidays
-
-
-# In[ ]:
-
-
-m = Prophet(changepoint_prior_scale=2.5, holidays=holidays)
-m.add_seasonality(name='monthly', period=30.5, fourier_order=5)
-m.fit(transactions)
-future = m.make_future_dataframe(periods=365)
-forecast = m.predict(future)
+start_time = dt.datetime.now()
+for i in range(1):
+    child_blocks = np.split(np.random.permutation(range(TWINS, N_CHILDREN)), N_BLOCKS)
+    for child_block in tqdm(child_blocks[:500]):
+        cids, gids = optimize_block(child_block, current_gift_ids=current_gift_ids)
+        current_gift_ids[cids] = gids
+    subm['GiftId'] = GIFT_IDS[current_gift_ids]
+    anh = my_avg_normalized_happiness(subm[['ChildId', 'GiftId']].values.tolist())
+    end_time = dt.datetime.now()
+    print(i, anh, (end_time-start_time).total_seconds())
+subm[['ChildId', 'GiftId']].to_csv('./submission_%i.csv' % int(anh * 10 ** 6), index=False)
 
 
 # In[ ]:
 
 
-# Calculate root mean squared error.
-print('RMSE: %f' % np.sqrt(np.mean((forecast.loc[:1682, 'yhat']-transactions['y'])**2)) )
-py.iplot([
-    go.Scatter(x=transactions['ds'], y=transactions['y'], name='y'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat'], name='yhat'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], fill='tonexty', mode='none', name='upper'),
-    go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], fill='tonexty', mode='none', name='lower'),
-    go.Scatter(x=forecast['ds'], y=forecast['trend'], name='Trend')
-])
+print('Improvement {}'.format(anh - initial_anh))
 
 
-# We managed to predict the spikes for new-year period. The model couldn't catch the downward spike for Jan 4th 2016, so it could not predict Jan 1st 2017 successfully. That's very reasonable, as there is no holiday for Jan 4th of 2016. But the model predicts the sales on the 24th Decembers nicely. And also forecasted period after Aug 15th 2017 looks good.
-# 
-# And, as a non-ecuadorian person, I can say from the graph that "Dia de la Madre" is an important event, and it boosts sales previous day.
-# 
-# And, that's it. Prophet is a fairly easy to use library to forecast time-series data, which only uses previous data and holidays for that. There are more features and parameters like saturating forecasts, uncertanity intervals etc. which we didn't cover here. You can read more from their paper https://peerj.com/preprints/3190.pdf.
-# 
-# I think it's not a full-featured regression or forecasting tool, as we cannot use other data to use correlations or effects of another variable etc. But, It could be a replacement for time-series models like ARMA, ARIMA etc. Please comment below if you think you know more ways to improve this model. Thank you!
+# In[ ]:
+
+
+'{:.1f} hours required to reach the top.'.format(((0.94253901 - 0.93421513) / (0.93421513 - initial_anh)) * 8)
+
+
+# My current best submission used this method. It improved 0.0005 in 8 hours :) With the same speed I would  reach the top in a week :) Of course the improvement won't be linear and the top teams could improve as well...
+
+# ## Happiness distribution
+
+# In[ ]:
+
+
+child_happiness = np.zeros(N_CHILDREN)
+gift_happiness = np.zeros(N_CHILDREN)
+for (c, g) in subm[['ChildId', 'GiftId']].values.tolist():
+    child_happiness[c] += -CHILD_HAPPINESS[c][g]
+    gift_happiness[c] += -GIFT_HAPPINESS[g][c]
+
+
+# In[ ]:
+
+
+plt.hist(gift_happiness, bins=20, color='r', normed=True, alpha=0.5, label='Santa happiness')
+plt.hist(child_happiness, bins=20, color='g', normed=True, alpha=0.5, label='Child happiness')
+plt.legend(loc=0)
+plt.grid()
+plt.xlabel('Happiness')
+plt.title('The children will be happier than Santa!')
+plt.show();
+
+
+# ## Time complexity
+
+# In[ ]:
+
+
+result = []
+for n in np.arange(100, 1600, 100):
+    C = np.random.random((n, n))
+    st = dt.datetime.now()
+    linear_sum_assignment(C)
+    et = dt.datetime.now()
+    result.append([n, (et - st).total_seconds()])
+
+
+# In[ ]:
+
+
+result = np.array(result)
+poly_estimate = np.polyfit(result[:, 0], result[:, 1], 3)
+
+
+# In[ ]:
+
+
+plt.scatter(result[:, 0], result[:, 1], c='y', s=500, marker='*', label='Run time')
+plt.plot(result[:, 0], np.poly1d(poly_estimate)(result[:, 0]), c='g', lw=3, label='Polynomial Estimate')
+plt.xlabel('Number of vertices')
+plt.ylabel('Run time (s)')
+plt.grid()
+plt.title('Hungarian method - O(n^3) time complexity')
+plt.legend(loc=0)
+plt.show()
+

@@ -1,524 +1,561 @@
 
 # coding: utf-8
 
-# # Introduction to CNN Keras - Acc 0.997 (top 8%) 
-# ### **Yassine Ghouzam, PhD**
-# #### 18/07/2017
+# **About Kiva:**
 # 
-# * **1. Introduction**
-# * **2. Data preparation**
-#     * 2.1 Load data
-#     * 2.2 Check for null and missing values
-#     * 2.3 Normalization
-#     * 2.4 Reshape
-#     * 2.5 Label encoding
-#     * 2.6 Split training and valdiation set
-# * **3. CNN**
-#     * 3.1 Define the model
-#     * 3.2 Set the optimizer and annealer
-#     * 3.3 Data augmentation
-# * **4. Evaluate the model**
-#     * 4.1 Training and validation curves
-#     * 4.2 Confusion matrix
-# * **5. Prediction and submition**
-#     * 5.1 Predict and Submit results
-
-# # 1. Introduction
+# [Kiva](https://www.kiva.org/about) is an international nonprofit, founded in 2005 and based in San Francisco, with a mission to connect people through lending to alleviate poverty.
+# Kiva is in 83 countries, with about 2.7 Million borrowers. Kiva has funded around 1.11 Billion USD worth of loans. It also has around 450 volunteers worldwide. 
 # 
-# This is a 5 layers Sequential Convolutional Neural Network for digits recognition trained on MNIST dataset. I choosed to build it with keras API (Tensorflow backend) which is very intuitive. Firstly, I will prepare the data (handwritten digits images) then i will focus on the CNN modeling and evaluation.
+# **Objective of the dataset:**
 # 
-# I achieved 99.671% of accuracy with this CNN trained in 2h30 on a single CPU (i5 2500k). For those who have a >= 3.0 GPU capabilites (from GTX 650 - to recent GPUs), you can use tensorflow-gpu with keras. Computation will be much much faster !!!
+# Pair Kiva's data with additional data sources to estimate the welfare level of borrowers in specific regions, based on shared economic and demographic characteristics.
 # 
-# **For computational reasons, i set the number of steps (epochs) to 2, if you want to achieve 99+% of accuracy set it to 30.**
+# **Objective of the notebook:**
 # 
-# This Notebook follows three main parts:
+# To get a better understanding of the data provided by Kiva and also to discuss ideas for additional data sources. 
 # 
-# * The data preparation
-# * The CNN modeling and evaluation
-# * The results prediction and submission
+# The Language used in the notebook is PytMost of the plots are done using plotly and so will be interactive. Please feel free to hover over the plots to get more insights.
 # 
-# 
-# 
-# 
-# <img src="http://img1.imagilive.com/0717/mnist-sample.png" ></img>
-
-# In[1]:
-
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-np.random.seed(2)
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix
-import itertools
-
-from keras.utils.np_utils import to_categorical # convert to one-hot-encoding
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D
-from keras.optimizers import RMSprop
-from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import ReduceLROnPlateau
-
-
-sns.set(style='white', context='notebook', palette='deep')
-
-
-# # 2. Data preparation
-# ## 2.1 Load data
-
-# In[2]:
-
-
-# Load the data
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-
-
-# In[3]:
-
-
-Y_train = train["label"]
-
-# Drop 'label' column
-X_train = train.drop(labels = ["label"],axis = 1) 
-
-# free some space
-del train 
-
-g = sns.countplot(Y_train)
-
-Y_train.value_counts()
-
-
-# We have similar counts for the 10 digits.
-
-# ## 2.2 Check for null and missing values
-
-# In[4]:
-
-
-# Check the data
-X_train.isnull().any().describe()
-
-
-# In[5]:
-
-
-test.isnull().any().describe()
-
-
-# I check for corrupted images (missing values inside).
-# 
-# There is no missing values in the train and test dataset. So we can safely go ahead.
-
-# ## 2.3 Normalization
-
-# We perform a grayscale normalization to reduce the effect of illumination's differences. 
-# 
-# Moreover the CNN converg faster on [0..1] data than on [0..255].
-
-# In[6]:
-
-
-# Normalize the data
-X_train = X_train / 255.0
-test = test / 255.0
-
-
-# ## 2.3 Reshape
-
-# In[7]:
-
-
-# Reshape image in 3 dimensions (height = 28px, width = 28px , canal = 1)
-X_train = X_train.values.reshape(-1,28,28,1)
-test = test.values.reshape(-1,28,28,1)
-
-
-# Train and test images (28px x 28px) has been stock into pandas.Dataframe as 1D vectors of 784 values. We reshape all data to 28x28x1 3D matrices. 
-# 
-# Keras requires an extra dimension in the end which correspond to channels. MNIST images are gray scaled so it use only one channel. For RGB images, there is 3 channels, we would have reshaped 784px vectors to 28x28x3 3D matrices. 
-
-# ## 2.5 Label encoding
-
-# In[8]:
-
-
-# Encode labels to one hot vectors (ex : 2 -> [0,0,1,0,0,0,0,0,0,0])
-Y_train = to_categorical(Y_train, num_classes = 10)
-
-
-# Labels are 10 digits numbers from 0 to 9. We need to encode these lables to one hot vectors (ex : 2 -> [0,0,1,0,0,0,0,0,0,0]).
-
-# ## 2.6 Split training and valdiation set 
-
-# In[9]:
-
-
-# Set the random seed
-random_seed = 2
-
-
-# In[10]:
-
-
-# Split the train and the validation set for the fitting
-X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size = 0.1, random_state=random_seed)
-
-
-# I choosed to split the train set in two parts : a small fraction (10%) became the validation set which the model is evaluated and the rest (90%) is used to train the model.
-# 
-# Since we have 42 000 training images of balanced labels (see 2.1 Load data), a random split of the train set doesn't cause some labels to be over represented in the validation set. Be carefull with some unbalanced dataset a simple random split could cause inaccurate evaluation during the validation. 
-# 
-# To avoid that, you could use stratify = True option in train_test_split function (**Only for >=0.17 sklearn versions**).
-
-# We can get a better sense for one of these examples by visualising the image and looking at the label.
-
-# In[11]:
-
-
-# Some examples
-g = plt.imshow(X_train[0][:,:,0])
-
-
-# # 3. CNN
-# ## 3.1 Define the model
-
-# I used the Keras Sequential API, where you have just to add one layer at a time, starting from the input.
-# 
-# The first is the convolutional (Conv2D) layer. It is like a set of learnable filters. I choosed to set 32 filters for the two firsts conv2D layers and 64 filters for the two last ones. Each filter transforms a part of the image (defined by the kernel size) using the kernel filter. The kernel filter matrix is applied on the whole image. Filters can be seen as a transformation of the image.
-# 
-# The CNN can isolate features that are useful everywhere from these transformed images (feature maps).
-# 
-# The second important layer in CNN is the pooling (MaxPool2D) layer. This layer simply acts as a downsampling filter. It looks at the 2 neighboring pixels and picks the maximal value. These are used to reduce computational cost, and to some extent also reduce overfitting. We have to choose the pooling size (i.e the area size pooled each time) more the pooling dimension is high, more the downsampling is important. 
-# 
-# Combining convolutional and pooling layers, CNN are able to combine local features and learn more global features of the image.
-# 
-# Dropout is a regularization method, where a proportion of nodes in the layer are randomly ignored (setting their wieghts to zero) for each training sample. This drops randomly a propotion of the network and forces the network to learn features in a distributed way. This technique also improves generalization and reduces the overfitting. 
-# 
-# 'relu' is the rectifier (activation function max(0,x). The rectifier activation function is used to add non linearity to the network. 
-# 
-# The Flatten layer is use to convert the final feature maps into a one single 1D vector. This flattening step is needed so that you can make use of fully connected layers after some convolutional/maxpool layers. It combines all the found local features of the previous convolutional layers.
-# 
-# In the end i used the features in two fully-connected (Dense) layers which is just artificial an neural networks (ANN) classifier. In the last layer(Dense(10,activation="softmax")) the net outputs distribution of probability of each class.
-
-# In[12]:
-
-
-# Set the CNN model 
-# my CNN architechture is In -> [[Conv2D->relu]*2 -> MaxPool2D -> Dropout]*2 -> Flatten -> Dense -> Dropout -> Out
-
-model = Sequential()
-
-model.add(Conv2D(filters = 32, kernel_size = (5,5),padding = 'Same', 
-                 activation ='relu', input_shape = (28,28,1)))
-model.add(Conv2D(filters = 32, kernel_size = (5,5),padding = 'Same', 
-                 activation ='relu'))
-model.add(MaxPool2D(pool_size=(2,2)))
-model.add(Dropout(0.25))
-
-
-model.add(Conv2D(filters = 64, kernel_size = (3,3),padding = 'Same', 
-                 activation ='relu'))
-model.add(Conv2D(filters = 64, kernel_size = (3,3),padding = 'Same', 
-                 activation ='relu'))
-model.add(MaxPool2D(pool_size=(2,2), strides=(2,2)))
-model.add(Dropout(0.25))
-
-
-model.add(Flatten())
-model.add(Dense(256, activation = "relu"))
-model.add(Dropout(0.5))
-model.add(Dense(10, activation = "softmax"))
-
-
-# ## 3.2 Set the optimizer and annealer
-# 
-# Once our layers are added to the model, we need to set up a score function, a loss function and an optimisation algorithm.
-# 
-# We define the loss function to measure how poorly our model performs on images with known labels. It is the error rate between the oberved labels and the predicted ones. We use a specific form for categorical classifications (>2 classes) called the "categorical_crossentropy".
-# 
-# The most important function is the optimizer. This function will iteratively improve parameters (filters kernel values, weights and bias of neurons ...) in order to minimise the loss. 
-# 
-# I choosed RMSprop (with default values), it is a very effective optimizer. The RMSProp update adjusts the Adagrad method in a very simple way in an attempt to reduce its aggressive, monotonically decreasing learning rate.
-# We could also have used Stochastic Gradient Descent ('sgd') optimizer, but it is slower than RMSprop.
-# 
-# The metric function "accuracy" is used is to evaluate the performance our model.
-# This metric function is similar to the loss function, except that the results from the metric evaluation are not used when training the model (only for evaluation).
-
-# In[13]:
-
-
-# Define the optimizer
-optimizer = RMSprop(lr=0.001, rho=0.9, epsilon=1e-08, decay=0.0)
-
-
-# In[14]:
-
-
-# Compile the model
-model.compile(optimizer = optimizer , loss = "categorical_crossentropy", metrics=["accuracy"])
-
-
-# <img src="http://img1.imagilive.com/0717/learningrates.jpg"> </img>
-
-# In order to make the optimizer converge faster and closest to the global minimum of the loss function, i used an annealing method of the learning rate (LR).
-# 
-# The LR is the step by which the optimizer walks through the 'loss landscape'. The higher LR, the bigger are the steps and the quicker is the convergence. However the sampling is very poor with an high LR and the optimizer could probably fall into a local minima.
-# 
-# Its better to have a decreasing learning rate during the training to reach efficiently the global minimum of the loss function. 
-# 
-# To keep the advantage of the fast computation time with a high LR, i decreased the LR dynamically every X steps (epochs) depending if it is necessary (when accuracy is not improved).
-# 
-# With the ReduceLROnPlateau function from Keras.callbacks, i choose to reduce the LR by half if the accuracy is not improved after 3 epochs.
-
-# In[15]:
-
-
-# Set a learning rate annealer
-learning_rate_reduction = ReduceLROnPlateau(monitor='val_acc', 
-                                            patience=3, 
-                                            verbose=1, 
-                                            factor=0.5, 
-                                            min_lr=0.00001)
-
-
-# In[16]:
-
-
-epochs = 1 # Turn epochs to 30 to get 0.9967 accuracy
-batch_size = 86
-
-
-# ## 3.3 Data augmentation 
-
-# In order to avoid overfitting problem, we need to expand artificially our handwritten digit dataset. We can make your existing dataset even larger. The idea is to alter the training data with small transformations to reproduce the variations occuring when someone is writing a digit.
-# 
-# For example, the number is not centered 
-# The scale is not the same (some who write with big/small numbers)
-# The image is rotated...
-# 
-# Approaches that alter the training data in ways that change the array representation while keeping the label the same are known as data augmentation techniques. Some popular augmentations people use are grayscales, horizontal flips, vertical flips, random crops, color jitters, translations, rotations, and much more. 
-# 
-# By applying just a couple of these transformations to our training data, we can easily double or triple the number of training examples and create a very robust model.
-# 
-# The improvement is important : 
-#    - Without data augmentation i obtained an accuracy of 98.114%
-#    - With data augmentation i achieved 99.67% of accuracy
-
-# In[17]:
-
-
-# Without data augmentation i obtained an accuracy of 0.98114
-#history = model.fit(X_train, Y_train, batch_size = batch_size, epochs = epochs, 
-#          validation_data = (X_val, Y_val), verbose = 2)
-
-
-# In[18]:
-
-
-# With data augmentation to prevent overfitting (accuracy 0.99286)
-
-datagen = ImageDataGenerator(
-        featurewise_center=False,  # set input mean to 0 over the dataset
-        samplewise_center=False,  # set each sample mean to 0
-        featurewise_std_normalization=False,  # divide inputs by std of the dataset
-        samplewise_std_normalization=False,  # divide each input by its std
-        zca_whitening=False,  # apply ZCA whitening
-        rotation_range=10,  # randomly rotate images in the range (degrees, 0 to 180)
-        zoom_range = 0.1, # Randomly zoom image 
-        width_shift_range=0.1,  # randomly shift images horizontally (fraction of total width)
-        height_shift_range=0.1,  # randomly shift images vertically (fraction of total height)
-        horizontal_flip=False,  # randomly flip images
-        vertical_flip=False)  # randomly flip images
-
-
-datagen.fit(X_train)
-
-
-# For the data augmentation, i choosed to :
-#    - Randomly rotate some training images by 10 degrees
-#    - Randomly  Zoom by 10% some training images
-#    - Randomly shift images horizontally by 10% of the width
-#    - Randomly shift images vertically by 10% of the height
-#    
-# I did not apply a vertical_flip nor horizontal_flip since it could have lead to misclassify symetrical numbers such as 6 and 9.
-# 
-# Once our model is ready, we fit the training dataset .
-
-# In[19]:
-
-
-# Fit the model
-history = model.fit_generator(datagen.flow(X_train,Y_train, batch_size=batch_size),
-                              epochs = epochs, validation_data = (X_val,Y_val),
-                              verbose = 2, steps_per_epoch=X_train.shape[0] // batch_size
-                              , callbacks=[learning_rate_reduction])
-
-
-# # 4. Evaluate the model
-# ## 4.1 Training and validation curves
-
-# In[20]:
-
-
-# Plot the loss and accuracy curves for training and validation 
-fig, ax = plt.subplots(2,1)
-ax[0].plot(history.history['loss'], color='b', label="Training loss")
-ax[0].plot(history.history['val_loss'], color='r', label="validation loss",axes =ax[0])
-legend = ax[0].legend(loc='best', shadow=True)
-
-ax[1].plot(history.history['acc'], color='b', label="Training accuracy")
-ax[1].plot(history.history['val_acc'], color='r',label="Validation accuracy")
-legend = ax[1].legend(loc='best', shadow=True)
-
-
-# The code below is for plotting loss and accuracy curves for training and validation. Since, i set epochs = 2 on this notebook .
-# I'll show you the training and validation curves i obtained from the model i build with 30 epochs (2h30)
-
-# <img src="http://img1.imagilive.com/0717/mnist_099671_train_val_loss_acc.png"></img>
-# 
-# The model reaches almost 99% (98.7+%) accuracy on the validation dataset after 2 epochs. The validation accuracy is greater than the training accuracy almost evry time during the training. That means that our model dosen't not overfit the training set.
-# 
-# Our model is very well trained  !!! 
-# 
-# <img src="http://img1.imagilive.com/0717/accuracies1de.jpg"/>
-
-# ## 4.2 Confusion matrix
-
-# Confusion matrix can be very helpfull to see your model drawbacks.
-# 
-# I plot the confusion matrix of the validation results.
-
-# In[24]:
-
-
-# Look at confusion matrix 
-
-def plot_confusion_matrix(cm, classes,
-                          normalize=False,
-                          title='Confusion matrix',
-                          cmap=plt.cm.Blues):
-    """
-    This function prints and plots the confusion matrix.
-    Normalization can be applied by setting `normalize=True`.
-    """
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45)
-    plt.yticks(tick_marks, classes)
-
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-
-    thresh = cm.max() / 2.
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, cm[i, j],
-                 horizontalalignment="center",
-                 color="white" if cm[i, j] > thresh else "black")
-
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-
-# Predict the values from the validation dataset
-Y_pred = model.predict(X_val)
-# Convert predictions classes to one hot vectors 
-Y_pred_classes = np.argmax(Y_pred,axis = 1) 
-# Convert validation observations to one hot vectors
-Y_true = np.argmax(Y_val,axis = 1) 
-# compute the confusion matrix
-confusion_mtx = confusion_matrix(Y_true, Y_pred_classes) 
-# plot the confusion matrix
-plot_confusion_matrix(confusion_mtx, classes = range(10)) 
-
-
-# Here we can see that our CNN performs very well on all digits with few errors considering the size of the validation set (4 200 images).
-# 
-# However, it seems that our CNN has some little troubles with the 4 digits, hey are misclassified as 9. Sometime it is very difficult to catch the difference between 4 and 9 when curves are smooth.
-
-# Let's investigate for errors. 
-# 
-# I want to see the most important errors . For that purpose i need to get the difference between the probabilities of real value and the predicted ones in the results.
+# Let us first import the necessary modules.
 
 # In[ ]:
 
 
-# Display some error results 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+color = sns.color_palette()
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Errors are difference between predicted labels and true labels
-errors = (Y_pred_classes - Y_true != 0)
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
 
-Y_pred_classes_errors = Y_pred_classes[errors]
-Y_pred_errors = Y_pred[errors]
-Y_true_errors = Y_true[errors]
-X_val_errors = X_val[errors]
-
-def display_errors(errors_index,img_errors,pred_errors, obs_errors):
-    """ This function shows 6 images with their predicted and real labels"""
-    n = 0
-    nrows = 2
-    ncols = 3
-    fig, ax = plt.subplots(nrows,ncols,sharex=True,sharey=True)
-    for row in range(nrows):
-        for col in range(ncols):
-            error = errors_index[n]
-            ax[row,col].imshow((img_errors[error]).reshape((28,28)))
-            ax[row,col].set_title("Predicted label :{}\nTrue label :{}".format(pred_errors[error],obs_errors[error]))
-            n += 1
-
-# Probabilities of the wrong predicted numbers
-Y_pred_errors_prob = np.max(Y_pred_errors,axis = 1)
-
-# Predicted probabilities of the true values in the error set
-true_prob_errors = np.diagonal(np.take(Y_pred_errors, Y_true_errors, axis=1))
-
-# Difference between the probability of the predicted label and the true label
-delta_pred_true_errors = Y_pred_errors_prob - true_prob_errors
-
-# Sorted list of the delta prob errors
-sorted_dela_errors = np.argsort(delta_pred_true_errors)
-
-# Top 6 errors 
-most_important_errors = sorted_dela_errors[-6:]
-
-# Show the top 6 errors
-display_errors(most_important_errors, X_val_errors, Y_pred_classes_errors, Y_true_errors)
+pd.options.mode.chained_assignment = None
+pd.options.display.max_columns = 999
 
 
-# The most important errors are also the most intrigous. 
+# Let us list down the files present in this data and also take a look at the top few rows of each files.
+
+# In[ ]:
+
+
+from subprocess import check_output
+print(check_output(["ls", "../input/data-science-for-good-kiva-crowdfunding/"]).decode("utf8"))
+
+
+# **kiva_loans.csv**
 # 
-# For those six case, the model is not ridiculous. Some of these errors can also be made by humans, especially for one the 9 that is very close to a 4. The last 9 is also very misleading, it seems for me that is a 0.
+# This is a subset of Kiva's data snapshots. This file has some of the loans given by Kiva. 
 
-# In[22]:
-
-
-# predict results
-results = model.predict(test)
-
-# select the indix with the maximum probability
-results = np.argmax(results,axis = 1)
-
-results = pd.Series(results,name="Label")
+# In[ ]:
 
 
-# In[23]:
+kiva_loans_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv")
+kiva_loans_df.head()
 
 
-submission = pd.concat([pd.Series(range(1,28001),name = "ImageId"),results],axis = 1)
-
-submission.to_csv("cnn_mnist_datagen.csv",index=False)
-
-
+# **kiva_mpi_region_locations.csv**
 # 
+# This file contains Kiva’s estimates as to the geolocation of subnational MPI regions
+
+# In[ ]:
+
+
+kiva_mpi_locations_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_mpi_region_locations.csv")
+kiva_mpi_locations_df.head()
+
+
+# **loan_theme_ids.csv**
 # 
-# ** you found this notebook helpful or you just liked it , some upvotes would be very much appreciated - That will keep me motivated :)**
+# This file contains records from the Kiva Data Snapshot and can be matched to the loan theme regions to get a loan’s location.
+
+# In[ ]:
+
+
+loan_theme_ids_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_theme_ids.csv")
+loan_theme_ids_df.head()
+
+
+# **loan_themes_by_region.csv**
 # 
+# This file contains regional data related to loan themes and partner ids. They are Kiva’s estimates as to the various geolocations in which a loan theme has been offered, as well as the resulting estimate of which MPI Region(s) the loan theme is in.
+
+# In[ ]:
+
+
+loan_themes_by_region_df = pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv")
+loan_themes_by_region_df.head()
+
+
+# We can now look at the snapshot of the loans data to understand more about the problem.
+
+# In[ ]:
+
+
+kiva_loans_df.shape
+
+
+# Now let us see the countrywise distribution of loans in the given snapshot data.
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df['country'].value_counts().head(50)
+trace = go.Bar(
+    y=cnt_srs.index[::-1],
+    x=cnt_srs.values[::-1],
+    orientation = 'h',
+    marker=dict(
+        color=cnt_srs.values[::-1],
+        colorscale = 'Viridis',
+        reversescale = True
+    ),
+)
+
+layout = go.Layout(
+    title='Country wise distribution of loans',
+    width=700,
+    height=1000,
+    )
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="CountryLoan")
+
+
+# Philippines has more number of loans given by Kiva followed by Kenya and  El salvador. Now let us plot the same in world map.
+
+# In[ ]:
+
+
+con_df = pd.DataFrame(kiva_loans_df['country'].value_counts()).reset_index()
+con_df.columns = ['country', 'num_loans']
+con_df = con_df.reset_index().drop('index', axis=1)
+
+#Find out more at https://plot.ly/python/choropleth-maps/
+data = [ dict(
+        type = 'choropleth',
+        locations = con_df['country'],
+        locationmode = 'country names',
+        z = con_df['num_loans'],
+        text = con_df['country'],
+        #colorscale = [[0,'rgb(255, 255, 255)'],[1,'rgb(56, 142, 60)']],
+        #colorscale = [[0,'rgb(255, 255, 255)'],[1,'rgb(220, 83, 67)']],
+        colorscale = [[0,"rgb(5, 10, 172)"],[0.85,"rgb(40, 60, 190)"],[0.9,"rgb(70, 100, 245)"],\
+            [0.94,"rgb(90, 120, 245)"],[0.97,"rgb(106, 137, 247)"],[1,"rgb(220, 220, 220)"]],
+        autocolorscale = False,
+        reversescale = True,
+        marker = dict(
+            line = dict (
+                color = 'rgb(180,180,180)',
+                width = 0.5
+            ) ),
+        colorbar = dict(
+            autotick = False,
+            tickprefix = '',
+            title = 'Number of Loans'),
+      ) ]
+
+layout = dict(
+    title = 'Number of loans by Country',
+    geo = dict(
+        showframe = False,
+        showcoastlines = True,
+        projection = dict(
+            type = 'Mercator'
+        )
+    )
+)
+
+fig = dict( data=data, layout=layout )
+py.iplot( fig, validate=False, filename='loans-world-map')
+
+
+# **Sectorwise distribution of loans:**
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df['sector'].value_counts().head(25)
+trace = go.Bar(
+    y=cnt_srs.index[::-1],
+    x=cnt_srs.values[::-1],
+    orientation = 'h',
+    marker=dict(
+        color=cnt_srs.values[::-1],
+        colorscale = 'Rainbow',
+        reversescale = True
+    ),
+)
+
+layout = dict(
+    title='Sector wise distribution of loans',
+    )
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="SectorLoan")
+
+
+# Sector wise, Agriculture has the highest number of loans followed by food and retail.  Now let us look at the loan details at activity level.
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df['activity'].value_counts().head(25)
+trace = go.Bar(
+    y=cnt_srs.index[::-1],
+    x=cnt_srs.values[::-1],
+    orientation = 'h',
+    marker=dict(
+        color=cnt_srs.values[::-1],
+        colorscale = 'Picnic',
+        reversescale = True
+    ),
+)
+
+layout = dict(
+    title='Activity wise distribution of loans',
+    )
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="ActivityLoan")
+
+
+# **Loan Amount & Funded Amunt:**
+# 
+# Now let us look at the loan amount column to know about the distribution. First let us see if there are any outliers in the column by doing a scatter pliot.
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,6))
+plt.scatter(range(kiva_loans_df.shape[0]), np.sort(kiva_loans_df.loan_amount.values))
+plt.xlabel('index', fontsize=12)
+plt.ylabel('loan_amount', fontsize=12)
+plt.title("Loan Amount Distribution")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,6))
+plt.scatter(range(kiva_loans_df.shape[0]), np.sort(kiva_loans_df.funded_amount.values))
+plt.xlabel('index', fontsize=12)
+plt.ylabel('loan_amount', fontsize=12)
+plt.title("Funded Amount Distribution")
+plt.show()
+
+
+# Looks like there is one loan worth 100K USD and it is funded too. Now let us truncate the extreme values and then do a histogram plot.
+
+# In[ ]:
+
+
+ulimit = np.percentile(kiva_loans_df.loan_amount.values, 99)
+llimit = np.percentile(kiva_loans_df.loan_amount.values, 1)
+kiva_loans_df['loan_amount_trunc'] = kiva_loans_df['loan_amount'].copy()
+kiva_loans_df['loan_amount_trunc'].loc[kiva_loans_df['loan_amount']>ulimit] = ulimit
+kiva_loans_df['loan_amount_trunc'].loc[kiva_loans_df['loan_amount']<llimit] = llimit
+
+plt.figure(figsize=(12,8))
+sns.distplot(kiva_loans_df.loan_amount_trunc.values, bins=50, kde=False)
+plt.xlabel('loan_amount_trunc', fontsize=12)
+plt.title("Loan Amount Histogram after outlier truncation")
+plt.show()
+
+
+# Loan amount is rightly skewed with majority of the loans falling under sub 1000 USD category.
+# 
+# **Repayment Term:**
+# 
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df.term_in_months.value_counts()
+
+trace = go.Bar(
+    x=cnt_srs.index,
+    y=cnt_srs.values,
+    marker=dict(
+        color=cnt_srs.values,
+        colorscale = 'Picnic',
+        reversescale = True
+    ),
+)
+
+layout = go.Layout(
+    title='Repayment Term in Months'
+)
+
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="RepaymentIntervals")
+
+
+# Looks like "14 month term" loans are most availed followed by "8 month term". I expected that half yearly and yearly loans will be more but was wrong. 
+# 
+# Now let us look at the repayment_interval (which is Frequency at which lenders are scheduled to receive installments)
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df.repayment_interval.value_counts()
+
+trace = go.Bar(
+    x=cnt_srs.index,
+    y=cnt_srs.values,
+    marker=dict(
+        color=cnt_srs.values,
+        colorscale = 'Rainbow',
+        reversescale = True
+    ),
+)
+
+layout = go.Layout(
+    title='Repayment Interval of loans'
+)
+
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="RepaymentIntervals")
+
+
+# Monthly loans are higher followed by irregular loans. 
+# 
+# **Lender Count:**
+# 
+# We also have a veriable lender_count - Number of lenders contributing to loan. Looks like more than one person lends the loan. So we can take a look at this variable.
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df.lender_count.value_counts()
+
+trace = go.Bar(
+    x=cnt_srs.index,
+    y=cnt_srs.values,
+    marker=dict(
+        color=cnt_srs.values,
+        colorscale = 'Portland',
+        reversescale = True
+    ),
+)
+
+layout = go.Layout(
+    title='Lender Count'
+)
+
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="LenderCount")
+
+
+# Looks like there are few loans with more than 500 lenders and is highly skewed. So we can look only at the initial left side of the graph.
+
+# In[ ]:
+
+
+cnt_srs = kiva_loans_df.lender_count.value_counts().head(100)
+
+trace = go.Bar(
+    x=cnt_srs.index,
+    y=cnt_srs.values,
+    marker=dict(
+        color=cnt_srs.values,
+        colorscale = 'Portland',
+        reversescale = True
+    ),
+)
+
+layout = go.Layout(
+    title='Lender Count Top 100'
+)
+
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="LenderCount")
+
+
+# Interestingly there are few loans with 0 lenders. We might have to look into them.
+# 
+# **Borrower Gender:**
+# 
+# Now let us look at the gender distribution of the borrowers.
+
+# In[ ]:
+
+
+olist = []
+for ll in kiva_loans_df["borrower_genders"].values:
+    if str(ll) != "nan":
+        olist.extend( [l.strip() for l in ll.split(",")] )
+temp_series = pd.Series(olist).value_counts()
+
+labels = (np.array(temp_series.index))
+sizes = (np.array((temp_series / temp_series.sum())*100))
+
+trace = go.Pie(labels=labels, values=sizes)
+layout = go.Layout(
+    title='Borrower Gender'
+)
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="BorrowerGender")
+
+
+# Nearly 80% of the borrowers are female. 
+# 
+# **Countrywise Loan Amount Distribution:**
+# 
+# Now let us look at the loan amount distribution at country level. 
+
+# In[ ]:
+
+
+trace = []
+for name, group in kiva_loans_df.groupby("country"):
+    trace.append ( 
+        go.Box(
+            x=group["loan_amount_trunc"].values,
+            name=name
+        )
+    )
+layout = go.Layout(
+    title='Loan Amount Distribution by country',
+    width = 800,
+    height = 2000
+)
+#data = [trace0, trace1]
+fig = go.Figure(data=trace, layout=layout)
+py.iplot(fig, filename="LoanAmountCountry")
+
+
+# **Sectorwise Loan Amount distribution:**
+
+# In[ ]:
+
+
+trace = []
+for name, group in kiva_loans_df.groupby("sector"):
+    trace.append ( 
+        go.Box(
+            x=group["loan_amount_trunc"].values,
+            name=name
+        )
+    )
+layout = go.Layout(
+    title='Loan Amount Distribution by Sector',
+    width = 800,
+    height = 800
+)
+#data = [trace0, trace1]
+fig = go.Figure(data=trace, layout=layout)
+py.iplot(fig, filename="LoanAmountSector")
+
+
+# **Multi-dimensional Poverty Index:**
+# 
+# We are given the MPI values of different regions. Let us plot the same (Please zoom-in to have a closer look)
+
+# In[ ]:
+
+
+scl = [ [0,"rgb(5, 10, 172)"],[0.35,"rgb(40, 60, 190)"],[0.5,"rgb(70, 100, 245)"],    [0.6,"rgb(90, 120, 245)"],[0.7,"rgb(106, 137, 247)"],[1,"rgb(220, 220, 220)"] ]
+
+data = [ dict(
+        type = 'scattergeo',
+        lon = kiva_mpi_locations_df['lon'],
+        lat = kiva_mpi_locations_df['lat'],
+        text = kiva_mpi_locations_df['LocationName'],
+        mode = 'markers',
+        marker = dict(
+            size = 8,
+            opacity = 0.8,
+            reversescale = True,
+            autocolorscale = False,
+            symbol = 'circle',
+            line = dict(
+                width=1,
+                color='rgba(102, 102, 102)'
+            ),
+            colorscale = scl,
+            cmin = 0,
+            color = kiva_mpi_locations_df['MPI'],
+            cmax = kiva_mpi_locations_df['MPI'].max(),
+            colorbar=dict(
+                title="Multi-dimenstional Poverty Index"
+            )
+        ))]
+
+layout = dict(
+        title = 'Multi-dimensional Poverty Index at different regions',
+        colorbar = True,
+        geo = dict(
+            showland = True,
+            landcolor = "rgb(250, 250, 250)",
+            subunitcolor = "rgb(217, 217, 217)",
+            countrycolor = "rgb(217, 217, 217)",
+            #countrywidth = 0.5,
+            #subunitwidth = 0.5
+        ),
+    )
+
+fig = dict( data=data, layout=layout )
+py.iplot( fig, validate=False, filename='d3-airports' )
+
+
+# ** GDP per capita of the countries:**
+# 
+# Now let us look at the GDP per capita of these countries. GDP per capita gives an estimate of the welfare of the people. 
+
+# In[ ]:
+
+
+country_profile_df = pd.read_csv("../input/undata-country-profiles/kiva_country_profile_variables.csv")
+                                 
+#Find out more at https://plot.ly/python/choropleth-maps/
+data = [ dict(
+        type = 'choropleth',
+        locations = country_profile_df['country'],
+        locationmode = 'country names',
+        z = country_profile_df['GDP per capita (current US$)'],
+        text = country_profile_df['country'],
+        #colorscale = [[0,'rgb(255, 255, 255)'],[1,'rgb(56, 142, 60)']],
+        #colorscale = [[0,'rgb(255, 255, 255)'],[1,'rgb(220, 83, 67)']],
+        #colorscale = [[0,"rgb(5, 10, 172)"],[0.85,"rgb(40, 60, 190)"],[0.9,"rgb(70, 100, 245)"],\
+        #    [0.94,"rgb(90, 120, 245)"],[0.97,"rgb(106, 137, 247)"],[1,"rgb(220, 220, 220)"]],
+        colorscale = [[0.0, 'rgb(242,240,247)'],[0.03, 'rgb(218,218,235)'],[0.06, 'rgb(188,189,220)'],\
+            [0.1, 'rgb(158,154,200)'],[0.15, 'rgb(117,107,177)'],[1.0, 'rgb(84,39,143)']],
+        autocolorscale = False,
+        reversescale = False,
+        marker = dict(
+            line = dict (
+                color = 'rgb(180,180,180)',
+                width = 0.5
+            ) ),
+        colorbar = dict(
+            autotick = False,
+            tickprefix = '',
+            title = 'GDP per capita'),
+      ) ]
+
+layout = dict(
+    title = 'GDP per capita by Country',
+    geo = dict(
+        showframe = False,
+        showcoastlines = True,
+        projection = dict(
+            type = 'Mercator'
+        )
+    )
+)
+
+fig = dict( data=data, layout=layout )
+py.iplot( fig, validate=False, filename='gdp-world-map')
+
+
+# More to come. Stay tuned.!

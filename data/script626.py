@@ -1,429 +1,960 @@
 
 # coding: utf-8
 
-# # YouTube8M EDA
-# 
-# The YouTube8M challenge is a multi-class classification problem, where we are asked to predict for each video, given video & frame level audio and frame RGB features, to which group of categories it belongs to.
-# 
-# For this task it is important to know:
-# 
-# * the total **number of classes/video categories**
-# * the **distribution of classes in the training set**
-# 
-# In the first part I'll be focusing on how to take apart detailed information about the labels for the training data. Especially taking into account frequent patterns that occur in the data. We will also be looking at co-dependencies of the most frequent label categories.
-# 
-# I've added a small section about the dependence of different video categories to the number of labels for each sample.
+# #Stacked Regressions to predict House Prices 
 # 
 # 
-# ----------
+# ##Serigne
+# 
+# **July 2017**
+# 
+# **If you use parts of this notebook in your scripts/notebooks, giving  some kind of credit would be very much appreciated :)  You can for instance link back to this notebook. Thanks!**
+
+# This competition is very important to me as  it helped me to begin my journey on Kaggle few months ago. I've read  some great notebooks here. To name a few:
+# 
+# 1. [Comprehensive data exploration with Python][1] by **Pedro Marcelino**  : Great and very motivational data analysis
+# 
+# 2. [A study on Regression applied to the Ames dataset][2] by **Julien Cohen-Solal**  : Thorough features engeneering and deep dive into linear regression analysis  but really easy to follow for beginners.
+# 
+# 3. [Regularized Linear Models][3] by **Alexandru Papiu**  : Great Starter kernel on modelling and Cross-validation
+# 
+# I can't recommend enough every beginner to go carefully through these kernels (and of course through many others great kernels) and get their first insights in data science and kaggle competitions.
+# 
+# After that (and some basic pratices) you should be more confident to go through [this great script][7] by **Human Analog**  who did an impressive work on features engeneering. 
+# 
+# As the dataset is particularly handy, I  decided few days ago to get back in this competition and apply things I learnt so far, especially stacking models. For that purpose, we build two stacking classes  ( the simplest approach and a less simple one). 
+# 
+# As these classes are written for general purpose, you can easily adapt them and/or extend them for your regression problems. 
+# The overall approach is  hopefully concise and easy to follow.. 
+# 
+# The features engeneering is rather parsimonious (at least compared to some others great scripts) . It is pretty much :
+# 
+# - **Imputing missing values**  by proceeding sequentially through the data
+# 
+# - **Transforming** some numerical variables that seem really categorical
+# 
+# - **Label Encoding** some categorical variables that may contain information in their ordering set
+# 
+# -  [**Box Cox Transformation**][4] of skewed features (instead of log-transformation) : This gave me a **slightly better result** both on leaderboard and cross-validation.
+# 
+# - ** Getting dummy variables** for categorical features. 
+# 
+# Then we choose many base models (mostly sklearn based models + sklearn API of  DMLC's [XGBoost][5] and Microsoft's [LightGBM][6]), cross-validate them on the data before stacking/ensembling them. The key here is to make the (linear) models robust to outliers. This improved the result both on LB and cross-validation. 
+# 
+#   [1]: https://www.kaggle.com/pmarcelino/comprehensive-data-exploration-with-python
+#   [2]:https://www.kaggle.com/juliencs/a-study-on-regression-applied-to-the-ames-dataset
+#   [3]: https://www.kaggle.com/apapiu/regularized-linear-models
+#   [4]: http://onlinestatbook.com/2/transformations/box-cox.html
+#   [5]: https://github.com/dmlc/xgboost
+#  [6]: https://github.com/Microsoft/LightGBM
+#  [7]: https://www.kaggle.com/humananalog/xgboost-lasso
+# 
+# To my surprise, this does well on LB ( 0.11420 and top 4% the last time I tested it : **July 2, 2017** )
+# 
+# 
+
+# **Hope that at the end of this notebook, stacking will be clear for those, like myself, who found the concept not so easy to grasp**
 
 # In[ ]:
 
+
+#import some necessary librairies
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import tensorflow as tf
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt  # Matlab-style plotting
 import seaborn as sns
-from IPython.display import YouTubeVideo
-import matplotlib.pyplot as plt
+color = sns.color_palette()
+sns.set_style('darkgrid')
+import warnings
+def ignore_warn(*args, **kwargs):
+    pass
+warnings.warn = ignore_warn #ignore annoying warning (from sklearn and seaborn)
+
+
+from scipy import stats
+from scipy.stats import norm, skew #for some statistics
+
+
+pd.set_option('display.float_format', lambda x: '{:.3f}'.format(x)) #Limiting floats output to 3 decimal points
+
 
 from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-print(check_output(["ls", "../input/video_level"]).decode("utf8"))
-
-
-# ### Read label names and count the distinct number of labels
-
-# In[ ]:
-
-
-labels_df = pd.read_csv('../input/label_names.csv')
-filenames = ["../input/video_level/train-{}.tfrecord".format(i) for i in range(10)]
-print("we have {} unique labels in the dataset".format(len(labels_df['label_name'].unique())))
-
-
-# ### read labels for all training samples and map to textual representation
-# 
-# in `'../input/label_names.csv'` there are a few label ids missing
-
-# In[ ]:
-
-
-labels_df = pd.read_csv('../input/label_names.csv')
-labels = []
-textual_labels = []
-textual_labels_nested = []
-filenames = ["../input/video_level/train-{}.tfrecord".format(i) for i in range(10)]
-total_sample_counter = 0
-
-label_counts = []
-
-for filename in filenames:
-    for example in tf.python_io.tf_record_iterator(filename):
-        total_sample_counter += 1
-        tf_example = tf.train.Example.FromString(example)
-
-        label_example = list(tf_example.features.feature['labels'].int64_list.value)
-        label_counts.append(len(label_example))
-        labels = labels + label_example
-        label_example_textual = list(labels_df[labels_df['label_id'].isin(label_example)]['label_name'])
-        textual_labels_nested.append(set(label_example_textual))
-        textual_labels = textual_labels + label_example_textual
-        if len(label_example_textual) != len(label_example):
-            print('label names lookup failed: {} vs {}'.format(label_example, label_example_textual))
-
-print('label ids missing from label_names.csv: {}'.format(sorted(set(labels) - set(labels_df['label_id']))))
-print('Found {} samples in all of the 10 available tfrecords'.format(total_sample_counter))
-
-
-# ### Label count distribution
-# 
-# For each sample in the available training set, we've counted the number of labels assigned to it. From this subset of the training data we can now estimate the true distribution of number of labels.
-# 
-# As we can see, the majority of samples has rather low number of labels attached.
-
-# In[ ]:
-
-
-sns.distplot(label_counts, kde=False)
-plt.title('distribution of number of labels')
-
-
-# ## Now, lets have a look at the most common labels
-# 
-# First, we have a look at single labels, simply by counting all of the labels.
-
-# In[ ]:
-
-
-# define helper function to group data
-def grouped_data_for(l):
-    # wrap the grouped data into dataframe, since the inner is pd.Series, not what we need
-    l_with_c = pd.DataFrame(
-        pd.DataFrame({'label': l}).groupby('label').size().rename('n')
-    ).sort_values('n', ascending=False).reset_index()
-    return l_with_c
-
-
-# Show top 20 labels by occurence in the subsample of the training set available to kernels
-
-# In[ ]:
-
-
-N = 20
-
-textual_labels_with_counts_all = grouped_data_for(textual_labels)
-
-sns.barplot(y='label', x='n', data=textual_labels_with_counts_all.iloc[0:N, :])
-plt.title('Top {} labels with sample count'.format(N))
+print(check_output(["ls", "../input"]).decode("utf8")) #check the files available in the directory
 
 
 # In[ ]:
 
 
-#singlets = [x for x in textual_labels_nested if len(x) == 1]
-# flatten
-#singlets = [item for sublist in singlets for item in sublist]
-#N = 20
-#textual_labels_with_counts = grouped_data_for(singlets)
-#sns.barplot(y='label', x='n', data=textual_labels_with_counts.iloc[0:N, :])
-#plt.title('Top {} labels with sample count from only samples with one label'.format(N))
+#Now let's import and put the train and test datasets in  pandas dataframe
 
-
-# Most common label combinations for 2-element label assignments
-
-# In[ ]:
-
-
-two_element_labels = ['|'.join(sorted(x)) for x in textual_labels_nested if len(x) == 2]
-
-N = 20
-
-textual_labels_with_counts = grouped_data_for(two_element_labels)
-
-sns.barplot(y='label', x='n', data=textual_labels_with_counts.iloc[0:N, :])
-plt.title('Top {} labels with sample count from only samples with two labels'.format(N))
-
-
-# For label triplets
-
-# In[ ]:
-
-
-two_element_labels = ['|'.join(sorted(x)) for x in textual_labels_nested if len(x) == 3]
-
-N = 20
-
-textual_labels_with_counts = grouped_data_for(two_element_labels)
-
-sns.barplot(y='label', x='n', data=textual_labels_with_counts.iloc[0:N, :])
-plt.title('Top {} labels with sample count from only samples with three labels'.format(N))
-
-
-# ## For each of the most occuring labels, how does the group size in average differ?
-# 
-# For this, we take the top 50 labels by count, and compute for each how many other labels are assigned to samples that also have the respective label from the top 50.
-
-# In[ ]:
-
-
-top_50_labels = list(textual_labels_with_counts_all['label'][0:50].values)
-top_50_labels
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
 
 # In[ ]:
 
 
-label_group_counts = []
-labels_for_group_counts = []
-for label in top_50_labels:
-    # this is a list of lists and
-    # for each of the inner lists we want to know how many elements there are
-    nested_labels_with_label = [x for x in textual_labels_nested if label in x]
-    group_counts = [len(x) for x in nested_labels_with_label]
-    label_group_counts = label_group_counts + group_counts
-    labels_for_group_counts = labels_for_group_counts + [label]*len(group_counts)
-
-count_df = pd.DataFrame({'label': labels_for_group_counts, 'group_size': label_group_counts})
-count_df.head()
-
-
-# If we look at the extremes, we can see that for example if **Football** is in the labels of one example, you would find a higher count of accompanying labels when compared to samples that have **Food** label.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.barplot(y='label', x='group_size', data=count_df)
-plt.title('avg number of labels per top 50 categories')
-
-
-# ### Distributions of label counts split by a few top labels
-# 
-# Here we can see that, depending on the category, the group size distribution varies quite a lot. This information can be used to regularize the number of labels for a given video, e.g. if we are confident that the video is about **Vehicle** we can then constrain the number of additional labels for that sample to be within the distribution that we estimated from the training data.
-
-# In[ ]:
-
-
-bins = [0, 1, 3, 14]
-colors = ['r', 'g', 'b', 'y']
-
-plt.figure(figsize=(12,8))
-for bin, color in zip(bins, colors):
-    sns.distplot(count_df[count_df['label'] == top_50_labels[bin]]['group_size'], kde=True, color=color)
-
-plt.legend([top_50_labels[bin] for bin in bins])
-
-
-# ### Estimate the probability of label occurence, given another label from training data
-# 
-# This probability can be interpreted as a similarity measure between labels.
-
-# In[ ]:
-
-
-K_labels = []
-
-for i in top_50_labels:
-    row = []
-    for j in top_50_labels:
-        # find all records that have label `i` in them
-        i_occurs = [x for x in textual_labels_nested if i in x]
-        # how often does j occur in total in them?
-        j_and_i_occurs = [x for x in i_occurs if j in x]
-        k = 1.0*len(j_and_i_occurs)/len(i_occurs)
-        row.append(k)
-    K_labels.append(row)
-
-K_labels = np.array(K_labels)
-K_labels = pd.DataFrame(K_labels)
-K_labels.columns = top_50_labels
-K_labels.index = top_50_labels
+##display the first five rows of the train dataset.
+train.head(5)
 
 
 # In[ ]:
 
 
-K_labels.head()
-
-
-# The similarity matrix is not symmetric because observing label A given B is not the same as observing B given A.
-# 
-# For rows:
-# 
-# * football, the sims, call of duty, racing and race track
-# 
-# it intuitively makes sense to observe high likelihood of *games* label.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.heatmap(K_labels)
-# probability of observing column label given row label
-plt.title('P(column|row)')
-
-
-# ****
-
-# # Video level RGB features
-# 
-# For this section I'll be going a little deeper in the video level RGB features, to get an idea about how they vary across different labels.
-# The basic idea is to compare the distributions of the averaged video level features. To do this, we are going to take the average of the video level RGB features, which is a very compressed format of that feature and compare the distribution of these values across top labels.
-
-# In[ ]:
-
-
-filenames = ["../input/video_level/train-{}.tfrecord".format(i) for i in range(10)]
-
-cosmetics = []
-games = []
-car = []
-vehicle = []
-animal = []
-
-for filename in filenames:
-    for example in tf.python_io.tf_record_iterator(filename):
-        tf_example = tf.train.Example.FromString(example)
-        label_example = list(tf_example.features.feature['labels'].int64_list.value)
-        label_example_textual = list(labels_df[labels_df['label_id'].isin(label_example)]['label_name'])
-        mean_mean_rgb = np.mean(tf_example.features.feature['mean_rgb'].float_list.value)
-        for label in label_example_textual:
-            if label == 'Cosmetics':
-                cosmetics.append(mean_mean_rgb)
-            elif label == 'Games':
-                games.append(mean_mean_rgb)
-            elif label == 'Car':
-                car.append(mean_mean_rgb)
-            elif label == 'Vehicle':
-                vehicle.append(mean_mean_rgb)
-            elif label == 'Animal':
-                animal.append(mean_mean_rgb)
+##display the first five rows of the test dataset.
+test.head(5)
 
 
 # In[ ]:
 
 
-len(cosmetics), len(games), len(car), len(vehicle), len(animal)
+#check the numbers of samples and features
+print("The train data size before dropping Id feature is : {} ".format(train.shape))
+print("The test data size before dropping Id feature is : {} ".format(test.shape))
+
+#Save the 'Id' column
+train_ID = train['Id']
+test_ID = test['Id']
+
+#Now drop the  'Id' colum since it's unnecessary for  the prediction process.
+train.drop("Id", axis = 1, inplace = True)
+test.drop("Id", axis = 1, inplace = True)
+
+#check again the data size after dropping the 'Id' variable
+print("\nThe train data size after dropping Id feature is : {} ".format(train.shape)) 
+print("The test data size after dropping Id feature is : {} ".format(test.shape))
 
 
-# In[ ]:
+# #Data Processing
 
+# ##Outliers
 
-sns.distplot(cosmetics, color='b')
-sns.distplot(games, color='r')
-sns.distplot(car, color='k')
-sns.distplot(vehicle, color='c')
-sns.distplot(animal, color='y')
+# [Documentation][1] for the Ames Housing Data indicates that there are outliers present in the training data
+# [1]: http://ww2.amstat.org/publications/jse/v19n3/Decock/DataDocumentation.txt
 
-
-# As expected the distributions don't differ a lot by just looking at them. You could now do a one way ANOVA test to find out whether the mean of any pair of these groups differ significantly, but let's not do that now.
-# 
-# ----------
+# Let's explore these outliers
 # 
 
-# # Frame level features
-# 
-# For this section, we are going to have a detailed look at the audio frame level features of a few selected videos.
-# The frame level features, audio and video, were extracted by taking a sample each second uniformly across the whole video.
-# 
-# See [this][1] forum post for details.
-# 
-# 
-#   [1]: https://www.kaggle.com/c/youtube8m/discussion/28848#162409
+# In[ ]:
+
+
+
+fig, ax = plt.subplots()
+ax.scatter(x = train['GrLivArea'], y = train['SalePrice'])
+plt.ylabel('SalePrice', fontsize=13)
+plt.xlabel('GrLivArea', fontsize=13)
+plt.show()
+
+
+# We can see at the bottom right two with extremely large GrLivArea that are of a low price. These values are huge oultliers.
+# Therefore, we can safely delete them.
 
 # In[ ]:
 
 
-frame_lvl_record = "../input/frame_level/train-1.tfrecord"
+#Deleting outliers
+train = train.drop(train[(train['GrLivArea']>4000) & (train['SalePrice']<300000)].index)
 
-def rgb_and_audio_from(tf_seq_example):
-    feat_rgb = []
-    feat_audio = []
-    n_frames = len(tf_seq_example.feature_lists.feature_list['audio'].feature)
-    sess = tf.InteractiveSession()
-    rgb_frame = []
-    audio_frame = []
-    # iterate through frames for that example
-    for i in range(n_frames):
-        rgb_frame.append(tf.cast(tf.decode_raw(
-                tf_seq_example.feature_lists.feature_list['rgb'].feature[i].bytes_list.value[0],tf.uint8)
-                       ,tf.float32).eval())
-        audio_frame.append(tf.cast(tf.decode_raw(
-                tf_seq_example.feature_lists.feature_list['audio'].feature[i].bytes_list.value[0],tf.uint8)
-                       ,tf.float32).eval())
+#Check the graphic again
+fig, ax = plt.subplots()
+ax.scatter(train['GrLivArea'], train['SalePrice'])
+plt.ylabel('SalePrice', fontsize=13)
+plt.xlabel('GrLivArea', fontsize=13)
+plt.show()
+
+
+# ###Note : 
+#  Outliers removal is note always safe.  We decided to delete these two as they are very huge and  really  bad ( extremely large areas for very low  prices). 
+# 
+# There are probably others outliers in the training data.   However, removing all them  may affect badly our models if ever there were also  outliers  in the test data. That's why , instead of removing them all, we will just manage to make some of our  models robust on them. You can refer to  the modelling part of this notebook for that. 
+
+# ##Target Variable
+
+# **SalePrice** is the variable we need to predict. So let's do some analysis on this variable first.
+
+# In[ ]:
+
+
+sns.distplot(train['SalePrice'] , fit=norm);
+
+# Get the fitted parameters used by the function
+(mu, sigma) = norm.fit(train['SalePrice'])
+print( '\n mu = {:.2f} and sigma = {:.2f}\n'.format(mu, sigma))
+
+#Now plot the distribution
+plt.legend(['Normal dist. ($\mu=$ {:.2f} and $\sigma=$ {:.2f} )'.format(mu, sigma)],
+            loc='best')
+plt.ylabel('Frequency')
+plt.title('SalePrice distribution')
+
+#Get also the QQ-plot
+fig = plt.figure()
+res = stats.probplot(train['SalePrice'], plot=plt)
+plt.show()
+
+
+# The target variable is right skewed.  As (linear) models love normally distributed data , we need to transform this variable and make it more normally distributed.
+
+#  **Log-transformation of the target variable**
+
+# In[ ]:
+
+
+#We use the numpy fuction log1p which  applies log(1+x) to all elements of the column
+train["SalePrice"] = np.log1p(train["SalePrice"])
+
+#Check the new distribution 
+sns.distplot(train['SalePrice'] , fit=norm);
+
+# Get the fitted parameters used by the function
+(mu, sigma) = norm.fit(train['SalePrice'])
+print( '\n mu = {:.2f} and sigma = {:.2f}\n'.format(mu, sigma))
+
+#Now plot the distribution
+plt.legend(['Normal dist. ($\mu=$ {:.2f} and $\sigma=$ {:.2f} )'.format(mu, sigma)],
+            loc='best')
+plt.ylabel('Frequency')
+plt.title('SalePrice distribution')
+
+#Get also the QQ-plot
+fig = plt.figure()
+res = stats.probplot(train['SalePrice'], plot=plt)
+plt.show()
+
+
+# The skew seems now corrected and the data appears more normally distributed. 
+
+# ##Features engineering
+
+# let's first  concatenate the train and test data in the same dataframe
+
+# In[ ]:
+
+
+ntrain = train.shape[0]
+ntest = test.shape[0]
+y_train = train.SalePrice.values
+all_data = pd.concat((train, test)).reset_index(drop=True)
+all_data.drop(['SalePrice'], axis=1, inplace=True)
+print("all_data size is : {}".format(all_data.shape))
+
+
+# ###Missing Data
+
+# In[ ]:
+
+
+all_data_na = (all_data.isnull().sum() / len(all_data)) * 100
+all_data_na = all_data_na.drop(all_data_na[all_data_na == 0].index).sort_values(ascending=False)[:30]
+missing_data = pd.DataFrame({'Missing Ratio' :all_data_na})
+missing_data.head(20)
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(15, 12))
+plt.xticks(rotation='90')
+sns.barplot(x=all_data_na.index, y=all_data_na)
+plt.xlabel('Features', fontsize=15)
+plt.ylabel('Percent of missing values', fontsize=15)
+plt.title('Percent missing data by feature', fontsize=15)
+
+
+# **Data Correlation**
+# 
+
+# In[ ]:
+
+
+#Correlation map to see how features are correlated with SalePrice
+corrmat = train.corr()
+plt.subplots(figsize=(12,9))
+sns.heatmap(corrmat, vmax=0.9, square=True)
+
+
+# ###Imputing missing values 
+
+# We impute them  by proceeding sequentially  through features with missing values 
+
+# - **PoolQC** : data description says NA means "No  Pool". That make sense, given the huge ratio of missing value (+99%) and majority of houses have no Pool at all in general. 
+
+# In[ ]:
+
+
+all_data["PoolQC"] = all_data["PoolQC"].fillna("None")
+
+
+# - **MiscFeature** : data description says NA means "no misc feature"
+# 
+
+# In[ ]:
+
+
+all_data["MiscFeature"] = all_data["MiscFeature"].fillna("None")
+
+
+# - **Alley** : data description says NA means "no alley access"
+
+# In[ ]:
+
+
+all_data["Alley"] = all_data["Alley"].fillna("None")
+
+
+# - **Fence** : data description says NA means "no fence"
+
+# In[ ]:
+
+
+all_data["Fence"] = all_data["Fence"].fillna("None")
+
+
+# - **FireplaceQu** : data description says NA means "no fireplace"
+
+# In[ ]:
+
+
+all_data["FireplaceQu"] = all_data["FireplaceQu"].fillna("None")
+
+
+# - **LotFrontage** : Since the area of each street connected to the house property most likely have a similar area to other houses in its neighborhood , we can **fill in missing values by the median LotFrontage of the neighborhood**.
+
+# In[ ]:
+
+
+#Group by neighborhood and fill in missing value by the median LotFrontage of all the neighborhood
+all_data["LotFrontage"] = all_data.groupby("Neighborhood")["LotFrontage"].transform(
+    lambda x: x.fillna(x.median()))
+
+
+# - **GarageType, GarageFinish, GarageQual and GarageCond** : Replacing missing data with None
+
+# In[ ]:
+
+
+for col in ('GarageType', 'GarageFinish', 'GarageQual', 'GarageCond'):
+    all_data[col] = all_data[col].fillna('None')
+
+
+# - **GarageYrBlt, GarageArea and GarageCars** : Replacing missing data with 0 (Since No garage = no cars in such garage.)
+# 
+
+# In[ ]:
+
+
+for col in ('GarageYrBlt', 'GarageArea', 'GarageCars'):
+    all_data[col] = all_data[col].fillna(0)
+
+
+# - **BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, TotalBsmtSF, BsmtFullBath and BsmtHalfBath** : missing values are likely zero for having no basement
+
+# In[ ]:
+
+
+for col in ('BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF','TotalBsmtSF', 'BsmtFullBath', 'BsmtHalfBath'):
+    all_data[col] = all_data[col].fillna(0)
+
+
+# - **BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1 and BsmtFinType2** : For all these categorical basement-related features, NaN means that there is no  basement.
+# 
+
+# In[ ]:
+
+
+for col in ('BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2'):
+    all_data[col] = all_data[col].fillna('None')
+
+
+# - **MasVnrArea and MasVnrType** : NA most likely means no masonry veneer for these houses. We can fill 0 for the area and None for the type. 
+# 
+
+# In[ ]:
+
+
+all_data["MasVnrType"] = all_data["MasVnrType"].fillna("None")
+all_data["MasVnrArea"] = all_data["MasVnrArea"].fillna(0)
+
+
+# - **MSZoning (The general zoning classification)** :  'RL' is by far  the most common value.  So we can fill in missing values with 'RL'
+# 
+
+# In[ ]:
+
+
+all_data['MSZoning'] = all_data['MSZoning'].fillna(all_data['MSZoning'].mode()[0])
+
+
+# - **Utilities** : For this categorical feature all records are "AllPub", except for one "NoSeWa"  and 2 NA . Since the house with 'NoSewa' is in the training set, **this feature won't help in predictive modelling**. We can then safely  remove it.
+# 
+
+# In[ ]:
+
+
+all_data = all_data.drop(['Utilities'], axis=1)
+
+
+# - **Functional** : data description says NA means typical
+
+# In[ ]:
+
+
+all_data["Functional"] = all_data["Functional"].fillna("Typ")
+
+
+# - **Electrical** : It has one NA value. Since this feature has mostly 'SBrkr', we can set that for the missing value.
+# 
+
+# In[ ]:
+
+
+all_data['Electrical'] = all_data['Electrical'].fillna(all_data['Electrical'].mode()[0])
+
+
+# - **KitchenQual**: Only one NA value, and same as Electrical, we set 'TA' (which is the most frequent)  for the missing value in KitchenQual.
+# 
+
+# In[ ]:
+
+
+all_data['KitchenQual'] = all_data['KitchenQual'].fillna(all_data['KitchenQual'].mode()[0])
+
+
+# - **Exterior1st and Exterior2nd** : Again Both Exterior 1 & 2 have only one missing value. We will just substitute in the most common string
+# 
+
+# In[ ]:
+
+
+all_data['Exterior1st'] = all_data['Exterior1st'].fillna(all_data['Exterior1st'].mode()[0])
+all_data['Exterior2nd'] = all_data['Exterior2nd'].fillna(all_data['Exterior2nd'].mode()[0])
+
+
+# - **SaleType** : Fill in again with most frequent which is "WD"
+
+# In[ ]:
+
+
+all_data['SaleType'] = all_data['SaleType'].fillna(all_data['SaleType'].mode()[0])
+
+
+# - **MSSubClass** : Na most likely means No building class. We can replace missing values with None
+# 
+
+# In[ ]:
+
+
+
+all_data['MSSubClass'] = all_data['MSSubClass'].fillna("None")
+
+
+
+# Is there any remaining missing value ? 
+
+# In[ ]:
+
+
+#Check remaining missing values if any 
+all_data_na = (all_data.isnull().sum() / len(all_data)) * 100
+all_data_na = all_data_na.drop(all_data_na[all_data_na == 0].index).sort_values(ascending=False)
+missing_data = pd.DataFrame({'Missing Ratio' :all_data_na})
+missing_data.head()
+
+
+# It remains no missing value.
+# 
+
+# ###More features engeneering
+
+# **Transforming some numerical variables that are really categorical**
+
+# In[ ]:
+
+
+#MSSubClass=The building class
+all_data['MSSubClass'] = all_data['MSSubClass'].apply(str)
+
+
+#Changing OverallCond into a categorical variable
+all_data['OverallCond'] = all_data['OverallCond'].astype(str)
+
+
+#Year and month sold are transformed into categorical features.
+all_data['YrSold'] = all_data['YrSold'].astype(str)
+all_data['MoSold'] = all_data['MoSold'].astype(str)
+
+
+
+# **Label Encoding some categorical variables that may contain information in their ordering set** 
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+cols = ('FireplaceQu', 'BsmtQual', 'BsmtCond', 'GarageQual', 'GarageCond', 
+        'ExterQual', 'ExterCond','HeatingQC', 'PoolQC', 'KitchenQual', 'BsmtFinType1', 
+        'BsmtFinType2', 'Functional', 'Fence', 'BsmtExposure', 'GarageFinish', 'LandSlope',
+        'LotShape', 'PavedDrive', 'Street', 'Alley', 'CentralAir', 'MSSubClass', 'OverallCond', 
+        'YrSold', 'MoSold')
+# process columns, apply LabelEncoder to categorical features
+for c in cols:
+    lbl = LabelEncoder() 
+    lbl.fit(list(all_data[c].values)) 
+    all_data[c] = lbl.transform(list(all_data[c].values))
+
+# shape        
+print('Shape all_data: {}'.format(all_data.shape))
+
+
+
+
+# **Adding one more important feature**
+
+# Since area related features are very important to determine house prices, we add one more feature which is the total area of basement, first and second floor areas of each house
+
+# In[ ]:
+
+
+# Adding total sqfootage feature 
+all_data['TotalSF'] = all_data['TotalBsmtSF'] + all_data['1stFlrSF'] + all_data['2ndFlrSF']
+
+
+# **Skewed features**
+
+# In[ ]:
+
+
+numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
+
+# Check the skew of all numerical features
+skewed_feats = all_data[numeric_feats].apply(lambda x: skew(x.dropna())).sort_values(ascending=False)
+print("\nSkew in numerical features: \n")
+skewness = pd.DataFrame({'Skew' :skewed_feats})
+skewness.head(10)
+
+
+# **Box Cox Transformation of (highly) skewed features**
+
+# We use the scipy  function boxcox1p which computes the Box-Cox transformation of **\\(1 + x\\)**. 
+# 
+# Note that setting \\( \lambda = 0 \\) is equivalent to log1p used above for the target variable.  
+# 
+# See [this page][1] for more details on Box Cox Transformation as well as [the scipy function's page][2]
+# [1]: http://onlinestatbook.com/2/transformations/box-cox.html
+# [2]: https://docs.scipy.org/doc/scipy-0.19.0/reference/generated/scipy.special.boxcox1p.html
+
+# In[ ]:
+
+
+skewness = skewness[abs(skewness) > 0.75]
+print("There are {} skewed numerical features to Box Cox transform".format(skewness.shape[0]))
+
+from scipy.special import boxcox1p
+skewed_features = skewness.index
+lam = 0.15
+for feat in skewed_features:
+    #all_data[feat] += 1
+    all_data[feat] = boxcox1p(all_data[feat], lam)
+    
+#all_data[skewed_features] = np.log1p(all_data[skewed_features])
+
+
+# **Getting dummy categorical features**
+
+# In[ ]:
+
+
+
+all_data = pd.get_dummies(all_data)
+print(all_data.shape)
+
+
+# Getting the new train and test sets. 
+
+# In[ ]:
+
+
+train = all_data[:ntrain]
+test = all_data[ntrain:]
+
+
+# #Modelling
+
+# **Import librairies**
+
+# In[ ]:
+
+
+from sklearn.linear_model import ElasticNet, Lasso,  BayesianRidge, LassoLarsIC
+from sklearn.ensemble import RandomForestRegressor,  GradientBoostingRegressor
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import RobustScaler
+from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
+from sklearn.model_selection import KFold, cross_val_score, train_test_split
+from sklearn.metrics import mean_squared_error
+import xgboost as xgb
+import lightgbm as lgb
+
+
+
+# **Define a cross validation strategy**
+
+# We use the **cross_val_score** function of Sklearn. However this function has not a shuffle attribut, we add then one line of code,  in order to shuffle the dataset  prior to cross-validation
+
+# In[ ]:
+
+
+#Validation function
+n_folds = 5
+
+def rmsle_cv(model):
+    kf = KFold(n_folds, shuffle=True, random_state=42).get_n_splits(train.values)
+    rmse= np.sqrt(-cross_val_score(model, train.values, y_train, scoring="neg_mean_squared_error", cv = kf))
+    return(rmse)
+
+
+# ##Base models
+
+# -  **LASSO  Regression**  : 
+# 
+# This model may be very sensitive to outliers. So we need to made it more robust on them. For that we use the sklearn's  **Robustscaler()**  method on pipeline 
+
+# In[ ]:
+
+
+lasso = make_pipeline(RobustScaler(), Lasso(alpha =0.0005, random_state=1))
+
+
+# - **Elastic Net Regression** :
+# 
+# again made robust to outliers
+
+# In[ ]:
+
+
+ENet = make_pipeline(RobustScaler(), ElasticNet(alpha=0.0005, l1_ratio=.9, random_state=3))
+
+
+# - **Kernel Ridge Regression** :
+
+# In[ ]:
+
+
+KRR = KernelRidge(alpha=0.6, kernel='polynomial', degree=2, coef0=2.5)
+
+
+# - **Gradient Boosting Regression** :
+# 
+# With **huber**  loss that makes it robust to outliers
+#     
+
+# In[ ]:
+
+
+GBoost = GradientBoostingRegressor(n_estimators=3000, learning_rate=0.05,
+                                   max_depth=4, max_features='sqrt',
+                                   min_samples_leaf=15, min_samples_split=10, 
+                                   loss='huber', random_state =5)
+
+
+# - **XGBoost** :
+
+# In[ ]:
+
+
+model_xgb = xgb.XGBRegressor(colsample_bytree=0.4603, gamma=0.0468, 
+                             learning_rate=0.05, max_depth=3, 
+                             min_child_weight=1.7817, n_estimators=2200,
+                             reg_alpha=0.4640, reg_lambda=0.8571,
+                             subsample=0.5213, silent=1,
+                             random_state =7, nthread = -1)
+
+
+
+# - **LightGBM** :
+
+# In[ ]:
+
+
+model_lgb = lgb.LGBMRegressor(objective='regression',num_leaves=5,
+                              learning_rate=0.05, n_estimators=720,
+                              max_bin = 55, bagging_fraction = 0.8,
+                              bagging_freq = 5, feature_fraction = 0.2319,
+                              feature_fraction_seed=9, bagging_seed=9,
+                              min_data_in_leaf =6, min_sum_hessian_in_leaf = 11)
+
+
+# ###Base models scores
+
+# Let's see how these base models perform on the data by evaluating the  cross-validation rmsle error
+
+# In[ ]:
+
+
+score = rmsle_cv(lasso)
+print("\nLasso score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+
+
+# In[ ]:
+
+
+score = rmsle_cv(ENet)
+print("ElasticNet score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+
+
+# In[ ]:
+
+
+score = rmsle_cv(KRR)
+print("Kernel Ridge score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+
+
+# In[ ]:
+
+
+score = rmsle_cv(GBoost)
+print("Gradient Boosting score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+
+
+# In[ ]:
+
+
+
+score = rmsle_cv(model_xgb)
+print("Xgboost score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+
+
+# In[ ]:
+
+
+score = rmsle_cv(model_lgb)
+print("LGBM score: {:.4f} ({:.4f})\n" .format(score.mean(), score.std()))
+
+
+# ##Stacking  models
+
+# ###Simplest Stacking approach : Averaging base models
+
+# We begin with this simple approach of averaging base models.  We build a new **class**  to extend scikit-learn with our model and also to laverage encapsulation and code reuse ([inheritance][1]) 
+# 
+# 
+#   [1]: https://en.wikipedia.org/wiki/Inheritance_(object-oriented_programming)
+
+# **Averaged base models class**
+
+# In[ ]:
+
+
+class AveragingModels(BaseEstimator, RegressorMixin, TransformerMixin):
+    def __init__(self, models):
+        self.models = models
         
+    # we define clones of the original models to fit the data in
+    def fit(self, X, y):
+        self.models_ = [clone(x) for x in self.models]
         
-    sess.close()
-    feat_rgb.append(rgb_frame)
-    feat_audio.append(audio_frame)
-    return feat_rgb, feat_audio
+        # Train cloned base models
+        for model in self.models_:
+            model.fit(X, y)
 
-# now, let's read the frame-level data
-# due to execution time, we're only going to read the first video
+        return self
+    
+    #Now we do the predictions for cloned models and average them
+    def predict(self, X):
+        predictions = np.column_stack([
+            model.predict(X) for model in self.models_
+        ])
+        return np.mean(predictions, axis=1)   
 
-i = 0
-for example in tf.python_io.tf_record_iterator(frame_lvl_record):     
-#    i+=1
-#    if i < 3:
-#        continue
-    tf_seq_example = tf.train.SequenceExample.FromString(example)
-    video_id = tf_seq_example.context.feature['video_id'].bytes_list.value[0]
-    print('https://www.youtube.com/watch?v={}'.format(str(video_id)))
-    rgb, audio = rgb_and_audio_from(tf_seq_example)
-    break
 
+# **Averaged base models score**
+
+# We just average four models here **ENet, GBoost,  KRR and lasso**.  Of course we could easily add more models in the mix. 
 
 # In[ ]:
 
 
-#YouTubeVideo('-1xYbUNeA7U')
+averaged_models = AveragingModels(models = (ENet, GBoost, KRR, lasso))
+
+score = rmsle_cv(averaged_models)
+print(" Averaged base models score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
 
 
-# In[ ]:
+# Wow ! It seems even the simplest stacking approach really improve the score . This encourages 
+# us to go further and explore a less simple stacking approch. 
 
+# ###Less simple Stacking : Adding a Meta-model
 
-audio = np.array(audio).squeeze()
-# audio now in (128, 168)
-audio = np.transpose(audio, (1, 0))
-print(audio.shape)
-
-
-# So we have a two-dimensional array for the audio frame level feature of one video. Each feature has a dimensionality of **128**, so the video is 161 seconds long.
-# As it says in the post above, both audio and video frame level features were transformed with a fixed point PCA. However for illustration I'll just consider each of the 161 audio features as a 128-point FFT, now let's see if there is some structure once we have reshaped it and plotted it.
+# In this approach, we add a meta-model on averaged base models and use the out-of-folds predictions of these base models to train our meta-model. 
 # 
-# We can then interpret this reshaped data as a [spectrogram][1], very frequently used in digital audio signal processing, where each row corresponds to a specific frequency, each column to a timestep (for us 1 second) and the color of each of the cells to the magnitude of the audio frequency in that frequency bin.
+# The procedure, for the training part, may be described as follows:
 # 
 # 
-#   [1]: https://en.wikipedia.org/wiki/Spectrogram
+# 1. Split the total training set into two disjoint sets (here **train** and .**holdout** )
+# 
+# 2. Train several base models on the first part (**train**)
+# 
+# 3. Test these base models on the second part (**holdout**)
+# 
+# 4. Use the predictions from 3)  (called  out-of-folds predictions) as the inputs, and the correct responses (target variable) as the outputs  to train a higher level learner called **meta-model**.
+# 
+# The first three steps are done iteratively . If we take for example a 5-fold stacking , we first split the training data into 5 folds. Then we will do 5 iterations. In each iteration,  we train every base model on 4 folds and predict on the remaining fold (holdout fold). 
+# 
+# So, we will be sure, after 5 iterations , that the entire data is used to get out-of-folds predictions that we will then use as 
+# new feature to train our meta-model in the step 4.
+# 
+# For the prediction part , We average the predictions of  all base models on the test data  and used them as **meta-features**  on which, the final prediction is done with the meta-model.
+# 
+
+# ![Faron](http://i.imgur.com/QBuDOjs.jpg)
+# 
+# (Image taken from [Faron](https://www.kaggle.com/getting-started/18153#post103381))
+
+# ![kaz](http://5047-presscdn.pagely.netdna-cdn.com/wp-content/uploads/2017/06/image5.gif)
+# 
+# Gif taken from [KazAnova's interview](http://blog.kaggle.com/2017/06/15/stacking-made-easy-an-introduction-to-stacknet-by-competitions-grandmaster-marios-michailidis-kazanova/)
+
+# On this gif, the base models are algorithms 0, 1, 2 and the meta-model is algorithm 3. The entire training dataset is 
+# A+B (target variable y known) that we can split into train part (A) and holdout part (B). And the test dataset is C. 
+# 
+# B1 (which is the prediction from the holdout part)  is the new feature used to train the meta-model 3 and C1 (which
+# is the prediction  from the test dataset) is the meta-feature on which the final prediction is done. 
+
+# **Stacking averaged Models Class**
 
 # In[ ]:
 
 
-cmap = plt.get_cmap('viridis') # plasma
-# let's also look at the first order diff across time
-daudio = np.diff(audio, axis=1)
-plt.figure(figsize=(16,8))
-plt.subplot(121)
-sns.heatmap(audio, cmap=cmap)
-plt.axvline(x=24, ymin=0, ymax=128, color='r')
-plt.axvline(x=40, ymin=0, ymax=128, color='r')
-plt.axvline(x=62, ymin=0, ymax=128, color='r')
-plt.axvline(x=91, ymin=0, ymax=128, color='r')
-plt.subplot(122)
-sns.heatmap(daudio, cmap=cmap)
+class StackingAveragedModels(BaseEstimator, RegressorMixin, TransformerMixin):
+    def __init__(self, base_models, meta_model, n_folds=5):
+        self.base_models = base_models
+        self.meta_model = meta_model
+        self.n_folds = n_folds
+   
+    # We again fit the data on clones of the original models
+    def fit(self, X, y):
+        self.base_models_ = [list() for x in self.base_models]
+        self.meta_model_ = clone(self.meta_model)
+        kfold = KFold(n_splits=self.n_folds, shuffle=True, random_state=156)
+        
+        # Train cloned base models then create out-of-fold predictions
+        # that are needed to train the cloned meta-model
+        out_of_fold_predictions = np.zeros((X.shape[0], len(self.base_models)))
+        for i, model in enumerate(self.base_models):
+            for train_index, holdout_index in kfold.split(X, y):
+                instance = clone(model)
+                self.base_models_[i].append(instance)
+                instance.fit(X[train_index], y[train_index])
+                y_pred = instance.predict(X[holdout_index])
+                out_of_fold_predictions[holdout_index, i] = y_pred
+                
+        # Now train the cloned  meta-model using the out-of-fold predictions as new feature
+        self.meta_model_.fit(out_of_fold_predictions, y)
+        return self
+   
+    #Do the predictions of all base models on the test data and use the averaged predictions as 
+    #meta-features for the final prediction which is done by the meta-model
+    def predict(self, X):
+        meta_features = np.column_stack([
+            np.column_stack([model.predict(X) for model in base_models]).mean(axis=1)
+            for base_models in self.base_models_ ])
+        return self.meta_model_.predict(meta_features)
 
 
-# You can see vertical lines of audio segments over time, they are also visible in the first order difference. I've also marked the beginnings with red lines. Can we still make these out when averaging over the 128 dimensions?
+# **Stacking Averaged models Score**
+
+# To make the two approaches comparable (by using the same number of models) , we just average **Enet KRR and Gboost**, then we add **lasso as meta-model**.
 
 # In[ ]:
 
 
-plt.figure()
-plt.plot(audio.mean(axis=0))
-# plot the same indicator lines
-plt.axvline(x=24, ymin=0, ymax=200, color='r')
-plt.axvline(x=40, ymin=0, ymax=200, color='r')
-plt.axvline(x=62, ymin=0, ymax=200, color='r')
-plt.axvline(x=91, ymin=0, ymax=200, color='r')
+stacked_averaged_models = StackingAveragedModels(base_models = (ENet, GBoost, KRR),
+                                                 meta_model = lasso)
 
+score = rmsle_cv(stacked_averaged_models)
+print("Stacking Averaged models score: {:.4f} ({:.4f})".format(score.mean(), score.std()))
+
+
+# We get again a better score by adding a meta learner
+
+# ## Ensembling StackedRegressor, XGBoost and LightGBM
+
+# We add **XGBoost and LightGBM** to the** StackedRegressor** defined previously. 
+
+# We first define a rmsle evaluation function 
+
+# In[ ]:
+
+
+def rmsle(y, y_pred):
+    return np.sqrt(mean_squared_error(y, y_pred))
+
+
+# ###Final Training and Prediction
+
+# **StackedRegressor:**
+
+# In[ ]:
+
+
+stacked_averaged_models.fit(train.values, y_train)
+stacked_train_pred = stacked_averaged_models.predict(train.values)
+stacked_pred = np.expm1(stacked_averaged_models.predict(test.values))
+print(rmsle(y_train, stacked_train_pred))
+
+
+# **XGBoost:**
+
+# In[ ]:
+
+
+model_xgb.fit(train, y_train)
+xgb_train_pred = model_xgb.predict(train)
+xgb_pred = np.expm1(model_xgb.predict(test))
+print(rmsle(y_train, xgb_train_pred))
+
+
+# **LightGBM:**
+
+# In[ ]:
+
+
+model_lgb.fit(train, y_train)
+lgb_train_pred = model_lgb.predict(train)
+lgb_pred = np.expm1(model_lgb.predict(test.values))
+print(rmsle(y_train, lgb_train_pred))
+
+
+# In[ ]:
+
+
+'''RMSE on the entire Train data when averaging'''
+
+print('RMSLE score on train data:')
+print(rmsle(y_train,stacked_train_pred*0.70 +
+               xgb_train_pred*0.15 + lgb_train_pred*0.15 ))
+
+
+# **Ensemble prediction:**
+
+# In[ ]:
+
+
+ensemble = stacked_pred*0.70 + xgb_pred*0.15 + lgb_pred*0.15
+
+
+# **Submission**
+
+# In[ ]:
+
+
+sub = pd.DataFrame()
+sub['Id'] = test_ID
+sub['SalePrice'] = ensemble
+sub.to_csv('submission.csv',index=False)
+
+
+# **If you found this notebook helpful or you just liked it , some upvotes would be very much appreciated -  That will keep me motivated to update it on a regular basis** :-)

@@ -1,440 +1,445 @@
 
 # coding: utf-8
 
-# Welcome everyone to my post that will describe my experiments to get good scores for this problem. My aim will be to transfer my knowledge and make it easy for others to follow along. 
+# Poonam Ligade
+# 7th Feb 2018
+# ---------------------------------------------------------------------------------
 # 
-# **Talking about easy, we will in fact be building and training our neural networks without doing programming. Instead we will use drag and drop GUI based platform (Deep Learning Studio) to build and train neural network.** We will try different experiments as we move forward with this competition.
+# 1. [About Yelp](#overview)
+# 2. [NLP using Keras Pretrained Glove word Embeddings](#keras)
 # 
-# I will try to documents as much details as I can on this notebook. Please feel free to send your suggestions and comments. 
-# 
-# Today we will try 3D Convolutional Neural Network for this problem.
-# 
-# Full discloure: I am one of the cofounder of the company who developed Deep Learning Studio software. Deep Learning Studio has a free monthly plan and it offers 2 hours of complementary training time on best GPU available in the Cloud (Nvidia K80 with 12GB RAM)
-
-# 1. Pre-processing
-# ==============
-# We will do following preprocessing on given CT Scans to make our life easier.
-# 
-# Code for these steps is mostly borrowed from excellent notebook of Guido Zuidhof. Please refer to that Guido Zuidhof notebook to understand these steps in detail. Here I will just list major high level preprocessing that we will do on the dataset.
-# 
-# 1. **Load and Convert DICOM file to NUMPY array.**
-# 2. **Do Lung Segmentation on these scans.**
-# 3. **Pad or Trim slices at the end such that every scan has exactly 256 slices.**
-# 4. **Threshold values to below -1100 to -1100 and values above 700 to 700**
-# 5. **Divide all values with 1100 to bring the range between -1 and 1**
-# 
-# You can find full source code for pre-processing in section 3. Following experiment uses this preprocessed data as input.
-
-# 2. First Experiment: 3D Convolutional Neural Networks
-# =========================================
-# Convolutional neural networks have been very successful in image classification and other types of imaging tasks. Traditionally convolution neural network operate on a 2D image possibly comprising of 1 or 3 color channels. Convolutional networks learns to extract low level features of image automatically. This ability comes in handy when tackling with complex real world images.
-# 
-# You can watch following video to get gentle introduction to convolutional neural network. https://www.youtube.com/watch?v=JiN9p5vWHDY&ab_channel=DeepLearning.TV
-# 
-# Our CT scan dataset is actually comprise of set of slices (each slice is 512x512 pixel image). We have information if the CT scan contain the cancer or not as a whole. Which means that we must process all slices together and then let network correct itself in the end.
-# 
-# 3D convolutional neural network fit the bill but they tend to consume a lots of GPU memory and are difficult to converge. But let's make a network and give it a shot.
-# 
-# 
-# 
-# Step-1: Get Access
-# ---------------------
-# Sign up and get access to Deep Learning Studio at 
-# 
-# [http://deepcognition.ai/][1] 
-# 
-# 
-# Step-2: Enable Cached Dataset
-# ----------------------------------------
-# Enable cached dataset in your account by uploading two small files that you must download from your Kaggle account. These files must be uploaded for to verify that user is infact has access to Kaggle dataset (Follow markers 1 to 4)
-# 
-#  ![Enable Access to Cached Dataset][2]
-# 
-# 
-# Step-3: Create and Open a New Project
-# ---------------------------------------------------
-# Let's build a new project by going to project menu on left and clicking on + button.
-# 
-# ![enter image description here][3]
-# 
-# Give a name and description to your project.
-# Now open the project by clicking on box+arrow icon on project bar.
-# 
-# ![Open Project][4]
-# 
-# 
-# 
-# Step-4: Select Dataset and do training/validation set division
-# ---------------------------------------------------------------------------
-# We will do training with 1200 samples and we will use 197 samples for validation for this example.
-# 
-# ![Training and Validation Split][5]
-# 
-# 
-# 
-# Step-5: Build model
-# -------------------------------
-# Once dataset is selected click on "Model" Tab and start building model as shown below by dragging layers from left menu bar to the canvas and connecting these layer blocks. 
-# 
-# ![Architecture][6]
-# 
-# You will also need to set the parameters of the layers. Below is the actual generated source code (using view code <> button in Model tab)  for the model that I built and you can reference it to get parameter values.
-# 
-#   
-# 
-# 
-#     def get_model():
-#     	Input_1 = Input(shape=(256, 512, 512, 1))
-#     	MaxPooling3D_27 = MaxPooling3D(pool_size= (1,3,3))(Input_1)
-#     	Convolution3D_1 = Convolution3D(kernel_dim1= 4,nb_filter= 10,activation= 'relu' ,kernel_dim3= 4,kernel_dim2= 4)(MaxPooling3D_27)
-#     	Convolution3D_7 = Convolution3D(kernel_dim1= 4,nb_filter= 10,activation= 'relu' ,kernel_dim3= 4,kernel_dim2= 4)(Convolution3D_1)
-#     	BatchNormalization_28 = BatchNormalization()(Convolution3D_7)
-#     	MaxPooling3D_12 = MaxPooling3D(pool_size= (2,2,2))(BatchNormalization_28)
-#     	SpatialDropout3D_1 = SpatialDropout3D(p= 0.5)(MaxPooling3D_12)
-#     	Convolution3D_9 = Convolution3D(kernel_dim1= 2,nb_filter= 20,activation= 'relu' ,kernel_dim3= 2,kernel_dim2= 2)(SpatialDropout3D_1)
-#     	Convolution3D_11 = Convolution3D(kernel_dim1= 2,nb_filter= 20,activation= 'relu' ,kernel_dim3= 2,kernel_dim2= 2)(Convolution3D_9)
-#     	BatchNormalization_9 = BatchNormalization()(Convolution3D_11)
-#     	MaxPooling3D_14 = MaxPooling3D(pool_size= (2,2,2))(BatchNormalization_9)
-#     	SpatialDropout3D_4 = SpatialDropout3D(p= 0.5)(MaxPooling3D_14)
-#     	Convolution3D_12 = Convolution3D(kernel_dim1= 2,nb_filter= 40,activation= 'relu' ,kernel_dim3= 2,kernel_dim2= 2)(SpatialDropout3D_4)
-#     	Convolution3D_13 = Convolution3D(kernel_dim1= 2,nb_filter= 40,activation= 'relu' ,kernel_dim3= 2,kernel_dim2= 2)(Convolution3D_12)
-#     	MaxPooling3D_23 = MaxPooling3D(pool_size= (2,2,2))(Convolution3D_13)
-#     	BatchNormalization_23 = BatchNormalization()(MaxPooling3D_23)
-#     	SpatialDropout3D_5 = SpatialDropout3D(p= 0.5)(BatchNormalization_23)
-#     	GlobalMaxPooling3D_1 = GlobalMaxPooling3D()(SpatialDropout3D_5)
-#     	Dense_1 = Dense(activation= 'relu' ,output_dim= 10)(GlobalMaxPooling3D_1)
-#     	Dropout_14 = Dropout(p= 0.3)(Dense_1)
-#     	Dense_6 = Dense(activation= 'relu' ,output_dim= 10)(Dropout_14)
-#     	Dense_2 = Dense(activation= 'softmax' ,output_dim= 2)(Dense_6)
+#     2.1.  [Preparing text data](#preparation) 
 #     
-#     	return Model([Input_1],[Dense_2])
+#     2.2.  [Converting text into numerical representation i.e Tensors](#numerical)
+#     
+#     2.2.  [Split train and validation data](#split)
 # 
-# **Rationale for this architecture**
-# 
-# First MaxPooling3D layer is done to reduce size of the scan (kind of downscaling) because even the GPUs like K80 with 12GB RAM are not able to fit this scan with reasonable model in memory.
-# 
-# Our architecture is based on stacking multiple blocks of following:
-# Conv3D->Conv3D->BatchNorm-> MaxPooling3D-> SpatialDropout3D
-# 
-# Purpose of first two Conv3D layers is to extract features from input. BatchNormalization layer is added to accelerate the training. (see https://arxiv.org/abs/1502.03167 ). MaxPool is added to reduce spacial dimensions for future blocks. SpacialDropout3D is added added to make system more robust and less prone to over-fitting.
-# 
-# At the end of convolutional network we do Global max pooling to pool the features which then go into three dense layers to bring the final dimension to 2 which is the size of our output/label (cancer or no cancer).
-# 
-# Note that by no mean this is the best architecture but I wanted to share my experiment with you guys in the hope it can help you build even better network. Your suggestions are welcome.
-# 
-# 
-# 
-# Step-6: Training and Results
-# -------------------------------------------
-# Now you can go to "Hyperparameters" tab and make sure batch size is set to 1. This is important because anything bigger will not fit GPUs memory and training will fail.
-# 
-# ![Hyperparameters][7]
-# 
-# Finally you can move to "Training" tab. Select GPU-K80 as instance and click on "Start Instance". Once Instance has been started. Click on "Start Training". Note that training is going to be very slow because of sheer size of dataset and computations needed. 
-# 
-# After trying out 2 epochs I was able to get loss of about 0.58 on validation set.
-# 
-# ![Training Dashboard][8]
-# 
-# 
-#   [1]: http://deepcognition.ai/
-#   [2]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_cached_dataset.jpg
-#   [3]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_new_project.jpg
-#   [4]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_open_project.jpg
-#   [5]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_dataset_selection.jpg
-#   [6]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_model.jpg
-#   [7]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_hyperparameters.jpg
-#   [8]: https://s3-us-west-2.amazonaws.com/deepcognition/3dconvnet_training_dashboard.jpg
+# 3. [SpaCy Capabilities Demo](#spacy)
 
-# 3. Pre-processing Code
-# ==================
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.utils import to_categorical
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('fivethirtyeight')
+
+import spacy;
+
+
+# <a id='overview'></a>
 # 
-# This notebook converts DICOM scans to Numpy array along with doing segmentation, normalization etc.
+# ## About Yelp
 # 
-# 1. It allows to use multi-CPU to do segmentation.
-# 2. slow_slice() function is designed to show scan at full resolution. Basic imshow only shows scaled version of scan.
+# **Yelp connects people with great local businesses.**
+# 
+#  ![yelp](https://s3-media3.fl.yelpcdn.com/assets/srv0/seo_metadata/f9149736ad8d/assets/img/logos/yelp_og_image.png)
+# 
+# This dataset is a subset of Yelp's businesses, reviews, and user data.
+# 
+# In this kernel I'm trying to do Natural Language Processing & Sentiment Analysis
+# 
+# What's in a review? Is it positive or negative? Yelp's reviews contain a lot of metadata that can be mined and used to infer meaning, business attributes, and sentiment.
+# 
+# Credits due :
+# 1. [Jeremy](https://www.kaggle.com/jhoward) [Kernel](https://www.kaggle.com/jhoward/improved-lstm-baseline-glove-dropout)
+# 2. [Keras](https://blog.keras.io/using-pre-trained-word-embeddings-in-a-keras-model.html) Blogpost
+
+# <a id='keras'></a>
+# 
+# ## Bidirectional LSTM using Keras
+# How to use pre-trained word embeddings in a Keras model.
+# 
+# Bidirectional LSTMs are an extension of traditional LSTMs that can improve model performance on sequence classification problems.
+# 
+# In problems where all timesteps of the input sequence are available, Bidirectional LSTMs train two instead of one LSTMs on the input sequence. The first on the input sequence as-is and the second on a reversed copy of the input sequence. This can provide additional context to the network and result in faster and even fuller learning on the problem.
+# 
+# In this tutorial, you will discover how to develop Bidirectional LSTMs for sequence classification in Python with the Keras deep learning library.
+# 
+# credits : Jason Brownlee [Blog](https://machinelearningmastery.com/develop-bidirectional-lstm-sequence-classification-python-keras/)
+
+# In[ ]:
+
+
+yelp_reviews=pd.read_csv("../input/yelp-dataset/yelp_review.csv",usecols=["stars","text"])
+yelp_reviews.head(2)
+
+
+# In[ ]:
+
+
+#let's check out a sample review
+yelp_reviews.text[5]
+
+
+# In[ ]:
+
+
+##checking for nulls
+yelp_reviews.isnull().any()
+
+
+# Great we dont have enemies!
+# <a id='preparation'></a>
+# 
+# ### Preparing Text Data
+
+# In[ ]:
+
+
+yelp_reviews.stars.unique()
+
+
+# In[ ]:
+
+
+x=yelp_reviews['stars'].value_counts()
+y=x.sort_index()
+#plot
+plt.figure(figsize=(8,4))
+ax= sns.barplot(y.index, x.values, alpha=0.8)
+plt.title("Yelp Stars for business")
+plt.ylabel('Number of businesses', fontsize=12)
+plt.xlabel('Stars acquired ', fontsize=12);
+
+
+# Since I wanted to make it simple binary classifcation problem with positive i.e, high polarity(stars= 4 and 5) and negative(stars= 1 and 2) labels I have converted stars column as binary column. We can keep neutral class as stars =3 but right now i am not dealing with that for sake of simplicity.
+
+# In[ ]:
+
+
+reviews=yelp_reviews[:300000]
+reviews=reviews[reviews.stars!=3]
+
+reviews["labels"]= reviews["stars"].apply(lambda x: 1 if x > 3  else 0)
+reviews=reviews.drop("stars",axis=1)
+
+reviews.head()
+
+
+# In[ ]:
+
+
+texts = reviews["text"].values
+labels = reviews["labels"].values
+
+
+# In[ ]:
+
+
+alice_shelley=b'iVBORw0KGgoAAAANSUhEUgAAA4QAAAOECAAAAADcJaDnAAAccklEQVR4nO3d2XbbSLJAUfCu/v9f5n2wVZbECVNmRCD2fuiy3TWAQB5GgqSk230BIv1f9AFAdyKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCKEYCK8hFv0AXCACCGYCK/AICztf9EHwGESLM4khGAiLM8grM52tJQ/wd0f/uT333Z/9qcV/H04ZY9/F5OwoE+z77bcbuZjHXWfMxv6F9b995/cH/+uilf22eO5PhGW8Wu23X/8wUOVP/40t9uzo69x6OewHa3q54bz+e6zyp709uMvD7++OhEW8ekm73Z79jdVWMq3pcZxjuPV0ct4/jppkX3d7d64RJOwhv0LNPvS/m8rmv1AxzEJK+iwPjs8xhdMwsvLvbpfHl3uwz6VCK+v5nKucS97ChEWcLSimhX24Z4wm4c3rCV0dSZhMl3fsO5MhLn87O52+/gm/Y5/K8nYjmbyGIt8GjAJW9ByZiKEYCJMZOC8MgoTE2EeQmlKhGlosCsRQjARQjARptHoE8v8IMI8hlbojjMvESZiFvYkwkxGVmgUpiXCVNpVmPKgZhNhLnakDfkqCuKYg8uymISdpFvy6Q4oiAiTud/77Ej7PNL3RNhIqZ+XVulYDxJhPgMHRKOVXYgIE2qzI23zQN/z8wmTGjazkl3wN48z2ZGOYxImNWwF1tmR1jnSg0SYVZM50ORhviXCtEYtz2QDRoUibChZhYiQYEahCNMaN7CqjMIqx3mUCLMauQKrfHSmyGEeJUKivXnLvkeFIkyqx/JjWUSY1PD9Yq7Gm782I0Iyy/VkMYgIM5qw9HKt7jd3hbkOdAgR5jNn3TVY3FWIkAxa3xWKMJ2eI6rz2xS+21oy119y/GYSQjARkkPjb3UhwrZsfLMQYS6dy2g7CkWYSucG+xJhJhpsSYR9ST4JEZJG15tCESYyezSlG4VNKxQhyV2/TBGm0eGLdj65fnDPiBCCiRCCiTALm9FlabofFWEObgj/6lihCMmtQZUiJLUGDYoQookQgomQzDrsRkVILh1fJRYhmXRsUIQ5xKy9Fnu9AkRIIi0HoQhTMAhfKHCIJ/AduBPo+fz/6OE89GjQJCSNts9FIiSJxwabDEIRkkTbOeieMIGo1ZdrzjRu0CQM13n1/dP6LIiQBFo3aDsaq/fi+/LiLOTaLw9kEnaVfomnP8DTiDBS4CBMtMSfn4VEBzia7Wgce9FlWZwGEQay+JbFWVgW29E4sasv/WYv/QGeyCSMYQAsy/LmNHRq0CRsKseTgAaXZTEJY+RIgCREGCBDg7f4aZPhNKQgwvksvmVZ3p2G8KeHydwTTpelwSzH8aBbgybhbImW/i1wtSc6DfFMwrksvo/aDUIRdhb3jPDmv9yvQdvRqczBZVmcht9Mwoksvs8aDkKT8DT/FXb/87vH1aRBnop8hewaKqcVcfHfn6+Wy9F29KDKDebTskHb0WMkuNXbM9azQRHupL5dnLZnbEd3sZg4j0m4gwR38qLMUyLcRH4HOHkv2I5uYRkN1HYQmoTrKfAY5+8VEa5g+RznHL4mwo8snxN8PIl9N6Mi/EiCJ3AS3xLha5bOOdacx86D0Kujr2nwHM7jJybhC5YOs4jwCQGex7n8TIQPLJsTrTuZre8I3RM+0uB0zRs0CX8Q4Mmc0DVMwm8smZM5oauYhP+xYs628ox2342K8A8Bvrb75zc5qSvZjja2Kq7b3prWzsH2g1CEy7J4zn7j9t//7PkHWcN2tO9i+TyC/js3W789bd+Tukf7SWi5vDbj3NiMmoS8tD/BDf+kBpfuEbYeg2/X/+8zs3Y/2vqM7tV+O8oze1va+s8ZhMvSfBJ62n5iyi6U7xpHaM08en1O3u9Hd55Lg3BZls7bUQ1u8+Z83TR4SNdJKMEnBew6Kc7kYU0jtHKONnjCGTQI/+q7HeWX2Q3ypeUktIKeTKGPJ+XfSzPO37k6RmgNPVpzTk4+b3ajXxpuRzWYggb/028SanB5KCDgnGjwn24RSnBZfhXglERrth214JbFFMqm2yTkl6CnJc8D37SK0BxcluV7AGEnRIPfddqOavCP28MvZtPgD40i1OCX24+/EG3rd/Apy4rLo8uaW6vLPaEG05Dgb022oxokrxaTUIKJGIQP2twTSjGFPsttg0YRLjoM1mqtbdDknpAENPhCr0m4LItxGKDfItukYYQqnKvhCtuo43bUqpjJ2f6oxVsUxNDfOiJkEAmu1XE76p6QVExCzmcIbtIwQoNwMAlu1C1CBQ6nwa2aRajBsQS4R68INTiUBPdpFKECB9PgTo0iZCABHiBCjpPgIY3erL9bKqTU76so3Bqeqd3yGaFfhIsOz9Jx7YzQaDv6j8VzCqfxJC0n4bIsxuExbZfNCC0n4bIsltERXuM6Vd8IVbibM3euvtvRZVnsSbfrvV7GaB6hDDfpvlgGabwdZSsNjtF+Ei6G4UpWyigmodVFMBEuKlzFSRpGhMtiga3gFI0jQtbQ4EAiXJbFR0CIJMK/VEgUEbKCp6iRRMhnGhxKhF/cFr7kzIwlwn+sNUKIEIKJ8Buj8Bn79NFE+J3lRgAR/qDCB07JcCLkLQ2OJ8KfrLmfnI8JRPiLVfedszGDCH+z7pjMT2XiJc9Hc5iEEEyED7w5/ZfzMIkIeUGDs4jwCctvcRImEiFPaXAe3/z3uebfENiqmMkkhGAifK73KOj96KcT4QvWIbOI8JXGFTZ+6CFE+FLbpdj2gUcRIb9ocDYRvmY1MoUI3/ApUmYQIQQTIT+Z/tOJ8C0bUsYT4QcqZDQRQjDfY+aTe/svqWAwk3AFW1JGEuEaKmQgEa6iQsYR4TptKmzzQBMR4UoWJ6OIcC0VMogIIZgIVzMKGUOE63X4IGmDh5iPCLfokCHTiXAbFXI6EW5kGHI2EW6mQs4lQgjmS5m2uy++uokTmYT72JNyGhHudM0Kr/mosrMd3evPerUt5TCT8JhrvWNxqQdThwiPsnA5yHb0sL8V2piyk0l4FhORnUR4mvoV1n8ENYkQgonwNG4K2UeEZ9EgO4nwJBpkLxFCMO8TnsEY5ACTEIKZhCf4bxDen/0hvHfzBu1RTxP88X8UYSkEEeFYhUK0EqLYjo5131ihr1JsyAszx3zMpcx8KXOg1yPCY05euvch/1ZyE2Em94df0IAIE7k//SVXJ8LBNrzGcn/5Gy5NhGnIrisRZhHcoKeAOCJM4iGCud9MUYOBvFk/1spbwugGov/7vZmEQx366IsymhDhSGsblFtrIoRgIkzg1SCcNiBN4lBemAn3poD7nK+n0GAsk3CgVQXFFxB/BM2ZhMOsG2IKwCSM9anBa/38Q57y7S0GOW8ODr4ttADC2Y4OsDobAbDYjo5QqsEMx9CdSXg236SJjUR4LgmymQhPtaXBDBvBDMeAe8IoGdZ/hmPAJDyTvSh7mITnKdegQZiDSXiaTQ1mWP8ZjoFFhKcZNgbLzVe2sh0NkWEIZTgGlsUkPIk5yH4m4RkqpmIQpmESnmBrgxnWf4Zj4A+T8LiBDQ4bsRpMRISHDdyLVtzmspkIE9NgDyI8anMpGXaCGY6BL16YOWb7sFq//g3CJkzCycwgfhPhISOH1cB/t2eCVGxHDxi6X7QZbcMknMsM4oEI99sxq5I0aMqmYju6156FnOGzMqRjErYk8UxEuFPxZVz88K/FdnSX0Wt4fCO3LPeniHAiq56nbEf32DWosjVoR5qFSbjdVVavHWkSJuEsFjwviHASDfKKCDe7ym50udRDqUyEW+1buNsG4bQ4VJiBCDe62LK92MOpSYTbTFm0M8tQYTwRznDftBud24UKw4lwi9uMG8LZVBhNhOmIohufmNlgyhzUYDsm4XpXbVD2wUS42uVeGP33H5VhKNvRsfLPQcKZhGvN+PIlDbYkwnX27djKNKj+SCIcZ9tb9LElqDCQCIfZ+hZ9bAcqjCPCVep+n1/yE+EYW7ei8aMo+r/f2M0T9mcjfwjh7v/E+SyFICbhCCUbzHEQHXmz/rONi9NAYRuT8KPxDWb52FiSw2hHhJ9MaHD7PzJIlmeDZmxHT7VnK2rhdyfCD7YksutuUIPt2Y6+NX5/lqzBZIfTg0l4kp2viaZb9N44ns8kPMX2D8j8ka7BlId0dSJ8p/7PAt0h5UFdmu3ocTZwHOIW4I1VM2H/Ccw7ciyKqWxHXxscSd4GMx/aFdmOHmJkcJxJeMSBBnN/Qiz1wV2OCF8auhCzr/Lsx3cptqOvfFyG196KesVuHhG+0HoOMpXt6F5H7gfPO4pxct+0XopJuI/NGqcxCZ97Pwb2flR0zb87jyrHWZ5J+IwbwmVZluVm4E9hEu7QYg4yjUm4mQQ5l0n4aODrgtUarHa8NYlwK7dJnMwHIx68ffbvtxe1QIZzT/jbqFJKFsgMtqObNBwLnjyGMwl/+vAm/ah/MZ2ZhBsc+E4WhRssfOhFiPCHcS/KFKbCwWxHv3u33GxFGcQk/GZMg5W3on+UfwDJiXCdK35jw/Wu8BgSE+E/b5Za7wav8iiyck/4Zche1OLlMxH+ZQwSxXZ0WZb3L550fWfiB08nA5mEyzJoiV1r3foq+3FEuAx7exBWsR0d9vbg7n+SZtpOwr4/cmkvX3o6StdJuC6SY9/a8Gou+MSSQ8+nt5XLyduDv7RcLOP12o5ui0ODTNEpwo1taJA52mxHN5ehwSe6rJa5rj8JZzdx5Qa9ZT/E1SPcmYS3B5nnOhHmWP05joJS6keYatmnOpgh2ryIMFH9CM9nmTFV8QiTTZ5khzOEUXi60qd0zJr33sQHlZdMSpUn4ZBFb4UxW+EPcGdrsMsg7PNAZ6m6HR20ELw/uErRRZNV0UmYrkHYrWaEg16RsRddqdejHa5khMleFb3Cd7q/uNzXp+Sro99yOe3s2oluUfWlhJxKTsJvzloMFhVh6j+lnTMLj5yG3HudUSotnNuS+nhLbke/O17A0avTs8FyEo+b6tvR+AbJL/k1Lh5hgimU4BBClHvceQ+49nb08Hk9/hSZ99LyS9oNaelJeDSAE763b+MG6z30rEec9tnhs/gxmPWizlJn7XxdqZxHXHc7eqyAnFeDlspuRw81eMrPmPBZtTq+rnfOS1Z0O3oswfAjuIqki+fbtbn//rOMh1xzO7ryZyqFHwEh7sWuTs1J+PkkD35Yxa7yMFlXz+MsvP36fSYl7wmDE7i5G/xS4ETcvv3vz1+lUTLCT+5+uGdz36//7+ryVVjxnvDTWbQV5bv0F6xghKENpr+gfJTudZB0B7TK6xRMwcnyrp+wRbJZzXvCl2dRg7NVPCXZXlmrOQlfXXvvDAZIu4Li301eqWqEj2fYEAySeAWtumjxx1/whZk/fn4qYvSJlGBJRT46U/OecFn+dXdfRr8gmu0WIpnMJyd+yq1Rdjs6TeY1lkOBJfTuIsYfft1JOIch+FmBU5T7I1Qm4WsFFlcSBRbRm4sZfvQm4UsavJLXpYU3KMJX7EM3cK4OsR19wpraLv86enVV44/cJHykQaYS4QMNXlP8xHul7CdmxhAg85mEEEyE33hFdL/8p+7FESbYpXp19I/8ayi95CtpRYO3oAdhEi7LosEzlDyH97e/ncQLM8tSdP1wrrhF0D5C/fXw8ToHLgTbUVhin4ybT0JzsIlPFzp0ITSOUIAny/tKe+a96GI7yomyPq0lb7BvhN6YHyDnOX13VLdPf8MMPbej0WedaVLfDP7VchJmOPHwpd8kVGAnJa523le0RihxSUpLtZw2X+6go281CTXIG2FPIG0iFOAUiXZWda54gwjrXIwrSFNhoct+/QgLXQzOs/WyRz53XD1CCfZUqcGLv0/oYzHzpTjlpRq8eIQESFHhJtE/LibNffQA9VbDRYSvqU1XPvxoL3tPKMDGql38i25Hq10GOrvkJJQgq8XvRq93TyjABCYtqn/X+v78j1fIsP6vth3VYAZzrsKL/8q2/3iGBXOtCL0vmMSM63BKgykqvMw9YYJzyUw/LviRu6qob37/z1UmoQZ7K339LxJh6WvACSqvgPrb0cpn/7rmv+r+979YcTmUn4QVT3oHQdel5HIo/j5hyXPexOCVdeKlj26g7HZUfr1d6fqXjZDe7j8rPHJDGD0Ii0Z4padBTnD/+suOlRHeYMUXZm4+F1PCxKt0f/KrQgpGCMuP8EqW9025V0dNwUJmvEB6f/JnWyQIoNQ9oQD57r7cDjeUoMFS21EN8svjTnRjVBkaLDQJJchF1YhQgDWlf8Uhx/GV2I5qkCFyNJj/uUqBpQUsr/ULJsvaTxyh+q4gc4VZ1n6Ne0JYr9wXFqa9J/TZNA7JMuZWSBqhBK8i7kLWqTBphHDYx8+UZnmmFyHXVWQY5owwy1MUx4VeyxpfYJHzLQoRXkmGJfZ0RWU4sGVJOgk1yMme9ZalwZwRwnhpGrQdZah7/E96+OvPmspxLL+IkFHSLa2ciz3rdjTpyWKLfBcx3xH9kTNC6su64hNKGqErWJ0ruF7SCKEPEUIwEUIwETKEd5nWyxphjU/ewgmyRkh1RuFqeSM0Cmkib4TQhAghmAghWOII3RTSQ+IIVVibl0fXyhwhtalwpdQRGoW1qXCd1BFCByKEYLkj9AlSGsgdodtCGsgeIVyeCBnHy6OrpI/QbSFXlz5CKjMK1ygQoVFYmApXKBAhXJsIIZgIGcp+9DMRQrAKEXplprKbWfhJhQhVyKWViFCFXFmNCKnMfvQDEUIwETKcUfhekQjdFJamwreKRKhCrqtKhCoszSh8p0yElKbCN+pE6Kt7S1Pha3UitCPloipFCJdUKkKjsDD70ZdKRahCrqhWhCoszCh8pViEKixMhS9Ui9A7FVxOuQipyyh8rmCERiHXUjBCFXItFSNUYVW+6dNT/4s+gMn+9msxkEfJSbjf/ddfIV7NCPc2pL1otiBP3Kquyx1X8+dDtRxCVF1vI9WchCs8vKn/+w+shhBem3l01QjvKqOKsq+O3l9vKP+9+nL7/UeQT9l7wmV5VeH919/y+hHaGYWovOSGKL0dfXo1f9/6vbnkVkMIz32/lN2OLsvyY8P557dP/g5IrvQkXH4Ouu3BSTSEUfhT9QihvNIvzHy5LfuHmmflAFdYdCeqfU/4l2tKZbajEKx9hL5nDdHaR2gzSzQRQjAR2pESTIQQTITL4raQUCJclkWFRBLhHyqcyMn+SYR/WRhEESGzeb77RYRfvFExifP8mwghmAj/8RRNCBF+o0IiiPA7FRJAhD+ocDSvfz0S4U/WyFhO7xMihGAi/M1z9Tj2GU+J8IGVwlwiZBrPbs+J8AmLZQin9QURPmO5DOCkviLCpywY5hHhcyo8mzP6kghfsGZO5SXnN0T4ilXDJJf4qUyD+IFNJ7HG3jMJX7OFOofT+IEIGUyDn9iOvmVHepDltYIIP5DhARbXKrajH1hHjGYSfmQW7mJhrSbCFWS4mWW1ge0oBDMJVzELn7kvy9NTY01tYxKuYlk98eekPH6kwcnaSITrWFgP7g+/ePpbPvpf9AFUcbcl/eF5agLcQ4Sr3VX4HwmeyXZ0PWvsy/MNqPOzk1dHNzEMpXY+k3ATX93U/gQMIEK20OAAtqPbdd2TWiqDmISspMFRRLhdz9XY81FPYTu6S7cdqVUykkm4S69F6TXhsUS4j2XJaWxHd2uyJbVAhjMJd+uxOns8ylgi3K/D+uzwGMPZjh5z6T2ptTGHScgrGpxEhMd49Z7DbEdPcMU9qXUxjwjPcLUKLYqpbEchmEl4lstMQytiNhGe5xIZWg/z2Y6e5wrr9wqPoRyT8GSFx6GlEMQkPFnZlewdzzAiPJvFzEa2o4NU2pZaA7FEOEyVDK2AaLajwxRZ3EUO88pMwuHSTkSXPgkRzpCxQxc+DRHOkS1Dlz0REU4WXaPrnY8IZwus0LXOyaujs8WVoMGk/LjsDuSXmgivT4LJ2Y5engazMwmvTH8lmISzTXx1VIM1iBCCiXAyg5DfRDiXBnkgQggmQggmwquyGy1DhBBMhBBMhFNFfzUhGYkQgokQgolwJrtRnhAhBBPhRAYhz4gQgokQgokQgokQgonwonx+uw4RQjARzuMdCp4S4TXZjRYiQggmQggmQggmwktyS1iJCCGYCCGYCKfxNiHPiRCCiRCCiXAWu1FeEGER3nS4LhHWcFfhdYmwgvt9MQuvS4QFyO/aRJjf/ddfuRgRpqe9qxNhdhq8PBEmd3/xa65DhLnprgERpnZ/+1uuQYQQTISZmXwtiDAxDfYgwrw02IQI03rW4F2YFyRCCCbCSc76ml6j8Hr+F30APCe2PkxCCCbCnF4PQiPyckRYzooKhVqKCOfY9rrM+3ciJHYxIrwgldYiwoRE1IsIpzj3O/+K9FpEmM/nxlR4Kd6sz0Zg7ZiEEEyEEEyEyZywG7WhLUaEuQioIRGmosGORAjBRJiJQdiSCGdY+YEZDfYkwjw02JQIJzj3k6Mj/oVEEuF4GuQtEaZhN9qVCLPQYFsiTEKDfYkQgvl6whTMwc5MwuG8lsl7IszAIGxNhKOtGIQa7E2Eg2mQT0QYToPdiRCCiRCCeZ8wmM0oJuFY3iTkIxEO9bFBgxARDmUOsoIIIZgIC7KHvRYRhtqZkwovRYQDjXtZRoVXIsJxgl6WEWg1Igx0IJfX/6gGyxHhMGMHodauQ4RVqfAyRHgx2qzHB7hHGf6JtbsP5FyECMfQB6uJMMo5P5xe7BfgnrC2Xynf3RIWJMIh5g2o+8vfUIXt6AgzN4nCK88kHGBNg9rhiwjPp0E2EeHpvGDJNiI826oGDUL+EeHJzEG2EiEE8xbFqcxBthPhKcTHfrajZ9AgB5iEhymQY0R4iAA5znYUgpmEB5iDnEGEeymQk9iORvCpNb4RYQAN8p3t6D42o5zGJNxFg5xHhBBMhPO5JeQHEUIwEe7hlpATiRCCiRCCiRCCiXA6L47ykwhn0yC/iHAyDfKbCCGYCPcwzjiRCCGYCCGYCOeykeWBCKfSII9ECMFEuMvdSOM0ItxJhZxFhDMplydEuJcdKScR4X4q5BQihGAiPMCOlDOI8BAVcpwIj1Ehh4nwIFtSjhIhBBPhYUYhx4jwODtSDhEhBBPhGYxCDhDhKVTIfiI8hwrZTYQQTIQnMQrZS4RnWVOhHy7KEyI8jVnIPiI8z4oKjUIeifBEKmQPEZ7JjpQdRHgqFbKdCM/1sUL7UX4T4Wwq5BcRnuzzhlSF/CTCs/nqQjYS4Xw3s5DvRHg+O1I2EeEANqRsIcIRvFHBBjfP2oN86Mx554tJOMqHysxCvogwigr563/RB3Bdd6GxikkYxtuF/CHCkbz6wgoiHMpn2PhMhIOpkE9EOJoK+UCEw9mS8p4IJ5Ah74gQgvns6DQPbws69SzLYhJO9HtTqkH+EOFE95e/oTPbUQhmEkIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUIwEUKw/wf0n8IA+qpuMAAAAABJRU5ErkJggg=='
+
+
+# In[ ]:
+
+
+import imageio
+import codecs
+from wordcloud import WordCloud, STOPWORDS
+f2 = open("mws.png", "wb")
+f2.write(codecs.decode(alice_shelley,'base64'))
+f2.close()
+img2 = imageio.imread("mws.png")
+alice_mask = img2
+
+wc = WordCloud(background_color="white", max_words=5000, mask=alice_mask,
+               stopwords=STOPWORDS)
+# generate word cloud
+wc.generate(" ".join(texts[:10000]))
+
+# show
+plt.figure(figsize=(16,13))
+plt.imshow(wc, interpolation='bilinear')
+plt.title("Yelp Reviews (Alice in Wonderland)", fontsize=14,color='seagreen')
+plt.axis("off");
+
+
+# What a beautiful wordcloud of theme Alice in wonderland.
+# We can see most popular words users have written in review are food, good , great place, price , drink , delicious etc.
+# <a id='numerical'></a>
+# 
+# 
+# ### Converting text into numerical representation i.e Tensors
+# Then we can format our text samples and labels into tensors that can be fed into a neural network. 
+# Some Preprocessing is needed here.
+# Tokenization - We need to break down the sentence into unique words. For eg, "The cow jumped over the moon" will become ["The","cow","jumped","over","moon"]
+# 
+# To do this, we will rely on Keras utilities keras.preprocessing.text.Tokenizer and keras.preprocessing.sequence.pad_sequences.
+# 
 # 
 
 # In[ ]:
 
 
-# Please check excellent notebook of Guido Zuidhof for full explanation of this code
-get_ipython().run_line_magic('matplotlib', 'inline')
-import sys
-import numpy as np
-from numpy import *
-from scipy import stats
-import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from sklearn import preprocessing
-from sklearn.metrics import *
-import glob
-from sklearn.model_selection import train_test_split
-import datetime
-import math
-import os.path
-from importlib import reload
-import matplotlib.pyplot as plt
-from IPython.display import display
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from multiprocessing import Pool
-import time
-from skimage import measure, morphology, segmentation
-import scipy.ndimage as ndimage
-import dicom
 
-import keras
-from keras.layers.core import *
-from keras.layers.normalization import *
-from keras.layers.pooling import *
-from keras.layers import Input
-from keras.layers.convolutional import *
-from keras.regularizers import *
-from keras.optimizers import *
-from keras.callbacks import *
-from keras.models import Model, Sequential
-from keras.models import load_model
-import tensorflow as tf
-
-#INPUT_SCAN_FOLDER = '/data/kaggle_cancer_2017/stage1/'
-#OUTPUT_FOLDER = '/data/kaggle_preprocessed_output/'
-
-# For Kaggle I have added  sample_image directory only
-INPUT_SCAN_FOLDER = '../input/sample_images/'
-OUTPUT_FOLDER = None
-
-THRESHOLD_HIGH = 700
-THRESHOLD_LOW = -1100
-
-# fix random seed for reproducibility
-np.random.seed(17)
+MAX_NUM_WORDS=1000 # how many unique words to use (i.e num rows in embedding vector)
+MAX_SEQUENCE_LENGTH=100 # max number of words in a review to use
 
 
-# Simple Function to show the slice at full resolustion normal imshow would downscale this image.
-# It can accept either (image_width, image_height) array or (image_width, image_height, 1) numpy as input.
-# Optional Value range is a tuple of fixed max value and min value. This is useful if you do not want color 
-#  to change between different scan slices.
+tokenizer = Tokenizer(num_words=MAX_NUM_WORDS)
+tokenizer.fit_on_texts(texts)
+sequences = tokenizer.texts_to_sequences(texts)
 
-def show_slice(arr, value_range = None):
-    if len (list(arr.shape)) > 2:
-        arr2 = arr.copy()
-        arr2 = np.reshape (arr, (arr.shape[0],arr.shape[1]))
-    else:
-        arr2 = arr
+word_index = tokenizer.word_index
+print('Found %s unique tokens.' % len(word_index))
 
-    dpi = 80
-    margin = 0.05 # (5% of the width/height of the figure...)
-    xpixels, ypixels = arr2.shape[0], arr2.shape[1]
+data = pad_sequences(sequences, maxlen=MAX_SEQUENCE_LENGTH)
 
-    # Make a figure big enough to accomodate an axis of xpixels by ypixels
-    # as well as the ticklabels, etc...
-    figsize = (1 + margin) * ypixels / dpi, (1 + margin) * xpixels / dpi
-
-    fig = plt.figure(figsize=figsize, dpi=dpi)
-    # Make the axis the right size...
-    ax = fig.add_axes([margin, margin, 1 - 2*margin, 1 - 2*margin])
-
-    if value_range is None:
-        plt.imshow(arr2, cmap=plt.cm.gray)
-    else:        
-        ax.imshow(arr2, vmin=value_range[0], vmax=1, cmap=plt.cm.gray, interpolation='none')
-    plt.show()
-
-def preprocess_all_scans_mp (in_folder, out_folder, demo=False):
-
-    dicom_folder_list = [ name for name in os.listdir(in_folder) if os.path.isdir(os.path.join(in_folder, name)) ]
-   
-    # For Testing feed just load one scan
-    segment_pad_and_save_ct_scan_as_npz  (dicom_folder_list[0], demo=True)
-    
-    if not demo:
-        # Multi-threaded processes to utilize all available CPUs for this task. Note that many threads will block on IO
-        # so creating more than number of CPUs.    
-        thread_pool = Pool(32)
-        thread_pool.map (segment_pad_and_save_ct_scan_as_npz, dicom_folder_list)
-        
-        # Cleanup
-        thread_pool.close()
-        thread_pool.join_thread()
-        
-def segment_pad_and_save_ct_scan_as_npz (scanid, demo=False):
-    
-    scan_dir = INPUT_SCAN_FOLDER + str(scanid)
-    
-    scan = load_scan_as_HU_nparray(scan_dir)
-    
-    # For demo reduce number of slices to 5 to save time
-    if demo:
-        scan = scan[78:82]
-    
-    if demo:
-        print ("----Loaded Scan and Converted to HU units----")
-        print ("Shape: ", scan.shape)
-        show_slice (scan[3])
-    
-    scan = seperate_lungs_and_pad (scan)
-    
-    if demo:
-        print ("----Segmented Lung and Padded/Trimmed to have 256 slices----")
-        print ("Shape: ", scan.shape)
-        show_slice (scan[3])
-        
-    scan = threshold_and_normalize_scan (scan)
-    
-    if demo:
-        print ("----Thresholded and Normalized----")
-        print ("Shape: ", scan.shape)
-        show_slice (scan[3]) 
-    
-    # For Convnet we will need one extra dimension representing color channel
-    scan = scan.reshape((256,512,512,1))
-    
-    if demo:
-        print ("----Expanded dimensions for color channel representation ----")
-        print ("Shape: ", scan.shape)
-        show_slice (scan[3], value_range=(-1,1))         
-    
-    # Save output file to compressed npz file for easy reading.
-    if not demo:
-        out_file = OUTPUT_FOLDER + 'stage1/' + scanid + '.npz'    
-        np.savez_compressed (out_file, scan)
-    
-# Load the scans in given folder path
-def load_scan_as_HU_nparray(path):
-    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
-    slices.sort(key = lambda x: int(x.ImagePositionPatient[2]))
-    try:
-        slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
-    except:
-        slice_thickness = np.abs(slices[0].SliceLocation - slices[1].SliceLocation)
-        
-    for s in slices:
-        s.SliceThickness = slice_thickness
-    
-    image = np.stack([s.pixel_array for s in slices])
-    
-    # Convert to int16 (from sometimes int16), 
-    # should be possible as values should always be low enough (<32k)
-    image = image.astype(np.int16)
-
-    # Set outside-of-scan pixels to 0
-    # The intercept is usually -1024, so air is approximately 0
-    image[image == -2000] = 0
-    
-    # Convert to Hounsfield units (HU)
-    for slice_number in range(len(slices)):
-        
-        intercept = slices[slice_number].RescaleIntercept
-        slope = slices[slice_number].RescaleSlope
-        
-        if slope != 1:
-            image[slice_number] = slope * image[slice_number].astype(np.float64)
-            image[slice_number] = image[slice_number].astype(np.int16)
-            
-        image[slice_number] += np.int16(intercept)
-    
-    return np.array(image, dtype=np.int16)        
+labels = to_categorical(np.asarray(labels))
+print('Shape of data tensor:', data.shape)
+print('Shape of label tensor:', labels.shape)
 
 
-def seperate_lungs_and_pad(scan):
-    
-    # make total 256 slices fill in -1100 as exterme value 
-    segmented_scan = np.full ((256, 512, 512), THRESHOLD_LOW)
-    
-    for i, image in enumerate (scan):
-        
-        # Ignore all slices later than 255 if required.
-        if (i == 256):
-            break
-        
-        # Creation of the internal Marker
-        marker_internal = image < -400
-        marker_internal = segmentation.clear_border(marker_internal)
-        marker_internal_labels = measure.label(marker_internal)
-        areas = [r.area for r in measure.regionprops(marker_internal_labels)]
-        areas.sort()
-        if len(areas) > 2:
-            for region in measure.regionprops(marker_internal_labels):
-                if region.area < areas[-2]:
-                    for coordinates in region.coords:                
-                           marker_internal_labels[coordinates[0], coordinates[1]] = 0
-        marker_internal = marker_internal_labels > 0
-        #Creation of the external Marker
-        external_a = ndimage.binary_dilation(marker_internal, iterations=10)
-        external_b = ndimage.binary_dilation(marker_internal, iterations=55)
-        marker_external = external_b ^ external_a
-        #Creation of the Watershed Marker matrix
-        marker_watershed = np.zeros((512, 512), dtype=np.int)
-        marker_watershed += marker_internal * 255
-        marker_watershed += marker_external * 128
-
-        #Creation of the Sobel-Gradient
-        sobel_filtered_dx = ndimage.sobel(image, 1)
-        sobel_filtered_dy = ndimage.sobel(image, 0)
-        sobel_gradient = np.hypot(sobel_filtered_dx, sobel_filtered_dy)
-        sobel_gradient *= 255.0 / np.max(sobel_gradient)
-
-        #Watershed algorithm
-        watershed = morphology.watershed(sobel_gradient, marker_watershed)
-
-        #Reducing the image created by the Watershed algorithm to its outline
-        outline = ndimage.morphological_gradient(watershed, size=(3,3))
-        outline = outline.astype(bool)
-
-        #Performing Black-Tophat Morphology for reinclusion
-        #Creation of the disk-kernel and increasing its size a bit
-        blackhat_struct = [[0, 0, 1, 1, 1, 0, 0],
-                           [0, 1, 1, 1, 1, 1, 0],
-                           [1, 1, 1, 1, 1, 1, 1],
-                           [1, 1, 1, 1, 1, 1, 1],
-                           [1, 1, 1, 1, 1, 1, 1],
-                           [0, 1, 1, 1, 1, 1, 0],
-                           [0, 0, 1, 1, 1, 0, 0]]
-        blackhat_struct = ndimage.iterate_structure(blackhat_struct, 8)
-        #Perform the Black-Hat
-        outline += ndimage.black_tophat(outline, structure=blackhat_struct)
-
-        #Use the internal marker and the Outline that was just created to generate the lungfilter
-        lungfilter = np.bitwise_or(marker_internal, outline)
-        #Close holes in the lungfilter
-        #fill_holes is not used here, since in some slices the heart would be reincluded by accident
-        lungfilter = ndimage.morphology.binary_closing(lungfilter, structure=np.ones((5,5)), iterations=3)
-
-        #Apply the lungfilter (note the filtered areas being assigned 30 HU)
-        segmented_scan[i] = np.where(lungfilter == 1, image, 30*np.ones((512, 512)))
-        
-    return segmented_scan
-
-def threshold_and_normalize_scan (scan):
-    scan = scan.astype(np.float32)
-    scan [scan < THRESHOLD_LOW] = THRESHOLD_LOW
-    scan [scan > THRESHOLD_HIGH] = THRESHOLD_HIGH
-    
-    # Maximum absolute value of any pixel .
-    max_abs = abs (max(THRESHOLD_LOW, THRESHOLD_HIGH, key=abs))
-    
-    # This will bring values between -1 and 1
-    scan /= max_abs
-    
-    return scan
-
-if OUTPUT_FOLDER:
-    os.makedirs (OUTPUT_FOLDER+'stage1/', exist_ok=True)
-    
-# For full preprocessing you should to set demo=False
-preprocess_all_scans_mp (INPUT_SCAN_FOLDER, OUTPUT_FOLDER, demo=True)
-
-
-# Summary
-# ===========
-# In this post we built a working convolutional 3D neural network without programming. Please feel free to modify and experiment with it.
+# <a id='split'></a>
 # 
-# Currently I am working on following two more appoarches:
+# ###  split the data into a training set and a validation set
+
+# In[ ]:
+
+
+VALIDATION_SPLIT=0.2
+
+indices = np.arange(data.shape[0])
+np.random.shuffle(indices)
+data = data[indices]
+labels = labels[indices]
+nb_validation_samples = int(VALIDATION_SPLIT * data.shape[0])
+
+x_train = data[:-nb_validation_samples]
+y_train = labels[:-nb_validation_samples]
+x_val = data[-nb_validation_samples:]
+y_val = labels[-nb_validation_samples:]
+
+
+# <a id='embedding_layer'></a>
 # 
-# 1. Reduce dimensionality of scans using **autoencoders** to make it easy to process the dataset using some other neural network.
+# ### Preparing the Embedding layer
+
+# In[ ]:
+
+
+GLOVE_DIR='../input/glove-global-vectors-for-word-representation/'
+
+import os
+embeddings_index = {}
+f = open(os.path.join(GLOVE_DIR, 'glove.6B.50d.txt'))
+for line in f:
+    values = line.split()
+    word = values[0]
+    coefs = np.asarray(values[1:], dtype='float32')
+    embeddings_index[word] = coefs
+f.close()
+
+print('Found %s word vectors.' % len(embeddings_index))
+
+
+# <a id='embedding_matrix'></a>
 # 
-# 2. Use **Convolutional LSTM neural network** that combines both CNN and LSTM for analyzing sequence of images.
 # 
-# I hope to share more details about these experiments with you in coming days.
+# ### compute  embedding matrix
+# At this point we can leverage our embedding_index dictionary and our word_index to compute our embedding matrix
 # 
-# If you liked this post please give it a upvote!! - Thank you
+
+# In[ ]:
+
+
+EMBEDDING_DIM = 50 # how big is each word vector
+
+embedding_matrix = np.zeros((len(word_index) + 1, EMBEDDING_DIM))
+for word, i in word_index.items():
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None:
+        # words not found in embedding index will be all-zeros.
+        embedding_matrix[i] = embedding_vector
+
+
+# ### Define Embedding Layer 
+#  We load this embedding matrix into an Embedding layer. Note that we set trainable=False to prevent the weights from being updated during training.
+# 
+
+# In[ ]:
+
+
+from keras.layers import Embedding
+
+embedding_layer = Embedding(len(word_index) + 1,
+                            EMBEDDING_DIM,
+                            weights=[embedding_matrix],
+                            input_length=MAX_SEQUENCE_LENGTH,
+                            trainable=False)
+
+
+# ### Training model :)
+
+# In[ ]:
+
+
+from keras.layers import Bidirectional, GlobalMaxPool1D,Conv1D
+from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation
+
+from keras.models import Model
+
+
+inp = Input(shape=(MAX_SEQUENCE_LENGTH,))
+x = embedded_sequences = embedding_layer(inp)
+x = Bidirectional(LSTM(50, return_sequences=True, dropout=0.1, recurrent_dropout=0.1))(x)
+x = GlobalMaxPool1D()(x)
+x = Dense(50, activation="relu")(x)
+x = Dropout(0.1)(x)
+x = Dense(2, activation="sigmoid")(x)
+model = Model(inputs=inp, outputs=x)
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+
+# In[ ]:
+
+
+model.fit(x_train, y_train, validation_data=(x_val, y_val),
+          epochs=2, batch_size=128);
+
+
+# This gives us 93% accuracy. Thats not enough may be we should bring on more data.
+# 
+# 
+# ### Spacy
+# 
+# spaCy is an industrial-strength natural language processing (NLP) library for Python. spaCy's goal is to take recent advancements in natural language processing out of research papers and put them in the hands of users to build production software.
+# 
+# spaCy handles many tasks commonly associated with building an end-to-end natural language processing pipeline:
+# 
+# 1. Tokenization
+# 2. Text normalization, such as lowercasing, stemming/lemmatization
+# 3. Part-of-speech tagging
+# 4. Syntactic dependency parsing
+# 5. Sentence boundary detection
+# 6. Named entity recognition and annotation
+# 
+# Let's take a sample review
+
+# In[ ]:
+
+
+import spacy
+nlp = spacy.load('en')
+sample_review=reviews.text[5]
+sample_review
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'parsed_review = nlp(sample_review)\nprint(parsed_review)')
+
+
+# looks like nothing changed. 
+# Let's check againn.
+# ### Sentence detection and segmentation
+# 
+# 
+
+# In[ ]:
+
+
+for num, sentence in enumerate(parsed_review.sents):
+    print ('Sentence {}:'.format(num + 1))
+    print (sentence)
+    print ('\n')
+
+
+# ### Named entity detection
+
+# In[ ]:
+
+
+for num, entity in enumerate(parsed_review.ents):
+    print ('Entity {}:'.format(num + 1), entity, '-', entity.label_)
+    print ('\n')
+
+
+# ### Part of speech tagging
+
+# In[ ]:
+
+
+token_text = [token.orth_ for token in parsed_review]
+token_pos = [token.pos_ for token in parsed_review]
+
+parts_of_speech=pd.DataFrame(data=list(zip(token_text, token_pos)),columns=['token_text', 'part_of_speech'])
+parts_of_speech.head(10)
+
+
+# ### Text normalization, like stemming/lemmatization and shape analysis
+# 
+# The work at this stage attempts to reduce as many different variations of similar words into a single term ( different branches all reduced to single word stem). Therefore if we have "running", "runs" and "run", you would really want these three distinct words to collapse into just the word "run". (However of course you lose granularity of the past, present or future tense).
+# 
+# 
+
+# In[ ]:
+
+
+token_lemma = [token.lemma_ for token in parsed_review]
+token_shape = [token.shape_ for token in parsed_review]
+
+text_normalized_DF=pd.DataFrame(list(zip(token_text, token_lemma, token_shape)),
+             columns=['token_text', 'token_lemma', 'token_shape'])
+text_normalized_DF.head()
+
+
+# ### Token-level entity analysis
+# 
+
+# In[ ]:
+
+
+token_entity_type = [token.ent_type_ for token in parsed_review]
+token_entity_iob = [token.ent_iob_ for token in parsed_review]
+
+entity_analysis=pd.DataFrame(list(zip(token_text, token_entity_type, token_entity_iob)),
+             columns=['token_text', 'entity_type', 'inside_outside_begin'])
+entity_analysis.head()
+
+
+# ### Token  attributes
+# 
+# such as the relative frequency of tokens, and whether or not a token matches any of these categories
+# 
+# stopword
+# punctuation
+# whitespace
+# represents a number
+# whether or not the token is included in spaCy's default vocabulary?
+
+# In[ ]:
+
+
+token_attributes = [(token.orth_,
+                     token.prob,
+                     token.is_stop,
+                     token.is_punct,
+                     token.is_space,
+                     token.like_num,
+                     token.is_oov)
+                    for token in parsed_review]
+
+token_attributes = pd.DataFrame(token_attributes,
+                  columns=['text',
+                           'log_probability',
+                           'stop?',
+                           'punctuation?',
+                           'whitespace?',
+                           'number?',
+                           'out of vocab.?'])
+
+token_attributes.loc[:, 'stop?':'out of vocab.?'] = (token_attributes.loc[:, 'stop?':'out of vocab.?']
+                                       .applymap(lambda x: u'Yes' if x else u''))
+                                               
+token_attributes.head()
+

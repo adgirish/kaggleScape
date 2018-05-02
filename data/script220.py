@@ -4,154 +4,122 @@
 # In[1]:
 
 
-import time
-start_time = time.time()
-from sklearn.model_selection import train_test_split
-import sys, os, re, csv, codecs, numpy as np, pandas as pd
-np.random.seed(32)
-os.environ["OMP_NUM_THREADS"] = "4"
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation, Conv1D
-from keras.layers import Bidirectional, GlobalMaxPool1D, MaxPooling1D, Add, Flatten
-from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
-from keras.models import Model, load_model
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-from keras import backend as K
-from keras.engine import InputSpec, Layer
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from keras.models import Model
+from keras.layers import Dense, Embedding, Input
+from keras.layers import Conv1D, GlobalMaxPool1D, Dropout, concatenate
+from keras.preprocessing import text, sequence
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 
 # In[2]:
 
 
-import logging
-from sklearn.metrics import roc_auc_score
-from keras.callbacks import Callback
+# define network parameters
+max_features = 20000
+maxlen = 100
 
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
 
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
-
+# # Load and Preprocessing Steps
+# Here we load the data and fill in the misisng values
 
 # In[3]:
 
 
-train = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/train.csv")
-test = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/test.csv")
-# embedding_path = "../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec"
-embedding_path = "../input/glove840b300dtxt/glove.840B.300d.txt"
-embed_size = 300
-max_features = 100000
-max_len = 150
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
+train = train.sample(frac=1)
 
+list_sentences_train = train["comment_text"].fillna("Invalid").values
+list_classes = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+y = train[list_classes].values
+list_sentences_test = test["comment_text"].fillna("Invalid").values
+
+
+# ## Sequence Generation
+# Here we take the data and generate sequences from the data
 
 # In[4]:
 
 
-list_classes = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
-y = train[list_classes].values
-train["comment_text"].fillna("no comment")
-test["comment_text"].fillna("no comment")
-X_train, X_valid, Y_train, Y_valid = train_test_split(train, y, test_size = 0.1)
+tokenizer = text.Tokenizer(num_words=max_features)
+tokenizer.fit_on_texts(list(list_sentences_train))
+# train data
+list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
+X_t = sequence.pad_sequences(list_tokenized_train, maxlen=maxlen)
+# test data
+list_tokenized_test = tokenizer.texts_to_sequences(list_sentences_test)
+X_te = sequence.pad_sequences(list_tokenized_test, maxlen=maxlen)
 
 
 # In[5]:
 
 
-raw_text_train = X_train["comment_text"].str.lower()
-raw_text_valid = X_valid["comment_text"].str.lower()
-raw_text_test = test["comment_text"].str.lower()
+def build_model(conv_layers = 2, max_dilation_rate = 3):
+    embed_size = 128
+    inp = Input(shape=(maxlen, ))
+    x = Embedding(max_features, embed_size)(inp)
+    x = Dropout(0.25)(x)
+    x = Conv1D(2*embed_size, 
+                   kernel_size = 3)(x)
+    prefilt_x = Conv1D(2*embed_size, 
+                   kernel_size = 3)(x)
+    out_conv = []
+    # dilation rate lets us use ngrams and skip grams to process 
+    for dilation_rate in range(max_dilation_rate):
+        x = prefilt_x
+        for i in range(3):
+            x = Conv1D(32*2**(i), 
+                       kernel_size = 3, 
+                       dilation_rate = dilation_rate+1)(x)    
+        out_conv += [Dropout(0.5)(GlobalMaxPool1D()(x))]
+    x = concatenate(out_conv, axis = -1)    
+    x = Dense(50, activation="relu")(x)
+    x = Dropout(0.1)(x)
+    x = Dense(6, activation="sigmoid")(x)
+    model = Model(inputs=inp, outputs=x)
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                  metrics=['accuracy'])
 
-tk = Tokenizer(num_words = max_features, lower = True)
-tk.fit_on_texts(raw_text_train)
-X_train["comment_seq"] = tk.texts_to_sequences(raw_text_train)
-X_valid["comment_seq"] = tk.texts_to_sequences(raw_text_valid)
-test["comment_seq"] = tk.texts_to_sequences(raw_text_test)
+    return model
 
-X_train = pad_sequences(X_train.comment_seq, maxlen = max_len)
-X_valid = pad_sequences(X_valid.comment_seq, maxlen = max_len)
-test = pad_sequences(test.comment_seq, maxlen = max_len)
+model = build_model()
+model.summary()
 
+
+# # Train the Model
+# Here we train the model and use model checkpointing and early stopping to keep only the best version of the model
 
 # In[6]:
 
 
-def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-embedding_index = dict(get_coefs(*o.strip().split(" ")) for o in open(embedding_path))
+batch_size = 32
+epochs = 2
+
+file_path="weights.hdf5"
+checkpoint = ModelCheckpoint(file_path, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
+early = EarlyStopping(monitor="val_loss", mode="min", patience=20)
+
+callbacks_list = [checkpoint, early] #early
+model.fit(X_t, y, 
+          batch_size=batch_size, 
+          epochs=epochs, 
+          validation_split=0.1, 
+          callbacks=callbacks_list)
 
 
-# In[7]:
-
-
-word_index = tk.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.zeros((nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embedding_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-
-# In[8]:
-
-
-from keras.optimizers import Adam, RMSprop
-from keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler
-from keras.layers import GRU, BatchNormalization, Conv1D, MaxPooling1D
-
-file_path = "best_model.hdf5"
-check_point = ModelCheckpoint(file_path, monitor = "val_loss", verbose = 1,
-                              save_best_only = True, mode = "min")
-ra_val = RocAucEvaluation(validation_data=(X_valid, Y_valid), interval = 1)
-early_stop = EarlyStopping(monitor = "val_loss", mode = "min", patience = 5)
-
-def build_model(lr = 0.0, lr_d = 0.0, units = 0, dr = 0.0):
-    inp = Input(shape = (max_len,))
-    x = Embedding(max_features, embed_size, weights = [embedding_matrix], trainable = False)(inp)
-    x = SpatialDropout1D(dr)(x)
-
-    x = Bidirectional(GRU(units, return_sequences = True))(x)
-    x = Conv1D(64, kernel_size = 2, padding = "valid", kernel_initializer = "he_uniform")(x)
-    avg_pool = GlobalAveragePooling1D()(x)
-    max_pool = GlobalMaxPooling1D()(x)
-    x = concatenate([avg_pool, max_pool])
-
-    x = Dense(6, activation = "sigmoid")(x)
-    model = Model(inputs = inp, outputs = x)
-    model.compile(loss = "binary_crossentropy", optimizer = Adam(lr = lr, decay = lr_d), metrics = ["accuracy"])
-    history = model.fit(X_train, Y_train, batch_size = 128, epochs = 4, validation_data = (X_valid, Y_valid), 
-                        verbose = 1, callbacks = [ra_val, check_point, early_stop])
-    model = load_model(file_path)
-    return model
-
-
-# In[9]:
-
-
-model = build_model(lr = 1e-3, lr_d = 0, units = 128, dr = 0.2)
-pred = model.predict(test, batch_size = 1024, verbose = 1)
-
-
-# In[10]:
-
-
-submission = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv")
-submission[list_classes] = (pred)
-submission.to_csv("submission.csv", index = False)
-print("[{}] Completed!".format(time.time() - start_time))
-
+# # Make Predictions
+# Load the model and make predictions on the test dataset
 
 # In[11]:
 
 
-submission.head()
+#model.load_weights(file_path)
+y_test = model.predict(X_te, verbose = True, batch_size = 1024)
+sample_submission = pd.read_csv("../input/sample_submission.csv")
+sample_submission[list_classes] = y_test
+sample_submission.to_csv("predictions.csv", 
+                         index=False)
 

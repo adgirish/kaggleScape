@@ -1,216 +1,153 @@
-from keras.regularizers import l2, activity_l2
-import numpy as np
 import pandas as pd
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation
-from keras.layers.normalization import BatchNormalization
-from keras.layers.advanced_activations import PReLU
-from keras.utils import np_utils, generic_utils
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import log_loss, auc, roc_auc_score
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-from keras.optimizers import Adagrad,SGD,Adadelta
-from keras.callbacks import EarlyStopping
-from keras.layers import containers
-from keras.layers.core import Dense, AutoEncoder
-from keras.constraints import maxnorm
-
-np.random.seed(1778)  # for reproducibility
-need_normalise=True
-need_validataion=True
-need_categorical=False
-save_categorical_file=False
-nb_epoch=1#400
-golden_feature=[("CoverageField1B","PropertyField21B"),
-                ("GeographicField6A","GeographicField8A"),
-                ("GeographicField6A","GeographicField13A"),
-                ("GeographicField8A","GeographicField13A"),
-                ("GeographicField11A","GeographicField13A"),
-                ("GeographicField8A","GeographicField11A")]
-
-def save2model(submission,file_name,y_pre):
-    assert len(y_pre)==len(submission)
-    submission['QuoteConversion_Flag']=y_pre
-    submission.to_csv(file_name,index=False)
-    print ("saved files %s" % file_name)
-
-def getDummy(df,col):
-    category_values=df[col].unique()
-    data=[[0 for i in range(len(category_values))] for i in range(len(df))]
-    dic_category=dict()
-    for i,val in enumerate(list(category_values)):
-        dic_category[str(val)]=i
-   # print dic_category
-    for i in range(len(df)):
-        data[i][dic_category[str(df[col][i])]]=1
-
-    data=np.array(data)
-    for i,val in enumerate(list(category_values)):
-        df.loc[:,"_".join([col,str(val)])]=data[:,i]
-
-    return df
+import numpy as np
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+from sklearn.decomposition import PCA, FastICA
+from sklearn.preprocessing import RobustScaler
+from sklearn.pipeline import make_pipeline, Pipeline, _name_estimators
+from sklearn.linear_model import ElasticNet, ElasticNetCV
+from sklearn.model_selection import cross_val_score, KFold
+from sklearn.metrics import r2_score
+from sklearn.base import BaseEstimator, TransformerMixin
+import xgboost as xgb
 
 
-def generateFileName(model,params):
-     file_name="_".join([(key+"_"+ str(val))for key,val in params.items()])
-     return model+"_"+file_name+".csv"
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
-def load_data():
-    train=pd.read_csv('../input/train.csv')
-    test=pd.read_csv('../input/test.csv')
-    train = train.drop(['QuoteNumber','PropertyField6', 'GeographicField10A'], axis=1)
-    
-    submission=pd.DataFrame()
-    submission["QuoteNumber"]= test["QuoteNumber"]
+y_train = train['y'].values
+y_mean = np.mean(y_train)
+id_test = test['ID']
 
-    train_y=train['QuoteConversion_Flag'].values
-    train=train.drop('QuoteConversion_Flag',axis=1)
-    
-    test = test.drop(['QuoteNumber','PropertyField6', 'GeographicField10A'],axis=1)
-    train['Date'] = pd.to_datetime(pd.Series(train['Original_Quote_Date']))
-    train = train.drop('Original_Quote_Date', axis=1)
-    train['Year'] = train['Date'].apply(lambda x: int(str(x)[:4]))
-    train['Month'] = train['Date'].apply(lambda x: int(str(x)[5:7]))
-    train['weekday'] = [train['Date'][i].dayofweek for i in range(len(train['Date']))]
-    
-    test['Date'] = pd.to_datetime(pd.Series(test['Original_Quote_Date']))
-    test = test.drop('Original_Quote_Date', axis=1)
-    test['Year'] = test['Date'].apply(lambda x: int(str(x)[:4]))
-    test['Month'] = test['Date'].apply(lambda x: int(str(x)[5:7]))
-    test['weekday'] = [test['Date'][i].dayofweek for i in range(len(test['Date']))]
-    
-    train = train.drop('Date', axis=1)
-    test = test.drop('Date', axis=1)
-    
-    #fill na, have no effect on need_categorical method
-    train = train.fillna(-1)
-    test = test.fillna(-1)
-    
-    for f in test.columns:#
-        if train[f].dtype=='object':
-            lbl = LabelEncoder()
-            lbl.fit(list(train[f])+list(test[f]))
-            train[f] = lbl.transform(list(train[f].values))
-            test[f] = lbl.transform(list(test[f].values))
+num_train = len(train)
+df_all = pd.concat([train, test])
+df_all.drop(['ID', 'y'], axis=1, inplace=True)
 
-    #try to encode all params less than 100 to be category
-    if need_categorical:
-        #row bind train and test
-        x=train.append(test,ignore_index=True)
-        del train
-        del test
-        for f in x.columns:#
-            category_values= set(list(x[f].unique()))
-            if len(category_values)<4:
-                print (f)
-                x=getDummy(x,f)
-                #x.drop(f,axis=1)
-                #all_data.drop(f,axis=1)
-        test = x.iloc[260753:,]
-        train = x.iloc[:260753:,]
+# One-hot encoding of categorical/strings
+df_all = pd.get_dummies(df_all, drop_first=True)
 
-    #save need_categorical:
-#    if save_categorical_file and need_categorical:
-#        train["QuoteConversion_Flag"]=train_y
-#        train["QuoteNumber"]=1
-#        test["QuoteNumber"]=submission["QuoteNumber"]
-#        train.to_csv("./data/train_category.csv",index=False)
-#        test.to_csv("./data/test_category.csv",index=False)
+train = df_all[:num_train]
+test = df_all[num_train:]
 
-    #add golden feature:
 
-    encoder = LabelEncoder()
-    train_y = encoder.fit_transform(train_y).astype(np.int32)
-    train_y = np_utils.to_categorical(train_y)
-    #for featureA,featureB in golden_feature:
-    #    train.loc[:,"_".join([featureA,featureB,"diff"])]=train[featureA]-train[featureB]
-    #    test.loc[:,"_".join([featureA,featureB,"diff"])]=test[featureA]-test[featureB]        
+class AddColumns(BaseEstimator, TransformerMixin):
+    def __init__(self, transform_=None):
+        self.transform_ = transform_
 
-    print ("processsing finished")
-    valid=None
-    valid_y=None
-    train = np.array(train)
-    train = train.astype(np.float32)
-    test=np.array(test)
-    test=test.astype(np.float32)
-    if need_normalise:
-        scaler = StandardScaler().fit(train)
-        train = scaler.transform(train)
-        test = scaler.transform(test)
-    
-    if need_validataion:
-        train,valid,train_y,valid_y=train_test_split(train,train_y,test_size=20000,random_state=218)
-    return [(train,train_y),(test,submission),(valid,valid_y)]
+    def fit(self, X, y=None):
+        self.transform_.fit(X, y)
+        return self
 
-print('Loading data...')
+    def transform(self, X, y=None):
+        xform_data = self.transform_.transform(X, y)
+        return np.append(X, xform_data, axis=1)
 
-#datasets=load_data()
 
-datasets=load_data()
+class LogExpPipeline(Pipeline):
+    def fit(self, X, y):
+        super(LogExpPipeline, self).fit(X, np.log1p(y))
 
-X_train, y_train = datasets[0]
-X_test, submission = datasets[1]
-X_valid, y_valid = datasets[2]
+    def predict(self, X):
+        return np.expm1(super(LogExpPipeline, self).predict(X))
 
-nb_classes = y_train.shape[1]
-print(nb_classes, 'classes')
+#
+# Model/pipeline with scaling,pca,svm
+#
+svm_pipe = LogExpPipeline(_name_estimators([RobustScaler(),
+                                            PCA(),
+                                            SVR(kernel='rbf', C=1.0, epsilon=0.05)]))
+                                            
+# results = cross_val_score(svm_pipe, train, y_train, cv=5, scoring='r2')
+# print("SVM score: %.4f (%.4f)" % (results.mean(), results.std()))
+# exit()
+                                            
+#
+# Model/pipeline with scaling,pca,ElasticNet
+#
+en_pipe = LogExpPipeline(_name_estimators([RobustScaler(),
+                                           PCA(n_components=125),
+                                           ElasticNet(alpha=0.001, l1_ratio=0.1)]))
 
-dims = X_train.shape[1]
-print(dims, 'dims')
+#
+# XGBoost model
+#
+xgb_model = xgb.sklearn.XGBRegressor(max_depth=4, learning_rate=0.005, subsample=0.921,
+                                     objective='reg:linear', n_estimators=1300, base_score=y_mean)
+                                     
+xgb_pipe = Pipeline(_name_estimators([AddColumns(transform_=PCA(n_components=10)),
+                                      AddColumns(transform_=FastICA(n_components=10, max_iter=500)),
+                                      xgb_model]))
 
-model = Sequential()
+# results = cross_val_score(xgb_model, train, y_train, cv=5, scoring='r2')
+# print("XGB score: %.4f (%.4f)" % (results.mean(), results.std()))
 
-model.add(Dense(1024, input_shape=(dims,)))
-model.add(Dropout(0.1))#    input dropout
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
 
-model.add(Dense(360))
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
+#
+# Random Forest
+#
+rf_model = RandomForestRegressor(n_estimators=250, n_jobs=4, min_samples_split=25,
+                                 min_samples_leaf=25, max_depth=3)
 
-model.add(Dense(420))
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
+# results = cross_val_score(rf_model, train, y_train, cv=5, scoring='r2')
+# print("RF score: %.4f (%.4f)" % (results.mean(), results.std()))
 
-model.add(Dense(nb_classes))
-model.add(Activation('softmax'))
-#opt=SGD(momentum=0.9)
-model.compile(loss='binary_crossentropy', optimizer="sgd")
-auc_scores=[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
-best_score=-1
-best_model=None
-threshold=0.9638
-print('Training model...')
-if need_validataion:
-    for i in range(nb_epoch):
-    #early_stopping=EarlyStopping(monitor='val_loss', patience=0, verbose=1)
-    #model.fit(X_train, y_train, nb_epoch=nb_epoch,batch_size=256,validation_split=0.01,callbacks=[early_stopping])
-        print ("best_score is:",best_score)
-        model.fit(X_train, y_train, nb_epoch=1,batch_size=256)
-        y_pre = model.predict_proba(X_valid)
-        scores = roc_auc_score(y_valid,y_pre)
-        auc_scores.append(scores)
-        print (i,scores)
-        if scores>best_score:
-            best_score=scores
-            best_model=model
-            if best_score>threshold:
-                y_pre = model.predict_proba(X_test)[:,1]
-                save2model(submission,'keras_nn_test_'+str(best_score)+".csv", y_pre)
-    plt.plot(auc_scores)
-    plt.show()
-else:
-    model.fit(X_train, y_train, nb_epoch=nb_epoch, batch_size=256)
 
-if need_validataion:
-    model=best_model
-#print('Generating submission...')
-y_pre = model.predict_proba(X_test)[:,1]
-#print roc_auc_score(y_test,y_pre)
-save2model(submission, 'keras_nn_test.csv',y_pre)
+#
+# Now the training and stacking part.  In previous version i just tried to train each model and
+# find the best combination, that lead to a horrible score (Overfit?).  Code below does out-of-fold
+# training/predictions and then we combine the final results.
+#
+# Read here for more explanation (This code was borrowed/adapted) :
+#
+
+class Ensemble(object):
+    def __init__(self, n_splits, stacker, base_models):
+        self.n_splits = n_splits
+        self.stacker = stacker
+        self.base_models = base_models
+
+    def fit_predict(self, X, y, T):
+        X = np.array(X)
+        y = np.array(y)
+        T = np.array(T)
+
+        folds = list(KFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
+
+        S_train = np.zeros((X.shape[0], len(self.base_models)))
+        S_test = np.zeros((T.shape[0], len(self.base_models)))
+        for i, clf in enumerate(self.base_models):
+
+            S_test_i = np.zeros((T.shape[0], self.n_splits))
+
+            for j, (train_idx, test_idx) in enumerate(folds):
+                X_train = X[train_idx]
+                y_train = y[train_idx]
+                X_holdout = X[test_idx]
+                y_holdout = y[test_idx]
+
+                clf.fit(X_train, y_train)
+                y_pred = clf.predict(X_holdout)[:]
+
+                print ("Model %d fold %d score %f" % (i, j, r2_score(y_holdout, y_pred)))
+
+                S_train[test_idx, i] = y_pred
+                S_test_i[:, j] = clf.predict(T)[:]
+            S_test[:, i] = S_test_i.mean(axis=1)
+
+        # results = cross_val_score(self.stacker, S_train, y, cv=5, scoring='r2')
+        # print("Stacker score: %.4f (%.4f)" % (results.mean(), results.std()))
+        # exit()
+
+        self.stacker.fit(S_train, y)
+        res = self.stacker.predict(S_test)[:]
+        return res
+
+stack = Ensemble(n_splits=5,
+                 #stacker=ElasticNetCV(l1_ratio=[x/10.0 for x in range(1,10)]),
+                 stacker=ElasticNet(l1_ratio=0.1, alpha=1.4),
+                 base_models=(svm_pipe, en_pipe, xgb_pipe, rf_model))
+
+y_test = stack.fit_predict(train, y_train, test)
+
+df_sub = pd.DataFrame({'ID': id_test, 'y': y_test})
+df_sub.to_csv('submission.csv', index=False)

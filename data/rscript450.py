@@ -1,121 +1,92 @@
-import numpy as np
-np.random.seed(42)
 import pandas as pd
+import numpy as np
+from sklearn import *
+import glob
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
+datafiles = sorted(glob.glob('../input/**.csv'))
+datafiles = {file.split('/')[-1].split('.')[0]: pd.read_csv(file, encoding='latin-1') for file in datafiles}
+print([k for k in datafiles])
+datafiles['WNCAATourneyCompactResults_PrelimData2018']['SecondaryTourney'] = 'NCAA'
+datafiles['WRegularSeasonCompactResults_PrelimData2018']['SecondaryTourney'] = 'Regular'
 
-from keras.models import Model
-from keras.layers import Input, Embedding, Dense, Conv2D, MaxPool2D
-from keras.layers import Reshape, Flatten, Concatenate, Dropout, SpatialDropout1D
-from keras.preprocessing import text, sequence
-from keras.callbacks import Callback
+#Presets
+WLoc = {'A': 1, 'H': 2, 'N': 3}
+SecondaryTourney = {'NIT': 1, 'CBI': 2, 'CIT': 3, 'V16': 4, 'Regular': 5 ,'NCAA': 6}
 
-import warnings
-warnings.filterwarnings('ignore')
+games = pd.concat((datafiles['WNCAATourneyCompactResults_PrelimData2018'],datafiles['WRegularSeasonCompactResults_PrelimData2018']), axis=0, ignore_index=True)
+games.reset_index(drop=True, inplace=True)
+games['WLoc'] = games['WLoc'].map(WLoc)
+games['SecondaryTourney'] = games['SecondaryTourney'].map(SecondaryTourney)
+games.head()
 
-import os
-os.environ['OMP_NUM_THREADS'] = '4'
+#Add Ids
+games['ID'] = games.apply(lambda r: '_'.join(map(str, [r['Season']]+sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
+games['IDTeams'] = games.apply(lambda r: '_'.join(map(str, sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
+games['Team1'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[0], axis=1)
+games['Team2'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[1], axis=1)
+games['IDTeam1'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
+games['IDTeam2'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
 
+#Add Seeds
+seeds = {'_'.join(map(str,[int(k1),k2])):int(v[1:3]) for k1, v, k2 in datafiles['WNCAATourneySeeds_SampleTourney2018'].values}
+#Add 2018
+if 2018 not in datafiles['WNCAATourneySeeds']['Season'].unique():
+    seeds = {**seeds, **{k.replace('2017_','2018_'):seeds[k] for k in seeds if '2017_' in k}}
 
-EMBEDDING_FILE = '../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec'
+games['Team1Seed'] = games['IDTeam1'].map(seeds).fillna(0)
+games['Team2Seed'] = games['IDTeam2'].map(seeds).fillna(0)
 
-train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+#Additional Features & Clean Up
+games['ScoreDiff'] = games['WScore'] - games['LScore'] 
+games['Pred'] = games.apply(lambda r: 1. if sorted([r['WTeamID'],r['LTeamID']])[0]==r['WTeamID'] else 0., axis=1)
+games['ScoreDiffNorm'] = games.apply(lambda r: r['ScoreDiff'] * -1 if r['Pred'] == 0. else r['ScoreDiff'], axis=1)
+games['SeedDiff'] = games['Team1Seed'] - games['Team2Seed'] 
+games = games.fillna(-1)
 
-X_train = train["comment_text"].fillna("fillna").values
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-X_test = test["comment_text"].fillna("fillna").values
+#Test Set
+sub = datafiles['WSampleSubmissionStage1']
+#sub = datafiles['WSampleSubmissionStage2_SampleTourney2018']
+sub['WLoc'] = 3 #N
+sub['SecondaryTourney'] = 6 #NCAA
+sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
+sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
+sub['Team1'] = sub['ID'].map(lambda x: x.split('_')[1])
+sub['Team2'] = sub['ID'].map(lambda x: x.split('_')[2])
+sub['IDTeams'] = sub.apply(lambda r: '_'.join(map(str, [r['Team1'], r['Team2']])), axis=1)
+sub['IDTeam1'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
+sub['IDTeam2'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
+sub['Team1Seed'] = sub['IDTeam1'].map(seeds).fillna(0)
+sub['Team2Seed'] = sub['IDTeam2'].map(seeds).fillna(0)
+sub['SeedDiff'] = sub['Team1Seed'] - sub['Team2Seed'] 
 
+#Leaky (No Validation)
+sdn = games.groupby(['IDTeams'], as_index=False)[['ScoreDiffNorm']].mean()
+sub = pd.merge(sub, sdn, how='left', on=['IDTeams'])
+sub['ScoreDiffNorm'] = sub['ScoreDiffNorm'].fillna(0.)
 
-max_features = 100000
-maxlen = 200
-embed_size = 300
+#Interactions
+inter = games[['IDTeam2','IDTeam1','Season','Pred']].rename(columns={'IDTeam2':'Target','IDTeam1':'Common'})
+inter['Pred'] = inter['Pred'] * -1
+inter = pd.concat((inter,games[['IDTeam1','IDTeam2','Season','Pred']].rename(columns={'IDTeam1':'Target','IDTeam2':'Common'})), axis=0, ignore_index=True).reset_index(drop=True)
+inter = inter[inter['Season']>2013] #Limit
+inter = pd.merge(inter, inter, how='inner', on=['Common','Season'])
+inter = inter[inter['Target_x'] != inter['Target_y']]
+inter['IDTeams'] = inter.apply(lambda r: '_'.join(map(str, [r['Target_x'].split('_')[1],r['Target_y'].split('_')[1]])), axis=1)
+inter = inter[['IDTeams','Pred_x']]
+inter = inter.groupby(['IDTeams'], as_index=False)[['Pred_x']].sum()
+inter = {k:int(v) for k, v in inter.values}
 
-tokenizer = text.Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(X_train) + list(X_test))
-X_train = tokenizer.texts_to_sequences(X_train)
-X_test = tokenizer.texts_to_sequences(X_test)
-x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
-x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
+games['Inter'] = games['IDTeams'].map(inter).fillna(0)
+sub['Inter'] = sub['IDTeams'].map(inter).fillna(0)
+col = [c for c in games.columns if c not in ['ID', 'Team1','Team2', 'IDTeams','IDTeam1','IDTeam2','Pred','DayNum', 'WTeamID', 'WScore', 'LTeamID', 'LScore', 'NumOT', 'ScoreDiff']]
 
+reg = linear_model.HuberRegressor()
+reg.fit(games[col], games['Pred'])
+sub['Pred'] = reg.predict(sub[col]).clip(0.05, 0.95)
+sub[['ID','Pred']].to_csv('rh3p_submission.csv', index=False)
 
-def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
-embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE))
-
-word_index = tokenizer.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.zeros((nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
-
-
-filter_sizes = [1,2,3,5]
-num_filters = 32
-
-def get_model():    
-    inp = Input(shape=(maxlen, ))
-    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
-    x = SpatialDropout1D(0.4)(x)
-    x = Reshape((maxlen, embed_size, 1))(x)
-    
-    conv_0 = Conv2D(num_filters, kernel_size=(filter_sizes[0], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_1 = Conv2D(num_filters, kernel_size=(filter_sizes[1], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_2 = Conv2D(num_filters, kernel_size=(filter_sizes[2], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_3 = Conv2D(num_filters, kernel_size=(filter_sizes[3], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    
-    maxpool_0 = MaxPool2D(pool_size=(maxlen - filter_sizes[0] + 1, 1))(conv_0)
-    maxpool_1 = MaxPool2D(pool_size=(maxlen - filter_sizes[1] + 1, 1))(conv_1)
-    maxpool_2 = MaxPool2D(pool_size=(maxlen - filter_sizes[2] + 1, 1))(conv_2)
-    maxpool_3 = MaxPool2D(pool_size=(maxlen - filter_sizes[3] + 1, 1))(conv_3)
-        
-    z = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])   
-    z = Flatten()(z)
-    z = Dropout(0.1)(z)
-        
-    outp = Dense(6, activation="sigmoid")(z)
-    
-    model = Model(inputs=inp, outputs=outp)
-    model.compile(loss='binary_crossentropy',
-                  optimizer='adam',
-                  metrics=['accuracy'])
-
-    return model
-
-model = get_model()
-
-
-batch_size = 256
-epochs = 3
-
-X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
-RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
-
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=2)
-
-
-y_pred = model.predict(x_test, batch_size=1024)
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
+reg = ensemble.ExtraTreesClassifier(n_jobs=-1, random_state=18, n_estimators=100)
+reg.fit(games[col], games['Pred'])
+sub['Pred'] = reg.predict_proba(sub[col])[:,1]
+sub['Pred'] = sub['Pred'].clip(0.05, 0.95)
+sub[['ID','Pred']].to_csv('rh3p_etr_submission.csv', index=False)

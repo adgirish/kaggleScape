@@ -1,187 +1,336 @@
-import numpy as np
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier, ExtraTreesRegressor
-from sklearn import cross_validation
-import re
+"""Sea Lion Prognostication Engine
+
+https://www.kaggle.com/c/noaa-fisheries-steller-sea-lion-population-count
+"""
+
+import sys
+import os
+from collections import namedtuple
 import operator
-from sklearn.feature_selection import SelectKBest, f_classif
+import glob
+import csv 
+from math import sqrt
 
-#Print you can execute arbitrary python code
-train = pd.read_csv("../input/train.csv", dtype={"Age": np.float64}, )
-test = pd.read_csv("../input/test.csv", dtype={"Age": np.float64}, )
+import numpy as np
 
-target = train["Survived"].values
-full = pd.concat([train, test])
-#print(full.head())
-#print(full.describe())
-#print(full.info())
+import PIL
+from PIL import Image, ImageDraw, ImageFilter
 
-full['surname'] = full["Name"].apply(lambda x: x.split(',')[0].lower())
+import skimage
+import skimage.io
+import skimage.measure
 
-full["Title"] = full["Name"].apply(lambda x: re.search(' ([A-Za-z]+)\.',x).group(1))
-title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Dr": 5, "Rev": 6, "Major": 7, "Col": 7, "Mlle": 2, "Mme": 3,"Don": 9,"Dona": 9, "Lady": 10, "Countess": 10, "Jonkheer": 10, "Sir": 9, "Capt": 7, "Ms": 2}
-full["TitleCat"] = full.loc[:,'Title'].map(title_mapping)
+import shapely
+import shapely.geometry
+from shapely.geometry import Polygon
 
-full["FamilySize"] = full["SibSp"] + full["Parch"] + 1
-full["FamilySize"] = pd.cut(full["FamilySize"], bins=[0,1,4,20], labels=[0,1,2])
+# Notes
+# cls -- sea lion class 
+# tid -- train, train dotted, or test image id 
+# _nb -- short for number
+# x, y -- don't forget image arrays organized row, col, channels
+#
+# With contributions from @bitsofbits ...
+#
 
-full["NameLength"] = full["Name"].apply(lambda x: len(x))
 
-full["Embarked"] = pd.Categorical.from_array(full.Embarked).codes
+# ================ Meta ====================
+__description__ = 'Sea Lion Prognostication Engine'
+__version__ = '0.1.0'
+__license__ = 'MIT'
+__author__ = 'Gavin Crooks (@threeplusone)'
+__status__ = "Prototype"
+__copyright__ = "Copyright 2017"
 
-full["Fare"] = full["Fare"].fillna(8.05)
+# python -c 'import sealiondata; sealiondata.package_versions()'
+def package_versions():
+    print('sealionengine \t', __version__)
+    print('python        \t', sys.version[0:5])
+    print('numpy         \t', np.__version__)
+    print('skimage       \t', skimage.__version__)
+    print('pillow (PIL)  \t', PIL.__version__)
+    print('shapely       \t', shapely.__version__)
 
-full = pd.concat([full,pd.get_dummies(full['Sex'])],axis=1)
 
-full['CabinCat'] = pd.Categorical.from_array(full.Cabin.fillna('0').apply(lambda x: x[0])).codes
+SOURCEDIR = os.path.join('..', 'input')
 
-# function to get oven/odd/null from cabine 
-def get_type_cabine(cabine):
-    # Use a regular expression to search for a title. 
-    cabine_search = re.search('\d+', cabine)
-    # If the title exists, extract and return it.
-    if cabine_search:
-        num = cabine_search.group(0)
-        if np.float64(num) % 2 == 0:
-            return '2'
+DATADIR = '.'
+
+VERBOSITY = namedtuple('VERBOSITY', ['QUITE', 'NORMAL', 'VERBOSE', 'DEBUG'])(0,1,2,3)
+
+
+SeaLionCoord = namedtuple('SeaLionCoord', ['tid', 'cls', 'x', 'y'])
+
+
+class SeaLionData(object):
+    
+    def __init__(self, sourcedir=SOURCEDIR, datadir=DATADIR, verbosity=VERBOSITY.NORMAL):
+        self.sourcedir = sourcedir
+        self.datadir = datadir
+        self.verbosity = verbosity
+        
+        self.cls_nb = 5
+        
+        self.cls_names = (
+            'adult_males',
+            'subadult_males',
+            'adult_females',
+            'juveniles',
+            'pups',
+            'NOT_A_SEA_LION')
+            
+        self.cls = namedtuple('ClassIndex', self.cls_names)(*range(0,6))
+    
+        # backported from @bitsofbits. Average actual color of dot centers.
+        self.cls_colors = (
+            (243,8,5),          # red
+            (244,8,242),        # magenta
+            (87,46,10),         # brown 
+            (25,56,176),        # blue
+            (38,174,21),        # green
+            )
+    
+            
+        self.dot_radius = 3
+        
+        self.train_nb = 947
+        
+        self.test_nb = 18636
+       
+        self.paths = {
+            # Source paths
+            'sample'     : os.path.join(sourcedir, 'sample_submission.csv'),
+            'counts'     : os.path.join(sourcedir, 'Train', 'train.csv'),
+            'train'      : os.path.join(sourcedir, 'Train', '{tid}.jpg'),
+            'dotted'     : os.path.join(sourcedir, 'TrainDotted', '{tid}.jpg'),
+            'test'       : os.path.join(sourcedir, 'Test', '{tid}.jpg'),
+            # Data paths
+            'coords'     : os.path.join(datadir, 'coords.csv'),  
+            }
+        
+        # From MismatchedTrainImages.txt
+        self.bad_train_ids = (
+            3, 7, 9, 21, 30, 34, 71, 81, 89, 97, 151, 184, 215, 234, 242, 
+            268, 290, 311, 331, 344, 380, 384, 406, 421, 469, 475, 490, 499, 
+            507, 530, 531, 605, 607, 614, 621, 638, 644, 687, 712, 721, 767, 
+            779, 781, 794, 800, 811, 839, 840, 869, 882, 901, 903, 905, 909, 
+            913, 927, 946)
+            
+        self._counts = None
+
+        
+    @property
+    def trainshort_ids(self):
+        return (0,1,2,4,5,6,8,10)  # Trainshort1
+        #return range(41,51)         # Trainshort2
+        
+    @property 
+    def train_ids(self):
+        """List of all valid train ids"""
+        tids = range(0, self.train_nb)
+        tids = list(set(tids) - set(self.bad_train_ids) )  # Remove bad ids
+        tids.sort()
+        return tids
+                    
+    @property 
+    def test_ids(self):
+        return range(0, self.test_nb)
+    
+    def path(self, name, **kwargs):
+        """Return path to various source files"""
+        path = self.paths[name].format(**kwargs)
+        return path        
+
+    @property
+    def counts(self) :
+        """A map from train_id to list of sea lion class counts"""
+        if self._counts is None :
+            counts = {}
+            fn = self.path('counts')
+            with open(fn) as f:
+                f.readline()
+                for line in f:
+                    tid_counts = list(map(int, line.split(',')))
+                    counts[tid_counts[0]] = tid_counts[1:]
+            self._counts = counts
+        return self._counts
+
+    def rmse(self, tid_counts) :
+        true_counts = self.counts
+        
+        error = np.zeros(shape=[5] )
+        
+        for tid in tid_counts:
+            true_counts = self.counts[tid]
+            obs_counts = tid_counts[tid]
+            diff = np.asarray(true_counts) - np.asarray(obs_counts)
+            error += diff*diff
+        #print(error)
+        error /= len(tid_counts)
+        rmse = np.sqrt(error).sum() / 5
+        return rmse 
+        
+
+    def load_train_image(self, train_id, border=0, mask=False):
+        """Return image as numpy array
+         
+        border -- add a black border of this width around image
+        mask -- If true mask out masked areas from corresponding dotted image
+        """
+        img = self._load_image('train', train_id, border)
+        if mask :
+            # The masked areas are not uniformly black, presumable due to 
+            # jpeg compression artifacts
+            dot_img = self._load_image('dotted', train_id, border).astype(np.uint16).sum(axis=-1)
+            img = np.copy(img)
+            img[dot_img<40] = 0
+        return img
+   
+
+    def load_dotted_image(self, train_id, border=0):
+        return self._load_image('dotted', train_id, border)
+ 
+ 
+    def load_test_image(self, test_id, border=0):    
+        return self._load_image('test', test_id, border)
+
+
+    def _load_image(self, itype, tid, border=0) :
+        fn = self.path(itype, tid=tid)
+        img = np.asarray(Image.open(fn))
+        if border :
+            height, width, channels = img.shape
+            bimg = np.zeros( shape=(height+border*2, width+border*2, channels), dtype=np.uint8)
+            bimg[border:-border, border:-border, :] = img
+            img = bimg
+        return img
+    
+
+    def coords(self, train_id):
+        """Extract coordinates of dotted sealions and return list of SeaLionCoord objects)"""
+        
+        # Empirical constants
+        MIN_DIFFERENCE = 16
+        MIN_AREA = 9
+        MAX_AREA = 100
+        MAX_AVG_DIFF = 50
+        MAX_COLOR_DIFF = 32
+       
+        src_img = np.asarray(self.load_train_image(train_id, mask=True), dtype = np.float)
+        dot_img = np.asarray(self.load_dotted_image(train_id), dtype = np.float)
+
+        img_diff = np.abs(src_img-dot_img)
+        
+        # Detect bad data. If train and dotted images are very different then somethings wrong.
+        avg_diff = img_diff.sum() / (img_diff.shape[0] * img_diff.shape[1])
+        if avg_diff > MAX_AVG_DIFF: return None
+        
+        img_diff = np.max(img_diff, axis=-1)   
+           
+        img_diff[img_diff<MIN_DIFFERENCE] = 0
+        img_diff[img_diff>=MIN_DIFFERENCE] = 255
+
+        sealions = []
+        
+        for cls, color in enumerate(self.cls_colors):
+            # color search backported from @bitsofbits.
+            color_array = np.array(color)[None, None, :]
+            has_color = np.sqrt(np.sum(np.square(dot_img * (img_diff > 0)[:,:,None] - color_array), axis=-1)) < MAX_COLOR_DIFF 
+            contours = skimage.measure.find_contours(has_color.astype(float), 0.5)
+            
+            if self.verbosity == VERBOSITY.DEBUG :
+                print()
+                fn = 'diff_{}_{}.png'.format(train_id,cls)
+                print('Saving train/dotted difference: {}'.format(fn))
+                Image.fromarray((has_color*255).astype(np.uint8)).save(fn)
+
+            for cnt in contours :
+                p = Polygon(shell=cnt)
+                area = p.area 
+                if(area > MIN_AREA and area < MAX_AREA) :
+                    y, x= p.centroid.coords[0] # DANGER : skimage and cv2 coordinates transposed?
+                    x = int(round(x))
+                    y = int(round(y))
+                    sealions.append( SeaLionCoord(train_id, cls, x, y) )
+                
+        if self.verbosity >= VERBOSITY.VERBOSE :
+            counts = [0,0,0,0,0]
+            for c in sealions :
+                counts[c.cls] +=1
+            print()
+            print('train_id','true_counts','counted_dots', 'difference', sep='\t')   
+            true_counts = self.counts[train_id]
+            print(train_id, true_counts, counts, np.array(true_counts) - np.array(counts) , sep='\t' )
+          
+        if self.verbosity == VERBOSITY.DEBUG :
+            img = np.copy(sld.load_dotted_image(train_id))
+            r = self.dot_radius
+            dy,dx,c = img.shape
+            for tid, cls, cx, cy in sealions :                    
+                for x in range(cx-r, cx+r+1) : img[cy, x, :] = 255
+                for y in range(cy-r, cy+r+1) : img[y, cx, :] = 255    
+            fn = 'cross_{}.png'.format(train_id)
+            print('Saving crossed dots: {}'.format(fn))
+            Image.fromarray(img).save(fn)
+     
+        return sealions
+        
+
+    def save_coords(self, train_ids=None): 
+        if train_ids is None: train_ids = self.train_ids
+        fn = self.path('coords')
+        self._progress('Saving sealion coordinates to {}'.format(fn))
+        with open(fn, 'w') as csvfile:
+            writer =csv.writer(csvfile)
+            writer.writerow( SeaLionCoord._fields )
+            for tid in train_ids :
+                self._progress()
+                for coord in self.coords(tid):
+                    writer.writerow(coord)
+        self._progress('done')
+        
+    def load_coords(self):
+        fn = self.path('coords')
+        self._progress('Loading sea lion coordinates from {}'.format(fn))
+        with open(fn) as f:
+            f.readline()
+            return [SeaLionCoord(*[int(n) for n in line.split(',')]) for line in f]
+
+    
+            
+    def save_sea_lion_chunks(self, coords, chunksize=128):
+        self._progress('Saving image chunks...')
+        self._progress('\n', verbosity=VERBOSITY.VERBOSE)
+        
+        last_tid = -1
+        
+        for tid, cls, x, y in coords :
+            if tid != last_tid:
+                img = self.load_train_image(tid, border=chunksize//2, mask=True)
+                last_tid = tid
+
+            fn = 'chunk_{tid}_{cls}_{x}_{y}_{size}.png'.format(size=chunksize, tid=tid, cls=cls, x=x, y=y)
+            self._progress(' Saving '+fn, end='\n', verbosity=VERBOSITY.VERBOSE)
+            Image.fromarray( img[y:y+chunksize, x:x+chunksize, :]).save(fn)
+            self._progress()
+        self._progress('done')
+        
+            
+    def _progress(self, string=None, end=' ', verbosity=VERBOSITY.NORMAL):
+        if self.verbosity < verbosity: return
+        if not string :
+            print('.', end='')
+        elif string == 'done':
+            print(' done') 
         else:
-            return '1'
-    return '0'
-full["Cabin"] = full["Cabin"].fillna(" ")
+            print(string, end=end)
+        sys.stdout.flush()
 
-full["CabinType"] = full["Cabin"].apply(get_type_cabine)
-#print(pd.value_counts(full["CabinType"]))
+# end SeaLionData
 
 
-
-#### CHILD/FEMALE ADULT/MALE ADULT------------------------------------------------------------
-child_age = 18
-def get_person(passenger):
-    age, sex = passenger
-    if (age < child_age):
-        return 'child'
-    elif (sex == 'female'):
-        return 'female_adult'
-    else:
-        return 'male_adult'
-full = pd.concat([full, pd.DataFrame(full[['Age', 'Sex']].apply(get_person, axis=1), columns=['person'])],axis=1)
-full = pd.concat([full,pd.get_dummies(full['person'])],axis=1)
-
-### FEATURES BASED ON TICKET   --------------------------------------------------------
-table_ticket = pd.DataFrame(full["Ticket"].value_counts())
-table_ticket.rename(columns={'Ticket':'Ticket_Members'}, inplace=True)
-
-table_ticket['Ticket_perishing_women'] = full.Ticket[(full.female_adult == 1.0) 
-                                    & (full.Survived == 0.0) 
-                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
-table_ticket['Ticket_perishing_women'] = table_ticket['Ticket_perishing_women'].fillna(0)
-table_ticket['Ticket_perishing_women'][table_ticket['Ticket_perishing_women'] > 0] = 1.0 
-
-table_ticket['Ticket_surviving_men'] = full.Ticket[(full.male_adult == 1.0) 
-                                    & (full.Survived == 1.0) 
-                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
-table_ticket['Ticket_surviving_men'] = table_ticket['Ticket_surviving_men'].fillna(0)
-table_ticket['Ticket_surviving_men'][table_ticket['Ticket_surviving_men'] > 0] = 1.0 
-
-table_ticket["Ticket_Id"]= pd.Categorical.from_array(table_ticket.index).codes
-# compress under 3 members into one code.
-table_ticket["Ticket_Id"][table_ticket["Ticket_Members"] < 3 ] = -1
-table_ticket["Ticket_Members"] = pd.cut(table_ticket["Ticket_Members"], bins=[0,1,4,20], labels=[0,1,2])
-
-full = pd.merge(full, table_ticket, left_on="Ticket",right_index=True,how='left', sort=False)
-
-### FEATURES BASED ON SURNAME    --------------------------------------------------------
-table_surname = pd.DataFrame(full["surname"].value_counts())
-table_surname.rename(columns={'surname':'Surname_Members'}, inplace=True)
-
-table_surname['Surname_perishing_women'] = full.surname[(full.female_adult == 1.0) 
-                                    & (full.Survived == 0.0) 
-                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
-table_surname['Surname_perishing_women'] = table_surname['Surname_perishing_women'].fillna(0)
-table_surname['Surname_perishing_women'][table_surname['Surname_perishing_women'] > 0] = 1.0 
-
-table_surname['Surname_surviving_men'] = full.surname[(full.male_adult == 1.0) 
-                                    & (full.Survived == 1.0) 
-                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
-table_surname['Surname_surviving_men'] = table_surname['Surname_surviving_men'].fillna(0)
-table_surname['Surname_surviving_men'][table_surname['Surname_surviving_men'] > 0] = 1.0 
-
-table_surname["Surname_Id"]= pd.Categorical.from_array(table_surname.index).codes
-# compress under 3 members into one code.
-table_surname["Surname_Id"][table_surname["Surname_Members"] < 3 ] = -1
-
-table_surname["Surname_Members"] = pd.cut(table_surname["Surname_Members"], bins=[0,1,4,20], labels=[0,1,2])
-
-full = pd.merge(full, table_surname, left_on="surname",right_index=True,how='left', sort=False)
-
-### AGE PROCESSING --------------------------------------------------------------------------
-classers = ['Fare','Parch','Pclass','SibSp','TitleCat', 
-'CabinCat','female','male', 'Embarked', 'FamilySize', 'NameLength','Ticket_Members','Ticket_Id']
-etr = ExtraTreesRegressor(n_estimators=200)
-X_train = full[classers][full['Age'].notnull()]
-Y_train = full['Age'][full['Age'].notnull()]
-X_test = full[classers][full['Age'].isnull()]
-etr.fit(X_train,np.ravel(Y_train))
-age_preds = etr.predict(X_test)
-full['Age'][full['Age'].isnull()] = age_preds
-
-# FEATURES -----------------------------------------------------------------------------------
-features = ['female','male','Age','male_adult','female_adult', 'child','TitleCat', 'Pclass',
-'Pclass','Ticket_Id','NameLength','CabinType','CabinCat', 'SibSp', 'Parch',
-'Fare','Embarked','Surname_Members','Ticket_Members','FamilySize',
-'Ticket_perishing_women','Ticket_surviving_men',
-'Surname_perishing_women','Surname_surviving_men']
-
-train = full[0:891].copy()
-test = full[891:].copy()
-
-selector = SelectKBest(f_classif, k=len(features))
-selector.fit(train[features], target)
-scores = -np.log10(selector.pvalues_)
-indices = np.argsort(scores)[::-1]
-print("Features importance :")
-for f in range(len(scores)):
-    print("%0.2f %s" % (scores[indices[f]],features[indices[f]]))
-
-# BEST CLASSIFIER METHOD ==> RANDOM FOREST -----------------------------------------------------
-rfc = RandomForestClassifier(n_estimators=3000, min_samples_split=4, class_weight={0:0.745,1:0.255})
-
-
-# CROSS VALIDATION WITH RANDOM FOREST CLASSIFIER METHOD-----------------------------------------
-kf = cross_validation.KFold(train.shape[0], n_folds=3, random_state=1)
-
-scores = cross_validation.cross_val_score(rfc, train[features], target, cv=kf)
-print("Accuracy: %0.3f (+/- %0.2f) [%s]" % (scores.mean()*100, scores.std()*100, 'RFC Cross Validation'))
-rfc.fit(train[features], target)
-score = rfc.score(train[features], target)
-print("Accuracy: %0.3f            [%s]" % (score*100, 'RFC full test'))
-importances = rfc.feature_importances_
-indices = np.argsort(importances)[::-1]
-for f in range(len(features)):
-    print("%d. feature %d (%f) %s" % (f + 1, indices[f]+1, importances[indices[f]]*100, features[indices[f]]))
-
-
-# PREDICTION  -----------------------------------------------------------------------------------
-rfc.fit(train[features], target)
-predictions = rfc.predict(test[features])
-
-# OUTPUT FILE -----------------------------------------------------------------------------------
-PassengerId =np.array(test["PassengerId"]).astype(int)
-my_prediction = pd.DataFrame(predictions, PassengerId, columns = ["Survived"])
-
-my_prediction.to_csv("my_prediction.csv", index_label = ["PassengerId"])
-
-print("The end ...")
-
-
-
-
-
-
-
-
-
-
-
-
-
+# Count sea lion dots and compare to truth from train.csv
+sld = SeaLionData()
+sld.verbosity = VERBOSITY.VERBOSE
+for tid in sld.trainshort_ids:
+    coord = sld.coords(tid)

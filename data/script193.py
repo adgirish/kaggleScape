@@ -1,369 +1,1662 @@
 
 # coding: utf-8
 
-# This kernel is very basic model. I hope it will help you.
-# 
-# **Please upvote to encourage me to do more.**
+# # Reinforcement Learning for Meal Planning based on Meeting a Set Budget and Personal Preferences
 
-# ![](https://78.media.tumblr.com/0a56b418334765ec595a0982fe25aac3/tumblr_ouloa3CUT41wq17fxo3_400.gif)
+# ## Aim
+# 
+# When food shopping, there are many different products for the same ingredient to choose from in supermarkets. Some are less expensive, others are of higher quality. I would like to create a model that, for the required ingredients, can select the optimal products required to make a meal that is both:
+# 
+# 1. Within my budget
+# 
+# 2. Meets my personal preferences
+# 
+# To do this, I will first build a very simple model that can recommend the products that are below my budgets before introducing my preferences.
+# 
+# The reason we use a model is so that we could, in theory, scale the problem to consider more and more ingredients and products that would cause the problemt to then be beyond the possibility of any mental calculations.
+# 
+
+# ## Method
+# 
+# To achieve this, I will be bulding a simple reinforcement learning model and use Montel Carlo learning to find the optimal combination of products.
+# 
+# First, let us formally define the parts of our model as a Markov Decision Process:
+# 
+# - We have a finite number of ingredients required to make any meal and are considered to be our **States**
+# - There are the finite possible products for each ingredient and are therefore the **Actions of each state**
+# - Our preferences become the **Individual Rewards** for selecting each product, we will cover this in more detail later
+# 
+# Monte Carlo learning takes the combined the quality of each step towards reaching an end goal and requires that, in order to assess the quality of any step, we must wait and see the outcome of the whole combination. 
+# 
+# Monte Carlo is often avoided due to the time required to go through the whole process before being able to learn. However, in our problem it is required as our final check when establishing whether the combination of products selected is good or bad is to add up the real cost of those selected and check whether or not this is below or above our budget. Futhermore, at least at this stage, we will not be considering more than a few ingredients and so the time taken is not significant in this regard.
+# 
+# 
+
+# ## Sample Data
+# 
+# For this demonstration, I have created some sample data for a meal where we have 4 ingredients and 9 products, as shown in the digram below. 
+# 
+# We need to select one product for each ingredient in the meal.
+# 
+# This means we have 2 x 2 x 2 x 3 = 24 possible selections of products for the 4 ingredients.
+# 
+# I have also included the real cost for each product and V_0. 
+# 
+# V_0 is simply the initial quality of each product to meet our requirements and we set this to 0 for each.
+# 
+
+# ![States1.png](attachment:States1.png)
 
 # In[1]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import warnings
+warnings.filterwarnings('ignore')
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[2]:
-
-
-train = pd.read_csv('../input/train.csv')
-train.head()
+import time
 
 
 # In[3]:
 
 
-train['author'].unique()
+#data = pd.read_csv('C:\\Users\\kr015\\Documents\\Machine Learning\Meal Plan\\Final\\SampleData.csv')
+data = pd.read_csv("../input/SampleData.csv")
 
-
-# **hp lovecraft**
-# ![](data:image/jpeg;base64,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)
-
-# **edgar allan poe**
-# ![](data:image/jpeg;base64,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)
-
-# **Mary Wollstonecraft Shelley**
-# ![](data:image/jpeg;base64,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)
 
 # In[4]:
 
 
-import seaborn as sns
+data
 
+
+# ## Applying the Model in Theory
+# 
+# For now, I will not introduce any individual rewards for the procuts. Intead, I will simply focus on whether the combination of products selected is below our budget or not. This outcome is defined as the **Terminal Reward** of our problem.
+# 
+# For example, say we have a budget of £30, then the choice:
+# 
+# $$a1 \rightarrow b1 \rightarrow c1 \rightarrow d1$$
+#     
+# Then the real cost of this selection is:
+# 
+# $$£10 + £8 + £3 + £8 = £29 < £30$$
+# 
+# And therefore, our terminal reward is:
+# 
+# $$R_T = +1$$
+#     
+# Whereas, 
+# 
+# $$a2 \rightarrow b2 \rightarrow c2 \rightarrow d1$$
+#     
+# Then the real cost of this selection is:
+# 
+# $$£6 + £11 + £7 + £8 = £32 > £30$$
+# 
+# And therefore, our terminal reward is:
+# 
+# $$R_T = -1$$
+#     
+# 
+# For now, we are simply telling our model whether the choice is good or bad and will observe what this does to the results.
+
+# ### Model Learning
+# 
+# So how does our model actually learn? In short, we get our model to try out lots of combinations of proucts and at the end of each tell it whether its choice was good or bad. Over time, it will recognise that some products generally lead to getting a good outcome while others do not.
+# 
+# What we end up creating are values for how good each product is, denoted V(a). We have already introduced the initial V(a) for each product but how do we reach go from these initial values to actually being able to make a decision?
+# 
+# For this, we need an **Update Rule**. This tells the model, after each time it has presented its choice of products and we have told it whether it's selection is good or bad, how to add this to our initial values. 
+# 
+# Our update rule is as follows:
+#     
+# $$V(a) \leftarrow V(a) + \alpha*(G - V(a))$$
+#     
+# This may look unusual at first but in words we are simply updating the value of any action, V(a), by an amount that is either a little more if the outcome was good or a little less if the outcome was bad. 
+# 
+# 
+# G is the **Return** and is simply to total reward obtained. Currently in our example, this is simply the terminal reward (+1 or -1 accordingly). We will reintroduce this later when we include individual product rewards.
+# 
+# Alpha, $\alpha$, is the **Learning Rate** and we will demonstrate how this effects the results more later but just for now, the simple explination is: "The learning rate determines to what extent newly acquired information overrides old information. A factor of 0 makes the agent learn nothing, while a factor of 1 makes the agent consider only the most recent information." (https://en.wikipedia.org/wiki/Q-learning)
+
+# ### Small Demo of Updating Values
+# 
+# So how do we actually use this with our model?
+# 
+# Let us start with a table that has each product and its initial V_0(a):
+# 
+# |Product|V_0(a)|
+# |:-----:|:----:|
+# |   a1  |   0  |
+# |   a2  |   0  |
+# |   b1  |   0  |
+# |   b2  |   0  |
+# |   c1  |   0  |
+# |   c2  |   0  |
+# |   d1  |   0  |
+# |   d2  |   0  |
+# |   d3  |   0  |
+# 
+# ---
+# We now pick a random selection of products, each cobination is known as an **episode**. We also set $\alpha = 0.5$ for now just for simpicity in the calculations.
+# 
+# e.g.
+# 
+# $$a1 \rightarrow b1 \rightarrow c1 \rightarrow d1$$ 
+# 
+# Provides:
+#   
+# $$Total Cost = £29 < £30$$
+# 
+# Therefore:
+#     
+# $$R_T = +1$$
+#     
+# 
+# 
+# Now applying our update rule to a1:
+# 
+# $$V_1(a1) <- V_0(a1) + \alpha*( G - V_0(a1))$$
+#     
+# $$\implies V_1(a1) <- 0 + 0.5*( 1 - 0) = 0.5$$
+# 
+# 
+# Therefore, all actions that lead to this positive outcome are updated as well to produced the following table with V1(a):
+# 
+# |Product|V_0(a)|V_1(a)|
+# |:-----:|:----:|:----:|
+# |   a1  |   0  |  0.5 |
+# |   a2  |   0  |   0  |
+# |   b1  |   0  |  0.5 |
+# |   b2  |   0  |   0  |
+# |   c1  |   0  |  0.5 |
+# |   c2  |   0  |   0  |
+# |   d1  |   0  |  0.5 |
+# |   d2  |   0  |   0  |
+# |   d3  |   0  |   0  |
+# 
+# ---
+# So let us pick another random episode:
+# 
+# $$a1 \rightarrow b2 \rightarrow c2 \rightarrow d1$$
+# 
+# Provides:
+#   
+# $$Total Cost = £36 > £30$$
+# 
+# Therefore:
+#     
+# $$R_T = -1$$
+#     
+# 
+# 
+# Now applying our update rule to a1:
+# 
+# 
+# 
+# $$V_2(a1) \leftarrow V_1(a1) + \alpha * ( G - V_1(a1))$$
+# 
+#   
+# $$\implies V_2(a1) \leftarrow 0.5 + 0.5*( -1 - 0.5) = 0.5 - 0.75$$
+# 
+# 
+# $$\implies V_2(a1) \leftarrow -0.25$$
+# 
+# 
+# 
+# and likewise for d1.
+# 
+# Whereas the updated value for b2 is:
+# 
+# $$V_2(b2) \leftarrow V_1(b2) + \alpha*( G - V_1(b2))$$
+#     
+# $$\implies V_2(b2) \leftarrow 0 + 0.5*( -1 - 0) = -0.5$$
+#     
+# and likewise for c2.
+# 
+# 
+# Therefore, we can add V2(a) to our table:
+# 
+# |Product|V_0(a)|V_1(a)|V_2(a)|
+# |:-----:|:----:|:----:|:----:|
+# |   a1  |   0  |  0.5 | -0.25|
+# |   a2  |   0  |   0  |   0  |
+# |   b1  |   0  |  0.5 | 0.5  |
+# |   b2  |   0  |   0  | -0.5 |
+# |   c1  |   0  |  0.5 | 0.5  |
+# |   c2  |   0  |   0  | -0.5 |
+# |   d1  |   0  |  0.5 | -0.25|
+# |   d2  |   0  |   0  |   0  |
+# |   d3  |   0  |   0  |   0  |
+# 
+# 
+# 
+
+# ## Action Selection
+# 
+# You may have noticed in the demo, I have simply randomly selected the products in each episode. We could do this but using a completely random selection process may mean that some actions are not selected often enough to know whether they are good or bad.
+# 
+# Similarly, if we went to other way and decided to select the products greedily, i.e. to ones that currently have the best value, we may miss one that is in fact better but never given a chance. For example, if we chose the best actions from V2(a) we would get a2, b1, c1 and d2 or d3 which both provide a positive terminal reward therefore, if we used a purely greedy selection process, we would never consider any other products as these continue to provide a positiv outcome. 
+# 
+# Instead, we implement **epsilon-greedy** action selection where we randomly select products with probablity $\epsilon$, and greedily select products with probability $1-\epsilon$ where:
+# 
+# 
+# $$0 \leq  \epsilon \leq  1$$
+#     
+# This means that we are going reach the optimal choice of products quickly as we continue to test whether the 'good' products are in fact optimal but also leaves room for us to also explore other products occasionally just to make sure they aren't as good as our current choice. 
+# 
+# 
+
+# # Building and Applying our Model
+
+# We are now ready to build a simple model as shown in the MCModelv1 function below.
+# 
+# Although this seems complex, I have done nothing more than apply the methods previously discussed in such a way that we can vary the inputs and still obtain reqults. Admittedly, this was my first attempt at doing this and so my coding may not be perfectly written but should be sufficient for our requirements. 
+# 
+# 
+# To calculate the terminal reward, we currently use the following condition to check if the total cost is less or more than our budget:
+# 
+#     if(budget >= episode2['Real_Cost'].sum()):
+#         Return = 1  
+#     else:
+#         Return = -1
+#         
+# 
+# 
 
 # In[5]:
 
 
-sns.countplot('author',data = train)
+def MCModelv1(data, alpha, e, epsilon, budget, reward):
+    # Define the States
+    Ingredients = list(set(data['Ingredient']))
+    # Initialise V_0
+    V0 = data['V_0']
+    data['V'] = V0
+    output = []
+    output1 = []
+    output2 = []
+    actioninfull = []
+    #Interate over the number of episodes specified
+    for e in range(0,e):
+        
+        episode_run = []
+        #Introduce epsilon-greedy selection, we randomly select the first episode as V_0(a) = 0 for all actions
+        epsilon = epsilon
+        if e == 0:
+            for i in range(0,len(Ingredients)):
+                episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+            episode_run = episode_run.astype(int)
+        
+        else:
+            for i in range(0,len(Ingredients)):
+                greedyselection = np.random.random_integers(low = 1, high =10)
+                if greedyselection <= (epsilon)*10:
+                    episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+                else:
+                    data_I = data[data['Ingredient'] == (i+1)] 
+                    MaxofVforI = data_I[data_I['V'] == data_I['V'].max() ]['Product']
+                    #If multiple max values, take first
+                    MaxofVforI = MaxofVforI.values[0]
+                    episode_run = np.append(episode_run, MaxofVforI)
+                    
+                episode_run = episode_run.astype(int)
+                
+               
+           
+        episode = pd.DataFrame({'Ingredient' : Ingredients, 'Product': episode_run})    
+        episode['Merged_label'] =  (episode['Ingredient']*10 + episode['Product']).astype(float)
+        data['QMerged_label'] = (data['QMerged_label']).astype(float)
+        data['Reward'] = reward
+        episode2 =  episode.merge(data[['QMerged_label','Real_Cost','Reward']], left_on='Merged_label',right_on='QMerged_label', how = 'inner')
+        data = data.drop('Reward',1)
+        
+        # Calculate our terminal reward
+        if(budget >= episode2['Real_Cost'].sum()):
+            Return = 1  
+        else:
+            Return = -1 
+        episode2 = episode2.drop('Reward',1)
+        episode2['Return'] = Return
+        
+        # Apply update rule to actions that were involved in obtaining terminal reward 
+        data = data.merge(episode2[['Merged_label','Return']], left_on='QMerged_label',right_on='Merged_label', how = 'outer')
+        data['Return'] = data['Return'].fillna(0)
+        for v in range(0,len(data)):
+            if data.iloc[v,7] == 0:
+                data.iloc[v,5] = data.iloc[v,5] 
+            else:
+                data.iloc[v,5]  = data.iloc[v,5]  + alpha*( (data.iloc[v,7]/len(Ingredients)) - data.iloc[v,5] )
+                
+        # Output table    
+        data = data.drop('Merged_label',1)
+        data = data.drop('Return',1)
+        
+        # Output is the Sum of V(a) for all episodes
+        output  = np.append(output, data.iloc[:,-1].sum())
+        
+        # Output 1 and 2 are the Sum of V(a) for for the cheapest actions and rest respectively
+        # I did this so we can copare how they converge whilst applying to such a small sample problem
+        output1 = np.append(output1, data.iloc[[1,2,4,8],-1].sum())
+        output2 = np.append(output2, data.iloc[[0,3,5,6,7],-1].sum())
+        
+        # Ouput to optimal action from the model based on highest V(a)
+        action = pd.DataFrame(data.groupby('Ingredient')['V'].max())
+        action2 = action.merge(data, left_on = 'V',right_on = 'V', how = 'inner')
+        action3 = action2[['Ingredient','Product']]
+        action3 = action3.groupby('Ingredient')['Product'].apply(lambda x :x.iloc[np.random.randint(0, len(x))])
+        
+        # Output the optimal action at each episode so we can see how this changes over time
+        actioninfull = np.append(actioninfull, action3)
+        actioninfull = actioninfull.astype(int)
+        
+        # Rename for clarity
+        SumofV = output
+        SumofVForCheapest = output1
+        SumofVForExpensive = output2
+        OptimalActions = action3
+        ActionsSelectedinTime = actioninfull
+        
+    return(SumofV, SumofVForCheapest, SumofVForExpensive, OptimalActions, data, ActionsSelectedinTime)
 
+
+
+
+# ### We now run our model with some sample variables:
 
 # In[6]:
 
 
-train['length'] = train.text.str.count(' ')
+alpha = 0.1
+num_episodes = 100
+epsilon = 0.5
+budget = 30
+
+# Currently not using a reward
+reward = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl = MCModelv1(data=data, alpha = alpha, e = num_episodes,epsilon = epsilon, budget = budget, reward = reward)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+
+# In our function, we have 6 outputs from the model.
+# 
+# - Mdl[0]: Returns the Sum of all V(a) for each episode
+# 
+# - Mdl[1]: Returns to Sum of V(a) for the cheapest products, possible to define due to the simplicity of our sample data
+# 
+# - Mdl[2]: Returns the Sum of V(a) for the non-cheapest products
+# 
+# - Mdl[3]: Returns the optimal actions of the final episode
+# 
+# - Mdl[4]: Returns the data table with the final V(a) added for each product
+# 
+# - Mdl[5]: Shows the optimal action at each epsiode
+# 
+# There is a lot to take away from these so let us go through each and establish what we can learn to improve our model.
+# 
+# 
+
+# #### Optimal actions of final episode
+# 
+# First, lets see what the model suggest we should select. In this run it suggests actions, or products, that have a total cost below budget which is good.
+# 
+# However, there is still more that we can check to help us understand what is going on.
+# 
+# 
+# First, we can plot the total V for all actions and we see that this is converging which is ideal. We want our model to converge so that as we try more episodes we are 'zoning-in' on the optimal choice of products. The reason the output converges is because we are reducing the amount it learns each time by a factor of $\alpha$, in this case 0.5. We will show later what happens if we vary this or don't apply this at all.
+# 
+# We have also plotted the sum of V for the produts we know are cheapest, based on being able to assess the small sample size, and the others seperately. Again, both are converging positively although the cheaper products appear to have slightly higher values.
+# 
+# 
+# 
+
+# In[6]:
+
+
+print(Mdl[3])
+
+Mdl[4]
 
 
 # In[7]:
 
 
-train.head()
+plt.plot(range(0,num_episodes), Mdl[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
 # In[8]:
 
 
-train[train["author"]=="MWS"]["length"].describe()
+plt.plot(range(0,num_episodes), Mdl[1],range(0,num_episodes), Mdl[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
+
+# #### So why is this happening and why did the model suggest the actions it did?
+# 
+# To understand that, we need to disect the suggestions made by the model at each episode and how this relates to our return.
+# 
+# Below, we have taken the optimal action for each state. We can see that the suggested actions do vary greatly between episodes and the model appears to decide which is wants to suggest very quickly.
+# 
+# Therefore, I have plotted the total cost of the suggested actions at each episode and we can see the actions vary initially then smooth out and the resulting total cost is below our budget. This helps us understand what is going on greatly.
+# 
+# So far, all we have told the model is to provide a selection that is below budget and it has. It has simply found a answer that is below the budget as required.
+# 
+# So what is the next step? Before I introduce rewards I want to demonstrate what happens if I vary some of the parameters and what we can do if we decide to change what we want our model to suggest.
 
 # In[9]:
 
 
-train[train["author"]=="HPL"]["length"].describe()
+Ingredients = list(set(data['Ingredient']))
+actions = pd.DataFrame()
+
+for a in range(0, len(Ingredients)):   
+    individualactions = []
+    for i in range(0,num_episodes):    
+        individualactions = np.append(individualactions, Mdl[5][a+(i*(len(Ingredients)))])
+    actions[a] = individualactions
+    plt.plot(range(0,num_episodes), actions[a])
+    plt.title('Product for Ingredient: ' + str(a+1))
+    plt.xlabel('Episode')
+    plt.ylabel('Product')
+    plt.show()    
+
+    
 
 
 # In[10]:
 
 
-train[train["author"]=="EAP"]["length"].describe()
+actions2 = actions
+actions2['Product1'] = actions2.iloc[:,0]+10
+actions2['Product2'] = actions2.iloc[:,1]+20
+actions2['Product3'] = actions2.iloc[:,2]+30
+actions2['Product4'] = actions2.iloc[:,3]+40
 
+actions3 = actions2.merge(data[['QMerged_label','Real_Cost']],left_on = 'Product1',right_on = 'QMerged_label', how = 'left')
+actions4 = actions3.merge(data[['QMerged_label','Real_Cost']],left_on = 'Product2',right_on = 'QMerged_label', how = 'left')
+actions5 = actions4.merge(data[['QMerged_label','Real_Cost']],left_on = 'Product3',right_on = 'QMerged_label', how = 'left')
+actions6 = actions5.merge(data[['QMerged_label','Real_Cost']],left_on = 'Product4',right_on = 'QMerged_label', how = 'left')
+
+
+actions6['Total_Cost'] = actions6.iloc[:,9] + actions6.iloc[:,11] + actions6.iloc[:,13] + actions6.iloc[:,15]
+actions6 = actions6.iloc[:,[0,1,2,3,-1]]
+
+actions6 = actions6.iloc[:num_episodes]
+
+plt.plot(range(0,num_episodes), actions6['Total_Cost'])
+plt.plot([0, num_episodes], [budget, budget], 'k-', lw=2)
+plt.title('Total Real Cost of Best Products at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Total Real Cost (£)')
+plt.ylim([0,budget+10])
+plt.show()
+
+
+# ## Effect of Changing Parameters and How to Change Model's Aim
+# 
+# 
+
+# We have a few parameters that can be changed:
+# 
+# 1. The Budget
+# 
+# 2. Our learning rate, $\alpha$
+# 
+# 3. Out action selection parameter, $\epsilon$
+
+# #### Varying Budget
+# 
+# First, lets observe what happens if we make our budget either impossibly low or high.
+# 
+# A budget that means we only obtain a negative reward means that we will force our V to converge negatively whereas a budget that is too high will cause our V to converge positively as all actions are continually positive.
+# 
+# The latter seems like what we had in our first run, a lot of the episodes lead to positive outcomes and so many combinations of products are possible and there is little distinction between the cheapest products from the rest.
+# 
+# If instead we consider a budget that is reasonably low given the prices of the products, we can see a trend where the cheapest products look to be converging positively and the more expensive products converging negatively. However, the smoothness of these is far from ideal, both appear to be oscillating greatly between each episode.
+# 
+# So what can we do the reduce the 'spikiness' of the outputs? This leades us onto our next parameter, alpha.
 
 # In[11]:
 
 
-train[train['length'] == 860]
+##### Make budget very small
+budget2 = 5
 
 
-# ![](data:image/jpeg;base64,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)
+alpha2 = 0.1
+num_episodes2 = 100
+epsilon2 = 0.5
+
+
+# Currently not using a reward
+reward2 = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl2 = MCModelv1(data=data, alpha = alpha2, e = num_episodes2,epsilon = epsilon2, budget = budget2, reward = reward2)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+plt.plot(range(0,num_episodes2), Mdl2[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
 
 # In[12]:
 
 
-train.text.values[9215]
+# Make budget very large
+budget3 = 100
+
+
+alpha3 = 0.1
+num_episodes3 = 100
+epsilon3 = 0.5
+
+
+# Currently not using a reward
+reward3 = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl3 = MCModelv1(data=data, alpha = alpha3, e = num_episodes3,epsilon = epsilon3, budget = budget3, reward = reward3)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+plt.plot(range(0,num_episodes), Mdl3[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
 # In[13]:
 
 
-sns.boxplot(x = 'author',y = 'length',data = train)
+# Make budget reasonably small
+budget4 = 23
 
 
-# In[14]:
+alpha4 = 0.1
+num_episodes4 = 100
+epsilon4 = 0.5
 
 
-import nltk
+# Currently not using a reward
+reward4 = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl4 = MCModelv1(data=data, alpha = alpha4, e = num_episodes4,epsilon = epsilon4, budget = budget4, reward = reward4)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+plt.plot(range(0,num_episodes4), Mdl4[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
-# In[15]:
+plt.plot(range(0,num_episodes4), Mdl4[1],range(0,num_episodes4), Mdl4[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
-print(nltk.word_tokenize(train.text[0]))
+# ## Varying Alpha
+
+# #### A good explination of what is going on with our outupt due to alpha is described by stack overflow user VishalTheBeast:
+#     
+# "Learning rate tells the magnitude of step that is taken towards the solution.
+# 
+# It should not be too big a number as it may continuously oscillate around the minima and it should not be too small of a number else it will take a lot of time and iterations to reach the minima.
+# 
+# The reason why decay is advised in learning rate is because initially when we are at a totally random point in solution space we need to take big leaps towards the solution and later when we come close to it, we make small jumps and hence small improvements to finally reach the minima.
+# 
+# Analogy can be made as: in the game of golf when the ball is far away from the hole, the player hits it very hard to get as close as possible to the hole. Later when he reaches the flagged area, he choses a different stick to get accurate short shot.
+# 
+# So its not that he won't be able to put the ball in the hole without choosing the short shot stick, he may send the ball ahead of the target two or three times. But it would be best if he plays optimally and uses the right amount of power to reach the hole. Same is for decayed learning rate." 
+#     
+#     
+# https://stackoverflow.com/questions/33011825/learning-rate-of-a-q-learning-agent
+
+# To better demonstrate the effect of varying our alpha, I will be using an animated plot created using Plot.ly.
+# 
+# I have witten a more detailed guide on how to do this here:
+# 
+# https://www.philiposbornedata.com/2018/03/01/creating-interactive-animation-for-parameter-optimisation-using-plot-ly/
+# 
+
+# ---
+# 
+# In our first animation, we vary alpha between 1 and 0.1. This enables us to see that as we reduce alpha our output smooths somewhat but it still pretty rough.
+# 
+# To investigate this further, I have then created a similar plot for alpha between 0.1 and 0.01. This emphasises the smoothing effect alpha has even more so.
+# 
+# However, even though the results are smoothing out, they are no longer converging in 100 episodes and, furthermore, they output seems to alternate between each alpha. This is due to a combination of small alphas requireing more episodes to learn and out action selection paramter epsilon being 0.5. Essentially, the output is still being decided by randomness half of the time and so out results are not converging within the 100 episode frame. 
+
+# In[30]:
 
 
-# In[16]:
-
-
-from sklearn.feature_extraction.text    import CountVectorizer,TfidfVectorizer
-
-
-# In[17]:
-
-
-text = list(train.text.values)
-text
-
-
-# In[18]:
-
-
-tf_vectorizer = CountVectorizer(max_df=0.95, min_df=2,
-                                stop_words='english')
-tf = tf_vectorizer.fit_transform(text)
-
-
-# In[19]:
-
-
-print(tf_vectorizer.get_feature_names()[0:100])
-
-
-# In[20]:
-
-
-train.head()
-
-
-# In[21]:
-
-
-from sklearn.model_selection import train_test_split
-
-train1 ,test1 = train_test_split(train,test_size=0.2) 
-np.random.seed(0)
-train1.head()
-
-
-# In[22]:
-
-
-X_train = train1['text'].values
-X_test = test1['text'].values
-y_train = train1['author'].values
-y_test = test1['author'].values
+from plotly.offline import init_notebook_mode, iplot, plot
+from IPython.display import display, HTML
+import plotly
+import plotly.plotly as py
+init_notebook_mode(connected=True)
 
 
 # In[23]:
 
 
-X_train[1],y_train[0]
+# Provide all parameters fixed except alpha
+budget5 = 23
+num_episodes5 = 100
+epsilon5 = 0.5
 
+# Currently not using a reward
+reward5 = [0,0,0,0,0,0,0,0,0]
 
-# In[24]:
+VforInteractiveGraphA = []    
+lA = []
+num_episodes5_2 = []
+for x in range(0, 10):
+    alpha5 = 1 - x/10
+    Mdl5 = MCModelv1(data=data, alpha = alpha5, e = num_episodes5,epsilon = epsilon5, budget = budget5, reward = reward5)
+    VforInteractiveGraphA = np.append(VforInteractiveGraphA, Mdl5[0])
+    for y in range(0, num_episodes5):
+        lA = np.append(lA,alpha5)
+        num_episodes5_2 = np.append(num_episodes5_2, y)
+VforInteractiveGraphA2 = pd.DataFrame(VforInteractiveGraphA,lA)
+VforInteractiveGraphA2['index1'] = VforInteractiveGraphA2.index
+VforInteractiveGraphA2['Episode'] = num_episodes5_2
+VforInteractiveGraphA2.columns = ['V', 'Alpha', 'Episode']
+VforInteractiveGraphA2 = VforInteractiveGraphA2[['Alpha','Episode', 'V']]
 
-
-X_test[0],y_test[0]
+VforInteractiveGraphA2.head()
 
 
 # In[25]:
 
 
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn import svm
+VforInteractiveGraphA3 = VforInteractiveGraphA2
+VforInteractiveGraphA3['continent'] = 'Test'
+VforInteractiveGraphA3['country'] = 'Test2'
+VforInteractiveGraphA3['pop'] = 7000000.0
+VforInteractiveGraphA3.columns = ['year', 'lifeExp', 'gdpPercap', 'continent', 'country', 'pop']
 
-
-# **Here i used Countvectorizer only, you can try TfidfVectorizer also.**
-
-# In[26]:
-
-
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', svm.LinearSVC())
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
-
-
-# In[27]:
-
-
-text_clf = Pipeline([('vect', TfidfVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', svm.LinearSVC())
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
-
-
-# ![try other](https://media1.tenor.com/images/35b9a8d480d756f6d31d2d59d56abb4a/tenor.gif?itemid=5139192)
-# 
-# **Try with different classifier**
-
-# In[28]:
-
-
-from sklearn.ensemble import RandomForestClassifier,ExtraTreesClassifier
-import xgboost as xgb
-import lightgbm as lgbm
-from sklearn.naive_bayes import MultinomialNB
-
-
-# In[29]:
-
-
-rfc = RandomForestClassifier()
-etrc = ExtraTreesClassifier()
-xgbc = xgb.XGBClassifier()
-lgbmc = lgbm.LGBMClassifier()
-mnb = MultinomialNB()
-
-
-# In[30]:
-
-
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', rfc)
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
+alphaforGraph = list(set(VforInteractiveGraphA3['year']))
+alphaforGraph = np.round(alphaforGraph,1)
+alphaforGraph = np.sort(alphaforGraph)[::-1]
+years = np.round([(alphaforGraph) for alphaforGraph in alphaforGraph],1)
+years
 
 
 # In[31]:
 
 
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', xgbc)
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+dataset = VforInteractiveGraphA3
+
+continents = []
+for continent in dataset['continent']:
+    if continent not in continents:
+        continents.append(continent)
+# make figure
+figure = {
+    'data': [],
+    'layout': {},
+    'frames': []
+}
+
+# fill in most of layout
+figure['layout']['title'] = "Parameter Optimisation using Interactive Animation <br> PhilipOsborneData.com"
+figure['layout']['xaxis'] = {'title': 'Episode'}
+figure['layout']['yaxis'] = {'title': 'Sum of V', 'type': 'linear'}
+figure['layout']['hovermode'] = 'closest'
+figure['layout']['sliders'] = {
+    'args': [
+        'transition', {
+            'duration': 400,
+            'easing': 'cubic-in-out'
+        }
+    ],
+    'initialValue': '1952',
+    'plotlycommand': 'animate',
+    'values': years,
+    'visible': True
+}
+figure['layout']['updatemenus'] = [
+    {
+        'buttons': [
+            {
+                'args': [None, {'frame': {'duration': 500, 'redraw': False},
+                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
+                'label': 'Play',
+                'method': 'animate'
+            },
+            {
+                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
+                'transition': {'duration': 0}}],
+                'label': 'Pause',
+                'method': 'animate'
+            }
+        ],
+        'direction': 'left',
+        'pad': {'r': 10, 't': 87},
+        'showactive': False,
+        'type': 'buttons',
+        'x': 0.1,
+        'xanchor': 'right',
+        'y': 0,
+        'yanchor': 'top'
+    }
+]
+
+sliders_dict = {
+    'active': 0,
+    'yanchor': 'top',
+    'xanchor': 'left',
+    'currentvalue': {
+        'font': {'size': 20},
+        'prefix': 'Alpha: ',
+        'visible': True,
+        'xanchor': 'right'
+    },
+    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
+    'pad': {'b': 10, 't': 50},
+    'len': 0.9,
+    'x': 0.1,
+    'y': 0,
+    'steps': []
+}
+
+# make data
+year = 1.0
+for continent in continents:
+    dataset_by_year = dataset[np.round(dataset['year'],1) == np.round(year,1)]
+    dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+    data_dict = {
+        'x': list(dataset_by_year_and_cont['lifeExp']),
+        'y': list(dataset_by_year_and_cont['gdpPercap']),
+        'mode': 'markers',
+        'text': list(dataset_by_year_and_cont['country']),
+        'marker': {
+            'sizemode': 'area',
+            'sizeref': 200000,
+            'size': list(dataset_by_year_and_cont['pop'])
+        },
+        'name': continent
+    }
+    figure['data'].append(data_dict)
+
+# make frames
+for year in years:
+    frame = {'data': [], 'name': str(year)}
+    for continent in continents:
+        dataset_by_year = dataset[np.round(dataset['year'],1) == np.round(year,1)]
+        dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+        data_dict = {
+            'x': list(dataset_by_year_and_cont['lifeExp']),
+            'y': list(dataset_by_year_and_cont['gdpPercap']),
+            'mode': 'markers',
+            'text': list(dataset_by_year_and_cont['country']),
+            'marker': {
+                'sizemode': 'area',
+                'sizeref': 200000,
+                'size': list(dataset_by_year_and_cont['pop'])
+            },
+            'name': continent
+        }
+        frame['data'].append(data_dict)
+
+    figure['frames'].append(frame)
+    slider_step = {'args': [
+        [year],
+        {'frame': {'duration': 300, 'redraw': False},
+         'mode': 'immediate',
+       'transition': {'duration': 300}}
+     ],
+     'label': year,
+     'method': 'animate'}
+    sliders_dict['steps'].append(slider_step)
 
 
-# In[32]:
+figure['layout']['sliders'] = [sliders_dict]
+
+iplot(figure)
 
 
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', lgbmc)
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
+# In[50]:
 
 
-# In[33]:
+# Provide all parameters fixed except alpha
+budget6 = 23
+num_episodes6 = 100
+epsilon6 = 0.5
+
+# Currently not using a reward
+reward6 = [0,0,0,0,0,0,0,0,0]
+
+VforInteractiveGraphA_2 = []    
+lA2 = []
+num_episodes6_2 = []
+for x in range(0, 10):
+    alpha6 = 0.1 - x/100
+    Mdl6 = MCModelv1(data=data, alpha = alpha6, e = num_episodes6,epsilon = epsilon6, budget = budget6, reward = reward6)
+    VforInteractiveGraphA_2 = np.append(VforInteractiveGraphA_2, Mdl6[0])
+    for y in range(0, num_episodes6):
+        lA2 = np.append(lA2,alpha6)
+        num_episodes6_2 = np.append(num_episodes6_2, y)
+VforInteractiveGraphA_22 = pd.DataFrame(VforInteractiveGraphA_2,lA2)
+VforInteractiveGraphA_22['index1'] = VforInteractiveGraphA_22.index
+VforInteractiveGraphA_22['Episode'] = num_episodes6_2
+VforInteractiveGraphA_22.columns = ['V', 'Alpha', 'Episode']
+VforInteractiveGraphA_22 = VforInteractiveGraphA_22[['Alpha','Episode', 'V']]
 
 
-text_clf = Pipeline([('vect', CountVectorizer()),
-                     ('tfidf', TfidfTransformer()),
-                     ('clf', mnb)
-                    ])
-text_clf = text_clf.fit(X_train,y_train)
-y_test_predicted = text_clf.predict(X_test)
-np.mean(y_test_predicted == y_test)
+VforInteractiveGraphA_23 = VforInteractiveGraphA_22
+VforInteractiveGraphA_23['continent'] = 'Test'
+VforInteractiveGraphA_23['country'] = 'Test2'
+VforInteractiveGraphA_23['pop'] = 7000000.0
+VforInteractiveGraphA_23.columns = ['year', 'lifeExp', 'gdpPercap', 'continent', 'country', 'pop']
+
+alphaforGraph2 = list(set(VforInteractiveGraphA_23['year']))
+alphaforGraph2 = np.round(alphaforGraph2,2)
+alphaforGraph2 = np.sort(alphaforGraph2)[::-1]
+years = np.round([(alphaforGraph2) for alphaforGraph2 in alphaforGraph2],2)
+years
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+dataset = VforInteractiveGraphA_23
+
+continents = []
+for continent in dataset['continent']:
+    if continent not in continents:
+        continents.append(continent)
+# make figure
+figure = {
+    'data': [],
+    'layout': {},
+    'frames': []
+}
+
+# fill in most of layout
+figure['layout']['title'] = "Parameter Optimisation using Interactive Animation <br> PhilipOsborneData.com"
+figure['layout']['xaxis'] = {'title': 'Episode'}
+figure['layout']['yaxis'] = {'title': 'Sum of V', 'type': 'linear'}
+figure['layout']['hovermode'] = 'closest'
+figure['layout']['sliders'] = {
+    'args': [
+        'transition', {
+            'duration': 400,
+            'easing': 'cubic-in-out'
+        }
+    ],
+    'initialValue': '1952',
+    'plotlycommand': 'animate',
+    'values': years,
+    'visible': True
+}
+figure['layout']['updatemenus'] = [
+    {
+        'buttons': [
+            {
+                'args': [None, {'frame': {'duration': 500, 'redraw': False},
+                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
+                'label': 'Play',
+                'method': 'animate'
+            },
+            {
+                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
+                'transition': {'duration': 0}}],
+                'label': 'Pause',
+                'method': 'animate'
+            }
+        ],
+        'direction': 'left',
+        'pad': {'r': 10, 't': 87},
+        'showactive': False,
+        'type': 'buttons',
+        'x': 0.1,
+        'xanchor': 'right',
+        'y': 0,
+        'yanchor': 'top'
+    }
+]
+
+sliders_dict = {
+    'active': 0,
+    'yanchor': 'top',
+    'xanchor': 'left',
+    'currentvalue': {
+        'font': {'size': 20},
+        'prefix': 'Alpha: ',
+        'visible': True,
+        'xanchor': 'right'
+    },
+    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
+    'pad': {'b': 10, 't': 50},
+    'len': 0.9,
+    'x': 0.1,
+    'y': 0,
+    'steps': []
+}
+
+# make data
+year = 1.0
+for continent in continents:
+    dataset_by_year = dataset[np.round(dataset['year'],2) == np.round(year,2)]
+    dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+    data_dict = {
+        'x': list(dataset_by_year_and_cont['lifeExp']),
+        'y': list(dataset_by_year_and_cont['gdpPercap']),
+        'mode': 'markers',
+        'text': list(dataset_by_year_and_cont['country']),
+        'marker': {
+            'sizemode': 'area',
+            'sizeref': 200000,
+            'size': list(dataset_by_year_and_cont['pop'])
+        },
+        'name': continent
+    }
+    figure['data'].append(data_dict)
+
+# make frames
+for year in years:
+    frame = {'data': [], 'name': str(year)}
+    for continent in continents:
+        dataset_by_year = dataset[np.round(dataset['year'],2) == np.round(year,2)]
+        dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+        data_dict = {
+            'x': list(dataset_by_year_and_cont['lifeExp']),
+            'y': list(dataset_by_year_and_cont['gdpPercap']),
+            'mode': 'markers',
+            'text': list(dataset_by_year_and_cont['country']),
+            'marker': {
+                'sizemode': 'area',
+                'sizeref': 200000,
+                'size': list(dataset_by_year_and_cont['pop'])
+            },
+            'name': continent
+        }
+        frame['data'].append(data_dict)
+
+    figure['frames'].append(frame)
+    slider_step = {'args': [
+        [year],
+        {'frame': {'duration': 300, 'redraw': False},
+         'mode': 'immediate',
+       'transition': {'duration': 300}}
+     ],
+     'label': year,
+     'method': 'animate'}
+    sliders_dict['steps'].append(slider_step)
 
 
-# **Here i'm trying to apply LSA and extraxt the top words of author EAP**
+figure['layout']['sliders'] = [sliders_dict]
 
-# In[34]:
-
-
-train.head()
+iplot(figure)
 
 
-# In[35]:
+# ## Varying Epsilon
+
+# With the previous results in mind, we now fix alpha to be 0.05 and vary epsilone between 1 and 0 to show the effect of completely randomly selecting actions to selecting actions greedily.
+# 
+# We see that having a high epsilon creates very sporadic results. Therefore we should select something resonably small like 0.2. Although have epsilon equal to 0 looks good because of how smooth the curve is, as we mentioned earlier, this may lead us to a choice very quickly but may not be the best. We want some randomness so the model can explore other actions if needed.
+
+# In[86]:
 
 
-text = list(train[train['author']=='EAP'].text.values)
+# Provide all parameters fixed except alpha
+budget7 = 23
+num_episodes7 = 100
+alpha7  = 0.05
+
+# Currently not using a reward
+reward7 = [0,0,0,0,0,0,0,0,0]
+
+VforInteractiveGraphA_3 = []    
+lA3 = []
+num_episodes7_3 = []
+for x in range(0, 11):
+    epsilon7 = 1 - x/10
+    Mdl7 = MCModelv1(data=data, alpha = alpha7, e = num_episodes7,epsilon = epsilon7, budget = budget7, reward = reward7)
+    VforInteractiveGraphA_3 = np.append(VforInteractiveGraphA_3, Mdl7[0])
+    for y in range(0, num_episodes7):
+        lA3 = np.append(lA3,epsilon7)
+        num_episodes7_3 = np.append(num_episodes7_3, y)
+VforInteractiveGraphA_32 = pd.DataFrame(VforInteractiveGraphA_3,lA3)
+VforInteractiveGraphA_32['index1'] = VforInteractiveGraphA_32.index
+VforInteractiveGraphA_32['Episode'] = num_episodes7_3
+VforInteractiveGraphA_32.columns = ['V', 'Epsilon', 'Episode']
+VforInteractiveGraphA_32 = VforInteractiveGraphA_32[['Epsilon','Episode', 'V']]
 
 
-# In[36]:
+VforInteractiveGraphA_33 = VforInteractiveGraphA_32
+VforInteractiveGraphA_33['continent'] = 'Test'
+VforInteractiveGraphA_33['country'] = 'Test2'
+VforInteractiveGraphA_33['pop'] = 7000000.0
+VforInteractiveGraphA_33.columns = ['year', 'lifeExp', 'gdpPercap', 'continent', 'country', 'pop']
+
+epsilonforGraph3 = list(set(VforInteractiveGraphA_33['year']))
+epsilonforGraph3 = np.round(epsilonforGraph3,1)
+epsilonforGraph3 = np.sort(epsilonforGraph3)[::-1]
+years = np.round([(epsilonforGraph3) for epsilonforGraph3 in epsilonforGraph3],1)
+years
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+dataset = VforInteractiveGraphA_33
+
+continents = []
+for continent in dataset['continent']:
+    if continent not in continents:
+        continents.append(continent)
+# make figure
+figure = {
+    'data': [],
+    'layout': {},
+    'frames': []
+}
+
+# fill in most of layout
+figure['layout']['title'] = "Parameter Optimisation using Interactive Animation <br> PhilipOsborneData.com"
+figure['layout']['xaxis'] = {'title': 'Episode'}
+figure['layout']['yaxis'] = {'title': 'Sum of V', 'type': 'linear'}
+figure['layout']['hovermode'] = 'closest'
+figure['layout']['sliders'] = {
+    'args': [
+        'transition', {
+            'duration': 400,
+            'easing': 'cubic-in-out'
+        }
+    ],
+    'initialValue': '1952',
+    'plotlycommand': 'animate',
+    'values': years,
+    'visible': True
+}
+figure['layout']['updatemenus'] = [
+    {
+        'buttons': [
+            {
+                'args': [None, {'frame': {'duration': 500, 'redraw': False},
+                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
+                'label': 'Play',
+                'method': 'animate'
+            },
+            {
+                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
+                'transition': {'duration': 0}}],
+                'label': 'Pause',
+                'method': 'animate'
+            }
+        ],
+        'direction': 'left',
+        'pad': {'r': 10, 't': 87},
+        'showactive': False,
+        'type': 'buttons',
+        'x': 0.1,
+        'xanchor': 'right',
+        'y': 0,
+        'yanchor': 'top'
+    }
+]
+
+sliders_dict = {
+    'active': 0,
+    'yanchor': 'top',
+    'xanchor': 'left',
+    'currentvalue': {
+        'font': {'size': 20},
+        'prefix': 'Epsilon: ',
+        'visible': True,
+        'xanchor': 'right'
+    },
+    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
+    'pad': {'b': 10, 't': 50},
+    'len': 0.9,
+    'x': 0.1,
+    'y': 0,
+    'steps': []
+}
+
+# make data
+year = 1.0
+for continent in continents:
+    dataset_by_year = dataset[np.round(dataset['year'],1) == np.round(year,1)]
+    dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+    data_dict = {
+        'x': list(dataset_by_year_and_cont['lifeExp']),
+        'y': list(dataset_by_year_and_cont['gdpPercap']),
+        'mode': 'markers',
+        'text': list(dataset_by_year_and_cont['country']),
+        'marker': {
+            'sizemode': 'area',
+            'sizeref': 200000,
+            'size': list(dataset_by_year_and_cont['pop'])
+        },
+        'name': continent
+    }
+    figure['data'].append(data_dict)
+
+# make frames
+for year in years:
+    frame = {'data': [], 'name': str(year)}
+    for continent in continents:
+        dataset_by_year = dataset[np.round(dataset['year'],1) == np.round(year,1)]
+        dataset_by_year_and_cont = dataset_by_year[dataset_by_year['continent'] == continent]
+
+        data_dict = {
+            'x': list(dataset_by_year_and_cont['lifeExp']),
+            'y': list(dataset_by_year_and_cont['gdpPercap']),
+            'mode': 'markers',
+            'text': list(dataset_by_year_and_cont['country']),
+            'marker': {
+                'sizemode': 'area',
+                'sizeref': 200000,
+                'size': list(dataset_by_year_and_cont['pop']),
+                'color': 'rgba(255, 182, 193, .9)'
+            },
+            'name': continent
+        }
+        frame['data'].append(data_dict)
+
+    figure['frames'].append(frame)
+    slider_step = {'args': [
+        [year],
+        {'frame': {'duration': 300, 'redraw': False},
+         'mode': 'immediate',
+       'transition': {'duration': 300}}
+     ],
+     'label': year,
+     'method': 'animate'}
+    sliders_dict['steps'].append(slider_step)
 
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-vectorizer = TfidfVectorizer(lowercase=True,stop_words='english')
+figure['layout']['sliders'] = [sliders_dict]
+
+iplot(figure)
 
 
-# In[37]:
+# ## Increasing the Number of Episodes
+
+# Lastly, we can increase the number of episodes. I refrained from doing this sooner because we were running 10 models in a loop to output our animated graphs and this would have caused the time taken to run the model to explode. 
+# 
+# We noted that a low alpha would require more episodes to learn so we can run our model for 1000 episodes.
+# 
+# However, we still notice that the output is oscillating, but, as mentioned before, this is due to our aim being simply to recommend a combination that is below budget. What this shows is that the model can't find the single best combination when there are many that fit below our budget.
+# 
+# Therefore, what happens if we change our aim slightly so that we can use the model to find the cheapest combination of products?
+
+# In[84]:
 
 
-X =vectorizer.fit_transform(text)
+# Increase the number of episodes
+
+budget8 = 23
+alpha8 = 0.05
+num_episodes8 = 1000
+epsilon8 = 0.2
+
+# Currently not using a reward
+reward8 = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl8 = MCModelv1(data=data, alpha = alpha8, e = num_episodes8,epsilon = epsilon8, budget = budget8, reward = reward8)
+
+print("--- %s seconds ---" % (time.time() - start_time))
 
 
-# In[38]:
+plt.plot(range(0,num_episodes8), Mdl8[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
-from sklearn.decomposition import TruncatedSVD
-lsa = TruncatedSVD(n_components=3,n_iter=500)
+plt.plot(range(0,num_episodes8), Mdl8[1],range(0,num_episodes8), Mdl8[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
 
 
-# In[39]:
+# ## Changing our Model's Aim to Find the Cheapest Combination of Products
 
+# #### This will now more clearly seperate the cheapest products from the rest and nearly always provides us with the cheapest combination of products.
 
-lsa.fit(X)
-
-
-# In[40]:
-
-
-terms = vectorizer.get_feature_names()
-
-
-# In[41]:
-
-
-for i,comp in enumerate(lsa.components_):
-    termsInComp = zip(terms,comp)
-    sortedterms = sorted(termsInComp, key=lambda x: x[1],reverse=True)[:10]
-    print("Concept %d:" % i)
-    for term in sortedterms:
-        print(term[0])
-    print(" ")
-
-
-# Further :
-# * tune the parameters of the model to get high accuracy
-# * clean the data further if needed like removing common words and stop words
-# * ensemble models
-# * data visulazation
-# * if needed feature engineering 
-# and many things to do ....
+# To do this, all we need do is adapt our model slightly to provide a terminal reward that is relative to how far below or above budget this combination in the episode is. 
+# 
+# This can done by changing the calculation for return to:
 # 
 # 
-
-# ![please](https://media.giphy.com/media/cyoN6pC6kek2A/giphy.gif)
-
-# **More to come...**
 # 
-# **Please upvote to encourage me.**
+#         if(budget >= episode2['Real_Cost'].sum()):
+#             Return = (budget - episode2['Real_Cost'].sum())
+#         else:
+#             Return = (budget - episode2['Real_Cost'].sum())
+#             
+# We now see that the seperation between the cheapest products and the others is emphasised.
 # 
-# **Thank you :)** 
+# This really demonstrates the flexibility of reinforcement learning and how easy it can be to adapt the model based on your aims.
+
+# In[80]:
+
+
+def MCModelv2(data, alpha, e, epsilon, budget, reward):
+    # Define the States
+    Ingredients = list(set(data['Ingredient']))
+    # Initialise V_0
+    V0 = data['V_0']
+    data['V'] = V0
+    output = []
+    output1 = []
+    output2 = []
+    actioninfull = []
+    #Interate over the number of episodes specified
+    for e in range(0,e):
+        
+        episode_run = []
+        #Introduce epsilon-greedy selection, we randomly select the first episode as V_0(a) = 0 for all actions
+        epsilon = epsilon
+        if e == 0:
+            for i in range(0,len(Ingredients)):
+                episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+            episode_run = episode_run.astype(int)
+        
+        else:
+            for i in range(0,len(Ingredients)):
+                greedyselection = np.random.random_integers(low = 1, high =10)
+                if greedyselection <= (epsilon)*10:
+                    episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+                else:
+                    data_I = data[data['Ingredient'] == (i+1)] 
+                    MaxofVforI = data_I[data_I['V'] == data_I['V'].max() ]['Product']
+                    #If multiple max values, take first
+                    MaxofVforI = MaxofVforI.values[0]
+                    episode_run = np.append(episode_run, MaxofVforI)
+                    
+                episode_run = episode_run.astype(int)
+                
+               
+           
+        episode = pd.DataFrame({'Ingredient' : Ingredients, 'Product': episode_run})    
+        episode['Merged_label'] =  (episode['Ingredient']*10 + episode['Product']).astype(float)
+        data['QMerged_label'] = (data['QMerged_label']).astype(float)
+        data['Reward'] = reward
+        episode2 =  episode.merge(data[['QMerged_label','Real_Cost','Reward']], left_on='Merged_label',right_on='QMerged_label', how = 'inner')
+        data = data.drop('Reward',1)
+        
+        # Calculate our terminal reward
+        if(budget >= episode2['Real_Cost'].sum()):
+            Return = (budget - episode2['Real_Cost'].sum())  
+        else:
+            Return = (budget - episode2['Real_Cost'].sum())
+        episode2 = episode2.drop('Reward',1)
+        episode2['Return'] = Return
+        
+        # Apply update rule to actions that were involved in obtaining terminal reward 
+        data = data.merge(episode2[['Merged_label','Return']], left_on='QMerged_label',right_on='Merged_label', how = 'outer')
+        data['Return'] = data['Return'].fillna(0)
+        for v in range(0,len(data)):
+            if data.iloc[v,7] == 0:
+                data.iloc[v,5] = data.iloc[v,5] 
+            else:
+                data.iloc[v,5]  = data.iloc[v,5]  + alpha*( (data.iloc[v,7]/len(Ingredients)) - data.iloc[v,5] )
+                
+        # Output table    
+        data = data.drop('Merged_label',1)
+        data = data.drop('Return',1)
+        
+        # Output is the Sum of V(a) for all episodes
+        output  = np.append(output, data.iloc[:,-1].sum())
+        
+        # Output 1 and 2 are the Sum of V(a) for for the cheapest actions and rest respectively
+        # I did this so we can copare how they converge whilst applying to such a small sample problem
+        output1 = np.append(output1, data.iloc[[1,2,4,8],-1].sum())
+        output2 = np.append(output2, data.iloc[[0,3,5,6,7],-1].sum())
+        
+        # Ouput to optimal action from the model based on highest V(a)
+        action = pd.DataFrame(data.groupby('Ingredient')['V'].max())
+        action2 = action.merge(data, left_on = 'V',right_on = 'V', how = 'inner')
+        action3 = action2[['Ingredient','Product']]
+        action3 = action3.groupby('Ingredient')['Product'].apply(lambda x :x.iloc[np.random.randint(0, len(x))])
+        
+        # Output the optimal action at each episode so we can see how this changes over time
+        actioninfull = np.append(actioninfull, action3)
+        actioninfull = actioninfull.astype(int)
+        
+        # Rename for clarity
+        SumofV = output
+        SumofVForCheapest = output1
+        SumofVForExpensive = output2
+        OptimalActions = action3
+        ActionsSelectedinTime = actioninfull
+        
+    return(SumofV, SumofVForCheapest, SumofVForExpensive, OptimalActions, data, ActionsSelectedinTime)
+
+
+
+
+# In[85]:
+
+
+##### Make budget reasonably small
+budget9 = 23
+
+
+alpha9 = 0.05
+num_episodes9 = 1000
+epsilon9 = 0.2
+
+
+# Currently not using a reward
+reward9 = [0,0,0,0,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl9 = MCModelv2(data=data, alpha = alpha9, e = num_episodes9,epsilon = epsilon9, budget = budget9, reward = reward9)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+print(Mdl9[3])
+
+
+plt.plot(range(0,num_episodes9), Mdl9[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+plt.plot(range(0,num_episodes9), Mdl9[1],range(0,num_episodes9), Mdl9[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+# # Introducing Preferences
+
+# So far, we have not included any personal preferences towards products. If we wanted to include this, we can simply introduce rewards for each product whilst still having a terminal reward that encourages the model to be below budget. 
+# 
+# 
+# This can done by changing the calculation for return to:
+# 
+# 
+# 
+#         if(budget >= episode2['Real_Cost'].sum()):
+#             Return = 1 + (episode2['Reward'].sum())/len(Ingredients)
+#         else:
+#             Return = -1 + (episode2['Reward'].sum())/len(Ingredients)
+#             
+# So why is our return calculation now like this? 
+# 
+# Well firstly, we still want our combination to be below budget so we provide the positive and negative rewards for being above and below budget respectively.
+# 
+# Next, we want to account for the reward of each product. For our purposes, we define the rewards to be a value between 0 and 1. MC return is formally calculated using the following:
+# 
+# 
+# $$R =  \sum_{k=0}^{Num Actions} \gamma^{k-1} r_{k}  $$
+# 
+# 
+# $\gamma$ is the discount factor and this tells us how much we value later steps compared to earlier steps. In our case, all actions are equally as important to reaching the desired outcome of being below budget so we set $\gamma = 1$. 
+# 
+# However, to ensure that we reach the primary goal of being below budget, we take the average of the sum of the rewards for each action so that this will always be less than 1 or -1 respectively.
+# 
+# 
+# 
+
+# In[109]:
+
+
+def MCModelv3(data, alpha, e, epsilon, budget, reward):
+    # Define the States
+    Ingredients = list(set(data['Ingredient']))
+    # Initialise V_0
+    V0 = data['V_0']
+    data['V'] = V0
+    output = []
+    output1 = []
+    output2 = []
+    actioninfull = []
+    #Interate over the number of episodes specified
+    for e in range(0,e):
+        
+        episode_run = []
+        #Introduce epsilon-greedy selection, we randomly select the first episode as V_0(a) = 0 for all actions
+        epsilon = epsilon
+        if e == 0:
+            for i in range(0,len(Ingredients)):
+                episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+            episode_run = episode_run.astype(int)
+        
+        else:
+            for i in range(0,len(Ingredients)):
+                greedyselection = np.random.random_integers(low = 1, high =10)
+                if greedyselection <= (epsilon)*10:
+                    episode_run = np.append(episode_run,np.random.random_integers(low = 1, high = sum(1 for p in data.iloc[:, 0] if p == i+1 ), size = None))
+                else:
+                    data_I = data[data['Ingredient'] == (i+1)] 
+                    MaxofVforI = data_I[data_I['V'] == data_I['V'].max() ]['Product']
+                    #If multiple max values, take first
+                    MaxofVforI = MaxofVforI.values[0]
+                    episode_run = np.append(episode_run, MaxofVforI)
+                    
+                episode_run = episode_run.astype(int)
+                
+               
+           
+        episode = pd.DataFrame({'Ingredient' : Ingredients, 'Product': episode_run})    
+        episode['Merged_label'] =  (episode['Ingredient']*10 + episode['Product']).astype(float)
+        data['QMerged_label'] = (data['QMerged_label']).astype(float)
+        data['Reward'] = reward
+        episode2 =  episode.merge(data[['QMerged_label','Real_Cost','Reward']], left_on='Merged_label',right_on='QMerged_label', how = 'inner')
+        data = data.drop('Reward',1)
+        
+        # Calculate our terminal reward
+        if(budget >= episode2['Real_Cost'].sum()):
+            Return = 1 + (episode2['Reward'].sum())/(len(Ingredients))
+        else:
+            Return = -1 + (episode2['Reward'].sum())/(len(Ingredients))
+        episode2 = episode2.drop('Reward',1)
+        episode2['Return'] = Return
+        
+        # Apply update rule to actions that were involved in obtaining terminal reward 
+        data = data.merge(episode2[['Merged_label','Return']], left_on='QMerged_label',right_on='Merged_label', how = 'outer')
+        data['Return'] = data['Return'].fillna(0)
+        for v in range(0,len(data)):
+            if data.iloc[v,7] == 0:
+                data.iloc[v,5] = data.iloc[v,5] 
+            else:
+                data.iloc[v,5]  = data.iloc[v,5]  + alpha*( (data.iloc[v,7]/len(Ingredients)) - data.iloc[v,5] )
+                
+        # Output table    
+        data = data.drop('Merged_label',1)
+        data = data.drop('Return',1)
+        
+        # Output is the Sum of V(a) for all episodes
+        output  = np.append(output, data.iloc[:,-1].sum())
+        
+        # Output 1 and 2 are the Sum of V(a) for for the cheapest actions and rest respectively
+        # I did this so we can copare how they converge whilst applying to such a small sample problem
+        output1 = np.append(output1, data.iloc[[1,2,4,8],-1].sum())
+        output2 = np.append(output2, data.iloc[[0,3,5,6,7],-1].sum())
+        
+        # Ouput to optimal action from the model based on highest V(a)
+        action = pd.DataFrame(data.groupby('Ingredient')['V'].max())
+        action2 = action.merge(data, left_on = 'V',right_on = 'V', how = 'inner')
+        action3 = action2[['Ingredient','Product']]
+        action3 = action3.groupby('Ingredient')['Product'].apply(lambda x :x.iloc[np.random.randint(0, len(x))])
+        
+        # Output the optimal action at each episode so we can see how this changes over time
+        actioninfull = np.append(actioninfull, action3)
+        actioninfull = actioninfull.astype(int)
+        
+        # Rename for clarity
+        SumofV = output
+        SumofVForCheapest = output1
+        SumofVForExpensive = output2
+        OptimalActions = action3
+        ActionsSelectedinTime = actioninfull
+        
+    return(SumofV, SumofVForCheapest, SumofVForExpensive, OptimalActions, data, ActionsSelectedinTime)
+
+
+
+
+# ## Introducing Preferences using Rewards
+
+# Say we decided we wanted product a1 and b2, we could add a reward to each. Let us see what happens if we do this in the output and graphs below. We have changed out budget slightly as a1 and b2 add up to £21 which means there is no way to select two more products that would put it below a budget of £23.
+# 
+# Applying a very high reward forces the modle to pick a1 and b2 then work around to find products that will put it under our budget.
+# 
+# I have kept in the comparison between the cheapest products and the rest to show that the model now is not valuing the cheapest once more. Instead we get the output a1, b2, c1 and d3 which has a total cost of £25. This is both below our budget and includes our preferred products.
+# 
+
+# In[111]:
+
+
+# Introduce simple rewards
+budget10 = 30
+
+
+alpha10 = 0.05
+num_episodes10 = 1000
+epsilon10 = 0.2
+
+
+# Currently not using a reward
+reward10 = [0.8,0,0,0.8,0,0,0,0,0]
+
+start_time = time.time()
+
+Mdl10 = MCModelv3(data=data, alpha = alpha10, e = num_episodes10,epsilon = epsilon10, budget = budget10, reward = reward10)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+print(Mdl10[3])
+
+
+plt.plot(range(0,num_episodes10), Mdl10[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+plt.plot(range(0,num_episodes10), Mdl10[1],range(0,num_episodes10), Mdl10[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+# Let's try one more reward signal. This time, I give some reward to each but want it to provide the best combination from my rewards that still keeps us below budget.
+# 
+# We have the following rewards:
+# 
+# |Action|Reward|
+# |:----:|:----:|
+# |a1    | 0.8  |
+# |a2    | 0.4  |
+# |b1    | 0.5  |
+# |b2    | 0.6  |
+# |c1    | 0.4  |
+# |c2    | 0.4  |
+# |d1    | 0.6  |
+# |d2    | 0.2  |
+# |d3    | 0.4  |
+# 
+# Running this model a few times shows that it would:
+# - Often select a1 as this has a much higher reward
+# - Would always pick c1 as the rewards are the same but is cheaper
+# - Had a hard time selecting between b1 and b2 as the rewards are 0.5 and 0.6 but the costs are £8 and £11 respectively
+# - Would typically select d3 as being significantly cheaper than d1 even though reward is slightly less
+
+# In[112]:
+
+
+# Add rewards for more actions
+budget11 = 30
+
+
+alpha11 = 0.05
+num_episodes11 = 1000
+epsilon11 = 0.2
+
+
+# Currently not using a reward
+reward11 = [0.8,0.4,0.5,0.6,0.4,0.4,0.6,0.2,0.4]
+
+start_time = time.time()
+
+Mdl11 = MCModelv3(data=data, alpha = alpha11, e = num_episodes11,epsilon = epsilon11, budget = budget11, reward = reward11)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+print(Mdl11[3])
+
+
+plt.plot(range(0,num_episodes11), Mdl11[0])
+plt.title('Sum of V for all Actions at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+plt.plot(range(0,num_episodes11), Mdl10[1],range(0,num_episodes11), Mdl11[2])
+plt.title('Sum of V for the cheapest actions and others seperated at each Episode')
+plt.xlabel('Episode')
+plt.ylabel('Sum of V')
+plt.show()
+
+
+# # Conclusion
+# 
+# We have managed to build a Monte Carlo Reinforcement Learning model to: 1) recommend products below a budget, 2) recommend the cheapest products and 3) recommened the best products based on a preference that is still below a budget.
+# 
+# 
+# 
+# Along the way, we have demonstrated the effect of changing parameters in reinforcement learning and how understanding these enables us to reach a desired result. 
+# 
+# 
+# There is much more that we could do, in my mind, the end goal would be to apply to a real recipe and products from a supermarket where the increased number of ingredients and products need to be accounted for.
+# 
+# 
+# 
+# I created this sample data and problem to better my understanding of Reinforcement Learning and hope that you find it useful.
+# 
+# Thanks
+# 
+# Philip Osborne
+# 
+# 

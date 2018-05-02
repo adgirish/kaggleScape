@@ -1,93 +1,91 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.datasets import make_classification
+# coding=utf8
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+import matplotlib.pyplot as plt
 
-'''
-Another CTR comp and so i suspect libffm will play its part, after all it is an atomic bomb for this kind of stuff.
-A sci-kit learn inspired script to convert pandas dataframes into libFFM style data.
+RS = 20170501
+np.random.seed(RS)
 
-The script is fairly hacky (hey thats Kaggle) and takes a little while to run a huge dataset.
-The key to using this class is setting up the features dtypes correctly for output (ammend transform to suit your needs)
+ROUNDS = 450
+params = {
+	'objective': 'regression',
+    'metric': 'rmse',
+    'boosting': 'gbdt',
+    'learning_rate': 0.04,
+    'verbose': 0,
+    'num_leaves': 2 ** 5,
+    'bagging_fraction': 0.95,
+    'bagging_freq': 1,
+    'bagging_seed': RS,
+    'feature_fraction': 0.7,
+    'feature_fraction_seed': RS,
+    'max_bin': 100,
+    'max_depth': 5,
+    'num_rounds': ROUNDS
+}
 
-Example below
+print("Started")
+input_folder = '../input/'
+train_df = pd.read_csv(input_folder + 'train.csv', parse_dates=['timestamp'])
+test_df  = pd.read_csv(input_folder + 'test.csv' , parse_dates=['timestamp'])
+macro_df = pd.read_csv(input_folder + 'macro.csv', parse_dates=['timestamp'])
 
-'''
+#fix outlier
+train_df.drop(train_df[train_df["life_sq"] > 5000].index, inplace=True)
 
+train_y  = np.log(train_df['price_doc'].values)
+test_ids = test_df['id']
 
-class FFMFormatPandas:
-    def __init__(self):
-        self.field_index_ = None
-        self.feature_index_ = None
-        self.y = None
+train_df.drop(['id', 'price_doc'], axis=1, inplace=True)
+test_df.drop(['id'], axis=1, inplace=True)
+print("Data: X_train: {}, X_test: {}".format(train_df.shape, test_df.shape))
 
-    def fit(self, df, y=None):
-        self.y = y
-        df_ffm = df[df.columns.difference([self.y])]
-        if self.field_index_ is None:
-            self.field_index_ = {col: i for i, col in enumerate(df_ffm)}
+df = pd.concat([train_df, test_df])
 
-        if self.feature_index_ is not None:
-            last_idx = max(list(self.feature_index_.values()))
+#Lets try using only those from https://www.kaggle.com/robertoruiz/sberbank-russian-housing-market/dealing-with-multicollinearity
+macro_cols = ["timestamp","balance_trade","balance_trade_growth","eurrub","average_provision_of_build_contract","micex_rgbi_tr","micex_cbi_tr","deposits_rate","mortgage_value","mortgage_rate","income_per_cap","museum_visitis_per_100_cap","apartment_build"]
+df = df.merge(macro_df[macro_cols], on='timestamp', how='left')
+print("Merged with macro: {}".format(df.shape))
 
-        if self.feature_index_ is None:
-            self.feature_index_ = dict()
-            last_idx = 0
+#Dates...
+df['year'] = df.timestamp.dt.year
+df['month'] = df.timestamp.dt.month
+df['dow'] = df.timestamp.dt.dayofweek
+df.drop(['timestamp'], axis=1, inplace=True)
 
-        for col in df.columns:
-            vals = df[col].unique()
-            for val in vals:
-                if pd.isnull(val):
-                    continue
-                name = '{}_{}'.format(col, val)
-                if name not in self.feature_index_:
-                    self.feature_index_[name] = last_idx
-                    last_idx += 1
-            self.feature_index_[col] = last_idx
-            last_idx += 1
-        return self
+#More featuers needed...
 
-    def fit_transform(self, df, y=None):
-        self.fit(df, y)
-        return self.transform(df)
+df_num = df.select_dtypes(exclude=['object'])
+df_obj = df.select_dtypes(include=['object']).copy()
+for c in df_obj:
+    df_obj[c] = pd.factorize(df_obj[c])[0]
 
-    def transform_row_(self, row, t):
-        ffm = []
-        if self.y != None:
-            ffm.append(str(row.loc[row.index == self.y][0]))
-        if self.y is None:
-            ffm.append(str(0))
+df_values = pd.concat([df_num, df_obj], axis=1)
 
-        for col, val in row.loc[row.index != self.y].to_dict().items():
-            col_type = t[col]
-            name = '{}_{}'.format(col, val)
-            if col_type.kind ==  'O':
-                ffm.append('{}:{}:1'.format(self.field_index_[col], self.feature_index_[name]))
-            elif col_type.kind == 'i':
-                ffm.append('{}:{}:{}'.format(self.field_index_[col], self.feature_index_[col], val))
-        return ' '.join(ffm)
+pos = train_df.shape[0]
+train_df = df_values[:pos]
+test_df  = df_values[pos:]
+del df, df_num, df_obj, df_values
 
-    def transform(self, df):
-        t = df.dtypes.to_dict()
-        return pd.Series({idx: self.transform_row_(row, t) for idx, row in df.iterrows()})
+print("Training on: {}".format(train_df.shape, train_y.shape))
 
-########################### Lets build some data and test ############################
-### 
+train_lgb = lgb.Dataset(train_df, train_y)
+model = lgb.train(params, train_lgb, num_boost_round=ROUNDS)
+preds = model.predict(test_df)
+	
+print("Writing output...")
+out_df = pd.DataFrame({"id":test_ids, "price_doc":np.exp(preds)})
+out_df.to_csv("lgb_{}_{}.csv".format(ROUNDS, RS), index=False)
+print(out_df.head(3))
 
+print("Features importance...")
+gain = model.feature_importance('gain')
+ft = pd.DataFrame({'feature':model.feature_name(), 'split':model.feature_importance('split'), 'gain':100 * gain / gain.sum()}).sort_values('gain', ascending=False)
+print(ft.head(25))
 
-train, y = make_classification(n_samples=100, n_features=5, n_informative=2, n_redundant=2, n_classes=2, random_state=42)
+plt.figure()
+ft[['feature','gain']].head(25).plot(kind='barh', x='feature', y='gain', legend=False, figsize=(10, 20))
+plt.gcf().savefig('features_importance.png')
 
-train=pd.DataFrame(train, columns=['int1','int2','int3','s1','s2'])
-train['int1'] = train['int1'].map(int)
-train['int2'] = train['int2'].map(int)
-train['int3'] = train['int3'].map(int)
-train['s1'] = round(np.log(abs(train['s1'] +1 ))).map(str)
-train['s2'] = round(np.log(abs(train['s2'] +1 ))).map(str)
-train['clicked'] = y
-
-
-ffm_train = FFMFormatPandas()
-ffm_train_data = ffm_train.fit_transform(train, y='clicked')
-print('Base data')
-print(train[0:10])
-print('FFM data')
-print(ffm_train_data[0:10])
+print("Done.")

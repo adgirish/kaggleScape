@@ -1,186 +1,355 @@
-"""
-This is an upgraded version of Ceshine's LGBM starter script, simply adding more
-average features and weekly average features on it.
-"""
-from datetime import date, timedelta
-import calendar as ca
+# coding: utf-8
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+
+import datetime
 import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_squared_error
-import lightgbm as lgb
-print('Loading Data')
-df_train = pd.read_csv(
-    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
-    dtype={'onpromotion': bool},
-    converters={'unit_sales': lambda u: np.log1p(
-        float(u)) if float(u) > 0 else 0},
-    parse_dates=["date"],
-    skiprows=range(1, 66458909)  # 2016-01-01
-)
-item_nbr_u = df_train[df_train.date>pd.datetime(2017,8,10)].item_nbr.unique()
-
-df_test = pd.read_csv(
-    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
-    dtype={'onpromotion': bool},
-    parse_dates=["date"]  # , date_parser=parser
-).set_index(
-    ['store_nbr', 'item_nbr', 'date']
-)
-
-items = pd.read_csv(
-    "../input/items.csv",
-).set_index("item_nbr")
-
-df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
-del df_train
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
+import random
+from operator import itemgetter
+import zipfile
+from sklearn.metrics import roc_auc_score
+import time
+random.seed(2016)
 
 
+def create_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    for i, feat in enumerate(features):
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+    outfile.close()
 
-promo_2017_train = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
-        level=-1).fillna(False)
-promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
-promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
-promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
-promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
-promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
-del promo_2017_test, promo_2017_train
 
-df_2017 = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
-        level=-1).fillna(0)
-df_2017.columns = df_2017.columns.get_level_values(1)
+def get_importance(gbm, features):
+    create_feature_map(features)
+    importance = gbm.get_fscore(fmap='xgb.fmap')
+    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
+    return importance
 
+
+def intersect(a, b):
+    return list(set(a) & set(b))
+
+
+def print_features_importance(imp):
+    for i in range(len(imp)):
+        print("# " + str(imp[i][1]))
+        print('output.remove(\'' + imp[i][0] + '\')')
+
+
+def run_default_test(train, test, features, target, random_state=0):
+    eta = 0.1
+    max_depth = 5
+    subsample = 0.8
+    colsample_bytree = 0.8
+    start_time = time.time()
+
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state
+    }
+    num_boost_round = 260
+    early_stopping_rounds = 20
+    test_size = 0.1
+
+    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
+    y_train = X_train[target]
+    y_valid = X_valid[target]
+    dtrain = xgb.DMatrix(X_train[features], y_train)
+    dvalid = xgb.DMatrix(X_valid[features], y_valid)
+
+    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+
+    print("Validating...")
+    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_ntree_limit)
+    score = roc_auc_score(X_valid[target].values, check)
+    print('Check error value: {:.6f}'.format(score))
+
+    imp = get_importance(gbm, features)
+    print('Importance array: ', imp)
+
+    print("Predict test set...")
+    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_ntree_limit)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return test_prediction.tolist(), score
+
+
+def create_submission(score, test, prediction):
+    # Make Submission
+    now = datetime.datetime.now()
+    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print('Writing submission: ', sub_file)
+    f = open(sub_file, 'w')
+    f.write('id,probability\n')
+    total = 0
+    for id in test['id']:
+        str1 = str(id) + ',' + str(prediction[total])
+        str1 += '\n'
+        total += 1
+        f.write(str1)
+    f.close()
+
+    # print('Creating zip-file...')
+    # z = zipfile.ZipFile(sub_file + ".zip", "w", zipfile.ZIP_DEFLATED)
+    # z.write(sub_file)
+    # z.close()
+
+
+def get_features(train, test):
+    trainval = list(train.columns.values)
+    testval = list(test.columns.values)
+    output = intersect(trainval, testval)
+    output.remove('itemID_1')
+    output.remove('itemID_2')
+    return output
+
+
+def prep_train():
+    testing = 0
+    start_time = time.time()
+
+    types1 = {
+        'itemID_1': np.dtype(int),
+        'itemID_2': np.dtype(int),
+        'isDuplicate': np.dtype(int),
+        'generationMethod': np.dtype(int),
+    }
+
+    types2 = {
+        'itemID': np.dtype(int),
+        'categoryID': np.dtype(int),
+        'title': np.dtype(str),
+        'description': np.dtype(str),
+        'images_array': np.dtype(str),
+        'attrsJSON': np.dtype(str),
+        'price': np.dtype(float),
+        'locationID': np.dtype(int),
+        'metroID': np.dtype(float),
+        'lat': np.dtype(float),
+        'lon': np.dtype(float),
+    }
+
+    print("Load ItemPairs_train.csv")
+    pairs = pd.read_csv("../input/ItemPairs_train.csv", dtype=types1)
+    # Add 'id' column for easy merge
+    print("Load ItemInfo_train.csv")
+    items = pd.read_csv("../input/ItemInfo_train.csv", dtype=types2)
+    items.fillna(-1, inplace=True)
+    location = pd.read_csv("../input/Location.csv")
+    category = pd.read_csv("../input/Category.csv")
+
+    train = pairs
+    train = train.drop(['generationMethod'], axis=1)
+
+    print('Add text features...')
+    items['len_title'] = items['title'].str.len()
+    items['len_description'] = items['description'].str.len()
+    items['len_attrsJSON'] = items['attrsJSON'].str.len()
+
+    print('Merge item 1...')
+    item1 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item1 = pd.merge(item1, category, how='left', on='categoryID', left_index=True)
+    item1 = pd.merge(item1, location, how='left', on='locationID', left_index=True)
+
+    item1 = item1.rename(
+        columns={
+            'itemID': 'itemID_1',
+            'categoryID': 'categoryID_1',
+            'parentCategoryID': 'parentCategoryID_1',
+            'price': 'price_1',
+            'locationID': 'locationID_1',
+            'regionID': 'regionID_1',
+            'metroID': 'metroID_1',
+            'lat': 'lat_1',
+            'lon': 'lon_1',
+            'len_title': 'len_title_1',
+			'len_description': 'len_description_1',
+			'len_attrsJSON': 'len_attrsJSON_1',
+        }
+    )
+
+    # Add item 1 data
+    train = pd.merge(train, item1, how='left', on='itemID_1', left_index=True)
+
+    print('Merge item 2...')
+    item2 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item2 = pd.merge(item2, category, how='left', on='categoryID', left_index=True)
+    item2 = pd.merge(item2, location, how='left', on='locationID', left_index=True)
+
+    item2 = item2.rename(
+        columns={
+            'itemID': 'itemID_2',
+            'categoryID': 'categoryID_2',
+            'parentCategoryID': 'parentCategoryID_2',
+            'price': 'price_2',
+            'locationID': 'locationID_2',
+            'regionID': 'regionID_2',
+            'metroID': 'metroID_2',
+            'lat': 'lat_2',
+            'lon': 'lon_2',
+            'len_title': 'len_title_2',
+			'len_description': 'len_description_2',
+			'len_attrsJSON': 'len_attrsJSON_2'
+        }
+    )
+
+    # Add item 2 data
+    train = pd.merge(train, item2, how='left', on='itemID_2', left_index=True)
+
+    # Create same arrays
+    print('Create same arrays')
+    train['price_same'] = np.equal(train['price_1'], train['price_2']).astype(np.int32)
+    train['locationID_same'] = np.equal(train['locationID_1'], train['locationID_2']).astype(np.int32)
+    train['categoryID_same'] = np.equal(train['categoryID_1'], train['categoryID_2']).astype(np.int32)
+    train['regionID_same'] = np.equal(train['regionID_1'], train['regionID_2']).astype(np.int32)
+    train['metroID_same'] = np.equal(train['metroID_1'], train['metroID_2']).astype(np.int32)
+    train['lat_same'] = np.equal(train['lat_1'], train['lat_2']).astype(np.int32)
+    train['lon_same'] = np.equal(train['lon_1'], train['lon_2']).astype(np.int32)
+
+    # print(train.describe())
+    print('Create train data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return train
+
+
+def prep_test():
+    start_time = time.time()
+
+    types1 = {
+        'itemID_1': np.dtype(int),
+        'itemID_2': np.dtype(int),
+        'id': np.dtype(int),
+    }
+
+    types2 = {
+        'itemID': np.dtype(int),
+        'categoryID': np.dtype(int),
+        'title': np.dtype(str),
+        'description': np.dtype(str),
+        'images_array': np.dtype(str),
+        'attrsJSON': np.dtype(str),
+        'price': np.dtype(float),
+        'locationID': np.dtype(int),
+        'metroID': np.dtype(float),
+        'lat': np.dtype(float),
+        'lon': np.dtype(float),
+    }
+
+    print("Load ItemPairs_test.csv")
+    pairs = pd.read_csv("../input/ItemPairs_test.csv", dtype=types1)
+    print("Load ItemInfo_testcsv")
+    items = pd.read_csv("../input/ItemInfo_test.csv", dtype=types2)
+    items.fillna(-1, inplace=True)
+    location = pd.read_csv("../input/Location.csv")
+    category = pd.read_csv("../input/Category.csv")
+
+    train = pairs
+
+    print('Add text features...')
+    items['len_title'] = items['title'].str.len()
+    items['len_description'] = items['description'].str.len()
+    items['len_attrsJSON'] = items['attrsJSON'].str.len()
     
-items = items.reindex(df_2017.index.get_level_values(1))
+    print('Merge item 1...')
+    item1 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item1 = pd.merge(item1, category, how='left', on='categoryID', left_index=True)
+    item1 = pd.merge(item1, location, how='left', on='locationID', left_index=True)
 
-def get_timespan(df, dt, minus, periods, freq='D'):
-    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
-
-def get_nearwd(date,b_date):
-    date_list = pd.date_range(date-timedelta(140),periods=21,freq='7D').date
-    result = date_list[date_list<=b_date][-1]
-    return result
-def prepare_dataset(t2017, is_train=True):
-    X = pd.DataFrame({
-        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
-        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
-        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values,
-        "unpromo_16aftsum_2017":(1-get_timespan(promo_2017, t2017+timedelta(16), 16, 16)).iloc[:,1:].sum(axis=1).values, 
-    })
-
-    for i in range(16):
-        X["promo_{}".format(i)] = promo_2017[
-            t2017 + timedelta(days=i)].values.astype(np.uint8)
-        for j in [14,60,140]:
-            X["aft_promo_{}{}".format(i,j)] = (promo_2017[
-                t2017 + timedelta(days=i)]-1).values.astype(np.uint8)
-            X["aft_promo_{}{}".format(i,j)] = X["aft_promo_{}{}".format(i,j)]\
-                                        *X['promo_{}_2017'.format(j)]
-        if i ==15:
-            X["bf_unpromo_{}".format(i)]=0
-        else:
-            X["bf_unpromo_{}".format(i)] = (1-get_timespan(
-                    promo_2017, t2017+timedelta(16), 16-i, 16-i)).iloc[:,1:].sum(
-                            axis=1).values / (15-i) * X['promo_{}'.format(i)]
-
-    for i in range(7):
-        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
-        #X['mean_12_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 84-i, 12, freq='7D').mean(axis=1).values
-        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values        
-        
-        date = get_nearwd(t2017+timedelta(i),t2017)
-        ahead = (t2017-date).days
-        if ahead!=0:
-            X['ahead0_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead, ahead).mean(axis=1).values
-            X['ahead7_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead+7, ahead+7).mean(axis=1).values
-        X["day_1_2017_{}1".format(i)]= get_timespan(df_2017, date, 1, 1).values.ravel()
-        X["day_1_2017_{}2".format(i)]= get_timespan(df_2017, date-timedelta(7), 1, 1).values.ravel()
-        for m in [3,7,14,30,60,140]:
-            X["mean_{}_2017_{}1".format(m,i)]= get_timespan(df_2017, date,m, m).\
-                mean(axis=1).values
-            X["mean_{}_2017_{}2".format(m,i)]= get_timespan(df_2017, date-timedelta(7),m, m).\
-                mean(axis=1).values
-    if is_train:
-        y = df_2017[
-            pd.date_range(t2017, periods=16)
-        ].values
-        return X, y
-    return X
-
-print("Preparing dataset...")
-
-t2017 = date(2017, 7, 5)
-X_l, y_l = [], []
-for i in range(4):
-    delta = timedelta(days=7 * i)
-    X_tmp, y_tmp = prepare_dataset(
-        t2017 + delta
+    item1 = item1.rename(
+        columns={
+            'itemID': 'itemID_1',
+            'categoryID': 'categoryID_1',
+            'parentCategoryID': 'parentCategoryID_1',
+            'price': 'price_1',
+            'locationID': 'locationID_1',
+            'regionID': 'regionID_1',
+            'metroID': 'metroID_1',
+            'lat': 'lat_1',
+            'lon': 'lon_1',
+            'len_title': 'len_title_1',
+			'len_description': 'len_description_1',
+			'len_attrsJSON': 'len_attrsJSON_1'
+        }
     )
-    X_l.append(X_tmp)
-    y_l.append(y_tmp)
-X_train = pd.concat(X_l, axis=0)
-y_train = np.concatenate(y_l, axis=0)
-del X_l, y_l
-X_val, y_val = prepare_dataset(date(2017, 7, 26))
-X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
 
-print("Training and predicting models...")
-params = {
-    'num_leaves': 31,
-    'objective': 'regression',
-    'min_data_in_leaf': 200,
-    'learning_rate': 0.07,
-    'feature_fraction': 0.8,
-    'bagging_fraction': 0.85,
-    'bagging_freq': 3,
-    'metric': 'l2_root',
-    'num_threads': 4
-}
+    # Add item 1 data
+    train = pd.merge(train, item1, how='left', on='itemID_1', left_index=True)
 
-MAX_ROUNDS = 400
-val_pred = []
-test_pred = []
-cate_vars = []
-for i in range(16):
-    print("=" * 50)
-    print("Step %d" % (i+1))
-    print("=" * 50)
-    dtrain = lgb.Dataset(
-        X_train, label=y_train[:, i],
-        categorical_feature=cate_vars,
-        weight=pd.concat([items["perishable"]] * 4) * 0.25 + 1
+    print('Merge item 2...')
+    item2 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon',
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item2 = pd.merge(item2, category, how='left', on='categoryID', left_index=True)
+    item2 = pd.merge(item2, location, how='left', on='locationID', left_index=True)
+
+    item2 = item2.rename(
+        columns={
+            'itemID': 'itemID_2',
+            'categoryID': 'categoryID_2',
+            'parentCategoryID': 'parentCategoryID_2',
+            'price': 'price_2',
+            'locationID': 'locationID_2',
+            'regionID': 'regionID_2',
+            'metroID': 'metroID_2',
+            'lat': 'lat_2',
+            'lon': 'lon_2',
+            'len_title': 'len_title_2',
+			'len_description': 'len_description_2',
+			'len_attrsJSON': 'len_attrsJSON_2',
+        }
     )
-    dval = lgb.Dataset(
-        X_val, label=y_val[:, i], reference=dtrain,
-        weight=items["perishable"] * 0.25 + 1,
-        categorical_feature=cate_vars)
-    bst = lgb.train(
-        params, dtrain, num_boost_round=MAX_ROUNDS,
-        valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100
-    )
-    print("\n".join(("%s: %.2f" % x) for x in sorted(
-        zip(X_train.columns, bst.feature_importance("gain")),
-        key=lambda x: x[1], reverse=True
-    )))
-    val_pred.append(bst.predict(
-        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
-    test_pred.append(bst.predict(
-        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
 
-print("Validation mse:", mean_squared_error(
-    y_val, np.array(val_pred).transpose())**0.5)
+    # Add item 2 data
+    train = pd.merge(train, item2, how='left', on='itemID_2', left_index=True)
 
-print("Making submission...")
-y_test = np.array(test_pred).transpose()
-df_preds = pd.DataFrame(
-    y_test, index=df_2017.index,
-    columns=pd.date_range("2017-08-16", periods=16)
-).stack().to_frame("unit_sales")
-df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+    # Create same arrays
+    print('Create same arrays')
+    train['price_same'] = np.equal(train['price_1'], train['price_2']).astype(np.int32)
+    train['locationID_same'] = np.equal(train['locationID_1'], train['locationID_2']).astype(np.int32)
+    train['categoryID_same'] = np.equal(train['categoryID_1'], train['categoryID_2']).astype(np.int32)
+    train['regionID_same'] = np.equal(train['regionID_1'], train['regionID_2']).astype(np.int32)
+    train['metroID_same'] = np.equal(train['metroID_1'], train['metroID_2']).astype(np.int32)
+    train['lat_same'] = np.equal(train['lat_1'], train['lat_2']).astype(np.int32)
+    train['lon_same'] = np.equal(train['lon_1'], train['lon_2']).astype(np.int32)
 
-submission = df_test[["id"]].join(df_preds, how="left").fillna(0).reset_index()
-submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 10000)
-submission.loc[~submission.item_nbr.isin(item_nbr_u),'unit_sales']=0
-del item_nbr_u
-submission[['id','unit_sales']].to_csv('lgb.csv', float_format='%.4f', index=None)
+    # print(train.describe())
+    print('Create test data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return train
+
+
+def read_test_train():
+    train = prep_train()
+    test = prep_test()
+    train.fillna(-1, inplace=True)
+    test.fillna(-1, inplace=True)
+    # Get only subset of data
+    if 1:
+        len_old = len(train.index)
+        train = train.sample(frac=0.5)
+        len_new = len(train.index)
+        print('Reduce train from {} to {}'.format(len_old, len_new))
+    features = get_features(train, test)
+    return train, test, features
+
+
+train, test, features = read_test_train()
+print('Length of train: ', len(train))
+print('Length of test: ', len(test))
+print('Features [{}]: {}'.format(len(features), sorted(features)))
+test_prediction, score = run_default_test(train, test, features, 'isDuplicate')
+print('Real score = {}'.format(score))
+create_submission(score, test, test_prediction)
+
+

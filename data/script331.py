@@ -1,768 +1,288 @@
 
 # coding: utf-8
 
-# Explore the dataset and try some classification algorithm.
-# ----------------------------------------------------------
+# ## Manifold Learning And Autoencoders
+# 
+# Author: Alexandru Papiu
+
+# The MNIST competition is slowly coming to an end so I figured I'd try something slightly different - let's try to see if we can get some intuition about the geometry and topology of the MNIST dataset.
+
+# ### Loading required packages and data:
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-import warnings
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
-
-import seaborn as sns
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-plt.style.use("ggplot")
 
-# Any results you write to the current directory are saved as output.
+from sklearn import metrics
+from sklearn.neighbors import NearestNeighbors
 
-
-# In[ ]:
-
-
-bird = pd.read_csv(
-    "../input/bird.csv", 
-    dtype={"id": "str"}
-).dropna(axis=0, how="any")
-
-bird.shape
-
-
-# Summary of the data.
-
-# In[ ]:
-
-
-bird.describe()
-
-
-# Check the number of specimens in each ecological group.
-
-# In[ ]:
-
-
-size_of_each_group = bird.groupby("type").size().sort_values(ascending=False)
-
-ax = size_of_each_group.plot(
-    kind="bar", 
-    color="#00304e",
-    figsize=((6, 4)),
-    rot=0
-)
-
-ax.set_title("Number of Specimens in Each Ecological Group", fontsize=10)
-ax.set_xlabel("")
-
-for x, y in zip(np.arange(0, len(size_of_each_group)), size_of_each_group):
-    ax.annotate("{:d}".format(y), xy=(x-(0.14 if len(str(y)) == 3 else 0.1), y-6), fontsize=10, color="#eeeeee")
-
-
-# In[ ]:
-
-
-from sklearn.preprocessing import StandardScaler
-
-scaler = StandardScaler(with_mean=False) # Do not centralize the features, keep them positive.
-
-bird_raw = bird.copy() # Make a copy of original data.
-
-feature_columns = ['huml', 'humw', 'ulnal', 'ulnaw', 'feml', 'femw', 'tibl', 'tibw', 'tarl', 'tarw'] # numeric feature columns.
-
-bird[feature_columns] = scaler.fit_transform(bird_raw[feature_columns]) # standardlize the numeric features.
-
-
-# Draw Andrews Curves and RadViz.
-
-# In[ ]:
-
-
-_, ax = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
-pd.tools.plotting.andrews_curves(bird[feature_columns+['type']], 'type', ax=ax[0])
-ax[0].grid()
-
-_ = pd.tools.plotting.radviz(bird[feature_columns+['type']], 'type', ax=ax[1])
-
-
-# The correlation matrix of 10 features.
-
-# In[ ]:
-
-
-corr = bird_raw[feature_columns].corr()
-
-_, ax = plt.subplots(figsize=(5, 5))
-
-sns.heatmap(
-    corr, 
-    cmap=sns.light_palette("#00304e", as_cmap=True), 
-    square=True, 
-    cbar=False, 
-    ax=ax, 
-    annot=True, 
-    annot_kws={"fontsize": 8}
-)
-
-_ = ax.set_title("Correlation Matrix", fontsize=10)
-
-
-# We can see that these features are highly correlated. That's natural: big birds have longer and thicker bones than small birds no matter what kinds of birds they are.
-# 
-# Draw scatter plots of 10 features.
-
-# In[ ]:
-
-
-_ = sns.pairplot(
-    data=bird_raw, 
-    kind="scatter", 
-    vars=feature_columns, 
-    hue="type", 
-    diag_kind="hist", 
-    palette=sns.color_palette("Set1", n_colors=6, desat=.5),
-)
-
-
-# Most feature-pairs present strong linear relationship. 
-
-# The box-plots of each kind of bones.
-
-# In[ ]:
-
-
-_, axes = plt.subplots(nrows=5, ncols=2, figsize=(8, 20))
-
-for f, ax in zip(feature_columns, axes.ravel()):
-    _ = sns.boxplot(
-        data=bird_raw, 
-        y=f, 
-        x='type', 
-        ax=ax, 
-        palette=sns.color_palette("Set1", n_colors=6, desat=.5)
-    )
-    
-    ax.set_xlabel("")
-
-
-# Compute the ratios of limbs and hinds of all birds, and plot them.
-
-# In[ ]:
-
-
-limb_hind_ratio = pd.DataFrame(
-    {"ratio": (bird_raw.huml + bird_raw.ulnal) / (bird_raw.feml + bird_raw.tibl + bird_raw.tarl), 
-     "type": bird_raw.type})
-
-_, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 5))
-sns.boxplot(
-    data=limb_hind_ratio, 
-    y="ratio", 
-    x="type", 
-    palette=sns.color_palette("Set1", n_colors=6, desat=.5)
-)
-
-ax.set_xlabel("Ecological Group", fontsize=8)
-ax.set_ylabel("Ratio of Limb and Hind", fontsize=8)
-_ = ax.set_title("Boxplot of Ratio of Limb and Hind for Each Ecological Group", fontsize=10)
-
-
-# ## Principle Components Analysis ##
-
-# In[ ]:
-
-
-from sklearn.decomposition import PCA
-
-pca = PCA()
-pca.fit(bird[feature_columns])
-
-explained_variance = pd.DataFrame({"evr": pca.explained_variance_ratio_, "evrc": pca.explained_variance_ratio_.cumsum()}, 
-                                  index=pd.Index(["pc{:d}".format(i) for i in np.arange(1, len(feature_columns) + 1)], name="principle components"))
-
-
-# In[ ]:
-
-
-_, ax = plt.subplots(figsize=(8, 4))
-explained_variance.evrc.plot(kind="line", color="#ee7621", ax=ax, linestyle="-", marker="h")
-explained_variance.evr.plot(kind="bar", ax=ax, color="#00304e", alpha=0.8, rot=0)
-ax.set_title("Explained Variance Ratio of Principle Components", fontsize=10)
-ax.set_ylim([0.0, 1.1])
-
-for x, y in zip(np.arange(0, len(explained_variance.evrc)), explained_variance.evrc):
-    ax.annotate("{:.1f}%".format(y * 100.0), xy=(x-0.2, y+0.03), fontsize=7)
-
-for x, y in zip(np.arange(1, len(explained_variance.evr)), explained_variance.evr[1:]):
-    ax.annotate("{:.1f}%".format(y * 100.0), xy=(x-0.15, y+0.02), fontsize=7)
-
-
-# We see that first principle component take almost all variance. This means our dataset is nearly 1-dimension. Not surprising, birds are all "bird-shaped", size of all their bones change almost synchronously.
-
-# KDE plots of 1st principle component for each ecological group.
-
-# In[ ]:
-
-
-pcs = pca.transform(bird[feature_columns])
-
-pc1 = pd.DataFrame({"pc1": pcs[:,0], "ecological_group": bird.type})
-
-_, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
-for g in pc1.ecological_group.unique():
-    tmp = pc1[pc1.ecological_group == g]["pc1"].to_frame()
-    tmp.columns=[g]
-    tmp.plot(kind="kde", ax=ax)
-    
-_ = ax.set_title("KDE plots of 1st principle component for each ecological group", fontsize=10)
-
-
-# Let's define the robustness of a bone is the ratio of its diameter and length.
-
-# In[ ]:
-
-
-robust = pd.DataFrame({
-        "humr": bird_raw.humw / bird_raw.huml, 
-        "ulnar": bird_raw.ulnaw / bird_raw.ulnal,
-        "femr": bird_raw.femw / bird_raw.feml,
-        "tibr": bird_raw.tibw / bird_raw.tibl,
-        "tarr": bird_raw.tarw / bird_raw.tarl,
-        "type": bird_raw.type}
-)
-
-_, axes = plt.subplots(nrows=3, ncols=2, figsize=(8, 12))
-
-for f, ax in zip(["humr", "ulnar", "femr", "tibr", "tarr"], axes.ravel()):
-    sns.boxplot(
-        data=robust, 
-        y=f, 
-        x='type', 
-        ax=ax, 
-        palette=sns.color_palette("Set1", n_colors=6, desat=.5)
-    )
-    
-    ax.set_xlabel("")
-    
-    if f == "tibr":
-        ax.set_ylim((0.0, 0.1))
-
-_ = axes[2, 1].annotate("No Data", xy=(.42, .5), fontsize=8)
-
-
-# Add these new features to original dataset.
-
-# In[ ]:
-
-
-bird_extended = pd.concat([bird_raw, robust[["humr", "ulnar", "femr", "tibr", "tarr"]], limb_hind_ratio["ratio"]], axis=1)
-
-feature_columns_extended = ["huml", "humw", "ulnal", "ulnaw", "feml", "femw", "tibl", "tibw", "tarl", "tarw", "humr", "ulnar", "femr", "tibr", "tarr", "ratio"]
-
-bird_extended[feature_columns_extended] = scaler.fit_transform(bird_extended[feature_columns_extended])
-
-
-# Now compute features' chi2 significances.
-
-# In[ ]:
-
-
-from sklearn.feature_selection import chi2
-
-chi2_result = chi2(bird_extended[feature_columns_extended], bird_extended.type)
-chi2_result = pd.DataFrame({"feature": feature_columns_extended, "chi2_statics": chi2_result[0], "p_values": chi2_result[1]})
-chi2_result.sort_values(by="p_values", ascending=False, inplace=True)
-chi2_result.set_index(keys="feature", inplace=True)
-
-ax = chi2_result["p_values"].plot(kind="barh", logx=True, color="#00304e")
-
-ax.annotate("{:3.2f}".format(chi2_result.chi2_statics[chi2_result.shape[0] - 1]), xy=(chi2_result.p_values[chi2_result.shape[0] - 1], len(feature_columns_extended) - 1), xytext=(0, -3), textcoords="offset pixels", fontsize=8, color="#00304e")
-for y, x, c in zip(np.arange(0, len(feature_columns_extended) - 1), chi2_result.p_values[:-1], chi2_result.chi2_statics[:-1]):
-    ax.annotate("{:3.2f}".format(c), xy=(x, y), xytext=(-35, -3), textcoords="offset pixels", fontsize=8, color="#eeeeee")
-
-ax.set_xlabel("p-value (chi2 value)")
-_ = ax.set_title("chi2 values and p-values of features", fontsize=10)
-
-
-# More large the chi2 value (*more small the p-value*), more significant the feature (*to be different in different groups*)
-
-# Try classification
-# ------------------
-
-# In[ ]:
-
-
-def draw_confusion_matrix(cm):
-    """
-    define a function to draw confusion matrix.
-    """
-    _, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 4))
-    sns.heatmap(
-        cm, 
-        square=True, 
-        xticklabels=["P", "R", "SO", "SW", "T", "W"], 
-        annot=True, 
-        annot_kws={"fontsize": 8}, 
-        yticklabels=["P", "R", "SO", "SW", "T", "W"], 
-        cbar=False, 
-        cmap=sns.light_palette("#00304e", as_cmap=True),
-        ax=ax
-    )
-
-    ax.set_xlabel("predicted ecological group", fontsize=8)
-    ax.set_ylabel("real ecological group", fontsize=8)
-    ax.set_title("Confusion Matrix", fontsize=10)
-    
-
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-
-train_f, test_f, train_l, test_l = train_test_split(bird_extended[feature_columns_extended], bird_extended.type, train_size=0.6)
-
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import GridSearchCV
-
-
-lr = LogisticRegression()
-params = {
-    "penalty": ["l1", "l2"],
-    "C": [0.1, 1.0, 5.0, 10.0],
-    "class_weight": [None, "balanced"]
-}
-
-gs = GridSearchCV(estimator=lr, param_grid=params, scoring="accuracy", cv=5, refit=True)
-_ = gs.fit(train_f, train_l)
-
-
-# Best params found by grid search.
-
-# In[ ]:
-
-
-print('\nBest parameters:')
-for param_name, param_value in gs.best_params_.items():
-    print('{}:\t{}'.format(param_name, str(param_value)))
-
-print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
-
-
-# Classification metrics.
-
-# In[ ]:
-
-
-from sklearn.metrics import confusion_matrix, classification_report
-predict_l = gs.predict(test_f)
-
-print(classification_report(test_l, predict_l))
-
-
-# In[ ]:
-
-
-draw_confusion_matrix(confusion_matrix(test_l, predict_l))
-
-
-# In[ ]:
-
-
-from sklearn.metrics import accuracy_score
-
-print("Accuracy: {:.3f}".format(accuracy_score(y_true=test_l, y_pred=predict_l)))
-
-
-# Features' weights (*absolute values*).
-
-# In[ ]:
-
-
-_, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
-sns.heatmap(
-    abs(gs.best_estimator_.coef_), 
-    ax=ax, 
-    square=True, 
-    xticklabels=feature_columns_extended, 
-    annot=True, 
-    annot_kws={"fontsize": 8}, 
-    yticklabels=gs.best_estimator_.classes_, 
-    cbar=False,
-    cmap=sns.light_palette("#00304e", as_cmap=True)
-)
-
-ax.set_xlabel("Features", fontsize=8)
-ax.set_ylabel("Ecological Group", fontsize=8) 
-_ = ax.set_title("Absolute Feature Weights", fontsize=10)
-
-
-# Try random forest algorithm.
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestClassifier
-
-rfc = RandomForestClassifier()
-
-params = {
-    "n_estimators": [10, 50, 100, 200],
-    "criterion": ["gini", "entropy"],
-    "max_depth": [10, 15, 20],
-    "class_weight": [None, "balanced"]
-}
-
-rfc_gs = GridSearchCV(estimator=rfc, param_grid=params, scoring="accuracy", cv=5, refit=True)
-_ = rfc_gs.fit(train_f, train_l)
-
-
-# In[ ]:
-
-
-print('\nBest parameters:')
-for param_name, param_value in rfc_gs.best_params_.items():
-    print('{}:\t{}'.format(param_name, str(param_value)))
-
-print('\nBest score (accuracy): {:.3f}'.format(rfc_gs.best_score_))
-
-
-# Metrics.
-
-# In[ ]:
-
-
-predict_l = rfc_gs.predict(test_f)
-
-print(classification_report(test_l, predict_l))
-
-
-# In[ ]:
-
-
-draw_confusion_matrix(confusion_matrix(test_l, predict_l))
-
-
-# Accuracy.
-
-# In[ ]:
-
-
-print("Accuracy: {:.3f}".format(accuracy_score(y_true=test_l, y_pred=predict_l)))
-
-
-# Features' importances
-
-# In[ ]:
-
-
-feature_importances = pd.DataFrame(
-    {
-        "importance": rfc_gs.best_estimator_.feature_importances_
-    }, 
-    index=pd.Index(feature_columns_extended, name="feature")
-).sort_values(by="importance")
-
-ax = feature_importances.plot(kind="barh", legend=False, color="#00304e")
-
-for y, x in zip(np.arange(0, feature_importances.shape[0]), feature_importances.importance):
-    _ = ax.annotate("{:.3f}".format(x), xy=(x-0.008, y-0.1), fontsize=8, color="#eeeeee")
-
-
-_ = ax.set_xlabel("importance")
-
-
-# The two classifiers perform poorly on wading birds. The recall is low. From charts (scatter/box-plot)  we see that wading birds is difficult to tell from other kids of birds. 
-# 
-# We try to use a support vector machine to tell wading birds from others.
-
-# In[ ]:
-
-
-from sklearn.svm import SVC
-from sklearn.metrics import roc_curve, accuracy_score, precision_score, recall_score, auc, precision_recall_curve
-
-# use extended feature set.
-bird_extended["is_w"] = (bird_extended.type == "W").astype("int32")
-
-# parameter grid
-params = {
-    'C': [1, 10, 100],
-    'kernel': ['poly', 'rbf'],
-    'degree': [2, 4, 6],
-    'gamma': ['auto', 1, 5, 10]
-}
-
-# SVM for separate ghoul from others.
-svc = SVC(probability=True)
-
-# split the train and test set.
-train_features, test_features, train_labels, test_labels = train_test_split(bird_extended[feature_columns_extended], bird_extended.is_w,
-                                                                            train_size=0.6)
-# grid search.
-gs = GridSearchCV(estimator=svc, param_grid=params, cv=3, refit=True, scoring='accuracy')
-gs.fit(train_features, train_labels)
-svc = gs.best_estimator_
-
-print('\nBest parameters:')
-for param_name, param_value in gs.best_params_.items():
-    print('{}:\t{}'.format(param_name, str(param_value)))
-
-print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
-
-
-# In[ ]:
-
-
-# merics.
-predict_labels = gs.predict(test_features)
-predict_proba = gs.predict_proba(test_features)
-fpr, rc, th = roc_curve(test_labels, predict_proba[:, 1])
-precision, recall, threshold = precision_recall_curve(test_labels, predict_proba[:, 1])
-roc_auc = auc(fpr, rc)
-
-print("\nMetrics: Accuracy: {:.3f}, Precision: {:.3f}, Recall: {:.3f}, AUC: {:.3f}".format(accuracy_score(test_labels, predict_labels), precision_score(test_labels, predict_labels), recall_score(test_labels, predict_labels), roc_auc))
-print("\nClassification Report:")
-print(classification_report(test_labels, predict_labels, target_names=["no wading birds", "wading birds"]))
-
-# ROC curve.
-fig = plt.figure(figsize=(12, 3))
-ax = fig.add_subplot(131)
-ax.set_xlabel("False Positive Rate")
-ax.set_ylabel("Recall")
-ax.set_title("ROC Curve")
-ax.plot(fpr, rc, color="#00304e", linewidth=1.0)
-ax.fill_between(fpr, [0.0] * len(rc), rc, facecolor="#00304e", alpha=0.3)
-ax.plot([0.0, 1.0], [0.0, 1.0], "--", color="#ee7621", alpha=0.6, linewidth=1.0)
-ax.text(0.75, 0.05, "auc: {:.2f}".format(roc_auc))
-
-# Precision & recall change with response to threshold.
-ax = fig.add_subplot(132)
-ax.set_xlabel("Threshold")
-ax.set_ylabel("Precision & Recall")
-ax.set_title("Precsion & Recall")
-ax.set_xlim([threshold.min(), threshold.max()])
-ax.set_ylim([0.0, 1.0])
-ax.plot(threshold, precision[:-1], "#00304e", label="Precision", linewidth=1.0)
-ax.plot(threshold, recall[:-1], "#ee7621", label="Recall", linewidth=1.0)
-ax.legend(loc="best")
-
-# Accuracy changes with response to threshold.
-ts = np.arange(0, 1.02, 0.02)
-accuracy = []
-for t in ts:
-    predict_label = (predict_proba[:, 1] >= t).astype(np.int)
-    accuracy_score(test_labels, predict_label)
-    accuracy.append(accuracy_score(test_labels, predict_label))
-
-ax = fig.add_subplot(133)
-ax.set_xlabel("Threshold")
-ax.set_ylabel("Accuracy")
-ax.set_ylim([0.0, 1.0])
-ax.set_title('Accuracy')
-ax.plot([0.0, 1.0], [0.5, 0.5], '--', color="#ee7621", alpha=0.6, linewidth=1.0)
-
-positive_fraction = test_labels.sum() / len(test_labels)
-ax.plot([0.0, 1.0], [positive_fraction, positive_fraction], '--', color="#006400", alpha=0.6, linewidth=1.0)
-ax.plot([0.0, 1.0], [1.0 - positive_fraction, 1.0 - positive_fraction], '--', color="#006400", alpha=0.6, linewidth=1.0)
-ax.fill_between(ts, [1.0 - positive_fraction] * len(ts), accuracy, facecolor="#00304e", alpha=0.3)
-ax.plot(ts, accuracy, color='#00304e', linewidth=1.0)
-
-_ = ax.annotate(
-    "max accuracy: {:.2f}".format(max(accuracy)), 
-    xy=[ts[accuracy.index(max(accuracy))], max(accuracy)],
-    xytext=[0.4, 0.6],
-    # textcoords="offset points",
-    arrowprops={"width": 1.5, "headwidth": 6.0}
-)
-
-
-# Because the number of positive instances and negative instances are unequal (*64:349*), high accuracy is not as good a news as we may think. 
-# 
-# Now we train a SVM first to tell wading birds from others and then train a LR to distinguish other 5 groups of birds.
-
-# In[ ]:
-
-
-svc = SVC(
-    C=100,
-    kernel="rbf"
-)
-
-lr = LogisticRegression(
-    penalty="l1",
-    C=5.0
-)
-
-train_features, test_features, train_labels, test_labels = train_test_split(bird_extended, bird_extended.type,
-                                                                            train_size=0.6)
-
-svc.fit(train_features[feature_columns_extended], train_features.is_w)
-_ = lr.fit(train_features.loc[train_features.is_w == 0, feature_columns_extended], train_features[train_features.is_w == 0].type)
-
-
-# In[ ]:
-
-
-predict_is_wading = svc.predict(test_features[feature_columns_extended])
-predict_type = lr.predict(test_features[feature_columns_extended])
-predict_type[predict_is_wading == 1] = "W"
-
-
-# In[ ]:
-
-
-print(classification_report(test_labels, predict_type))
-
-
-# In[ ]:
-
-
-draw_confusion_matrix(confusion_matrix(test_labels, predict_type))
-
-
-# Multi classification by an one-vs-one way using SVM.
-
-# In[ ]:
-
-
-params = {
-    'C': [1, 10, 100],
-    'kernel': ['poly', 'rbf'],
-    'degree': [2, 4, 6],
-    'gamma': ['auto', 1, 5, 10]
-}
-
-# SVM for separate ghoul from others.
-svc = SVC()
-
-# split the train and test set.
-train_features, test_features, train_labels, test_labels = train_test_split(
-    bird_extended[feature_columns_extended], bird_extended.type,
-    train_size=0.6
-)
-
-# grid search.
-gs = GridSearchCV(estimator=svc, param_grid=params, cv=3, refit=True, scoring='accuracy')
-gs.fit(train_features, train_labels)
-svc = gs.best_estimator_
-
-print('\nBest parameters:')
-for param_name, param_value in gs.best_params_.items():
-    print('{}:\t{}'.format(param_name, str(param_value)))
-
-print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
-
-
-# In[ ]:
-
-
-predict_labels = svc.predict(test_features)
-
-print(classification_report(test_labels, predict_labels))
-
-
-# In[ ]:
-
-
-draw_confusion_matrix(confusion_matrix(test_labels, predict_labels))
-
-
-# Try a simple multi-layer full-connected back-propagation neural network.
-# ------------------------------------------------------------------------
-
-# In[ ]:
-
-
-from keras.models import Sequential 
-
-
-# In[ ]:
-
-
-from keras.layers import Dense, Activation
-from keras.optimizers import SGD
+from keras.models import Sequential, Model
+from keras.layers import Dense, Dropout, Convolution2D, MaxPooling2D, Flatten, Input
+from keras.optimizers import adam
 from keras.utils.np_utils import to_categorical
 
-
-# In[ ]:
-
-
-model = Sequential()
-
-# input layer, , 100 neurons, input dimension is 16 (number of features).
-model.add(Dense(100, input_dim=16, init='uniform'))
-model.add(Activation('sigmoid'))
-
-# hidden layers, 100 neurons.
-model.add(Dense(100, init='uniform'))
-model.add(Activation('sigmoid'))
-
-# output layer, 6 neurons (6 ecological classes).
-model.add(Dense(6, init='uniform'))
-model.add(Activation('softmax'))
-
-# optimazor: stochastic gradient descent.
-# sgd = SGD(lr=0.1, decay=1e-6, momentum=0.9, nesterov=True)
-model.compile(loss='mse', optimizer="rmsprop", metrics=['accuracy'])
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
 
 
 # In[ ]:
 
 
-from sklearn.preprocessing import LabelEncoder
+train = pd.read_csv("../input/train.csv")
 
-train_features, test_features, train_labels, test_labels = train_test_split(
-    bird_extended[feature_columns_extended], bird_extended.type,
-    train_size=0.6
-)
+X_train = train.iloc[:,1:].values
+X_train = X_train.reshape(X_train.shape[0], 28, 28) #reshape to rectangular
+X_train = X_train/255 #pixel values are 0 - 255 - this makes puts them in the range 0 - 1
 
-le = LabelEncoder()
-train_labels_encode = le.fit_transform(train_labels)
-test_labels_encode = le.transform(test_labels)
+y_train = train["label"].values
 
 
 # In[ ]:
 
 
-train_labels_categorial = to_categorical(train_labels_encode)
+#define a function that allows us to see the digits:
+def show(img):
+    plt.imshow(img, cmap = "gray", interpolation = "none")
 
-# batch size 32, 100 epoches.
-_ = model.fit(train_features.values, train_labels_categorial, batch_size=32, nb_epoch=1000, verbose=0)
+
+# Let's pick one image to be our default image - just so we have a reference point. We'll call this the **"eight" image** - simply because, well it's an eight:
+
+# In[ ]:
+
+
+img = X_train[10]
+show(img)
 
 
 # In[ ]:
 
 
-predict_labels = le.inverse_transform(model.predict_classes(test_features.values, verbose=0))
+pd.DataFrame(img)
+
+
+# Ok so our digits are in a space in which every pixel is a variable or a feature. Since there are 28*28 = 784 pixels per image we can thing of the images as sitting in $\mathbb{R}^{784}$ - a real 784 dimensional vector space.
+# 
+# This space is very high dimensional and most dimensionality reduction techniques try to exploit the assumption that not all of these dimension are needed to distinguish between the digits (or more generally extract features or achieve some learning task).
+# 
+# Where does this intuition come from? To see this let's generate a point uniformly at random in the unit 784 dimensional hypercube and see what it looks like. We pick points in the hypercube simply because we normalized the pixel intensities. 
+# 
+# Maybe a 784-hypercube sounds intimidating but it has a very easy mathematical definition: it's the set composed of all  vectors in $\mathbb{R}^{784}$ that have all coordinates less than or equal to one: $$\{x \in \mathbb{R}^{784} | |x_i| < 1\} = [0,1]^{784}$$
+
+# In[ ]:
+
+
+#generating a random 28 by 28 image:
+rand_img = np.random.randint(0, 255, (28, 28))
+rand_img = rand_img/255.0
+
+show(rand_img)
+
+
+# Doesn't look like anything to me!
+# 
+# We can try to sample at random many times but unless we get extremely lucky all we'll get is static and nothing resembling an actual digit. This is good empirical evidence that the meaningful images - in this case images of digits, are clustered in smaller dimensional subsets in the original 784 dimensional pixel space. This is what is called the **manifold hypothesis**. And the promise is that if we better understand the structure of the manifold we will have an easier time building machine learning systems.
+
+# Before we try to see how to figure out the manifold structure let's take a closer look at out space. For example what happens if we start at the point of a digit and start traveling in a random direction? Will we get any meaningful images?
+
+# In[ ]:
+
+
+rand_direction = np.random.rand(28, 28) 
+
+
+# ### Moving in a random direction away from a digit in the 784 dimensional image space:
+
+# In[ ]:
+
+
+for i in range(16):
+    plt.subplot(4,4,i+1)
+    show(img + i/4*rand_direction)    
+    plt.xticks([])
+    plt.yticks([])
+
+
+# We can see that as we move away from the digit, the images we encounter become less and less distinguishable. At first we can still see the eight shape but before we know it we're back in static land.
+# 
+# Perhaps a good analogy here is that of a solar system: the surface of our planets are the manifolds we're interested in, one for each digit. Now say you're on the surface of the earth which is a 2-manifold and you start moving in a random direction (let's assume gravity doesn't exist and you can go through solid objects). If you don't understand the structure of earth you'll quickly find yourself in space or inside the earth. But if you instead move within the local earth (say spherical) coordinates you will stay on the surface and get to see all the cool stuff. 
+# 
+# There are however some differences: first of all we're in a much higher dimensional space and we're not sure how many dimensions we need to capture the structure of the digit subspaces. Secondly these subspaces could be really crazy looking - think for example two donuts entangled in some weird way. You could in fact get from one manifold to another without going into static space as all.
+
+# ### Our digits' best friends aka Nearest Neighbors:
+# 
+# Another thing to do to understand better the structure of the image space is to look at what images are closest to the "eight" image using some metric. In this case I'll use the sklearn knn wrap with l_2 distance as the metric on the flattened images. 
+
+# In[ ]:
+
+
+X_flat = X_train.reshape(X_train.shape[0], X_train.shape[1]*X_train.shape[2])
+
+knn = NearestNeighbors(5000)
+
+knn.fit(X_flat[:5000])
 
 
 # In[ ]:
 
 
-print(classification_report(test_labels, predict_labels))
+distances, neighbors = knn.kneighbors(img.flatten().reshape(1, -1))
+neighbors = neighbors[0]
+distances = distances[0]
+
+
+# ### Histogram of L_2 distances from the "eight" digit:
+
+# In[ ]:
+
+
+plt.hist(distances[1:])
+
+
+# The distances of the first 5000 images from the "eight" image is roughly normally distributed - in fact it's much more well behaved than I expected. At first I though I'd see multiple modes and a higher variance given that we have different classes. 
+
+# ### 32 Nearest Neighbors for our "eight" image:
+
+# In[ ]:
+
+
+for digit_num, num in enumerate(neighbors[:36]):
+    plt.subplot(6,6,digit_num+1)
+    grid_data = X_train[num]  # reshape from 1d to 2d pixel array
+    show(grid_data)
+    plt.xticks([])
+    plt.yticks([])
+
+
+# Interesting stuff - most of the neighbors are also eight but not all - we see some five and some nines as well. However all in all it looks like KNN would be a decent way to attack this problem - maybe with 5 or 10 neighbors.
+
+# ### Learning the manifold with an autoencoder:
+# 
+# Ok so how do we figure out what (combinations of) dimensions in the image space are important? One option would be to hand engineer features - for examples the mean of all pixels is probably a good feature to have. Other worthwhile features would be the slant, and the vertical or horizontal symmetry. 
+# 
+# But we want do to machine learning not hand-craft features because we're lazy and machines tend to better capture important features in messy datasets. There are many ways to try to reduce the dimensionality - hereI am going to use an autoencoder. I like autoencoders because they have a nice intuitive appeal and you can train them relatively fast. 
+# 
+# An **autoencoder ** is a feed- forward neural network who tries to learn a lower dimensional representation of our data. It does that by decreasing the number of layers in the middle of the network and then increasing it back to the dimension of the original image. 
+# 
+# Since the autoencoder is forced to reconstruct the images from a smaller representation it discards any variation that it doesn't find useful. Here is a great description form the [Deep Learning](http://www.deeplearningbook.org/contents/autoencoders.html) book:
+# 
+# "The important principle is that the autoencoder can aﬀord to represent only the variations that are needed to reconstruct training examples. If the data generating distribution concentrates near a low-dimensional manifold, this yields representations that implicitly capture a local coordinate system for this manifold: only the variations tangent to the manifold around x need to correspond to changes in h=f(x)."
+
+# Let's build an autoencoder in keras - It will have 3 hidden layers with 64, 2, and 64 units respectively. Our model will compress the image to a 2-dimensional vector and then try to reconstruct it . Note that we don't use the target y at all, instead we use X_flat for both the input and the target i.e. we're doing unsupervised learning.
+
+# In[ ]:
+
+
+input_img = Input(shape=(784,))
+encoded = Dense(64, activation='relu')(input_img)
+
+encoded = Dense(2)(encoded) #keep it linear here.
+
+decoded = Dense(64, activation='relu')(encoded)
+decoded = Dense(784, activation = 'sigmoid')(decoded)
+
+autoencoder = Model(input=input_img, output=decoded)
 
 
 # In[ ]:
 
 
-draw_confusion_matrix(confusion_matrix(test_labels, predict_labels))
+autoencoder.compile(optimizer = "adam", loss = "mse")
+autoencoder.fit(X_flat, X_flat, batch_size = 128,
+                nb_epoch = 10, verbose = 3)
 
 
-# To Be Continued ...
-# -------------------
+# In[ ]:
+
+
+encoder = Model(input = input_img, output = encoded)
+
+#building the decoder:
+encoded_input = Input(shape=(2,))
+encoded_layer_1 = autoencoder.layers[-2]
+encoded_layer_2 = autoencoder.layers[-1]
+
+
+decoder = encoded_layer_1(encoded_input)
+decoder = encoded_layer_2(decoder)
+decoder = Model(input=encoded_input, output=decoder)
+
+
+# ### 2D - representation learned by the autoencoder:
+
+# In[ ]:
+
+
+import seaborn as sns
+
+X_proj = encoder.predict(X_flat[:10000])
+X_proj.shape
+
+proj = pd.DataFrame(X_proj)
+proj.columns = ["comp_1", "comp_2"]
+proj["labels"] = y_train[:10000]
+sns.lmplot("comp_1", "comp_2",hue = "labels", data = proj, fit_reg=False)
+
+
+# We can see the autoencoder does a decent job of separating certain classes like 1, 0 and 4. It does better than PCA but is not as good as TSNE. The autoencoder learns a better representation that simpler methods like PCA because it can detect nonlinearities in the data due to its relu activations. In fact if we used linear activation functions and only one hidden layer we would have recovered the PCA case.
+# 
+# 
+# Can we recover the images from their 2-dimensional represetation?
+
+# In[ ]:
+
+
+
+#how well does the autoencoder decode:w1
+plt.subplot(2,2,1)
+show(X_train[160])
+plt.subplot(2,2,2)
+show(autoencoder.predict(np.expand_dims(X_train[160].flatten(), 0)).reshape(28, 28))
+plt.subplot(2,2,3)
+show(X_train[150])
+plt.subplot(2,2,4)
+show(autoencoder.predict(np.expand_dims(X_train[150].flatten(), 0)).reshape(28, 28))
+
+
+# Not really - the encoding decoding process is quite lossy - but that makes sense since we're converting a 784 dimensional vector into 2 dimensions.
+
+# ### Generating new digits by moving in the latent 2D - space:
+
+# Now the hope is that the new 2-D representation of the data is a good coordinate system for the subspace of the data that is actually meaningful i.e. the digits. One (hand-wavy) way to check this is to see what happens if we sample points in the 2-D representation space and move in various directions - do we get some meaningful change in the decoded image of the path or just noise as we did in the original space?
+
+# In[ ]:
+
+
+#moving along the x axis:
+for i in range(64):
+    plt.subplot(8,8,i+1)
+    pt = np.array([[i/3,0]])
+    show(decoder.predict(pt).reshape((28, 28)))
+    plt.xticks([])
+    plt.yticks([])
+
+
+# Pretty neat! We see that moving in a given direction in the 2D representation corresponds to staying on the digits manifolds in the original space. We never end up in static space. Sure not all the images are exactly digits but they are all digit-like. You can also clearly see the transition from one class to another.
+# 
+# Note that the way we're generating images here doesn't have very good statistical properties since we have to look at the 2-d plot first. Using a variational autoencoder makes the generative process more rigorous but we'll settle for this.
+
+# In[ ]:
+
+
+#moving along the y axis:
+for i in range(64):
+    plt.subplot(8,8,i+1)
+    pt = np.array([[10,i/3]])
+    show(decoder.predict(pt).reshape((28, 28)))
+    plt.xticks([])
+    plt.yticks([])
+
+
+# ### References:
+# 
+# -  [Autoencoder in Keras](https://blog.keras.io/building-autoencoders-in-keras.html) by Francois Chollet
+# 
+# - [Deep Learning Book Ch 14](http://www.deeplearningbook.org/contents/autoencoders.html) by Ian Goodfellow and Yoshua Bengio and Aaron Courville.

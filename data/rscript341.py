@@ -1,201 +1,283 @@
-'''
-Based on https://www.kaggle.com/apapiu/ridge-script
 
-Optimization:
-- Guess from description whether item had pictures
-- Guess item quantity from name
+__author__ = 'Michael Hartman'
+
+'''Inspired by several scripts at:
+https://www.kaggle.com/c/facebook-v-predicting-check-ins/scripts
+Special thanks to Sandro for starting the madness. :-)
+https://www.kaggle.com/svpons/facebook-v-predicting-check-ins/grid-plus-classifier
 '''
 
-import pandas as pd
 import numpy as np
-import scipy
-import math
-import re
-from multiprocessing import Pool
-
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.model_selection import train_test_split, cross_val_score, ParameterGrid
-from sklearn.metrics import make_scorer, mean_squared_log_error
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.externals import joblib
-
-import lightgbm as lgb
-
+import pandas as pd
+from sklearn.neighbors import KNeighborsClassifier
+import time
+from datetime import timedelta
 import gc
 
-n_threads = 4
+# Found at: https://www.kaggle.com/rshekhar2/facebook-v-predicting-check-ins/xgboost-cv-example-with-small-bug
+def mapkprecision(truthvalues, predictions):
+    '''
+    This is a faster implementation of MAP@k valid for numpy arrays.
+    It is only valid when there is one single truth value. 
 
+    m ~ number of observations
+    k ~ MAP at k -- in this case k should equal 3
 
-def rmsle(y, y_pred, *args, **kwargs):
-    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1))
-              ** 2.0 for i, pred in enumerate(y_pred)]
-    return (sum(to_sum) * (1.0 / len(y))) ** 0.5
+    truthvalues.shape = (m,) 
+    predictions.shape = (m, k)
+    '''
+    z = (predictions == truthvalues[:, None]).astype(np.float32)
+    weights = 1./(np.arange(predictions.shape[1], dtype=np.float32) + 1.)
+    z = z * weights[None, :]
+    return np.mean(np.sum(z, axis=1))
 
-def split_cat(text):
-    try: return text.split("/")
-    except: return (None, None, None)
+def load_data(data_name):
+    types = {'row_id': np.dtype(np.int32),
+         'x': np.dtype(float),
+         'y' : np.dtype(float),
+         'accuracy': np.dtype(np.int16),
+         'place_id': np.int64,
+         'time': np.dtype(np.int32)}
+    df = pd.read_csv(data_name, dtype=types, index_col = 0, na_filter=False)
+    return df
 
-def get_qntys(data):
-    qnty_matches = []
-    qnty_re = [r'(\d+) ?x [^\d]', r'(\d+) ?pairs?']
-    for r in qnty_re:
-        qnty_matches.append(data.name.str.extract(
-            r, flags=re.IGNORECASE, expand=False).dropna().astype(int))
-    return pd.concat(qnty_matches).reset_index().drop_duplicates(subset='index', keep='last').set_index('index')
+def process_one_cell(df_cell_train, df_cell_test, fw, th, n_neighbors):
+    
+    # Remove infrequent places
+    df_cell_train = remove_infrequent_places(df_cell_train, th).copy()
+    
+    # Store row_ids for test
+    row_ids = df_cell_test.index
+    
+    # Preparing data
+    y = df_cell_train.place_id.values
+    X = df_cell_train.drop(['place_id'], axis=1).values
+    
+    #Applying the classifier
+    clf = KNeighborsClassifier(n_neighbors=n_neighbors,
+                            weights=calculate_distance, p=1, 
+                            n_jobs=2, leaf_size=20)
+    clf.fit(X, y)
+    y_pred = clf.predict_proba(df_cell_test.values)
+    y_pred_labels = np.argsort(y_pred, axis=1)[:,:-4:-1]
+    pred_labels = clf.classes_[y_pred_labels]
+    cell_pred = np.column_stack((row_ids, pred_labels)).astype(np.int64) 
+    
+    return cell_pred
+    
+def calculate_distance(distances):
+    return distances ** -2
+    
+# Generate a dictionary of the time limits so it doesn't have to be 
+# recalculated each loop
+def create_time_dict(t_cuts, time_factor, time_aug):
+    
+    t_slice = 24 / t_cuts
+    time_dict = dict()
+    for t in range(t_cuts):
+        
+        t_min = 2 * np.pi * (t * t_slice * 12 / 288)
+        t_max = 2 * np.pi * (((t + 1) * t_slice * 12 - 1) / 288)
+        sin_t_start = np.round(np.sin(t_min)+1, 4) * time_factor
+        sin_t_stop = np.round(np.sin(t_max)+1, 4) * time_factor
+        cos_t_start = np.round(np.cos(t_min)+1, 4) * time_factor
+        cos_t_stop = np.round(np.cos(t_max)+1, 4) * time_factor
+        #print(t, (sin_t_start, sin_t_stop, cos_t_start, cos_t_stop))
+        sin_t_min = min((sin_t_start, sin_t_stop))
+        sin_t_max = max((sin_t_start, sin_t_stop))
+        cos_t_min = min((cos_t_start, cos_t_stop))
+        cos_t_max = max((cos_t_start, cos_t_stop))
 
+        time_dict[t] = [sin_t_min, sin_t_max, cos_t_min, cos_t_max]
+        t_min = 2 * np.pi * ((t * t_slice - time_aug) * 12 / 288)
+        t_max = 2 * np.pi * ((((t + 1) * t_slice + time_aug)* 12 - 1) / 288)
+        sin_t_start = np.round(np.sin(t_min)+1, 4) * time_factor
+        sin_t_stop = np.round(np.sin(t_max)+1, 4) * time_factor
+        cos_t_start = np.round(np.cos(t_min)+1, 4) * time_factor
+        cos_t_stop = np.round(np.cos(t_max)+1, 4) * time_factor
+        sin_t_min = min((sin_t_start, sin_t_stop, sin_t_min))
+        sin_t_max = max((sin_t_start, sin_t_stop, sin_t_max))
+        cos_t_min = min((cos_t_start, cos_t_stop, cos_t_min))
+        cos_t_max = max((cos_t_start, cos_t_stop, cos_t_max))
+        time_dict[t] += [sin_t_min, sin_t_max, cos_t_min, cos_t_max]
+        
+    return time_dict
 
-def may_have_pictures(descriptions):
-    pic_word_re = [re.compile(r, re.IGNORECASE) for r in [
-        r'((see(n)?)|( in| the| my))+ (picture(s)?|photo(s)?)']]
-    matches = []
-    for desc in descriptions:
-        match = 0
-        for r in pic_word_re:
-            if r.search(desc) is not None:
-                match = 1
-                continue
-        matches.append(match)
-    return np.array(matches)
+def process_grid(df_train, df_test, x_cuts, y_cuts, t_cuts,
+                 x_border_aug, y_border_aug, time_aug, fw, th, n_neighbors):
+    preds_list = []
+    x_slice = df_train['x'].max() / x_cuts
+    y_slice = df_train['y'].max() / y_cuts
+    time_max = df_train['minute_sin'].max()
+    time_factor = time_max / 2
+    time_dict = create_time_dict(t_cuts, time_factor, time_aug)
 
-NUM_BRANDS = 3000
-NAME_MIN_DF = 10
-MAX_FEAT_DESCP = 50000
-LOAD_MODEL = False
+    for i in range(x_cuts):
+        row_start_time = time.time()
+        x_min = x_slice * i
+        x_max = x_slice * (i+1)
+        x_max += int((i+1) == x_cuts) # expand edge at end
 
-if __name__ == '__main__':
-    print("Reading data")
+        mask = (df_test['x'] >= x_min)
+        mask = mask & (df_test['x'] < x_max)      
+        df_col_test = df_test[mask]
+        x_min -= x_border_aug
+        x_max += x_border_aug
+        mask = (df_train['x'] >= x_min)
+        mask = mask & (df_train['x'] < x_max)
+        df_col_train = df_train[mask]
 
-    df_train = pd.read_csv('../input/train.tsv', sep='\t')
-    df_test = pd.read_csv('../input/test.tsv', sep='\t')
+        for j in range(y_cuts):
+            y_min = y_slice * j
+            y_max = y_slice * (j+1)
+            y_max += int((j+1) == y_cuts) # expand edge at end
 
-    df = pd.concat([df_train, df_test], 0)
-    nrow_train = df_train.shape[0]
-    y_train = np.log1p(df_train["price"])
+            mask = (df_col_test['y'] >= y_min)
+            mask= mask & (df_col_test['y'] < y_max)
+            df_row_test = df_col_test[mask]
+            y_min -= y_border_aug
+            y_max += y_border_aug
+            mask = (df_col_train['y'] >= y_min)
+            mask = mask & (df_col_train['y'] < y_max)
+            df_row_train = df_col_train[mask]
 
-    del df_train
-    gc.collect()
+            for t in range(t_cuts):
+                #print(df_row_test.shape, df_row_train.shape)
+                t_lim = time_dict[t]
+                mask = df_row_test['minute_sin'].between(t_lim[0], t_lim[1])
+                mask = mask & df_row_test['minute_cos'].between(t_lim[2], t_lim[3])
+                df_cell_test = df_row_test[mask].copy()
+                mask = df_row_train['minute_sin'].between(t_lim[4], t_lim[5])
+                mask = mask & df_row_train['minute_cos'].between(t_lim[6], t_lim[7])
+                df_cell_train = df_row_train[mask].copy()
+                cell_pred = process_one_cell(df_cell_train.copy(), 
+                                             df_cell_test.copy(), 
+                                             fw, th, n_neighbors)
+                preds_list.append(cell_pred)
+        elapsed = (time.time() - row_start_time)
+        print('Row', i, 'completed in:', timedelta(seconds=elapsed))
+    preds = np.vstack(preds_list)
+    return preds
 
-    df['category_name'], df['subcat_1'], df['subcat_2'] = zip(*df['category_name'].apply(lambda x: split_cat(x)))
+# Thank you Alex!
+# From: https://www.kaggle.com/drarfc/facebook-v-predicting-check-ins/fastest-way-to-write-the-csv
+def generate_submission(preds):    
+    print('Writing submission file')
+    print('Pred shape:', preds.shape)
+    with open('KNN_submission.csv', "w") as out:
+        out.write("row_id,place_id\n")
+        rows = ['']*8607230
+        n=0
+        for num in range(8607230):
+            rows[n]='%d,%d %d %d\n' % (preds[num,0],preds[num,1],preds[num,2],preds[num,3])
+            n=n+1
+        out.writelines(rows)
 
-    df['category_name'].fillna(value='missing', inplace=True)
-    df['subcat_1'].fillna(value='missing', inplace=True)
-    df['subcat_2'].fillna(value='missing', inplace=True)
-    df['brand_name'].fillna(value='missing', inplace=True)
-    df['item_description'].fillna(value='missing', inplace=True)
+def validation_split(df, val_start_day):
+    day = df['time']//1440
+    df_val = df.loc[(day>=val_start_day)].copy()
+    df = df.loc[(day<val_start_day)].copy()
+    return df, df_val
 
-    print('Getting quantities')
-    df['qnty'] = get_qntys(df)
-    df.fillna(value={'qnty': 1}, inplace=True)
-    df.drop('name', axis=1, inplace=True)
-    gc.collect()
+def remove_infrequent_places(df, th=5):
+    place_counts = df.place_id.value_counts()
+    mask = (place_counts[df.place_id.values] >= th).values
+    df = df.loc[mask]
+    return df
+    
+def prepare_data(datapath, val_start_day):
+    val_label = None
+    df_train = load_data(datapath + 'train.csv')
+    if val_start_day > 0:
+        # Create validation data
+        df_train, df_test = validation_split(df_train, val_start_day)
+        val_label = df_test['place_id']
+        df_test.drop(['place_id'], axis=1, inplace=True)
+        print('Feature engineering on train')
+        df_train = feature_engineering(df_train)
+        print('Feature engineering on validation')
+        df_test = feature_engineering(df_test)
+    else:
+        print('Feature engineering on train')
+        df_train = feature_engineering(df_train)
+        df_test = load_data(datapath + 'test.csv') 
+        print('Feature engineering on test')
+        df_test = feature_engineering(df_test)
+    df_train = apply_weights(df_train, fw)
+    df_test = apply_weights(df_test, fw)
+    return df_train, df_test, val_label
+        
 
-    print('Adding information whether item might have containted pictures')
-    df['pics'] = pd.Series(may_have_pictures(df.item_description), index=df.index).astype('category')
+def apply_weights(df, fw):
+    df['accuracy'] *= fw[0]
+    df['day_of_year_sin'] *= fw[1]
+    df['day_of_year_cos'] *= fw[1]
+    df['minute_sin'] *= fw[2]
+    df['minute_cos'] *= fw[2]
+    df['weekday_sin'] *= fw[3]
+    df['weekday_cos'] *= fw[3]
+    df.x *= fw[4]
+    df.y *= fw[5]
+    df['year'] *= fw[6]
+    return df
+    
+def feature_engineering(df):
+    minute = 2*np.pi*((df["time"]//5)%288)/288
+    df['minute_sin'] = (np.sin(minute)+1).round(4)
+    df['minute_cos'] = (np.cos(minute)+1).round(4)
+    del minute
+    day = 2*np.pi*((df['time']//1440)%365)/365
+    df['day_of_year_sin'] = (np.sin(day)+1).round(4)
+    df['day_of_year_cos'] = (np.cos(day)+1).round(4)
+    del day
+    weekday = 2*np.pi*((df['time']//1440)%7)/7
+    df['weekday_sin'] = (np.sin(weekday)+1).round(4)
+    df['weekday_cos'] = (np.cos(weekday)+1).round(4)
+    del weekday
+    df['year'] = (((df['time'])//525600))
+    df.drop(['time'], axis=1, inplace=True)
+    df['accuracy'] = np.log10(df['accuracy'])
+    return df
+    
+print('Starting...')
+start_time = time.time()
+# Global variables
+datapath = '../input/'
+# Change val_start_day to zero to generate predictions
+val_start_day = 0 # Day at which to cut validation
+th = 5 # Threshold at which to cut places from train
+fw = [0.6, 0.32935, 0.56515, 0.2670, 22, 52, 0.51785]
 
-    pop_brand = df['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    df.loc[~df['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category = df['category_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    df.loc[~df['category_name'].isin(pop_category), 'category_name'] = 'missing'
+# Defining the size of the grid
+x_cuts = 20 # number of cuts along x 
+y_cuts = 20 # number of cuts along y
+#TODO: More general solution for t_cuts. For now must be 4.
+t_cuts = 4 # number of cuts along time. 
+x_border_aug = 0.04 # expansion of x border on train 
+y_border_aug = 0.01 # expansion of y border on train
+time_aug = 2
+n_neighbors = 31
 
-    df['category_name'] = df['category_name'].astype('category')
-    df['brand_name'] = df['brand_name'].astype('category')
-    df['item_condition_id'] = df['item_condition_id'].astype('category')
+df_train, df_test, val_label = prepare_data(datapath, val_start_day)
+gc.collect()
 
-    print("Count-vectorizing categories")
-    count_category = CountVectorizer()
-    X_category = count_category.fit_transform(df["category_name"])
-    X_category_s1 = count_category.fit_transform(df["subcat_1"])
-    X_category_s2 = count_category.fit_transform(df["subcat_2"])
+elapsed = (time.time() - start_time)
+print('Data prepared in:', timedelta(seconds=elapsed))
+    
+preds = process_grid(df_train, df_test, x_cuts, y_cuts, t_cuts,
+                     x_border_aug, y_border_aug, time_aug, 
+                     fw, th, n_neighbors)
+elapsed = (time.time() - start_time)
+print('Predictions made in:', timedelta(seconds=elapsed))
 
-    print("Getting descriptions' TF-IDFs")
-    count_descp = TfidfVectorizer(max_features=MAX_FEAT_DESCP,
-                                  ngram_range=(1, 3),
-                                  stop_words="english")
-    X_descp = count_descp.fit_transform(df["item_description"])
+#del df_train, df_test
 
-    print("Encoding brands")
-    vect_brand = CountVectorizer()
-    X_brand = vect_brand.fit_transform(df["brand_name"])
-
-    print("Creating dummies")
-    X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[["item_condition_id", "shipping", "pics"]], sparse=True).values)
-
-    X_qnty = scipy.sparse.csr_matrix(df['qnty']).T
-
-    X = scipy.sparse.hstack((
-                            X_dummies,
-                            X_descp,
-                            X_brand,
-                            X_category,
-                            X_category_s1,
-                            X_category_s2,
-                            X_qnty
-                            )).tocsr()
-
-    X_test = X[nrow_train:]
-    X_train = X[:nrow_train]
-    X_train, X_valid, y_train, y_valid = train_test_split(X_train, y_train, random_state=123, train_size=0.98)
-
-    GRID_SEARCH = False
-    param_grid = {
-        'lgb_lr': [0.75],
-        'lgb_max_bin': [8192, 4096, 16384],
-        'lgb_num_leaves': [32, 100, 1000],
-        'lgb_max_depth': [3, 8, 16],
-        'lgb_num_trees': [750, 2000, 3000]
-    }
-
-    if not GRID_SEARCH:
-        for k, v in param_grid.items():
-            param_grid[k] = [v[0]]
-
-    best_params = None
-    best_scores = (999,)
-    best_model_gb = None
-
-    print('Non-cross-validated grid search about to evaluate {} param combinations'.format(len(list(ParameterGrid(param_grid)))))
-
-    for p in list(ParameterGrid(param_grid)):
-        print('Evaluating param set: {}'.format(p))
-
-        d_train = lgb.Dataset(X_train, label=y_train, max_bin=p['lgb_max_bin'])
-        d_valid = lgb.Dataset(X_valid, label=y_valid, max_bin=p['lgb_max_bin'])
-        watchlist = [d_train, d_valid]
-
-        params = {
-            'learning_rate': p['lgb_lr'], # caution: params dict is modified by lgb
-            'application': 'regression',
-            'max_depth': p['lgb_max_depth'],
-            'num_leaves': p['lgb_num_leaves'],
-            'verbosity': -1,
-            'metric': 'RMSE',
-        }
-
-        print("Fitting boosted trees")
-        model_gb = lgb.train(params, train_set=d_train, num_boost_round=p['lgb_num_trees'],
-                                    valid_sets=watchlist, early_stopping_rounds=50, verbose_eval=0,
-                                    callbacks=[])
-
-        print("Evaluating model")
-        preds_gb = np.array(model_gb.predict(X_valid))
-        preds = preds_gb
-        score = mean_squared_log_error(y_valid, preds) ** 0.5
-
-        if score < best_scores[0]:
-            best_scores = (score,)
-            best_params = p
-            best_model_gb = model_gb
-
-    print('Best score: {}'.format(best_scores[0]))
-    print('Best params: {}'.format(best_params))
-
-    model_gb = best_model_gb
-
-    print('Predicting on test set')
-    preds_gb = np.array(model_gb.predict(X_test))
-    preds = preds_gb
-    df_test["price"] = np.expm1(preds)
-    print('Saving submission')
-    df_test[["test_id", "price"]].to_csv("submission_ridge.csv", index=False)
+if val_start_day > 0:
+    preds = preds[preds[:, 0] > 0] # only use rows predicted
+    labels = val_label.loc[preds[:, 0]].values
+    score = mapkprecision(labels, preds[:, 1:])
+    print('Final score:', score)
+else:
+    generate_submission(preds)
+elapsed = (time.time() - start_time)
+print('Task completed in:', timedelta(seconds=elapsed))

@@ -1,284 +1,167 @@
 
 # coding: utf-8
 
-# ## Here we'll try to encode categorical features...
+# ## This notebook demos Python data visualizations on the Iris dataset
+# 
+# This Python 3 environment comes with many helpful analytics libraries installed. It is defined by the [kaggle/python docker image](https://github.com/kaggle/docker-python)
+# 
+# We'll use three libraries for this tutorial: [pandas](http://pandas.pydata.org/), [matplotlib](http://matplotlib.org/), and [seaborn](http://stanford.edu/~mwaskom/software/seaborn/).
+# 
+# Press "Fork" at the top-right of this screen to run this notebook yourself and build each of the examples.
 
-# In[ ]:
+# In[1]:
 
 
-import numpy as np
+# First, we'll import pandas, a data processing and CSV file I/O library
 import pandas as pd
 
-import matplotlib.pyplot as plt
+# We'll also import seaborn, a Python graphing library
+import warnings # current version of seaborn generates a bunch of warnings that we'll ignore
+warnings.filterwarnings("ignore")
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import xgboost as xgb 
-from sklearn.metrics import r2_score
-
-from IPython.display import display, HTML
-# Shows all columns of a dataframe
-def show_dataframe(X, rows = 2):
-    display(HTML(X.to_html(max_rows=rows)))
-
-
-# In[ ]:
-
-
-# Datasets
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-
-# In[ ]:
-
-
-# Categorical features
-cat_cols = []
-for c in train.columns:
-    if train[c].dtype == 'object':
-        cat_cols.append(c)
-print('Categorical columns:', cat_cols)
-
-# Dublicate features
-d = {}; done = []
-cols = train.columns.values
-for c in cols: d[c]=[]
-for i in range(len(cols)):
-    if i not in done:
-        for j in range(i+1, len(cols)):
-            if all(train[cols[i]] == train[cols[j]]):
-                done.append(j)
-                d[cols[i]].append(cols[j])
-dub_cols = []
-for k in d.keys():
-    if len(d[k]) > 0: 
-        # print k, d[k]
-        dub_cols += d[k]        
-print('Dublicates:', dub_cols)
-
-# Constant columns
-const_cols = []
-for c in cols:
-    if len(train[c].unique()) == 1:
-        const_cols.append(c)
-print('Constant cols:', const_cols)
+import matplotlib.pyplot as plt
+sns.set(style="white", color_codes=True)
 
-
-# Figures below show categorical features (on the left) sorted by means of **y**'s grouped by labels. On the right there are corresponding **mean**'s, **std**'s (filled blue), **max**'s (green line) and **min**'s (red line).
+# Next, we'll load the Iris flower dataset, which is in the "../input/" directory
+iris = pd.read_csv("../input/Iris.csv") # the iris dataset is now a Pandas DataFrame
 
-# In[ ]:
+# Let's see what's in the iris data - Jupyter notebooks print the result of the last thing you do
+iris.head()
 
+# Press shift+enter to execute this cell
 
-plt.figure(figsize=(20,32))
-for i in range(len(cat_cols)):
-    c = cat_cols[i]
-    
-    means = train.groupby(c).y.mean()
-    stds = train.groupby(c).y.std().fillna(0)
-    maxs = train.groupby(c).y.max()
-    mins = train.groupby(c).y.min()
-    
-    ddd = pd.concat([means, stds, maxs, mins], axis=1); 
-    ddd.columns = ['means', 'stds', 'maxs', 'mins']
-    ddd.sort_values('means', inplace=True)
-    
-    plt.subplot(8,2,2*i+1)
-    ax = sns.countplot(train[c], order=ddd.index.values)
-    for p in ax.patches:
-        x=p.get_bbox().get_points()[:,0]
-        y=p.get_bbox().get_points()[1,1]
-        ax.annotate('{:.0f}'.format(y), (x.mean(), y), ha='center', va='bottom')
-    
-    plt.subplot(8,2,2*i+2)
-    plt.fill_between(range(len(train[c].unique())), 
-                     ddd.means.values - ddd.stds.values,
-                     ddd.means.values + ddd.stds.values,
-                     alpha=0.3
-                    )
-    plt.xticks(range(len(train[c].unique())), ddd.index.values)
-    plt.plot(ddd.means.values, color='b', marker='.', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd.maxs.values, color='g', linestyle='dashed', linewidth=0.7)
-    plt.plot(ddd.mins.values, color='r', linestyle='dashed', linewidth=0.7)
-    plt.xlabel(c + ': Maxs, Means, Mins and +- STDs')
-    plt.ylim(55, 270)
-
-
-# In[ ]:
-
-
-# Glue train + test
-train['eval_set'] = 0; test['eval_set'] = 1
-df = pd.concat([train, test], axis=0, copy=True)
-# Reset index
-df.reset_index(drop=True, inplace=True)
 
+# In[2]:
 
-# ### Categorical feature encoding
-# In the next cell for every categorical column from **cat_cols** we'll find **mean** of **y's** for every label using **.groupby()**. Then we sort labels by values of **means**. Now, when labels are sorted, they can be encoded by numbers from *0* to *numbers of labels - 1*.
 
-# In[ ]:
+# Let's see how many examples we have of each species
+iris["Species"].value_counts()
 
 
-def add_new_col(x):
-    if x not in new_col.keys(): 
-        # set n/2 x if is contained in test, but not in train 
-        # (n is the number of unique labels in train)
-        # or an alternative could be -100 (something out of range [0; n-1]
-        return int(len(new_col.keys())/2)
-    return new_col[x] # rank of the label
+# In[3]:
 
-for c in cat_cols:
-    # get labels and corresponding means
-    new_col = train.groupby(c).y.mean().sort_values().reset_index()
-    # make a dictionary, where key is a label and value is the rank of that label
-    new_col = new_col.reset_index().set_index(c).drop('y', axis=1)['index'].to_dict()
-    # add new column to the dataframe
-    df[c + '_new'] = df[c].apply(add_new_col)
 
-# drop old categorical columns
-df_new = df.drop(cat_cols, axis=1)
+# The first way we can plot things is using the .plot extension from Pandas dataframes
+# We'll use this to make a scatterplot of the Iris features.
+iris.plot(kind="scatter", x="SepalLengthCm", y="SepalWidthCm")
 
-# show the result
-show_dataframe(df_new, 5)
 
+# In[4]:
 
-# ### Train-test split
 
-# In[ ]:
+# We can also use the seaborn library to make a similar plot
+# A seaborn jointplot shows bivariate scatterplots and univariate histograms in the same figure
+sns.jointplot(x="SepalLengthCm", y="SepalWidthCm", data=iris, size=5)
 
 
-X = df.drop(list((set(const_cols) | set(dub_cols) | set(cat_cols))), axis=1)
+# In[5]:
 
-# Train
-X_train = X[X.eval_set == 0]
-y_train = X_train.pop('y'); 
-X_train = X_train.drop(['eval_set', 'ID'], axis=1)
 
-# Test
-X_test = X[X.eval_set == 1]
-X_test = X_test.drop(['y', 'eval_set', 'ID'], axis=1)
+# One piece of information missing in the plots above is what species each plant is
+# We'll use seaborn's FacetGrid to color the scatterplot by species
+sns.FacetGrid(iris, hue="Species", size=5)    .map(plt.scatter, "SepalLengthCm", "SepalWidthCm")    .add_legend()
 
-# Base score
-y_mean = y_train.mean()
-# Shapes
 
-print('Shape X_train: {}\nShape X_test: {}'.format(X_train.shape, X_test.shape))
+# In[6]:
 
 
-# ### Model (XGBoost)
+# We can look at an individual feature in Seaborn through a boxplot
+sns.boxplot(x="Species", y="PetalLengthCm", data=iris)
 
-# In[ ]:
 
+# In[7]:
 
-### Regressor
 
-# prepare dict of params for xgboost to run with
-xgb_params = {
-    'n_trees': 100, 
-    'eta': 0.005,
-    'max_depth': 3,
-    'subsample': 0.95,
-    'colsample_bytree': 0.6,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'base_score': np.log(y_mean),
-    'silent': 1
-}
+# One way we can extend this plot is adding a layer of individual points on top of
+# it through Seaborn's striplot
+# 
+# We'll use jitter=True so that all the points don't fall in single vertical lines
+# above the species
+#
+# Saving the resulting axes as ax each time causes the resulting plot to be shown
+# on top of the previous axes
+ax = sns.boxplot(x="Species", y="PetalLengthCm", data=iris)
+ax = sns.stripplot(x="Species", y="PetalLengthCm", data=iris, jitter=True, edgecolor="gray")
 
-# form DMatrices for Xgboost training
-dtrain = xgb.DMatrix(X_train, np.log(y_train))
-dtest = xgb.DMatrix(X_test)
 
-# evaluation metric
-def the_metric(y_pred, y):
-    y_true = y.get_label()
-    return 'r2', r2_score(y_true, y_pred)
+# In[8]:
 
-# xgboost, cross-validation
-cv_result = xgb.cv(xgb_params, 
-                   dtrain, 
-                   num_boost_round=2000, 
-                   nfold = 3,
-                   early_stopping_rounds=50,
-                   feval=the_metric,
-                   verbose_eval=100, 
-                   show_stdv=False
-                  )
 
-num_boost_rounds = len(cv_result)
-print('num_boost_rounds=' + str(num_boost_rounds))
+# A violin plot combines the benefits of the previous two plots and simplifies them
+# Denser regions of the data are fatter, and sparser thiner in a violin plot
+sns.violinplot(x="Species", y="PetalLengthCm", data=iris, size=6)
 
-# train model
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
 
-# Predict on trian and test
-y_train_pred = np.exp(model.predict(dtrain))
-y_pred = np.exp(model.predict(dtest))
+# In[9]:
 
-print('First 5 predicted test values:', y_pred[:5])
 
+# A final seaborn plot useful for looking at univariate relations is the kdeplot,
+# which creates and visualizes a kernel density estimate of the underlying feature
+sns.FacetGrid(iris, hue="Species", size=6)    .map(sns.kdeplot, "PetalLengthCm")    .add_legend()
 
-# In[ ]:
 
+# In[10]:
 
-plt.figure(figsize=(16,4))
 
-plt.subplot(1,4,1)
-train_scores = cv_result['train-r2-mean']
-train_stds = cv_result['train-r2-std']
-plt.plot(train_scores, color='green')
-plt.fill_between(range(len(cv_result)), train_scores - train_stds, 
-                 train_scores + train_stds, alpha=0.1, color='green')
-test_scores = cv_result['test-r2-mean']
-test_stds = cv_result['test-r2-std']
-plt.plot(test_scores, color='red')
-plt.fill_between(range(len(cv_result)), test_scores - test_stds, 
-                 test_scores + test_stds, alpha=0.1, color='red')
-plt.title('Train and test cv scores (R2)')
+# Another useful seaborn plot is the pairplot, which shows the bivariate relation
+# between each pair of features
+# 
+# From the pairplot, we'll see that the Iris-setosa species is separataed from the other
+# two across all feature combinations
+sns.pairplot(iris.drop("Id", axis=1), hue="Species", size=3)
 
-plt.subplot(1,4,2)
-plt.title('True vs. Pred. train')
-plt.plot([80,265], [80,265], color='g', alpha=0.3)
-plt.scatter(x=y_train, y=y_train_pred, marker='.', alpha=0.5)
-plt.scatter(x=[np.mean(y_train)], y=[np.mean(y_train_pred)], marker='o', color='red')
-plt.xlabel('Real train'); plt.ylabel('Pred. train')
 
-plt.subplot(1,4,3)
-sns.distplot(y_train, kde=False, color='g')
-sns.distplot(y_train_pred, kde=False, color='r')
-plt.title('Distr. of train and pred. train')
+# In[11]:
 
-plt.subplot(1,4,4)
-sns.distplot(y_train, kde=False, color='g')
-sns.distplot(y_pred, kde=False, color='b')
-plt.title('Distr. of train and pred. test')
 
+# The diagonal elements in a pairplot show the histogram by default
+# We can update these elements to show other things, such as a kde
+sns.pairplot(iris.drop("Id", axis=1), hue="Species", size=3, diag_kind="kde")
 
 
-plt.figure(figsize=(18,1))
-plt.plot(y_train_pred[:200], color='r', linewidth=0.7)
-plt.plot(y_train[:200], color='g', linewidth=0.7)
-plt.title('First 200 true and pred. trains')
+# In[12]:
 
-print('Mean error =', np.mean(y_train - y_train_pred))
-print('Train r2 =', r2_score(y_train, y_train_pred))
 
+# Now that we've covered seaborn, let's go back to some of the ones we can make with Pandas
+# We can quickly make a boxplot with Pandas on each feature split out by species
+iris.drop("Id", axis=1).boxplot(by="Species", figsize=(12, 6))
 
-# ### Feature importance
 
-# In[ ]:
+# In[13]:
 
 
-# First 50 features
-features_score = pd.Series(model.get_fscore()).sort_values(ascending=False)[:50]
-plt.figure(figsize=(7,10))
-sns.barplot(x=features_score.values, y=features_score.index.values, orient='h')
+# One cool more sophisticated technique pandas has available is called Andrews Curves
+# Andrews Curves involve using attributes of samples as coefficients for Fourier series
+# and then plotting these
+from pandas.tools.plotting import andrews_curves
+andrews_curves(iris.drop("Id", axis=1), "Species")
 
 
-# In[ ]:
+# In[14]:
 
 
-# output = pd.DataFrame({'id': test['ID'].astype(np.int32), 'y': y_pred})
-# output.to_csv('subm.csv', index=False)
+# Another multivariate visualization technique pandas has is parallel_coordinates
+# Parallel coordinates plots each feature on a separate column & then draws lines
+# connecting the features for each data sample
+from pandas.tools.plotting import parallel_coordinates
+parallel_coordinates(iris.drop("Id", axis=1), "Species")
 
+
+# In[15]:
+
+
+# A final multivariate visualization technique pandas has is radviz
+# Which puts each feature as a point on a 2D plane, and then simulates
+# having each sample attached to those points through a spring weighted
+# by the relative value for that feature
+from pandas.tools.plotting import radviz
+radviz(iris.drop("Id", axis=1), "Species")
+
+
+# # Wrapping Up
+# 
+# I hope you enjoyed this quick introduction to some of the quick, simple data visualizations you can create with pandas, seaborn, and matplotlib in Python!
+# 
+# I encourage you to run through these examples yourself, tweaking them and seeing what happens. From there, you can try applying these methods to a new dataset and incorprating them into your own workflow!
+# 
+# See [Kaggle Datasets](https://www.kaggle.com/datasets) for other datasets to try visualizing. The [World Food Facts data](https://www.kaggle.com/openfoodfacts/world-food-facts) is an especially rich one for visualization.

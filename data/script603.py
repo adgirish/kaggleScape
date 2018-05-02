@@ -1,109 +1,22 @@
 
 # coding: utf-8
 
-# This kernel creates mapping between click_id  from current test.csv and click_id from test.csv uploaded initially (and re-uploaded officially as test_supplement.csv), which has complete data for time range 2017-Nov-10 12:00 - 2017-Nov-10 23:00 (Chinese local time).
+# This is a collection of some thematically related datasets that are suitable for different types of regression analysis. Each set of datasets requires a different technique. A suggested question has that can be answered with regression been posed for each dataset.
 # 
-# The mapping can be useful to predict on test_supplement.csv data directly.
+# ## Linear regression (predicting a continuous value):
 # 
-# Old test data taken from [here](https://www.kaggle.com/tkm2261/old-test-data-on-talkingdata-adtracking), thanks tkm2261.
-
-# In[ ]:
-
-
-
-old_file_path = '../input/old-test-data-on-talkingdata-adtracking/test.csv'
-file_path = '../input/talkingdata-adtracking-fraud-detection/test.csv'
-output_file_path = 'mapping.csv'
-
-
-def _split(line):
-    line = line.strip()
-    index = line.index(',')
-    last_index = line.rindex(',')
-    click_id = line[:index]
-    payload = line[index:]
-    time = line[last_index:]
-    return click_id, payload, time
-
-
-def _read_same_time(lines, unprocessed_line):
-    click_id, payload, group_time = _split(unprocessed_line)
-    click_id_dict = {payload: [click_id]}
-    while True:
-        unprocessed_line = lines.readline()
-        if not unprocessed_line:
-            return unprocessed_line, click_id_dict, group_time
-        click_id, payload, click_time = _split(unprocessed_line)
-        if group_time == click_time:
-            if payload in click_id_dict:
-                click_id_dict[payload].append(click_id)
-            else:
-                click_id_dict[payload] = [click_id]
-        else:
-            return unprocessed_line, click_id_dict, group_time
-
-
-def _find_time(lines, group_time, unprocessed_line):
-    if unprocessed_line:
-        click_id, payload, time = _split(unprocessed_line)
-        if group_time == time:
-            return unprocessed_line
-    while True:
-        unprocessed_line = lines.readline()
-        click_id, payload, time = _split(unprocessed_line)
-        if group_time == time:
-            return unprocessed_line
-
-
-def _save(output, test_click_id_dict, old_test_click_id_dict):
-    for payload, click_ids in test_click_id_dict.items():
-        old_click_ids = old_test_click_id_dict[payload]
-        if len(old_click_ids) != len(click_ids):
-            print('Number of ids mismatch for "{}", test ids = {}, old test ids = {}'.format(payload, click_ids,
-                                                                                             old_click_ids))
-        for i in range(len(click_ids)):
-            output.write('{},{}\n'.format(click_ids[i], old_click_ids[i]))
-
-
-with open(file_path, "r", encoding="utf-8") as test:
-    with open(old_file_path, "r", encoding="utf-8") as old_test:
-        with open(output_file_path, "w", encoding="utf-8") as output:
-            output.write('click_id,old_click_id\n')
-            test.readline()  # skip header
-            old_test.readline()  # skip header
-            old_test_unprocessed_line = old_test.readline()
-            test_unprocessed_line = test.readline()
-            while test_unprocessed_line != '':
-                test_unprocessed_line, test_click_id_dict, click_time = _read_same_time(test, test_unprocessed_line)
-                old_test_unprocessed_line = _find_time(old_test, click_time, old_test_unprocessed_line)
-                old_test_unprocessed_line, old_test_click_id_dict, _ = _read_same_time(old_test,
-                                                                                       old_test_unprocessed_line)
-                _save(output, test_click_id_dict, old_test_click_id_dict)
-        pass
-
-
-# In[1]:
-
-
-import pandas as pd
-mapping = pd.read_csv('../input/mapping-between-test-supplement-csv-and-test-csv/mapping.csv', dtype={'click_id': 'int32','old_click_id': 'int32'}, engine='c',
-                na_filter=False,memory_map=True)
-
-
-# In[ ]:
-
-
-print('click id min {}'.format(mapping.click_id.min()))
-print('click id max {}'.format(mapping.click_id.max()))
-print('click id count {}'.format(mapping.click_id.count()))
-print('click id unique count {}'.format(mapping.click_id.unique().shape[0]))
-
-
-# In[ ]:
-
-
-print('old click id min {}'.format(mapping.old_click_id.min()))
-print('old click id max {}'.format(mapping.old_click_id.max()))
-print('old click id count {}'.format(mapping.old_click_id.count()))
-print('old click id unique count {}'.format(mapping.old_click_id.unique().shape[0]))
-
+# * [CalCOFI: Over 60 years of oceanographic data](https://www.kaggle.com/sohier/calcofi): Is there a relationship between water salinity & water temperature? Can you predict the water temperature based on salinity?
+# * [Weather in Szeged 2006-2016](https://www.kaggle.com/budincsevity/szeged-weather): Is there a relationship between humidity and temperature? What about between humidity and apparent temperature? Can you predict the apparent temperature given the humidity?
+# * [Weather Conditions in World War Two](https://www.kaggle.com/smid80/weatherww2/data): Is there a relationship between the daily minimum and maximum temperature? Can you predict the maximum temperature given the minimum temperature? 
+# 
+# ## Poisson regression (predicting a count value):
+# 
+# * [Montreal bike lanes: Use of bike lanes in Montreal city in 2015](https://www.kaggle.com/pablomonleon/montreal-bike-lanes): Is there a relationship between the number of bicyclists who use different bike paths on the same day? Can you predict how many riders there will be on one path given how many are on another?
+# * [New York City - East River Bicycle Crossings: Daily bicycle counts for major bridges in NYC](https://www.kaggle.com/new-york-city/nyc-east-river-bicycle-crossings): Is there a relationship between the number of bicyclists who cross different bridges in New York?
+# * (Requires some cleaning) [UK 2016 Road Safety Data: Data from the UK Department for Transport](https://www.kaggle.com/bluehorseshoe/uk-2016-road-safety-data/data) : Is there a relationship between the number of people in the car and the number of casualties in road accidents?
+# 
+# ## Logistic regression (predicting a categorical value, often with two categories):
+# 
+# * [The Ultimate Halloween Candy Power Ranking](https://www.kaggle.com/fivethirtyeight/the-ultimate-halloween-candy-power-ranking/): Can you predict if a candy is chocolate or not based on its other features?
+# * [Epicurious - Recipes with Rating and Nutrition](https://www.kaggle.com/hugodarwood/epirecipes): Can you predict whether a recipe was part of #cakeweek based on whether it its other features?
+# * (Requires some cleaning) [Competition context and results from 1,559 Kansas City Barbecue Society Barbeque Competitions](https://www.kaggle.com/jaysobel/kcbs-bbq/):: Can you model whether a team will win first place based on their score and the competition they’re at?

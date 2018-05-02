@@ -1,433 +1,313 @@
 
 # coding: utf-8
 
-# # What are common characteristics of employees lost in attrition compared to those who stay in IBM's fictional dataset? 
-# ## We will be using point plots, box plots, kernel density diagrams, means, standard deviations, and z-tests to explore this question.
+# In[ ]:
 
-# ----------
-# 
-# 
-# ## Set Up Dataset
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+with pd.HDFStore("../input/train.h5", "r") as train:
+    df = train.get('train')
+
+
+# # 缺失值统计 missing value statistics
 
 # In[ ]:
 
 
-from pandas import read_csv
-data = read_csv("../input/WA_Fn-UseC_-HR-Employee-Attrition.csv")
-
-
-# In[ ]:
-
-
-target = "Attrition"
-
-
-# In[ ]:
-
-
-feature_by_dtype = {}
-for c in data.columns:
-    
-    if c == target: continue
-    
-    data_type = str(data[c].dtype)
-    
-    if data_type not in feature_by_dtype.keys():
-         feature_by_dtype[data_type] = [c]
-    else:
-        feature_by_dtype[data_type].append(c)
-
-feature_by_dtype
-feature_by_dtype.keys()
+m, n = df.shape
+miss_count = []
+for col in df.columns:
+    x = df[col].isnull().sum()
+    miss_count.append(x)
+miss_count_rate = np.array(miss_count) / m
 
 
 # In[ ]:
 
 
-objects = feature_by_dtype["object"]
+fig, ax = plt.subplots(figsize=(8, 25))
+ind = np.arange(n)
+ax.barh(ind, miss_count_rate, color='y')
+plt.yticks(ind+0.4, df.columns)
+ax.set_xlabel('miss_count_rate in each col')
+ax.set_title('miss_count_rate in each col')
 
 
 # In[ ]:
 
 
-remove = ["Over18"]
+df = df.drop(df.columns[miss_count_rate > 0.3], axis=1)
+
+
+# # 异常值处理 Exception value processing
+
+# In[ ]:
+
+
+# 通过箱线图去除异常值之后，查看分布 observe hist of data within boxplot range
+m, n = df.shape
+col = df.columns
+plt.figure(figsize=(8, 50))
+k = 0
+for i in range(2, n):
+    k += 1
+    col_ = df[col[i]][df[col[i]].notnull()]
+    q_high = col_.quantile(0.75)
+    q_low = col_.quantile(0.25)
+    iqr = (q_high - q_low) * 1.5
+    high = q_high + iqr
+    low = q_low -iqr
+    col_ = col_[(col_ < high) & (col_ > low)]
+    plt.subplot(25, 4, k)
+    plt.hist(col_, bins=100)
+    plt.xticks()
+    plt.title(str(i) + ' ' + col[i])
+    plt.tight_layout(pad=0)
+
+
+# ## 以下特征形态较好 The following is features with fine hist
+# ### continuoues value[ 2, 6, 8, 13, 19, 20, 26, 27, 28, 30, 32, 34, 38, 41, 45, 49, 51, 52, 56, 59, 61, 62, 74, 76, 78, 79, 80, 81, 84, 86, 88, 89, 94, 97] 
+# ### category0 has two class[60, 63, 66, 67, 70, 72,  82,  96] 
+# ### category1 has three class [77, 87]
+
+# In[ ]:
+
+
+df = df.ix[:, [0, 1, 2, 6, 8, 13, 19, 20, 26, 27, 28, 30, 32, 34, 38, 41, 45, 49, 51,
+       52, 56, 59, 61, 62, 74, 76, 78, 79, 80, 81, 84, 86, 88, 89, 94, 97, 60, 
+               63, 66, 67, 70, 72, 82, 96, 77, 87, 98]]
+
+
+# ## 处理cate0特征下的异常值 processing exception value in cate0
+
+# In[ ]:
+
+
+cate0 = range(36, 44)
+col = df.columns
+for i in cate0:
+    df.ix[:, i] = np.where(df.ix[:, i] < -1, -2, df.ix[:, i])
+    df.ix[:, i] = np.where(df.ix[:, i] >= -1, 0, df.ix[:, i])
+
+
+# ## 去除y的异常值 drop samples which have exception value in y
+
+# In[ ]:
+
+
+q_high = df.y.quantile(0.75)
+q_low = df.y.quantile(0.25)
+iqr = (q_high - q_low) * 1.5
+high = q_high + iqr
+low = q_low -iqr
+df = df.drop(df[df.y > high].index)
+df = df.drop(df[df.y < low].index)
 
 
 # In[ ]:
 
 
-categorical_features = [f for f in objects if f not in remove]
+hist_ = plt.hist(df.ix[df['timestamp'] == 0, 'y'], bins=100)
 
 
 # In[ ]:
 
 
-int64s = feature_by_dtype["int64"]
+hist_ = plt.hist(df.ix[df['id'] == 438, 'y'], bins=100)
 
 
 # In[ ]:
 
 
-remove.append("StandardHours")
-remove.append("EmployeeCount")
+## 同一timestamp或用一id对应的y分布都是对称的。
+
+
+# # missing value fill 填充
+
+# In[ ]:
+
+
+df = df.sort_values(by='y')
 
 
 # In[ ]:
 
 
-count_features = []
-for i in [i for i in int64s if len(data[i].unique()) < 20 and i not in remove]:
-    count_features.append(i)
+df = df.fillna(method='ffill')
+df = df.fillna(method='bfill') # 防止第一个值为nan
+
+
+# # 模型 model
+
+# ## 划分测试集和训练集 Divide the test set and the training set
+
+# In[ ]:
+
+
+test = {'x': [], 'y': [], 'timestamp': []}
+time = range(1812, 1802, -1)
+for i in range(10):
+    df_ = df.ix[df['timestamp']==time[i], :]
+    test['x'].append(df_.drop(['y', 'id', 'timestamp'], axis=1))
+    test['y'].append(df_['y'])
+    test['timestamp'].append(time[i])
+df_ = df[df['timestamp'] < 1803]
+X = df_.drop(['y', 'id', 'timestamp'], axis=1)
+y = df_['y']
 
 
 # In[ ]:
 
 
-count_features = count_features #+ ["TotalWorkingYears", "YearsAtCompany", "HourlyRate"]
+from sklearn.ensemble import RandomForestRegressor
+rf0 = RandomForestRegressor(n_jobs=-1, verbose=1)
+rf0.fit(test['x'][0], test['y'][0])
 
 
 # In[ ]:
 
 
-remove.append("EmployeeNumber")
+col_ = X.columns
+plt.figure(figsize=(8, 16))
+ind = np.arange(len(col_))
+plt.barh(ind, rf0.feature_importances_)
+plt.yticks(ind+0.4, col_)
+
+
+# ## 类别变量的feature_importances_比较小，是否说明这几个特征没有用？
+# ## Feature_importances of features in cate0 and cate1 is small. Does it mean they are less important?
+
+# In[ ]:
+
+
+rf0.score(test['x'][0], test['y'][0])
 
 
 # In[ ]:
 
 
-numerical_features = [i for i in int64s if i not in remove]
+rf0.score(test['x'][1], test['y'][1])
 
 
-# ----------
-# 
-# 
-# # Numerical Features
+# ## 严重过拟合？试一下减少特征和增大训练集
+# ## Over-fitting?Try to use less features or use more samples to fit modle.
 
 # In[ ]:
 
 
-data[numerical_features].head()
-
-
-# ----------
-
-# # Python Source Code
-
-# In[ ]:
-
-
-def display_ttest(data, category, numeric):
-    output = {}
-    s1 = data[data[category] == data[category].unique()[0]][numeric]
-    s2 = data[data[category] == data[category].unique()[1]][numeric]
-    from scipy.stats import ttest_ind
-    t, p = ttest_ind(s1,s2)
-    from IPython.display import display
-    from pandas import DataFrame
-    display(DataFrame(data=[{"t-test statistic" : t, "p-value" : p}], columns=["t-test statistic", "p-value"], index=[category]).round(2))
-
-def display_ztest(data, category, numeric):
-    output = {}
-    s1 = data[data[category] == data[category].unique()[0]][numeric]
-    s2 = data[data[category] == data[category].unique()[1]][numeric]
-    from statsmodels.stats.weightstats import ztest
-    z, p = ztest(s1,s2)
-    from IPython.display import display
-    from pandas import DataFrame
-    display(DataFrame(data=[{"z-test statistic" : z, "p-value" : p}], columns=["z-test statistic", "p-value"], index=[category]).round(2))
-    
-def display_cxn_analysis(data, category, numeric, target):
-    
-    from seaborn import boxplot, kdeplot, set_style, distplot, countplot
-    from matplotlib.pyplot import show, figure, subplots, ylabel, xlabel, subplot, suptitle
-    
-    not_target = [a for a in data[category].unique() if a != target][0]
-    
-    pal = {target : "yellow",
-          not_target : "darkgrey"}
-    
-
-    set_style("whitegrid")
-    figure(figsize=(12,5))
-    suptitle(numeric + " by " + category)
-
-    # ==============================================
-    
-    p1 = subplot(2,2,2)
-    boxplot(y=category, x=numeric, data=data, orient="h", palette = pal)
-    p1.get_xaxis().set_visible(False)
-
-    # ==============================================
-    
-    if(numeric in count_features):
-        p2 = subplot(2,2,4)
-        
-        s2 = data[data[category] == not_target][numeric]
-        s2 = s2.rename(not_target) 
-        countplot(s2, color = pal[not_target])
-        
-        s1 = data[data[category] == target][numeric]
-        s1 = s1.rename(target)
-        ax = countplot(s1, color = pal[target])
-        
-        ax.set_yticklabels([ "{:.0f}%".format((tick/len(data)) * 100) for tick in ax.get_yticks()])
-        
-        ax.set_ylabel("Percentage")
-        ax.set_xlabel(numeric)
-        
-    else:
-        p2 = subplot(2,2,4, sharex=p1)
-        s1 = data[data[category] == target][numeric]
-        s1 = s1.rename(target)
-        kdeplot(s1, shade=True, color = pal[target])
-        #distplot(s1,kde=False,color = pal[target])
-
-        s2 = data[data[category] == not_target][numeric]
-        s2 = s2.rename(not_target)  
-        kdeplot(s2, shade=True, color = pal[not_target])
-        #distplot(s2,kde=False,color = pal[not_target])
-
-        #ylabel("Density Function")
-        ylabel("Distribution Plot")
-        xlabel(numeric)
-    
-    # ==============================================
-    
-    p3 = subplot(1,2,1)
-    from seaborn import pointplot
-    from matplotlib.pyplot import rc_context
-
-    with rc_context({'lines.linewidth': 0.8}):
-        pp = pointplot(x=category, y=numeric, data=data, capsize=.1, color="black", marker="s")
-        
-    
-    # ==============================================
-    
-    show()
-    
-    #display p value
-    
-    if(data[category].value_counts()[0] > 30 and data[category].value_counts()[1] > 30):
-        display_ztest(data,category,numeric)
-    else:
-        display_ttest(data,category,numeric)
-    
-    #Means, Standard Deviation, Absolute Distance
-    table = data[[category,numeric]]
-    
-    means = table.groupby(category).mean()
-    stds = table.groupby(category).std()
-    
-    s1_mean = means.loc[data[category].unique()[0]]
-    s1_std = stds.loc[data[category].unique()[0]]
-    
-    s2_mean = means.loc[data[category].unique()[1]]
-    s2_std = means.loc[data[category].unique()[1]]
-    
-    print("%s Mean: %.2f (+/- %.2f)" % (category + " == " + str(data[category].unique()[0]),s1_mean, s1_std))
-    print("%s Mean : %.2f (+/- %.2f)" % (category + " == " + str(data[category].unique()[1]), s2_mean, s2_std))
-    print("Absolute Mean Diferrence Distance: %.2f" % abs(s1_mean - s2_mean))
+# 只采用连续变量进行fit
+# Train model with continuous value.
+rf1 = RandomForestRegressor(n_jobs=-1, verbose=1)
+rf1.fit(test['x'][0].ix[:, range(34)], test['y'][0])
+rf1.score(test['x'][0].ix[:, range(34)], test['y'][0])
 
 
 # In[ ]:
 
 
-def get_p_value(s1,s2):
-    
-    from statsmodels.stats.weightstats import ztest
-    from scipy.stats import ttest_ind
-    
-    if(len(s1) > 30 & len(s2) > 30):
-        z, p = ztest(s1,s2)
-        return p
-    else:
-        t, p = ttest_ind(s1,s2)
-        return p
-    
-def get_p_values(data, category, numerics):
-    
-    output = {}
-    
-    for numeric in numerics:
-        s1 = data[data[category] == data[category].unique()[0]][numeric]
-        s2 = data[data[category] == data[category].unique()[1]][numeric]
-        row = {"p-value" : get_p_value(s1,s2)}
-        output[numeric] = row
-    
-    from pandas import DataFrame
-    
-    return DataFrame(data=output).T
-
-def get_statistically_significant_numerics(data, category, numerics):
-    df = get_p_values(data, category, numerics)
-    return list(df[df["p-value"] < 0.05].index)
-
-def get_statistically_non_significant_numerics(data, category, numerics):
-    df = get_p_values(data, category, numerics)
-    return list(df[df["p-value"] >= 0.05].index)
-    
-def display_p_values(data, category, numerics):
-    from IPython.display import display
-    display(get_p_values(data, category, numerics).round(2).sort_values("p-value", ascending=False))
+rf1.score(test['x'][1].ix[:, range(34)], test['y'][1])
 
 
 # In[ ]:
 
 
-significant = get_statistically_significant_numerics(data,target,numerical_features) 
-ns = get_statistically_non_significant_numerics(data,target,numerical_features)
+# 采用前10个特征fit. Fit with 10 features.
+rf2 = RandomForestRegressor(n_jobs=-1, verbose=1)
+rf2.fit(test['x'][0].ix[:, range(10)], test['y'][0])
+rf2.score(test['x'][0].ix[:, range(10)], test['y'][0])
 
-
-# ----------
-# 
-# # Statistically Significant Numerical Features
 
 # In[ ]:
 
 
-i = iter(significant)
+rf2.score(test['x'][1].ix[:, range(10)], test['y'][1])
 
-
-# ## The fictional company on average loses staff that are 3 - 4 years younger than those who stay.
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+# 采用第一个特征fit. Fit with one feature
+rf3 = RandomForestRegressor(n_jobs=-1, verbose=1)
+rf3.fit(test['x'][0].ix[:, range(1)], test['y'][0])
+rf3.score(test['x'][0].ix[:, range(1)], test['y'][0])
 
-
-# ## Employees lost in attrition tend to have lower daily rates than those who stay.
-#  - Each of the group are 180 degrees flipped from each other in their kernel density diagram
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+rf3.score(test['x'][1].ix[:, range(1)], test['y'][1])
 
-
-# ## Employees lost in attrition tend to have longer commute distances than those who stay.
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+plt.hist(test['y'][0])
 
-
-# # Employees lost in attrition are less satisfied with their work environment on average than those who stay.
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+plt.hist(test['y'][1])
 
 
-# ## Employees lost in attrition are less involved with their jobs on average than those who stay.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees lost in attrition tend to be lower in job level than those who stay.
+# ### 两个timestamp对于的y分布近似
+# ### y hist with defferent timestamps are similar.
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+df_ = df[df['timestamp'] < 100]
+X2 = df_.drop(['y', 'id', 'timestamp'], axis=1)
+y2 = df_['y']
+rf4 = RandomForestRegressor() 
+rf4.fit(X2, y2)
+rf4.score(X2, y2)
 
-
-# ## Employees who stay have more job satisfication than employees lost in attrition
 
 # In[ ]:
 
 
-display_cxn_analysis(data, target, next(i), "Yes")
+score_ = []
+for i in range(10):
+    score_.append(rf4.score(test['x'][i], test['y'][i]))
+plt.plot(range(10), score_)
 
 
-# ## Employees lost in attrition tend to have lower monthly average income on average than those who stay.
+# ## 还是过拟合 Still over fitting!
 
-# In[ ]:
+# plt.hist(test['x'][0].ix[test['x'][0].ix[:, 0]>-9, 0],bins=100)
 
+# df_id = df.groupby('id')['y'].mean()
 
-display_cxn_analysis(data, target, next(i), "Yes")
+# sns.boxplot(df_id)
 
+# df_ = df.ix[:, ['id', 'technical_35', 'derived_0']]
+# y_ = df['y']
+# rf_ = RandomForestRegressor()
+# rf_.fit(df_, y_)
+# rf_.score(df_, y_)
 
-# ## Employees who stay tend to have more stock options than those lost in attrition.
+# ind = np.arange(3)
+# plt.bar(ind, rf_.feature_importances_)
+# plt.xticks(ind+0.4, ['id', 'technical_35', 'derived_0'])
 
-# In[ ]:
+# df_ = df.ix[:, ['technical_35', 'derived_0']]
+# y_ = df['y']
+# rf_ = RandomForestRegressor(n_jobs=-1)
+# rf_.fit(df_, y_)
+# rf_.score(df_, y_)
 
+# ## id列对y的影响很不确定。
 
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees lost in attrition had less total working years than those who stay.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees lost in attrition had less training opportunities than those who stay.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees lost in attrition had poorer work-life balance on average than those who stay.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees who stay had longer organization tenure than those lost in attrition by 2 years on average.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees who stayed had 1 - 2 more years in their current role than those lost in attrition.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees lost in attrition had less time with their current manager by 1 - 2 years on average than those who stay.
-
-# In[ ]:
-
-
-display_cxn_analysis(data, target, next(i), "Yes")
-
-
-# ## Employees who stay are more satisfied with their work environment on average than those who leave.
-
-# ----------
-# # Non-Significant Features
-
-# In[ ]:
-
-
-for n in ns:
-    print(n)
-    
-    display_cxn_analysis(data, target, n, "Yes")
-
-
-# ----------
-# 
-# 
-# ### Thank you for reading. Please upvote if you liked it or leave a critique for this report so I can improve.
-# 
-# ### Read more:
-# - [IBM Employee Attrition Analysis by Category][1]
-#   [1]: https://www.kaggle.com/slamnz/d/pavansubhasht/ibm-hr-analytics-attrition-dataset/ibm-employee-attrition-analysis-by-category/
+# ## 以上，主要工作是做了特征选取，异常值处理，missing value填充
+# ## 选择随机森林模型进行拟合，过拟合现象比较严重。
+# ## 欢迎指教。
+# ## In this notebook, the main work is to do the feature selection, exception handling, missing value padding.
+# ## Using RandomForest to fit data, i find a serious over-fitting phenomenon.
+# ## Please give me some suggestions for the whole process. Happy kaggle！

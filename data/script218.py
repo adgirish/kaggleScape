@@ -1,266 +1,315 @@
 
 # coding: utf-8
 
-# # CV demonstration notebook
-# (based on Fred Navruzov's "Dumb-and-the-Dumber-Baselines (PLB=0.3276826)" - https://www.kaggle.com/frednavruzov/dumb-and-the-dumber-baselines-plb-0-3276826.  Some of the code is refactored for less memory use, but the results are unchanged.)
+# # Introduction
+# #### *This notebook describes and implements a basic approach to solving the Titanic Survival Prediction problem. The prediction is made using a Random Forest Classifier.*
 
-# In[ ]:
+# ## 1. Exploring training and test sets
+
+# First, load required packages.
+
+# In[1]:
 
 
-import pandas as pd # dataframes
-import numpy as np # algebra & calculus
-import nltk # text preprocessing & manipulation
-# from textblob import TextBlob
-import matplotlib.pyplot as plt # plotting
-import seaborn as sns # plotting
-
-from functools import partial # to reduce df memory consumption by applying to_numeric
-
-color = sns.color_palette() # adjusting plotting style
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 import warnings
-warnings.filterwarnings('ignore') # silence annoying warnings
+from sklearn.ensemble import RandomForestClassifier
+
+warnings.filterwarnings("ignore")
+plt.style.use('ggplot')
 
 
-# In[ ]:
+# Read training and test sets. Both datasets will be used in exploring and predicting.
+
+# In[2]:
 
 
-# aisles
-aisles = pd.read_csv('../input/aisles.csv', engine='c')
-print('Total aisles: {}'.format(aisles.shape[0]))
-
-# departments
-departments = pd.read_csv('../input/departments.csv', engine='c')
-print('Total departments: {}'.format(departments.shape[0]))
-
-# products
-products = pd.read_csv('../input/products.csv', engine='c')
-print('Total products: {}'.format(products.shape[0]))
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
 
-# In[ ]:
+# In[3]:
 
 
-# combine aisles, departments and products (left joined to products)
-goods = pd.merge(left=pd.merge(left=products, right=departments, how='left'), right=aisles, how='left')
-# to retain '-' and make product names more "standard"
-goods.product_name = goods.product_name.str.replace(' ', '_').str.lower() 
-
-# retype goods to reduce memory usage
-goods.product_id = goods.product_id.astype(np.int32)
-goods.aisle_id = goods.aisle_id.astype(np.int16)
-goods.department_id = goods.department_id.astype(np.int8)
+train.sample(frac=1).head(3)
 
 
-# In[ ]:
+# In[4]:
 
 
-# load datasets
-
-# train dataset
-op_train = pd.read_csv('../input/order_products__train.csv', engine='c', 
-                       dtype={'order_id': np.int32, 'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 'reordered': np.int8})
-print('Total ordered products(train): {}'.format(op_train.shape[0]))
+test.sample(frac=1).head(3)
 
 
-# In[ ]:
+# ## 2. Exploring missing data
+
+# Looks like there are missing (NaN) values among both datasets.
+
+# In[5]:
 
 
-# test dataset (submission)
-test = pd.read_csv('../input/sample_submission.csv', engine='c')
-print('Total orders(test): {}'.format(test.shape[0]))
+train.info()
 
 
-# In[ ]:
+# In[6]:
 
 
-#prior dataset
-op_prior = pd.read_csv('../input/order_products__prior.csv', engine='c', 
-                       dtype={'order_id': np.int32, 
-                              'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 
-                              'reordered': np.int8})
-
-print('Total ordered products(prior): {}'.format(op_prior.shape[0]))
+test.info()
 
 
-# In[ ]:
+# ### Non-numeric data
+
+# *Cabin* column stores quite a lot of different qualitative values and has a relatively large amount of missing data.
+
+# In[7]:
 
 
-# orders
-orders = pd.read_csv('../input/orders.csv', engine='c', dtype={'order_id': np.int32, 
-                                                           'user_id': np.int32, 
-                                                           'order_number': np.int16,  # max 100, could use int8
-                                                           'order_dow': np.int8, 
-                                                           'order_hour_of_day': np.int8, 
-                                                           'days_since_prior_order': np.float16})
-print('Total orders: {}'.format(orders.shape[0]))
-
-orders.eval_set = orders.eval_set.replace({'prior': 0, 'train': 1, 'test':2}).astype(np.int8)
-orders.days_since_prior_order = orders.days_since_prior_order.fillna(-1).astype(np.int8)
+missing_val_df = pd.DataFrame(index=["Total", "Unique Cabin", "Missing Cabin"])
+for name, df in zip(("Training data", "Test data"), (train, test)):
+    total = df.shape[0]
+    unique_cabin = len(df["Cabin"].unique())
+    missing_cabin = df["Cabin"].isnull().sum()
+    missing_val_df[name] = [total, unique_cabin, missing_cabin]
+missing_val_df
 
 
-# In[ ]:
-
-
-from functools import partial
-
-# merge train and prior together iteratively, to fit into 8GB kernel RAM
-# split df indexes into parts
-indexes = np.linspace(0, len(op_prior), num=10, dtype=np.int32)
-
-# initialize it with train dataset
-train_details = pd.merge(
-                left=op_train,
-                 right=orders, 
-                 how='left', 
-                 on='order_id'
-        ).apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))
-
-# add order hierarchy
-train_details = pd.merge(
-                left=train_details,
-                right=goods[['product_id', 
-                             'aisle_id', 
-                             'department_id']].apply(partial(pd.to_numeric, 
-                                                             errors='ignore', 
-                                                             downcast='integer')),
-                how='left',
-                on='product_id'
-)
-
-print(train_details.shape, op_train.shape)
-
-# delete (redundant now) dataframes
-#del op_train
-
-#order_details.head()
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', "# update by small portions\norder_details = pd.merge(left=pd.merge(\n                                left=op_prior,\n                                right=goods[['product_id', \n                                             'aisle_id', \n                                             'department_id' ]],\n                                how='left',\n                                on='product_id'\n                                ),\n                         right=orders, \n                         how='left', \n                         on='order_id')\n        \nprint('Datafame length: {}'.format(order_details.shape[0]))\nprint('Memory consumption: {:.2f} Mb'.format(sum(order_details.memory_usage(index=True, \n                                                                         deep=True) / 2**20)))\n# check dtypes to see if we use memory effectively\n#print(order_details.dtypes)\n\n# make sure we didn't forget to retain test dataset :D\n#test_orders = orders[orders.eval_set == 2]")
-
-
-# In[ ]:
-
-
-train_orders = orders[orders.eval_set == 1]
-
-
-# In[ ]:
-
-
-# switch to integer train indexes so .loc == .iloc
-train_orders.index.name = 'raw_order'
-train_orders.reset_index(inplace=True)
-
-
-# In[ ]:
-
-
-def get_last_orders_reordered(test_orders):
-    test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]
-    last_orders = test_history.groupby('user_id')['order_number'].max()
-    
-    t = pd.merge(
-        left=pd.merge(
-                left=last_orders.reset_index(),
-                right=test_history[test_history.reordered == 1],
-                how='left',
-                on=['user_id', 'order_number']
-            )[['user_id', 'product_id']],
-        right=test_orders[['user_id', 'order_id']],
-        how='left',
-        on='user_id'
-    ).fillna(-1).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(int(e)) for e in set(x)]) 
-                                              ).reset_index().replace(to_replace='-1', value='None')
-    t.columns = ['order_id', 'products']
-    
-    # occasionally there is a bug where a line with order_id == -1 makes it through. doesn't *seem* to effect things
-    return t[t.order_id > 0].set_index('order_id')
-
-
-# ### Run the above function for 4 folds...
+# We shall remove _Cabin_ columns from our dataframes.
 # 
-# Strictly speaking, this model does not have any interdependance on the train set, but to provide a complete demonstration KFold is used anyway.
+# Also, we can exclude _PassengerId_ from the training set, since IDs are unnecessary for classification.
 
-# In[ ]:
-
-
-import sklearn.model_selection
-
-cvpreds = []
-
-kf = sklearn.model_selection.KFold(4, shuffle=True, random_state=0)
-for train_index, test_index in kf.split(train_orders.index):
-    cvpreds.append(get_last_orders_reordered(train_orders.iloc[test_index]))
-
-df_cvpreds = pd.concat(cvpreds).sort_index()
-df_cvpreds.head()
+# In[8]:
 
 
-# #### Now to produce output (indentical to original notebook, so submission is not necessary!)
-
-# In[ ]:
-
-
-test_preds = get_last_orders_reordered(orders[orders.eval_set == 2])
-test_preds.to_csv('cvtest-output.csv', encoding='utf-8')
+train.drop("PassengerId", axis=1, inplace=True)
+for df in train, test:
+    df.drop("Cabin", axis=1, inplace=True)
 
 
-# # CV F1 validation code begins here
+# Fill in missing rows in _Embarked_ column with __S__ (Southampton Port), since it's the most frequent.
 
-# ### Produce an equivalent .csv + DataFrame to output with the train ground truth data
-
-# In[ ]:
+# In[9]:
 
 
-try:
-    df_train_gt = pd.read_csv('train.csv', index_col='order_id')
-except:
-    train_gtl = []
+non_empty_embarked = train["Embarked"].dropna()
+unique_values, value_counts = non_empty_embarked.unique(), non_empty_embarked.value_counts()
+X = np.arange(len(unique_values))
+colors = ["brown", "grey", "purple"]
 
-    for uid, subset in train_details.groupby('user_id'):
-        subset1 = subset[subset.reordered == 1]
-        oid = subset.order_id.values[0]
-
-        if len(subset1) == 0:
-            train_gtl.append((oid, 'None'))
-            continue
-
-        ostr = ' '.join([str(int(e)) for e in subset1.product_id.values])
-        # .strip is needed because join can have a padding space at the end
-        train_gtl.append((oid, ostr.strip()))
-
-    df_train_gt = pd.DataFrame(train_gtl)
-
-    df_train_gt.columns = ['order_id', 'products']
-    df_train_gt.set_index('order_id', inplace=True)
-    df_train_gt.sort_index(inplace=True)
-    
-    df_train_gt.to_csv('train.csv')
+plt.bar(left=X,
+        height=value_counts,
+        color=colors,
+        tick_label=unique_values)
+plt.xlabel("Port of Embarkation")
+plt.ylabel("Amount of embarked")
+plt.title("Bar plot of embarked in Southampton, Queenstown, Cherbourg")
 
 
-# ### Now compare the ground truth and CV DataFrames
+# ### Quantitative data
 
-# In[ ]:
+# Consider the distributions of passenger ages and fares (excluding NaN values).
 
-
-f1 = []
-for gt, pred in zip(df_train_gt.sort_index().products, df_cvpreds.sort_index().products):
-    lgt = gt.replace("None", "-1").split(' ')
-    lpred = pred.replace("None", "-1").split(' ')
-    
-    rr = (np.intersect1d(lgt, lpred))
-    precision = np.float(len(rr)) / len(lpred)
-    recall = np.float(len(rr)) / len(lgt)
-
-    denom = precision + recall
-    f1.append(((2 * precision * recall) / denom) if denom > 0 else 0)
-
-print(np.mean(f1))
+# In[10]:
 
 
-# #### The original is .327, so we've got a good validation!
+survived = train[train["Survived"] == 1]["Age"].dropna()
+perished = train[train["Survived"] == 0]["Age"].dropna()
+
+fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+fig.set_size_inches(12, 6)
+fig.subplots_adjust(hspace=0.5)
+ax1.hist(survived, facecolor='green', alpha=0.75)
+ax1.set(title="Survived", xlabel="Age", ylabel="Amount")
+ax2.hist(perished, facecolor='brown', alpha=0.75)
+ax2.set(title="Dead", xlabel="Age", ylabel="Amount")
+
+
+# In[11]:
+
+
+survived = train[train["Survived"] == 1]["Fare"].dropna()
+perished = train[train["Survived"] == 0]["Fare"].dropna()
+
+fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+fig.set_size_inches(12, 8)
+fig.subplots_adjust(hspace=0.5)
+ax1.hist(survived, facecolor='darkgreen', alpha=0.75)
+ax1.set(title="Survived", xlabel="Age", ylabel="Amount")
+ax2.hist(perished, facecolor='darkred', alpha=0.75)
+ax2.set(title="Dead", xlabel="Age", ylabel="Amount")
+
+
+# We can clean up *Age* and *Fare* columns filling in all of the missing values with **median **of all values in the training set.
+
+# In[12]:
+
+
+for df in train, test:
+    df["Embarked"].fillna("S", inplace=True)
+    for feature in "Age", "Fare":
+        df[feature].fillna(train[feature].mean(), inplace=True)
+
+
+# _Ticket_ column has a lot of various values. It will have no significant impact on our ensemble model.
+
+# In[13]:
+
+
+for df in train, test:
+    df.drop("Ticket", axis=1, inplace=True)
+
+
+# ## 3. Feature engineering
+
+# ### Converting non-numeric columns
+
+# All of the non-numeric features except _Embarked_ aren't particularly informative.
+# 
+# We shall convert _Embarked_ and _Sex_ columns to numeric because we can't feed non-numeric columns into a Machine Learning algorithm.
+
+# In[14]:
+
+
+for df in train, test:
+    df["Embarked"] = df["Embarked"].map(dict(zip(("S", "C", "Q"), (0, 1, 2))))
+    df["Sex"] = df["Sex"].map(dict(zip(("female", "male"), (0, 1))))
+
+
+# ### Generating new features
+
+# $SibSp$ + $Parch$ + $1$ gives the total number of people in a family.
+
+# In[15]:
+
+
+for df in train, test:
+    df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
+
+
+# Extract the passengers' titles (Mr., Mrs., Rev., etc.) from their names.
+
+# In[16]:
+
+
+for df in train, test:
+    titles = list()
+    for row in df["Name"]:
+        surname, title, name = re.split(r"[,.]", row, maxsplit=2)
+        titles.append(title.strip())
+    df["Title"] = titles
+    df.drop("Name", axis=1, inplace=True)
+
+
+# In[17]:
+
+
+title = train["Title"]
+unique_values, value_counts = title.unique(), title.value_counts()
+X = np.arange(len(unique_values))
+
+fig, ax = plt.subplots()
+fig.set_size_inches(18, 10)
+ax.bar(left=X, height=value_counts, width=0.5, tick_label=unique_values)
+ax.set_xlabel("Title")
+ax.set_ylabel("Count")
+ax.set_title("Passenger titles")
+ax.grid(color='g', linestyle='--', linewidth=0.5)
+
+
+# Looks like some titles are very rare. Let's map them into related titles.
+
+# In[18]:
+
+
+for df in train, test:
+    for key, value in zip(("Mr", "Mrs", "Miss", "Master", "Dr", "Rev"),
+                          np.arange(6)):
+        df.loc[df["Title"] == key, "Title"] = value
+    df.loc[df["Title"] == "Ms", "Title"] = 1
+    for title in "Major", "Col", "Capt":
+        df.loc[df["Title"] == title, "Title"] = 6
+    for title in "Mlle", "Mme":
+        df.loc[df["Title"] == title, "Title"] = 7
+    for title in "Don", "Sir":
+        df.loc[df["Title"] == title, "Title"] = 8
+    for title in "Lady", "the Countess", "Jonkheer":
+        df.loc[df["Title"] == title, "Title"] = 9
+test["Title"][414] = 0
+
+
+# Nominal features of our model.
+
+# In[19]:
+
+
+nominal_features = ["Pclass", "Sex", "Embarked", "FamilySize", "Title"]
+for df in train, test:
+    for nominal in nominal_features:
+        df[nominal] = df[nominal].astype(dtype="category")
+
+
+# Finally, we get
+
+# In[20]:
+
+
+train.sample(frac=1).head(10)
+
+
+# ## 4. Prediction
+
+# Choose the most informative predictors and randomly split the training data.
+
+# In[21]:
+
+
+from sklearn.model_selection import train_test_split
+
+predictors = ["Pclass", "Sex", "Age", "SibSp", "Parch",
+              "Fare", "Embarked", "FamilySize", "Title"]
+X_train, X_test, y_train, y_test = train_test_split(train[predictors], train["Survived"])
+
+
+# Build a Random Forest model from the training set and evaluate the mean accuracy on the given test set.
+
+# In[22]:
+
+
+forest = RandomForestClassifier(n_estimators=100,
+                                criterion='gini',
+                                max_depth=5,
+                                min_samples_split=10,
+                                min_samples_leaf=5,
+                                random_state=0)
+forest.fit(X_train, y_train)
+print("Random Forest score: {0:.2}".format(forest.score(X_test, y_test)))
+
+
+# Examine the feature importances.
+
+# In[23]:
+
+
+plt.bar(np.arange(len(predictors)), forest.feature_importances_)
+plt.xticks(np.arange(len(predictors)), predictors, rotation='vertical')
+
+
+# Pick the best features and make a submission.
+
+# In[24]:
+
+
+predictors = ["Title", "Sex", "Fare", "Pclass", "Age", "FamilySize"]
+clf = RandomForestClassifier(n_estimators=100,
+                             criterion='gini',
+                             max_depth=5,
+                             min_samples_split=10,
+                             min_samples_leaf=5,
+                             random_state=0)
+clf.fit(train[predictors], train["Survived"])
+prediction = clf.predict(test[predictors])
+
+submission = pd.DataFrame({"PassengerId": test["PassengerId"], "Survived": prediction})
+submission.to_csv("submission.csv", index=False)
+

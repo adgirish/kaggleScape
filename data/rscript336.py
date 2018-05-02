@@ -1,99 +1,110 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+from __future__ import division
+import sqlite3, time, csv, re, random
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cross_validation import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score
+from scipy.sparse import csr_matrix
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+'''
+This script was inspired by smerity's script "The Biannual Reddit Sarcasm
+Hunt." A natural follow-up question is whether we can detect posts with the
+/s flag using a BOW model. 
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+The corpus has about 54m posts, of which about 30k have the /s flag. It is 
+impossible to compete with a majority baseline that strong, so instead I've
+framed it as a binary classification task with uniform class distribution.
+Realistic, no, but enough to see some pronounced trends in the features. A
+logistic regression model scores about 72% on unseen data.
 
-# Any results you write to the current directory are saved as output.
+You can read my blurb about the results at davefernig.com
 
-from datetime import timedelta
+Lots of work has been done on irony detection, here are a couple references:
+Bamman, Contextualized Sarcasm Detection on Twitter, ICWSM 2015
+Wallace, Humans Require Context to Infer Ironic Intent (so Computers 
+Probably do, too), ACL 2014
+'''
 
-dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
+#Parameters
+srs_lmt = 30100 #serious posts to train on
+sar_lmt = 30100 #sarcastic posts to train on
+top_k = 30 #features to display
+num_ex = 20 #examples displayed per feature
+min_ex = 0 #shortest example displayed
+max_ex = 120 #longest example displayed
+ovr_ex = True #display longer/shorter examples if we run out
 
-train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
-                    skiprows=range(1, 60000000) 
-                    )
+print('Querying DB...\n')
+sql_conn = sqlite3.connect('../input/database.sqlite')
 
-holiday =  pd.read_csv('../input/holidays_events.csv')
-holiday = holiday.loc[holiday['transferred'] == False]
-holiday =holiday.rename(columns = {'locale_name':'city'})
+sarcasmData = sql_conn.execute("SELECT subreddit, body, score FROM May2015\
+                                WHERE body LIKE '% /s'\
+                                LIMIT " + str(sar_lmt))
 
+seriousData = sql_conn.execute("SELECT subreddit, body, score FROM May2015\
+                                WHERE body NOT LIKE '%/s%'\
+                                LIMIT " + str(srs_lmt))
 
-train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
-train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
-train['dow'] = train['date'].dt.dayofweek
+print('Building Corpora...\n')
+corpus, raw_corpus, srs_corpus = [], [], []
 
+for sar_post in sarcasmData:
+    raw_corpus.append(re.sub('\n', '', sar_post[1]))
+    cln_post = re.sub('/s|\n', '', sar_post[1]) #Remove /s and newlines
+    corpus.append(re.sub(r'([^\s\w]|_)+', '', cln_post)) #and then non-alpha
 
-#train['mon'] = train['date'].dt.month
-## Using Paulo Pinto's kernel
-## https://www.kaggle.com/paulorzp/log-ma-and-days-of-week-means-lb-0-532
-# creating records for all items, in all markets on all dates
-# for correct calculation of daily unit sales averages.
-u_dates = train.date.unique()
-u_stores = train.store_nbr.unique()
-u_items = train.item_nbr.unique()
-train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
-train = train.reindex(
-    pd.MultiIndex.from_product(
-        (u_dates, u_stores, u_items),
-        names=['date','store_nbr','item_nbr']
-    )
-)
+for srs_post in seriousData:
+    srs_corpus.append(re.sub('\n', '', srs_post[1]))
+    cln_post = re.sub('\n', '', srs_post[1]) #Remove newlines
+    corpus.append(re.sub(r'([^\s\w]|_)+', '', cln_post)) #and then non-alpha
 
-del u_dates, u_stores, u_items
+print('Fitting TF-IDF and Classifier...\n')
+vec, clf = TfidfVectorizer(min_df=5), LogisticRegression(C=1.25)
 
-train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
-train.reset_index(inplace=True) # reset index and restoring unique columns  
-lastdate = train.iloc[train.shape[0]-1].date
+td_matrix = csr_matrix(vec.fit_transform(corpus).toarray())
+labels = [1]*sar_lmt+[-1]*srs_lmt
+X_train, X_test, y_train, y_test = train_test_split(td_matrix, labels, 
+                                   test_size=0.33, random_state=42)
 
-#Load test
-test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
-test['dow'] = test['date'].dt.dayofweek
-#test['mon'] = test['date'].dt.month
+clf.fit(X_train, y_train)
+y_out = clf.predict(X_test)
 
-#Days of Week Means
-#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
-ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw')
-ma_dw.reset_index(inplace=True)
-ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk')
-ma_wk.reset_index(inplace=True)
+print("Accuracy on held-out data: ",\
+      str(100*accuracy_score(y_out, y_test))[0:5], "%\n")
 
-#Moving Averages
-ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais226')
-for i in [112,56,28,14,7,3,1]:
-    tmp = train[train.date>lastdate-timedelta(int(i))]
-    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
-    ma_is = ma_is.join(tmpg, how='left')
+X_train = y_train = X_test = y_test = y_out = None
 
-del tmp,tmpg
+print('Folding held-out data back into the training set, fitting...\n')
+clf.fit(td_matrix, labels)
 
-ma_is['mais']=ma_is.median(axis=1)
-ma_is.reset_index(inplace=True)
+#See what features were informative
+feature_weights, feature_names = clf.coef_[0], vec.get_feature_names()
+sar_indices = feature_weights.argsort()[-top_k:][::-1]
 
-test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
-test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
-test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
+print("The", top_k, "most informative words for predicting sarcasm on reddit:\n")
+for k in range(0, top_k):
+    
+    feature = feature_names[sar_indices[k]]
+    all_examples = [post for post in raw_corpus 
+                    if ' '+feature+' ' in post]
+                    
+    srs_examples = [post for post in srs_corpus 
+                    if ' '+feature+' ' in post]
+    
+    print("Feature", str(k+1),':', '"'+feature+'"',\
+          "(Appears", len(all_examples), "times sarcastically", len(srs_examples), "sincerely")
+    print("Examples:")
+    examples = [post for post in all_examples 
+                if len(post) <= max_ex and len(post) >= min_ex]
+    
+    in_range = len(examples)
+    extra_examples = [post for post in all_examples if post not in examples]
+    random.shuffle(examples)
+    extra_examples.sort(key = lambda s: len(s))
+    examples += extra_examples
 
-del ma_is, ma_wk, ma_dw
-
-#Forecasting Test
-test['unit_sales'] = test.mais
-pos_idx = test['mawk'] > 0
-test_pos = test.loc[pos_idx]
-test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
-test.loc[:, "unit_sales"].fillna(0, inplace=True)
-test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) 
-test['date']= pd.to_datetime(test['date'])
-holiday['date']= pd.to_datetime(holiday['date'])
-test1 = pd.merge(test, holiday, how = 'left', on =['date'] )
-
-
-test1['transferred'].fillna(True, inplace=True)
-test1.loc[test1['transferred'] == False, 'unit_sales'] = test1.loc[test1['transferred'] == False, 'unit_sales'] * 1.2
-test1.loc[test1['onpromotion'] == True, 'unit_sales'] = test1.loc[test1['onpromotion'] == True, 'unit_sales']*1.5
-test1[['id','unit_sales']].to_csv('grocery_3000_holiday.csv.gz', index=False,
-float_format='%.3f', compression='gzip')
+    for i in range(0, min(num_ex, len(examples))):
+        if in_range > i or ovr_ex:
+            print(str(i+1), ':', examples[i])
+    print('')        

@@ -1,393 +1,475 @@
 
 # coding: utf-8
 
-# # <center> Beginner's guide: NN with multichannel input  in Keras</center>
+# This dataset (as far as I understand) provides information retrieved through an informative system called HappyForce https://www.myhappyforce.com/en/  aimed at collecting data about employees satisfaction and happyness. 
 # 
-# _Author: Kirill Vlasov_
+# By means of an app  employees have been asked to answer a question?
+# **"How happy ar you today at work?**
+# The following answers were possible:
+# - 4 Great
+# - 3 Good
+# - 2 So So
+# - 1 Pretty Bad
 # 
-# --------
+# Whenever they want they can post this feeback about their happiness and leave a comment. The can also like or dislike comments. Plesae visit the related site for complete and correct information.
+# ![happyforce](https://www.myhappyforce.com/wp-content/themes/happyforce/img/app.png)
 # 
-# # Introduction
-# In this article we will not discuss types of Neural Network. We will try to build network with multichannel input, because this case is so difficult for novice.  
-#   
+# Some important references are 
+# * [1] J. Berengueres, G. Duran, D. Castro, Happiness,an inside job? Turnoverprediction using employee likeability, engagement and relative happiness, ASONAM 2017, Sidney.
+# * [2] https://www.slideshare.net/harriken/ieee-happiness-an-inside-job-asoman-2017
+# * [3] https://www.myhappyforce.com/en/ 
 # 
-# __Plan:__
-# - Explanation of model’s usefulness
-# - How to develop a neural network with multichannel input in Keras.
-# - Practice: using this approach in <a href="https://www.kaggle.com/c/donorschoose-application-screening">DonorsChoose Competition</a>
+# According to [1] the data spans 2.5 years and 4,356 employees of 34 companies  based  in  Barcelona.
 # 
-# Let's start!
-# 
-# # Explanation of model’s usefulness
-# Imagine, we have a dataset of images and we need to solve the problem of classification. Probably, we will develop a convolutional neural network. What are you going to do, in order to supplement meta data (texts, some categorical features and etc.) in model?  
-# Obviously, we need different types of NN for different types of data, e.g. RNN, CNN and etc. But NN with multichannel input allows to create ONE NN, which could merge all different types of needed NNs. It could divide different flows of calculation, and then merge them together inside one joint NN.
-#   
-# # How to develop a neural network with multichannel input in Keras.
-# 
-# - Firts of all, we define the type of each data and choose apropriate type of NN for each type of data. 
-# - Then, we develop each NN.
-# - By class _concatenate_ of module _layers.merge_ in _Keras_ we merge all outputs of these different NNs
-# - Enjoy! :) 
-#  
-# __That's all!__
-#   
-# # Practice: using this approach in DonorsChoose Competition </a>
-# 
-#   
-# ## 0. Importing Libraries
+# This dataset is amazingly interesting because it provides different perspectives on an elusive phaenomenon like employees happines. It also provides different data challenges like:
+# - time series like the trend of happiness self perception in time or the thrend of posted comments, etc.;
+# - networks analysis of social interactions (i.e. likes, dislikes, etc.);
+# - clustering;
+# - prediction (i.e. predict whether an employee will evntually leave the company at the end of the observation time)
+
+# ## Loading and Wrangling Data
+
+# First of all I am going to prepare the data for the analysis I want to perform. 
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-
-from sklearn.preprocessing import StandardScaler
-
-import seaborn as sns
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-from tqdm import tqdm_notebook
-import re
-import nltk
-from nltk.stem import SnowballStemmer
-
-from keras.preprocessing.text import Tokenizer
-
-from keras.layers import Dense, Activation, Dropout, Flatten, Input
-from keras.layers import Embedding, Conv1D, MaxPooling1D, GlobalMaxPooling1D, GlobalAveragePooling1D
-from keras.models import Model, Sequential 
-from keras.layers.recurrent import LSTM
-
-import tensorflow as tf
-from keras import backend as K
-
-from keras.layers.merge import concatenate
-from keras.utils import plot_model
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# ## 1. Loading and preprocessing data
-
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv', low_memory=False, index_col='id')
-test = pd.read_csv('../input/test.csv', low_memory=False, index_col='id')
-
-res = pd.read_csv('../input/resources.csv', low_memory=False, index_col='id')
-
-
-# ### 1.1. Concatination of train and test
-
-# In[ ]:
-
-
-train['is_train'] = 1
-test['is_train'] = 0
+churn = pd.read_csv('../input/churn.csv')
+churn.head()
 
 
 # In[ ]:
 
 
-df = pd.concat([train, test], axis=0)
-
-
-# ### 1.2. Generate features from 'res.csv'
-
-# In[ ]:
-
-
-sum_res = pd.pivot_table(res, index=res.index, aggfunc='sum', values=['price', 'quantity'])
-mean_res = pd.pivot_table(res, index=res.index, aggfunc='mean', values=['price', 'quantity'])
-median_res = pd.pivot_table(res, index=res.index, aggfunc='median', values=['price', 'quantity'])
-
-df = pd.merge(df, sum_res,left_index=True, right_index=True)
-df = pd.merge(df, mean_res,left_index=True, right_index=True, suffixes=('_sum', ''))
-df = pd.merge(df, median_res,left_index=True, right_index=True, suffixes=('_mean', '_median'))
-
-
-# ### 1.3. Type of features
-
-# In[ ]:
-
-
-df.columns
+ci = pd.read_csv('../input/commentInteractions.csv')
+ci.head()
 
 
 # In[ ]:
 
 
-cat_feature = ['school_state', 'teacher_prefix', 
-               'project_subject_categories', 'project_subject_subcategories', 'project_grade_category']
-
-target = 'project_is_approved'
-
-text_feature = ['project_title', 'project_resource_summary', 'project_essay_1', 'project_essay_2', 'project_essay_3',
-       'project_essay_4' ]
-
-real_feature = ['teacher_number_of_previously_posted_projects', 'price_sum', 'quantity_sum', 'price_mean', 'quantity_mean',
-       'price_median', 'quantity_median' ]
-
-
-
-# ### 1.4. Preprocessing of features 
-# __Categorical__  
-# We may just facrorize features of this type
-
-# In[ ]:
-
-
-for i in cat_feature:
-    df[i] = pd.factorize(df[i])[0]
-
-trn_cat = df[cat_feature].values[:182080]
-tst_cat = df[cat_feature].values[182080:]
-
-
-# __Real__  
-# Don't forget about _Scalling_
-
-# In[ ]:
-
-
-SS = StandardScaler()
-df_scale = SS.fit_transform(df[real_feature])
-
-trn_real = df_scale[:182080]
-tst_real = df_scale[182080:]
-
-
-# __Text__  
-# Processing of text data easily
-
-# In[ ]:
-
-
-df_text = df[text_feature].fillna(' ')
-df_text['full_text'] = ''
-for f in text_feature:
-    df_text['full_text'] = df_text['full_text'] + df_text[f]
+ci.shape
 
 
 # In[ ]:
 
 
-stemmer = SnowballStemmer('english')
-
-def clean(text):
-    return re.sub('[!@#$:]', '', ' '.join(re.findall('\w{3,}', str(text).lower())))
-
-def stem(text):
-    return ' '.join([stemmer.stem(w) for w in text.split()])
+cc = pd.read_csv('../input/comments_clean_anonimized.csv')
+cc.head()
 
 
 # In[ ]:
 
 
-df_text['full_text'] = df_text['full_text'].apply(lambda x: clean(x))
+votes = pd.read_csv('../input/votes.csv')
+votes.head()
 
 
 # In[ ]:
 
 
-#df_text['full_text'] = df_text['full_text'].apply(lambda x: stem(x)) - don't think about it :)
+len(votes['companyAlias'].unique())
+
+
+# There are 37 companies ([1] claims data are gathered from 34 compnies). I am going to get the list of unique company ids and use it to chang their occurrences (i.e. in the votes dataframe) with the company ids index (a shorter and thus easier to manage integer).
+
+# In[ ]:
+
+
+companies = pd.Series(votes['companyAlias'].unique())
+vc = [companies.values.tolist().index(company) for company in votes['companyAlias'].values]
+churn_company = [companies.values.tolist().index(company) if company in companies.values else -1 for company in churn['companyAlias'].values ]
+comment_company = [companies.values.tolist().index(company) if company in companies.values else -1 for company in ci['companyAlias'].values ]
+comment_company2 = [companies.values.tolist().index(company) if company in companies.values else -1 for company in cc['companyAlias'].values ]
+
+votes['companyAlias'] = vc
+churn['companyAlias'] = churn_company
+ci['companyAlias'] = comment_company
+cc['companyAlias'] = comment_company2
 
 
 # In[ ]:
 
 
-max_words = 500 #more words for more accuracy
-tokenizer = Tokenizer(num_words=max_words)
-tokenizer.fit_on_texts(df_text['full_text'])
-
-trn_text = tokenizer.texts_to_matrix(df_text['full_text'][:182080], mode='binary')
-tst_text = tokenizer.texts_to_matrix(df_text['full_text'][182080:], mode='binary')
-
-
-# __Target__
-
-# In[ ]:
-
-
-y = df[target].values[:182080]
-
-
-# ## 2. Modeling! 
-# ### 2.1. Parameters
-
-# In[ ]:
-
-
-len_cat = trn_cat.shape[1]
-len_real = trn_real.shape[1]
-len_text = trn_text.shape[1]
-
-
-size_embedding = 5000
-
-
-# ### 2.2. Architecture
-
-# In[ ]:
-
-
-# categorical channel 
-inputs1 = Input(shape=(len_cat,))
-dense_cat_1 = Dense(256, activation='relu')(inputs1)
-dense_cat_2 = Dense(128, activation='relu')(dense_cat_1)
-dense_cat_3 = Dense(64, activation='relu')(dense_cat_2)
-dense_cat_4 = Dense(32, activation='relu')(dense_cat_3)
-flat1 = Dense(32, activation='relu')(dense_cat_4)
-
-
-
-# real channel
-inputs2 = Input(shape=(len_real,))
-dense_real_1 = Dense(256, activation='relu')(inputs2)
-dense_real_2 = Dense(128, activation='relu')(dense_real_1)
-dense_real_3 = Dense(64, activation='relu')(dense_real_2)
-dense_real_4 = Dense(32, activation='relu')(dense_real_3)
-flat2 = Dense(32, activation='relu')(dense_real_4)
-
-
-# text chanel
-inputs3 = Input(shape=(len_text,))
-embedding3 = Embedding(size_embedding, 36)(inputs3)
-conv3 = Conv1D(filters=32, kernel_size=8, activation='relu')(embedding3)
-drop3 = Dropout(0.1)(conv3)
-pool3 = MaxPooling1D(pool_size=2)(drop3)
-flat3 = Flatten()(pool3)
-
-# merge
-merged = concatenate([flat1, flat2, flat3])
-
-# interpretation
-dense1 = Dense(200, activation='relu')(merged)
-dense2 = Dense(20, activation='relu')(dense1)
-outputs = Dense(1, activation='sigmoid')(dense2)
-model = Model(inputs=[inputs1, inputs2, inputs3], outputs=outputs)
-
-model.summary()
-
-
-# ### 2.4. Metric  
-# Thx Stackoverflow for realization
-
-# In[ ]:
-
-
-# AUC for a binary classifier
-def auc(y_true, y_pred):   
-    ptas = tf.stack([binary_PTA(y_true,y_pred,k) for k in np.linspace(0, 1, 1000)],axis=0)
-    pfas = tf.stack([binary_PFA(y_true,y_pred,k) for k in np.linspace(0, 1, 1000)],axis=0)
-    pfas = tf.concat([tf.ones((1,)) ,pfas],axis=0)
-    binSizes = -(pfas[1:]-pfas[:-1])
-    s = ptas*binSizes
-    return K.sum(s, axis=0)
-#-----------------------------------------------------------------------------------------------------------------------------------------------------
-# PFA, prob false alert for binary classifier
-def binary_PFA(y_true, y_pred, threshold=K.variable(value=0.5)):
-    y_pred = K.cast(y_pred >= threshold, 'float32')
-    # N = total number of negative labels
-    N = K.sum(1 - y_true)
-    # FP = total number of false alerts, alerts from the negative class labels
-    FP = K.sum(y_pred - y_pred * y_true)    
-    return FP/N
-#-----------------------------------------------------------------------------------------------------------------------------------------------------
-# P_TA prob true alerts for binary classifier
-def binary_PTA(y_true, y_pred, threshold=K.variable(value=0.5)):
-    y_pred = K.cast(y_pred >= threshold, 'float32')
-    # P = total number of positive labels
-    P = K.sum(y_true)
-    # TP = total number of correct alerts, alerts from the positive class labels
-    TP = K.sum(y_pred * y_true)    
-    return TP/P
-
-
-# ### 2.3. Compilation
-
-# In[ ]:
-
-
-model.compile(loss='binary_crossentropy',
-              optimizer='adam',
-              metrics=['accuracy', auc])
-
-
-# ### 2.4. Fitting
-
-# In[ ]:
-
-
-batch_size = 1000
-model.fit([trn_cat, trn_real, trn_text], y, batch_size=batch_size, epochs=3, validation_split=0.2)
-
-
-# ### 2.5. Submitting
-
-# In[ ]:
-
-
-submit = model.predict([tst_cat, tst_real, tst_text], batch_size=batch_size,verbose=1)
+dates = votes['voteDate'].str.replace('CET','')
+dates = dates.str.replace('CEST','')
+votes['voteDate']= dates
 
 
 # In[ ]:
 
 
-submission = pd.read_csv('../input/sample_submission.csv')
+votes['voteDate'] = pd.to_datetime(votes['voteDate'],format="%a %b %d %H:%M:%S %Y")
 
 
 # In[ ]:
 
 
-submission['project_is_approved'] = submit
-submission.to_csv('mi_nn.csv', index=False)
-
-
-# ## 3.Comparison with non-multichannel type of NN
-
-# In[ ]:
-
-
-trn_all = np.hstack((trn_cat, trn_real, trn_text))
-trn_all.shape
+votes['wday'] = votes['voteDate'].dt.dayofweek
+votes['yday'] = votes['voteDate'].dt.dayofyear
+votes['year'] = votes['voteDate'].dt.year
 
 
 # In[ ]:
 
 
-model2 = Sequential()
-model2.add(Dense(256, input_shape=(trn_all.shape[1],), activation='relu'))
-model2.add(Dense(128, activation='relu'))
-model2.add(Dense(1, activation='sigmoid'))
+votes['year'].unique()
+
+
+# We are dealing with four years of observations ranging from 2014 to 2017.
+
+# In[ ]:
+
+
+votes['year'] = votes['year']-2014
 
 
 # In[ ]:
 
 
-model2.compile(loss='binary_crossentropy',
-              optimizer='adam',
-              metrics=['accuracy', auc])
+votes['employee'] = votes['companyAlias'].astype(str)+"_"+votes['employee'].astype(str)
+churn['employee'] = churn['companyAlias'].astype(str)+"_"+churn['employee'].astype(str)
+ci['employee'] = ci['companyAlias'].astype(str)+"_"+ci['employee'].astype(str)
+cc['employee'] = cc['companyAlias'].astype(str)+"_"+cc['employee'].astype(str)
+
+len(votes['employee'].unique())
+
+
+# We are dealing with 4377 employees. Let's aggredate data on employee basis
+
+# In[ ]:
+
+
+employee = votes.groupby('employee',as_index=False).mean()
+employee = employee.merge(churn,on=['employee','employee'],how='left').drop_duplicates(subset="employee")
 
 
 # In[ ]:
 
 
-batch_size = 2000
-model2.fit(trn_all, y, batch_size=batch_size, epochs=3, validation_split=0.2)
+employee['companyAlias'] = employee.companyAlias_x.astype(int)
+employee = employee.drop(['companyAlias_x','companyAlias_y'],axis=1)
+employee.head()
 
 
-# # Conclusion
-# Certainly, computing power of Kaggle's kernel doesn't allow to build more sophisticated models, but in practice we may experiment with NN with multichannel input to achieve better results. Finally, NN with multichannel input are more flexible and let you work with different types of data. 
+# ## Self-reported Happyness
+
+# By means of an app [3] employees have been asked to answer a question?
+# **"How happy ar you today at work?**
+# The following answers were possible:
+# - 4 Great
+# - 3 Good
+# - 2 So So
+# - 1 Pretty Bad
+
+# In[ ]:
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+f,axarr = fig, ax = plt.subplots(ncols=1, nrows=1,figsize=(12,10))
+data =votes.groupby('companyAlias').mean()
+sns.barplot(x=data.index,y= data['vote'])
+
+
+# In[ ]:
+
+
+week_happ = votes.groupby('wday').mean()['vote']
+sns.barplot(x = week_happ.index, y = week_happ.values)
+
+
+# In[ ]:
+
+
+churn_employee = employee[employee['stillExists']==True]
+churn_employee = churn_employee.groupby('companyAlias').count()
+tmp = employee.groupby('companyAlias',as_index=False).count()
+churn_perc = 1- churn_employee['stillExists'].astype(float)/tmp['stillExists']
+churn_perc = [0 if np.isnan(perc) else perc for perc in churn_perc]
+
+
+# In[ ]:
+
+
+data['churn_perc'] = churn_perc
+
+
+# We can evaluate possible correlations betweean any pair of feature:
+
+# In[ ]:
+
+
+data.corr()
+
+
+# as we can see  data shows a  negative correlation between the percentage of churn employees and the mean of happiness in the related company. This apparently shows that companies where employees feel unhappy tend to have an higher percentage of churn. The following diagram depicts this trend.
+
+# In[ ]:
+
+
+sns.regplot(data['vote'].values,data['churn_perc'].values)
+
+
+# ## Being Social Matters
+
+# In[ ]:
+
+
+likes = ci[ci['liked']==True].groupby('employee',as_index=False).count()
+likes = likes[['employee','liked']]
+hates = ci[ci['disliked']==True].groupby('employee',as_index=False).count()
+hates = hates[['employee','disliked']]
+hated = cc[cc['dislikes']==True].groupby('employee',as_index=False).count()
+hated = hated[['employee','dislikes']]
+loved = cc[cc['likes']==True].groupby('employee',as_index=False).count()
+loved = loved[['employee','likes']]
+employee = employee.merge(likes,on='employee',how='left').drop_duplicates(subset="employee")
+employee = employee.merge(hates,on='employee',how='left').drop_duplicates(subset="employee")
+employee = employee.merge(hated,on='employee',how='left').drop_duplicates(subset="employee")
+employee = employee.merge(loved,on='employee',how='left').drop_duplicates(subset="employee")
+employee.shape
+
+
+# I have counted the number of likes and dislikes for each employee. The following heatmap shows some possible correlations among the employee data. The employee happiness (Vote) seems to be directly related with the possibility that the employee remained in the company. The number of likes and dislikes the employee has given exhibits small correlation.
+# An interesting thing to note is that the number of likes the employee got to his/her commnents are directly related to his/her perceived happiness and thus (possibly) to the possibility he/she will remain in the company.
+
+# In[ ]:
+
+
+f,ax = plt.subplots(1,1,figsize=(15,10))
+red_emp = employee.drop(['companyAlias','lastParticipationDate','wday'],axis=1)
+sns.heatmap(red_emp.corr())
+plt.title('Features Correlation Heatmap',fontsize=24)
+plt.show()
+
+
+# In[ ]:
+
+
+author_comments = cc[['employee','commentId']].drop_duplicates(subset='commentId')
+author_dict = {commentId:author_comments['employee'].values[i] for i,commentId in enumerate(author_comments['commentId'].values)}
+comments = [commentId for i,commentId in enumerate(author_comments['commentId'].values)]
+
+
+# In[ ]:
+
+
+#this is too computational intensive I will work on subsets
+#authors = [author_dict[commentId] if commentId in comments else -1 for commentId in ci['commentId'].values]
+
+
+# In[ ]:
+
+
+from nxviz import CircosPlot
+
+
+# ## PCA and Clustering
+
+# In this section I am going to find a possible strategy to clusterize the employees. My idea is to create a dataframe of features where each row represents an employee and each column represent a day in the four years of observations. The value in that cell represents the vote (about its happiness) the employee posted, 0 otherwise.
 # 
-# 
-# 
-# # Links
-# - <a href = "https://keras.io" > Keras Documentation </a>
-# - <a href = "https://machinelearningmastery.com/develop-n-gram-multichannel-convolutional-neural-network-sentiment-analysis/" >How to Develop an N-gram Multichannel Convolutional Neural Network for Sentiment Analysis </a>
-# - <a href = https://towardsdatascience.com/neural-network-architectures-156e5bad51ba> Neural Network Architectures </a>
-# 
+# This means 796 features  which are  lot. I therefore use PCA to reduce the number of features to 6. From these 6 components I have chosen 2 which, in my opinion, when plotted in 2D exhibits a distribution which is good for clustering.
+
+# In[ ]:
+
+
+votes_feature = votes[['employee','vote','wday','yday']]
+votes_feature['yday'] = votes['yday']+ votes['year']*365
+dummies = pd.get_dummies(votes_feature['yday'])
+for i,row in enumerate(votes_feature.values):
+    dummies.loc[i,row[3]]= row[1]
+votes_feature=pd.concat([votes_feature,dummies],axis=1)
+
+
+# In[ ]:
+
+
+dummies = votes_feature.groupby('employee',as_index=False).sum().drop(['vote','wday','yday','employee'],axis=1)
+dummies.head(2)
+
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA
+
+#votes_feature = votes[['vote','wday','yday']]
+pca = PCA(n_components=6)
+pca.fit(dummies)
+components = pca.transform(dummies)
+components = pd.DataFrame(components,columns=['c1','c2','c3','c4','c5','c6'])
+
+
+# In[ ]:
+
+
+components.head(2)
+
+
+# In[ ]:
+
+
+tocluster = pd.DataFrame(components[['c6','c4']])
+
+
+# In[ ]:
+
+
+from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering
+
+from sklearn.metrics import silhouette_score
+
+clusterer = KMeans(n_clusters=4,random_state=42).fit(tocluster)
+centers = clusterer.cluster_centers_
+c_preds = clusterer.predict(tocluster)
+
+
+# I have plotted several pairs of the obtained components looking for one 2D distribution suitable for clustering. I hav decided to go with th pair (6,4) and 4 clusters.
+
+# In[ ]:
+
+
+import matplotlib
+fig = plt.figure(figsize=(17,15))
+colors = ['orange','blue','purple','green','brown','red','pink','white']
+colored = [colors[k] for k in c_preds]
+plt.scatter(tocluster['c6'],tocluster['c4'],  color = colored,s=10,alpha=0.5)
+for ci,c in enumerate(centers):
+    plt.plot(c[0], c[1], 'o', markersize=15, color='black', alpha=0.5, label=''+str(ci))
+    plt.annotate(str(ci), (c[0],c[1]),fontsize=24,fontweight='bold')
+
+plt.xlabel('x_values')
+plt.ylabel('y_values')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+employee['cluster']=c_preds
+
+
+# here is how employees are distributed among clusters
+
+# In[ ]:
+
+
+tot_cluster = employee.groupby('cluster').count()['employee']
+tot_churn = len(employee[employee['stillExists']==False])
+tot_cluster
+
+
+# In[ ]:
+
+
+tmp = employee[employee['stillExists']==False].groupby('cluster',as_index='False').count()['employee']
+churn_perc_totchurn = tmp/tot_churn
+tmp=employee[employee['stillExists']==False].groupby('cluster',as_index='False').count()['employee']
+churn_perc_totcluster = tmp/tot_cluster
+fig1, axarr = plt.subplots(1,2,figsize=(17,10))
+explode = (0, 0, 0.2, 0)
+labels = 'Cluster 0', 'Cluster 1', 'Cluster 2', 'Cluster 3'
+axarr[0].pie(churn_perc_totchurn, explode=explode, labels=labels, autopct='%1.1f%%',
+        shadow=True, startangle=90)
+axarr[0].axis('equal')  
+axarr[0].set_title('Percentage of Churn in clusters with respect to the total of churn')
+sns.barplot(x=[0,1,2,3],y=churn_perc_totcluster,ax=axarr[1])
+axarr[1].set_title('Ratio of Churn in clusters with respect to the cluster population')
+plt.show()
+
+
+# This is interesting and I think it will deserve a more detailed analysis: although the third cluster is particulary small (597 individuals) it contains 20% of the employees that laved the Company. We might have found something intersting.
+
+# In[ ]:
+
+
+vote_cluster = employee.groupby('cluster',as_index='False').mean()['vote']
+nvote_cluster = employee.groupby('cluster',as_index='False').mean()['numVotes']
+likes_cluster = employee.groupby('cluster',as_index='False').mean()['likes']
+dislikes_cluster = employee.groupby('cluster',as_index='False').mean()['dislikes']
+liked_cluster = employee.groupby('cluster',as_index='False').mean()['liked']
+disliked_cluster = employee.groupby('cluster',as_index='False').mean()['disliked']
+fig,axarray = plt.subplots(3,2,figsize=(17,30))
+sns.barplot(x=[0,1,2,3],y=vote_cluster,ax=axarray[0,1])
+axarray[0,1].set_title('Happyness in Clusters')
+sns.barplot(x=[0,1,2,3],y=vote_cluster,ax=axarray[0,0])
+axarray[0,0].set_title('Happyness in Clusters')
+sns.barplot(x=[0,1,2,3],y=nvote_cluster,ax=axarray[0,1])
+axarray[0,1].set_title('#Votes in Clusters')
+sns.barplot(x=[0,1,2,3],y=likes_cluster,ax=axarray[1,0])
+axarray[1,0].set_title('#Likes Received in Clusters')
+sns.barplot(x=[0,1,2,3],y=dislikes_cluster,ax=axarray[1,1])
+axarray[1,1].set_title('#Dislikes Received in Clusters')
+sns.barplot(x=[0,1,2,3],y=liked_cluster,ax=axarray[2,0])
+axarray[2,0].set_title('#Liked Comments in Clusters')
+sns.barplot(x=[0,1,2,3],y=disliked_cluster,ax=axarray[2,1])
+axarray[2,1].set_title('#Disliked Comments in Clusters')
+plt.show()
+
+
+# ## Time Series
+
+# In[ ]:
+
+
+c1_sample = employee[employee['cluster']==2].head(5)
+
+
+# In[ ]:
+
+
+f,axarr = plt.subplots(3,2,figsize=(15,30))
+sample = employee[employee['cluster']==2][0:6]
+vtp = votes[votes['employee']==sample['employee'].iloc[0]]
+axarr[0,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[1]]
+axarr[0,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[2]]
+axarr[1,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[3]]
+axarr[1,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[4]]
+axarr[2,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[5]]
+axarr[2,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+
+plt.xlim(0,365)
+plt.show()
+
+
+# In[ ]:
+
+
+f,axarr = plt.subplots(3,2,figsize=(15,30))
+sample = employee[employee['cluster']==1][20:26]
+vtp = votes[votes['employee']==sample['employee'].iloc[0]]
+axarr[0,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[1]]
+axarr[0,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[2]]
+axarr[1,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[3]]
+axarr[1,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[4]]
+axarr[2,0].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+vtp = votes[votes['employee']==sample['employee'].iloc[5]]
+axarr[2,1].scatter(x=vtp['yday'].values,y=vtp['vote'].values,s=40,alpha=0.8)
+
+plt.xlim(0,365)
+plt.show()
+
+
+# Work in progress - Stay Tuned

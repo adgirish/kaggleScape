@@ -1,267 +1,245 @@
 
 # coding: utf-8
 
-# # Stratified KFold+XGBoost+EDA Tutorial
-# ### **Hyungsuk Kang, Sungkyunkwan University**
-# #### 2017/10/8
-# # Outline
-# * **1. Introduction**
-# * **2. Data preparation**
-#     * 2.1 Load data
-#     * 2.2 Check for missing values
-#     * 2.3 Split features and targets from the data
-#     * 2.4 Exploratory Visualization
-# * **3. Training/Predicting Pipeline**
-#     * 3.1  Define Gini metric
-#     * 3.2 Drop Unnecessary Features
-#     * 3.3 Stratified KFold
-#     * 3.4 XGBoost
-# * **4. Prediction and submission**
-#     * 4.1 Predict and Submit results
+# #INTRODUCTION 
 # 
-
-# # **1. Introduction**
+# **Caveat** : Running this notebook will take a while if you do decide to fork so take note. A handful of minutes.
 # 
-# This is a full walkthrough for building the machine learning model for Porto Seguro’s Safe Driver Prediction dataset provided by Porto Seguro. Stratified KFold is used due to inbalance of the output variable. XGBoost is used because it is like the winning ticket for classification problem with formatted data. You can check its success on this link. ([XGBoost winning solutions](https://github.com/dmlc/xgboost/tree/master/demo#machine-learning-challenge-winning-solutions)) First, I will prepare the data (driver's information and whether the driver initiated auto insurance or not) then I will focus on prediction.
+# This notebook will aim to provide an explanation and application of different feature ranking methods, namely that of Recursive Feature Elimination (RFE), Stability Selection, linear models as well as Random Forest. But first off, it is always imperative to give credit where credit is due. The stuff in this notebook is indebted to and borrows heavily from the excellent 4-part blog article by Ando Saabas on feature selection. So please do check out his article from this link: http://blog.datadive.net/selecting-good-features-part-iv-stability-selection-rfe-and-everything-side-by-side/ 
 # 
-# For more information on XGBoost, click this link.
+# The contents of this notebook are as follows: 
 # 
-# # [XGBoost](https://xgboost.readthedocs.io/en/latest/)
+#  1. **Data Cleaning and Visualisation** : This section will revolve around exploring the data and visualising some summary statistics. 
+#  2. **Stability Selection via Randomised Lasso Method** : Introduce a relatively new feature selection method called "Stability Selection" and using the Randomised Lasso in its implementation
+#  3. **Recursive Feature Elimination** : Implementing the Recursive Feature Elimination method of feature ranking via the use of basic Linear Regression 
+#  4. **Linear Model Feature Coefficients** : Implementing 3 of Sklearn's linear models (Linear Regression, Lasso and Ridge) and using the inbuilt estimated coefficients for our feature selection
+#  5. **Random Forest Feature Selection** : Using the Random Forest's convenient attribute "feature_importances" to calculate and ultimately rank the feature importance.
 # 
+# Finally, with all the points 1 to 5 above, we will combine the results to create our:
+# 
+# **Feature Ranking Matrix** : Matrix of all the features along with the respective model scores which we can use in our ranking.
+#  
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
 import seaborn as sns
-import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-from sklearn.model_selection import StratifiedKFold
-import xgboost as xgb
+from sklearn.feature_selection import RFE, f_regression
+from sklearn.linear_model import (LinearRegression, Ridge, Lasso, RandomizedLasso)
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
 
 
-# # **2. Data Preparation**
+# # 1. DATA CLEANSING AND ANALYSIS
 # 
-# ## **2.1 Load Data**
+# Let's first read in the house data as a dataframe "house" and inspect the first 5 rows
 
 # In[ ]:
 
 
-train=pd.read_csv('../input/train.csv', na_values=-1)
-test=pd.read_csv('../input/test.csv', na_values=-1)
+house = pd.read_csv("../input/kc_house_data.csv")
+house.head()
 
 
-# ## 2.2 Check for missing values(NaN)
+# Now its time for some general data inspection. Let's first examine to see if there are any nulls in the dataframe as well as look at the type of the data (i.e whether it is a string or numeric)
 
 # In[ ]:
 
 
-train.isnull().values.any()
+# Looking for nulls
+print(house.isnull().any())
+# Inspecting type
+print(house.dtypes)
 
 
-# ### Fill it with median value of the column
+# The data is pretty clean. There are no pesky nulls which we need to treat and most of the features are in numeric format. Let's go ahead and drop the "id" and "date" columns as these 2 features will not be used in this analysis.
+
+# In[ ]:
+
+
+# Dropping the id and date columns
+house = house.drop(['id', 'date'],axis=1)
+
+
+# **Pairplot Visualisation**
 # 
-# this does not harm the distribution of the model
-
-# ## 2.3 Split features and targets from the data
+# Let's create some Seaborn pairplots for the features ('sqft_lot','sqft_above','price','sqft_living','bedrooms') to get a feel for how the various features are distributed vis-a-vis the price as well as the number of bedrooms
 
 # In[ ]:
 
 
-features = train.drop(['id','target'], axis=1).values
-targets = train.target.values
+#sns.pairplot(house[['sqft_lot','sqft_above','price','sqft_living','bedrooms']], hue='bedrooms', palette='afmhot',size=1.4)
 
 
-# ## 2.3 Exploratory Visualization
+# In[ ]:
+
+
+with sns.plotting_context("notebook",font_scale=2.5):
+    g = sns.pairplot(house[['sqft_lot','sqft_above','price','sqft_living','bedrooms']], 
+                 hue='bedrooms', palette='tab20',size=6)
+g.set(xticklabels=[]);
+
+
+# From the pairplots, we seem to get the classical linear distribution of the data points, for example with price against sqft_living. This bodes well as in the latter analysis, we will implement some linear models which we will use in our Feature ranking. Let's look at the correlation heatmap: 
+
+# In[ ]:
+
+
+str_list = [] # empty list to contain columns with strings (words)
+for colname, colvalue in house.iteritems():
+    if type(colvalue[1]) == str:
+         str_list.append(colname)
+# Get to the numeric columns by inversion            
+num_list = house.columns.difference(str_list) 
+# Create Dataframe containing only numerical features
+house_num = house[num_list]
+f, ax = plt.subplots(figsize=(16, 12))
+plt.title('Pearson Correlation of features')
+# Draw the heatmap using seaborn
+#sns.heatmap(house_num.astype(float).corr(),linewidths=0.25,vmax=1.0, square=True, cmap="PuBuGn", linecolor='k', annot=True)
+sns.heatmap(house_num.astype(float).corr(),linewidths=0.25,vmax=1.0, square=True, cmap="cubehelix", linecolor='k', annot=True)
+
+
+# # 2. Stability Selection via Randomized Lasso
 # 
-# ### Distribution of targets
+# In a nutshell, this method serves to apply the feature selection on different parts of the data and features repeatedly until the results can be aggregated. Therefore stronger features ( defined as being selected as important) will have greater scores in this method as compared to weaker features. Refer to this paper by Nicolai Meinshausen and Peter Buhlmann for a much greater detail on the method : http://stat.ethz.ch/~nicolai/stability.pdf
+# 
+# In this notebook, the Stability Selection method is conveniently inbuilt into sklearn's randomized lasso model and therefore this will be implemented as follows:
 
 # In[ ]:
 
 
-ax = sns.countplot(x = targets ,palette="Set2")
-sns.set(font_scale=1.5)
-ax.set_xlabel(' ')
-ax.set_ylabel(' ')
-fig = plt.gcf()
-fig.set_size_inches(10,5)
-ax.set_ylim(top=700000)
-for p in ax.patches:
-    ax.annotate('{:.2f}%'.format(100*p.get_height()/len(targets)), (p.get_x()+ 0.3, p.get_height()+10000))
-
-plt.title('Distribution of 595212 Targets')
-plt.xlabel('Initiation of Auto Insurance Claim Next Year')
-plt.ylabel('Frequency [%]')
-plt.show()
+# First extract the target variable which is our House prices
+Y = house.price.values
+# Drop price from the house dataframe and create a matrix out of the house data
+house = house.drop(['price'], axis=1)
+X = house.as_matrix()
+# Store the column/feature names into a list "colnames"
+colnames = house.columns
 
 
-# ### The plot shows that:
-# - the target is imbalanced
-# - high bias is expected to 0
-# - class weight has to be balanced on training
-
-# ### Correlation matrix
+# Next, we create a function which will be able to conveniently store our feature rankings obtained from the various methods described here into a Python dictionary. In case you are thinking I created this function, no this is not the case. All credit goes to Ando Saabas and I am only trying to apply what he has discussed in the context of this dataset.
 
 # In[ ]:
 
 
-sns.set(style="white")
+# Define dictionary to store our rankings
+ranks = {}
+# Create our function which stores the feature rankings to the ranks dictionary
+def ranking(ranks, names, order=1):
+    minmax = MinMaxScaler()
+    ranks = minmax.fit_transform(order*np.array([ranks]).T).T[0]
+    ranks = map(lambda x: round(x,2), ranks)
+    return dict(zip(names, ranks))
 
-
-# Compute the correlation matrix
-corr = train.corr()
-
-
-# Set up the matplotlib figure
-f, ax = plt.subplots(figsize=(11, 9))
-
-# Generate a custom diverging colormap
-cmap = sns.diverging_palette(220, 10, as_cmap=True)
-
-# Draw the heatmap with the mask and correct aspect ratio
-sns.heatmap(corr, cmap=cmap, vmax=.3, center=0,
-            square=True, linewidths=.5, cbar_kws={"shrink": .5})
-
-plt.show()
-
-
-# ### It can be seen that:
-#  - ps\_calc\_\*  features are not related to target at all.
-#  - Removing them would prevent the curse of dimensionality.
-#     
-#     
-
-# # 3. Training/Predicting Pipeline
-
-# ## 3.1 Define Gini Metric
 
 # In[ ]:
 
 
-# Define the gini metric - from https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703#5897
-def gini(actual, pred, cmpcol = 0, sortcol = 1):
-    assert( len(actual) == len(pred) )
-    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
-    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
-    totalLosses = all[:,0].sum()
-    giniSum = all[:,0].cumsum().sum() / totalLosses
-    
-    giniSum -= (len(actual) + 1) / 2.
-    return giniSum / len(actual)
+# Finally let's run our Selection Stability method with Randomized Lasso
+rlasso = RandomizedLasso(alpha=0.04)
+rlasso.fit(X, Y)
+ranks["rlasso/Stability"] = ranking(np.abs(rlasso.scores_), colnames)
+print('finished')
+
+
+# # 3. Recursive Feature Elimination ( RFE )
+# 
+# Now onto the next method in our feature ranking endeavour. Recursive Feature Elimination or RFE uses a model ( eg. linear Regression or SVM) to select either the best or worst-performing feature, and then excludes this feature. The whole process is then iterated until all features in the dataset are used up ( or up to a user-defined limit). Sklearn conveniently possesses a RFE function via the sklearn.feature_selection call and we will use this along with a simple linear regression model for our ranking search as follows:
+
+# In[ ]:
+
+
+# Construct our Linear Regression model
+lr = LinearRegression(normalize=True)
+lr.fit(X,Y)
+#stop the search when only the last feature is left
+rfe = RFE(lr, n_features_to_select=1, verbose =3 )
+rfe.fit(X,Y)
+ranks["RFE"] = ranking(list(map(float, rfe.ranking_)), colnames, order=-1)
+
+
+# # 4. Linear Model Feature Ranking
+# 
+# Now let's apply 3 different linear models (Linear, Lasso and Ridge Regression) and how the features are selected and prioritised via these models. To achieve this, I shall use the sklearn implementation of these models and in particular the attribute .coef to return the estimated coefficients for each feature in the linear model.
+
+# In[ ]:
+
+
+# Using Linear Regression
+lr = LinearRegression(normalize=True)
+lr.fit(X,Y)
+ranks["LinReg"] = ranking(np.abs(lr.coef_), colnames)
+
+# Using Ridge 
+ridge = Ridge(alpha = 7)
+ridge.fit(X,Y)
+ranks['Ridge'] = ranking(np.abs(ridge.coef_), colnames)
+
+# Using Lasso
+lasso = Lasso(alpha=.05)
+lasso.fit(X, Y)
+ranks["Lasso"] = ranking(np.abs(lasso.coef_), colnames)
+
+
+# # 5. Random Forest feature ranking
+# 
+# Sklearn's Random Forest model also comes with it's own inbuilt feature ranking attribute and one can conveniently just call it via "feature_importances_". That is what we will be using as follows:
+
+# In[ ]:
+
+
+rf = RandomForestRegressor(n_jobs=-1, n_estimators=50, verbose=3)
+rf.fit(X,Y)
+ranks["RF"] = ranking(rf.feature_importances_, colnames);
+
+
+# # 6. Creating the Feature Ranking Matrix
+# 
+# We combine the scores from the various methods above and output it in a matrix form for convenient viewing as such:
+
+# In[ ]:
+
+
+# Create empty dictionary to store the mean value calculated from all the scores
+r = {}
+for name in colnames:
+    r[name] = round(np.mean([ranks[method][name] 
+                             for method in ranks.keys()]), 2)
  
-def gini_normalized(a, p):
-    return gini(a, p) / gini(a, a)
-
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = gini_normalized(labels, preds)
-    return 'gini', gini_score
-
-
-# ## 3.2 Drop Unnecessary Columns
-
-# In[ ]:
+methods = sorted(ranks.keys())
+ranks["Mean"] = r
+methods.append("Mean")
+ 
+print("\t%s" % "\t".join(methods))
+for name in colnames:
+    print("%s\t%s" % (name, "\t".join(map(str, 
+                         [ranks[method][name] for method in methods]))))
 
 
-unwanted = train.columns[train.columns.str.startswith('ps_calc_')]
-
+# Now, with the matrix above, the numbers and layout does not seem very easy or pleasant to the eye. Therefore, let's just collate the mean ranking score attributed to each of the feature and plot that via Seaborn's factorplot.
 
 # In[ ]:
 
 
-train = train.drop(unwanted, axis=1)  
-test = test.drop(unwanted, axis=1)  
+# Put the mean scores into a Pandas dataframe
+meanplot = pd.DataFrame(list(r.items()), columns= ['Feature','Mean Ranking'])
 
-
-# ## 3.3 Stratified KFold
-# 
-# Stratified KFold is used to keep the distribution of each label consistent for each training batch.
-
-# In[ ]:
-
-
-kfold = 5
-skf = StratifiedKFold(n_splits=kfold, random_state=42)
-
-
-# ## 3.4. XGBoost
-
-# ### Set parameters
-
-# In[ ]:
-
-
-# More parameters has to be tuned. Good luck :)
-params = {
-    'min_child_weight': 10.0,
-    'objective': 'binary:logistic',
-    'max_depth': 7,
-    'max_delta_step': 1.8,
-    'colsample_bytree': 0.4,
-    'subsample': 0.8,
-    'eta': 0.025,
-    'gamma': 0.65,
-    'num_boost_round' : 700
-    }
-
-
-# # 4.  Prediction and submission
-
-# ## 4.1. Predict and Submit results
-
-# ### Define X and y
-
-# In[ ]:
-
-
-X = train.drop(['id', 'target'], axis=1).values
-y = train.target.values
-test_id = test.id.values
-test = test.drop('id', axis=1)
-
-
-# ### Create a submission file
-# 
-# This is a pipeline originated from [StratifiedShuffleSplit + XGBoost example (0.28)](https://www.kaggle.com/kueipo/stratifiedshufflesplit-xgboost-example-0-28) 
-# 
-# Original [Simple XGBoost BTB (0.27+)](https://www.kaggle.com/anokas/simple-xgboost-btb-0-27?scriptVersionId=1551232)
-
-# In[ ]:
-
-
-sub = pd.DataFrame()
-sub['id'] = test_id
-sub['target'] = np.zeros_like(test_id)
+# Sort the dataframe
+meanplot = meanplot.sort_values('Mean Ranking', ascending=False)
 
 
 # In[ ]:
 
 
-for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-    print('[Fold %d/%d]' % (i + 1, kfold))
-    X_train, X_valid = X[train_index], X[test_index]
-    y_train, y_valid = y[train_index], y[test_index]
-    # Convert our data into XGBoost format
-    d_train = xgb.DMatrix(X_train, y_train)
-    d_valid = xgb.DMatrix(X_valid, y_valid)
-    d_test = xgb.DMatrix(test.values)
-    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-
-    # Train the model! We pass in a max of 1,600 rounds (with early stopping after 70)
-    # and the custom metric (maximize=True tells xgb that higher metric is better)
-    mdl = xgb.train(params, d_train, 1600, watchlist, early_stopping_rounds=70, feval=gini_xgb, maximize=True, verbose_eval=100)
-
-    print('[Fold %d/%d Prediciton:]' % (i + 1, kfold))
-    # Predict on our test data
-    p_test = mdl.predict(d_test, ntree_limit=mdl.best_ntree_limit)
-    sub['target'] += p_test/kfold
+# Let's plot the ranking of the features
+sns.factorplot(x="Mean Ranking", y="Feature", data = meanplot, kind="bar", 
+               size=14, aspect=1.9, palette='coolwarm')
 
 
-# ### Put submission to csv file
-
-# In[ ]:
-
-
-sub.to_csv('StratifiedKFold.csv', index=False)
-
+# Well as you can see from our feature ranking endeavours, the top 3 features are 'lat', 'waterfront' and 'grade'. The bottom 3 are 'sqft_lot15', 'sqft_lot' and 'sqft_basement'. 
+# This sort of feature ranking can be really useful, especially if one has many many features in the dataset and would like to trim or cut off features that contribute negligibly.

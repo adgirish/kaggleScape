@@ -1,187 +1,62 @@
-__author__ = 'Tilii: https://kaggle.com/tilii7'
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import warnings
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore',category=DeprecationWarning)
-    import pandas as pd
-    import numpy as np
-    from datetime import datetime
-    from sklearn.ensemble import IsolationForest
-    from sklearn.model_selection import cross_val_predict
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.manifold import TSNE
-    import pprint
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# from https://stackoverflow.com/questions/22354094/pythonic-way-of-detecting-outliers-in-one-dimensional-observation-data
-def is_outlier(points, thresh=3.5):
-    '''
-    Returns a boolean array with True if points are outliers and False
-    otherwise.
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-    Parameters:
-    -----------
-        points : An numobservations by numdimensions array of observations
-        thresh : The modified z-score to use as a threshold. Observations with
-            a modified z-score (based on the median absolute deviation) greater
-            than this value will be classified as outliers.
+from subprocess import check_output
+# print(check_output(["ls", "../input"]).decode("utf8"))
 
-    Returns:
-    --------
-        mask : A numobservations-length boolean array.
+# Any results you write to the current directory are saved as output.
 
-    References:
-    ----------
-        Boris Iglewicz and David Hoaglin (1993), 'Volume 16: How to Detect and
-        Handle Outliers', The ASQC Basic References in Quality Control:
-        Statistical Techniques, Edward F. Mykytka, Ph.D., Editor.
-    '''
-    if len(points.shape) == 1:
-        points = points[:,None]
-    median = np.median(points, axis=0)
-    diff = np.sum((points - median)**2, axis=-1)
-    diff = np.sqrt(diff)
-    med_abs_deviation = np.median(diff)
+import cv2
+import tifffile as tiff
 
-    modified_z_score = 0.6745 * diff / med_abs_deviation
+def _align_two_rasters(img1,img2):
+    try:
+        p1 = img1[300:1900,300:2200,1].astype(np.float32)
+        p2 = img2[300:1900,300:2200,3].astype(np.float32)
+    except:
+        print("_align_two_rasters: can't extract patch, falling back to whole image")
+        p1 = img1[:,:,1]
+        p2 = img2[:,:,3]
 
-    return (modified_z_score, (modified_z_score > thresh) )
+    # lp1 = cv2.Laplacian(p1,cv2.CV_32F,ksize=5)
+    # lp2 = cv2.Laplacian(p2,cv2.CV_32F,ksize=5)
 
-def timer(start_time=None):
-    if not start_time:
-        start_time = datetime.now()
-        return start_time
-    elif start_time:
-        tmin, tsec = divmod((datetime.now() - start_time).total_seconds(), 60)
-        print(' Time taken: %i minutes and %s seconds.' % (tmin, round(tsec,2)))
+    warp_mode = cv2.MOTION_EUCLIDEAN
+    warp_matrix = np.eye(2, 3, dtype=np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000,  1e-7)
+    (cc, warp_matrix) = cv2.findTransformECC (p1, p2,warp_matrix, warp_mode, criteria)
+    print("_align_two_rasters: cc:{}".format(cc))
 
-if __name__ == '__main__':
+    img3 = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+    img3[img3 == 0] = np.average(img3)
 
-    RFR = RandomForestRegressor(n_estimators=100)
-    tsne = TSNE(n_components=2, n_iter_without_progress=50, init='pca', verbose=2, random_state=1001)
+    return img3
 
-# Load data set and target values
-    start_time = timer(None)
-    print('\n# Reading and Processing Data')
-    train = pd.read_csv('../input/train.csv', dtype={'ID': np.int32, 'y': np.float32})
-    target = train['y'].values
-    train_ids = train['ID'].values
-    train = train.drop(['ID', 'y'], axis=1)
-    print('\n Initial Train Set Matrix Dimensions: %d x %d' % (train.shape[0], train.shape[1]))
-    train_len = len(train)
-    test = pd.read_csv('../input/test.csv', dtype={'ID': np.int32})
-    test_ids = test['ID'].values
-    test = test.drop(['ID'], axis=1)
-    print('\n Initial Test Set Matrix Dimensions: %d x %d' % (test.shape[0], test.shape[1]))
 
-# Sort out numerical and categorical features
-    all_data = pd.concat((train, test))
-    numeric_feats = all_data.dtypes[all_data.dtypes != 'object'].index
-    categorical_feats = all_data.dtypes[all_data.dtypes == 'object'].index
+image_id = "6120_2_2"
+img_3 = np.transpose(tiff.imread("../input/three_band/{}.tif".format(image_id)),(1,2,0))
+img_a = np.transpose(tiff.imread("../input/sixteen_band/{}_A.tif".format(image_id)),(1,2,0))
 
-    print('\n Converting categorical features:')
-    for i, col_name in enumerate(categorical_feats):
-        print(' Converting %s' % col_name)
-        temp_df = pd.get_dummies(all_data[col_name])
-        new_features = temp_df.columns.tolist()
-        new_features = [col_name + '_' + w for w in new_features]
-        temp_df.columns = new_features
-        all_data.drop(col_name, axis=1, inplace=True)
-        all_data = pd.concat((all_data, temp_df), axis=1)
+raster_size = img_3.shape
+img_a = cv2.resize(img_a,(raster_size[1],raster_size[0]),interpolation=cv2.INTER_CUBIC)
 
-# Remove columns where all data points have the same value
-    print('\n Number of columns before cleaning: %d' % len(all_data.columns))
-    cols = all_data.columns.tolist()
-    for column in cols:
-        if len(np.unique(all_data[column])) == 1:
-            print(' Column %s removed' % str(column))
-            all_data.drop(column, axis=1, inplace=True)
+img_a_new = _align_two_rasters(img_3,img_a)
 
-# Remove identical columns where all data points have the same value
-    cols = all_data.columns.tolist()
-    remove = []
-    for i in range(len(cols)-1):
-        v = all_data[cols[i]].values
-        for j in range(i+1,len(cols)):
-            if np.array_equal(v,all_data[cols[j]].values):
-                remove.append(cols[j])
-                print(' Column %s is identical to %s. Removing %s' % (str(cols[i]), str(cols[j]), str(cols[j])))
+img_a = 255 * (img_a.astype(np.float32)-300) / (np.max(img_a) * 1.1) + 40
+img_3 = 255 * img_3.astype(np.float32) / (np.max(img_3) * 0.9) + 60
+img_a_new = 255 * (img_a_new.astype(np.float32)-300) / (np.max(img_a_new) * 1.1) + 40
 
-    all_data.drop(remove, axis=1, inplace=True)
-    print('\n Number of columns after cleaning: %d' % len(all_data.columns))
+img_orig = np.stack([img_a[:, :, 4], img_3[:, :, 1], img_3[:, :, 0]], axis=-1).astype(np.uint8)
+img_reg = np.stack([img_a_new[:, :, 4], img_3[:, :, 1], img_3[:, :, 0]], axis=-1).astype(np.uint8)
 
-    features = all_data.columns
-    print('\n Final Matrix Dimensions: %d x %d' % (all_data.shape[0], all_data.shape[1]))
-    train_data = pd.DataFrame(all_data[ : train_len].values, columns=features)
-    test_data = pd.DataFrame(all_data[train_len : ].values, columns=features)
-    train_data.reset_index(drop=True, inplace=True)
-    test_data.reset_index(drop=True, inplace=True)
-    timer(start_time)
 
-    start_time = timer(None)
-    print('\n Calculating t-SNE embedding:')
-    all_data_tsne = tsne.fit_transform(all_data)
-    train_data_tsne = pd.DataFrame(all_data_tsne[ : train_len], columns=['tsne_x','tsne_y'])
-    test_data_tsne = pd.DataFrame(all_data_tsne[train_len : ], columns=['tsne_x','tsne_y'])
-    train_data_tsne.reset_index(drop=True, inplace=True)
-    test_data_tsne.reset_index(drop=True, inplace=True)
-    timer(start_time)
+cv2.imwrite("original.png",img_orig[200:900,300:1200,:])
+cv2.imwrite("registered.png",img_reg[200:900,300:1200,:])
 
-# Running isolation forest to remove outliers
-    start_time = timer(None)
-    clf = IsolationForest(n_estimators=500, max_samples=1.0, random_state=1001, bootstrap=True, contamination=0.02, verbose=0, n_jobs=-1)
-    print('\n Running Isolation Forest:')
-    clf.fit(train_data.values, target)
-    isof = clf.predict(train_data.values)
-    train.insert(0, 'y', target)
-    train.insert(0, 'ID', train_ids)
-    train['isof'] = isof
-    myindex = train['isof'] < 0
-    train_IF = train.loc[myindex]
-    train_IF.reset_index(drop=True, inplace=True)
-    train_IF.drop('isof', axis=1, inplace=True)
-    train_IF.to_csv('train-isof-outliers.csv', index=False)
-    test.insert(0, 'ID', test_ids)
-    test['isof'] = clf.predict(test_data.values)
-    myindex = test['isof'] < 0
-    test_IF = test.loc[myindex]
-    test_IF.reset_index(drop=True, inplace=True)
-    test_IF.drop('isof', axis=1, inplace=True)
-    test_IF.to_csv('test-isof-outliers.csv', index=False)
-    print('\n Found %d outlier points' % len(train_IF))
-    timer(start_time)
-
-    start_time = timer(None)
-    threshold = 2.0
-    print('\n Running Random Forest Regressor (10-fold):')
-    target_pred = cross_val_predict(estimator=RFR, X=train_data.values, y=target, cv=10, n_jobs=-1)
-    rfr_pred = pd.DataFrame({'ID': train_ids, 'y': target, 'y_pred': target_pred})
-    rfr_pred.to_csv('prediction-train-oof-10fold-RFR.csv', index=False)
-    yvalues = np.vstack((target, target_pred)).transpose()
-    OL_score, OL = is_outlier(yvalues, threshold)
-    train['outlier_score'] = OL_score
-    myindex = train['outlier_score'] >= threshold
-    train_OL = train.loc[myindex]
-    train_OL.reset_index(drop=True, inplace=True)
-    train_OL.drop(['isof','outlier_score'], axis=1, inplace=True)
-    train_OL.to_csv('train-outliers.csv', index=False)
-    timer(start_time)
-
-    start_time = timer(None)
-    train_outliers_tsne = train_data_tsne.loc[myindex]
-    test_outliers_tsne = test_data_tsne.values
-    outlier_list = []
-    for k in range(len(train_outliers_tsne)):
-        d = ((test_outliers_tsne-train_outliers_tsne.values[k])**2).sum(axis=1)  # compute distances
-        ndx = d.argsort() # sort so that smallest distance is first
-        print(' Presumed outlier point for train ID = %d is test ID = %d ; their Euclidean distance from t-SNE embedding is %.8f' % (train_OL.iloc[k]['ID'], test.iloc[ndx[0]]['ID'], d[ndx[0]]))
-        outlier_list.append(ndx[0])
-        print(' Ten closest test points (ID, distance):')
-        pprint.pprint(zip(test.iloc[ndx[:10]]['ID'], d[ndx[:10]]))
-
-    test_OL = test.iloc[outlier_list]
-    test_OL.drop(['isof'], axis=1, inplace=True)
-    test_OL.sort_values(['ID'], inplace=True)
-    test_OL.reset_index(drop=True, inplace=True)
-    test_OL.to_csv('test-outliers.csv', index=False)
-
-    timer(start_time)

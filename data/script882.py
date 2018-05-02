@@ -1,114 +1,105 @@
 
 # coding: utf-8
 
-# # Different point of view
+# This is a kfold with both xgb and lgb. Some elements are from kernels by The1owl and HyungsukKang.
 # 
-# You thought that this is an image classification competition. You thought you have to do CNN and stuff. But don't let organizers deceive you! There are texts and we are going to use them!
-# 
-# ## Idea
-# 
-# We have URLs for images in the data. And it makes sense to think that on different hostings there will be a different distribution of target classes. Or maybe we will be possible to find some meaningful words in the image filenames.
-# 
-# So let's train a text classification algorithm on the URLs and see what we can get.
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import json
+import numpy as np
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import StratifiedKFold
+import gc
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
+print('loading files...')
+train = pd.read_csv('../input/train.csv', na_values=-1)
+test = pd.read_csv('../input/test.csv', na_values=-1)
+col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
+train = train.drop(col_to_drop, axis=1)  
+test = test.drop(col_to_drop, axis=1)  
 
+for c in train.select_dtypes(include=['float64']).columns:
+    train[c]=train[c].astype(np.float32)
+    test[c]=test[c].astype(np.float32)
+for c in train.select_dtypes(include=['int64']).columns[2:]:
+    train[c]=train[c].astype(np.int8)
+    test[c]=test[c].astype(np.int8)    
 
-# In[ ]:
-
-
-def read_json_to_dataframe(filepath, test_file=False):
-    with open(filepath) as f:
-        data = json.load(f)
-        
-    df = pd.DataFrame(data)
-    df['url'] = df.images.map(lambda x: x['url'][0])
-    if not test_file:
-        df['image_id'] = df.annotations.map(lambda x: x['image_id'])
-        df['label_id'] = df.annotations.map(lambda x: x['label_id'])
-        df.drop(columns=['annotations', 'images'], inplace=True)
-    return df
-
-
-# In[ ]:
-
-
-train_data = read_json_to_dataframe('../input/train.json', test_file=False)
-validation_data = read_json_to_dataframe('../input/validation.json', test_file=False)
-test_data = read_json_to_dataframe('../input/test.json', test_file=True)
+print(train.shape, test.shape)
 
 
 # In[ ]:
 
 
-print("Train size: ", train_data.shape)
-print("Validation size: ", validation_data.shape)
-print("Test size: ", test_data.shape)
+# custom objective function (similar to auc)
 
+def gini(y, pred):
+    g = np.asarray(np.c_[y, pred, np.arange(len(y)) ], dtype=np.float)
+    g = g[np.lexsort((g[:,2], -1*g[:,1]))]
+    gs = g[:,0].cumsum().sum() / g[:,0].sum()
+    gs -= (len(y) + 1) / 2.
+    return gs / len(y)
 
-# # Create text features: TF-IDF vectorizer
-# 
-# What features can we get from texts? Domain name, top-level domain name, some hints from file names, maybe something else. We can do all these automatically by counting char n-grams in each URL and use this numbers as features. And `sklearn` already got all the functions and methods we need.
+def gini_xgb(pred, y):
+    y = y.get_label()
+    return 'gini', gini(y, pred) / gini(y, y)
 
-# In[ ]:
-
-
-tfidf = TfidfVectorizer(analyzer='char', ngram_range=(1, 3), max_features=2500, lowercase=False)
-tfidf.fit(train_data.url)
-
-
-# If don't know what just happened, then long story short: we just found 2500 most common 1-, 2- and 3-grams form all URLs in the training data. [Here is a nice doc](http://scikit-learn.org/stable/modules/feature_extraction.html#text-feature-extraction) if you want to know more. Now we can count occurrences of those n-grams in the URLs and apply some smoothing called [tf-idf](https://en.wikipedia.org/wiki/Tf%E2%80%93idf).
-
-# In[ ]:
-
-
-train_features = tfidf.transform(train_data.url)
-validation_features = tfidf.transform(validation_data.url)
-test_features = tfidf.transform(test_data.url)
-
-
-# And now let's train Logistic Regression on those features. The thing is that we have a lot of features and a lot of points so LR will take forever (in this notebook environment). So we will take few thousand random points to train a model.
-
-# In[ ]:
-
-
-np.random.seed(0)
-random_ids = np.random.choice(np.arange(len(train_data)), size=7500, replace=False)
+def gini_lgb(preds, dtrain):
+    y = list(dtrain.get_label())
+    score = gini(y, preds) / gini(y, y)
+    return 'gini', score, True
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'lr = LogisticRegression(C=10.0)\nlr.fit(train_features[random_ids], train_data.label_id.values[random_ids])\nprint("Validation error: %.3f" % (1 - accuracy_score(validation_data.label_id, lr.predict(validation_features))))')
+# xgb
+params = {'eta': 0.02, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 
+          'objective': 'binary:logistic', 'eval_metric': 'auc', 'silent': True}
 
+X = train.drop(['id', 'target'], axis=1)
+features = X.columns
+X = X.values
+y = train['target'].values
+sub=test['id'].to_frame()
+sub['target']=0
 
-# In[ ]:
+nrounds=200  # need to change to 2000
+kfold = 2  # need to change to 5
+skf = StratifiedKFold(n_splits=kfold, random_state=0)
+for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+    print(' xgb kfold: {}  of  {} : '.format(i+1, kfold))
+    X_train, X_valid = X[train_index], X[test_index]
+    y_train, y_valid = y[train_index], y[test_index]
+    d_train = xgb.DMatrix(X_train, y_train) 
+    d_valid = xgb.DMatrix(X_valid, y_valid) 
+    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
+    xgb_model = xgb.train(params, d_train, nrounds, watchlist, early_stopping_rounds=100, 
+                          feval=gini_xgb, maximize=True, verbose_eval=100)
+    sub['target'] += xgb_model.predict(xgb.DMatrix(test[features].values), 
+                        ntree_limit=xgb_model.best_ntree_limit+50) / (2*kfold)
+gc.collect()
+sub.head(2)
 
+# lgb
+params = {'metric': 'auc', 'learning_rate' : 0.01, 'max_depth':10, 'max_bin':10,  'objective': 'binary', 
+          'feature_fraction': 0.8,'bagging_fraction':0.9,'bagging_freq':10,  'min_data': 500}
 
-submission = pd.DataFrame({
-    'id': 1 + np.arange(len(test_data)),
-    'predicted': lr.predict(test_features),
-})
-submission.head()
+skf = StratifiedKFold(n_splits=kfold, random_state=1)
+for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+    print(' lgb kfold: {}  of  {} : '.format(i+1, kfold))
+    X_train, X_eval = X[train_index], X[test_index]
+    y_train, y_eval = y[train_index], y[test_index]
+    lgb_model = lgb.train(params, lgb.Dataset(X_train, label=y_train), nrounds, 
+                  lgb.Dataset(X_eval, label=y_eval), verbose_eval=100, 
+                  feval=gini_lgb, early_stopping_rounds=100)
+    sub['target'] += lgb_model.predict(test[features].values, 
+                        num_iteration=lgb_model.best_iteration) / (2*kfold)
+    
+sub.to_csv('sub10.csv', index=False, float_format='%.5f') 
+gc.collect()
+sub.head(2)
 
-
-# In[ ]:
-
-
-submission.to_csv('submission.csv', index=False)
-
-
-# Here you go. You have a submission. You definitely can do better if you use more data points to train logistic regression and invest some time into a selection of better parameters of TfIdf Vectorizer. But I suggest you don't.
-# 
-# It's all (almost) a joke, it's really an image classification competition and better spend your precious time on real images :) In fact, as @fayzur noted, it's forbidden to use URLs by competition rules, so go with images and don't get banned.
-# 
-# Good luck to you!

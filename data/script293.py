@@ -1,190 +1,206 @@
 
 # coding: utf-8
 
-# # Historical Bitcoin Data Analysis
+# ### Intro
+# In this kernel I explore the dataset for the CVPR competition. We are given images from videos produced as a car drives around and records activity from the car's point of view. My primary purpose is to see what's in the images and get a general feel for the objects we are asked to segment. I'll also create a data frame of labels for the train set that can be used for more in-depth classification.
+# 
+# New: I've been trying to optimize the code for reading all train images and generating the labels. Maybe you have some ideas to speed it up?.
 
-# In[ ]:
+# In[22]:
 
 
+import os
+import random
 import numpy as np
-import pandas as pd
-from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-import plotly.graph_objs as go
-import seaborn as sns
-import datetime, pytz
+import pandas as pd 
+from skimage import io, img_as_float
+from numba import jit
+from PIL import Image
+import cv2
+import tensorflow as tf
+from IPython.display import display
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
-init_notebook_mode(connected=True)
-get_ipython().run_line_magic('matplotlib', 'inline')
+
+# ### Files
+# First let's quickly look at the default file structure. There are 3 directories and a sample submission.
+
+# In[23]:
 
 
-# ## A Basic Hodler's Account
+os.listdir('../input')
+
+
+# Let's look first at the training images....
+
+# In[24]:
+
+
+def filecheck(dir):
+    dir_size = 0
+    filelist = os.listdir(dir)
+    filelist.sort()
+    print(dir)
+    for i,name in enumerate(filelist):
+        dir_size += os.path.getsize(os.path.join(dir, name))
+    print("{:.1f} GB of {} files".format(dir_size/1024/1024/1024, i))
+    print("showing sample files")
+    print("\n".join(filelist[300:306]) + "\n")
+
+dirs = ["../input/train_color","../input/train_label", "../input/test"]
+
+for d in dirs[0:2]:
+    filecheck(d)
+
+
+# 92.3GB of image data for the train set images! The filenames are interesting. The prefixes of the files, "170908" might represent dates the pictures were taken, and the middle string might represent times and/or frame numbers. You can see that each "instance" - the middle set of numbers - has images from both Camera 5 and Camera 6. From what I've seen they always come in pairs like that, which probably means there are (at least) two cameras recording at the same time. As expected, each jpg image in the train set has a corresponding png image with the mask of objects to classify. 
 # 
-# Simple analysis of returns based on $10 USD bitcoin buy at 00:00 each Monday morning.
+# Edit: This awesome kernel, [Recovering the Videos](https://www.kaggle.com/andrewrib/recovering-the-videos) string together sequential frames into videos.
 # 
-# Credit for data cleaning: https://www.kaggle.com/smitad/bitcoin-trading-strategy-simulation
+# Briefly looking at the test set files we see a more cyrptic naming convention. Our host refers to a "test video" in the Welcome post which suggests these files are also sequential somehow.
 
-# In[ ]:
-
-
-#define a conversion function for the native timestamps in the csv file
-def dateparse (time_in_secs):    
-    return pytz.utc.localize(datetime.datetime.fromtimestamp(float(time_in_secs)))
+# In[25]:
 
 
-# In[ ]:
+j = os.listdir(dirs[2])
+print("\n".join(j[0:6]))
+print("{} files".format(len(j)))
 
 
-data = pd.read_csv('../input/coinbaseUSD_1-min_data_2014-12-01_to_2017-10-20.csv.csv', parse_dates=[0], date_parser=dateparse)
+# ### Images
+# Jumping back to the training images - let's look at an image with labels.
+
+# In[26]:
 
 
-# In[ ]:
+im = Image.open("../input/train_color/170908_061523257_Camera_5.jpg")
+tlabel = np.asarray(Image.open("../input/train_label/170908_061523257_Camera_5_instanceIds.png")) // 1000
+tlabel[tlabel != 0] = 255
+plt.imshow(Image.blend(im, Image.fromarray(tlabel).convert('RGB'), alpha=0.4))
+display(plt.show())
 
 
-# First thing is to fix the data for bars/candles where there are no trades. 
-# Volume/trades are a single event so fill na's with zeroes for relevant fields...
-data['Volume_(BTC)'].fillna(value=0, inplace=True)
-data['Volume_(Currency)'].fillna(value=0, inplace=True)
-data['Weighted_Price'].fillna(value=0, inplace=True)
-
-# next we need to fix the OHLC (open high low close) data which is a continuous timeseries so
-# lets fill forwards those values...
-data['Open'].fillna(method='ffill', inplace=True)
-data['High'].fillna(method='ffill', inplace=True)
-data['Low'].fillna(method='ffill', inplace=True)
-data['Close'].fillna(method='ffill', inplace=True)
-
-data.tail()
-
-
-# In[ ]:
-
-
-# create valid date range
-start = datetime.datetime(2015, 1, 1, 0, 0, 0, 0, pytz.UTC)
-end = datetime.datetime(2017, 10, 17, 20, 0, 0, 0, pytz.UTC)
-
-# find rows between start and end time and find the first row (00:00 monday morning)
-weekly_rows = data[(data['Timestamp'] >= start) & (data['Timestamp'] <= end)].groupby([pd.Grouper(key='Timestamp', freq='W-MON')]).first().reset_index()
-weekly_rows.tail()
-
-
-# If anyone knows why this command creates days that don't exist (Oct 23) in the dataset, let me know.
-
-# In[ ]:
-
-
-# create time series plot of account value v. investment
-trace0 = go.Scatter(
-    x = weekly_rows['Timestamp'],
-    y = (weekly_rows.index+1)*10,
-    mode = 'lines',
-    name = 'Investment'
-)
-trace1 = go.Scatter(
-    x = weekly_rows['Timestamp'],
-    y = ((10.0 / weekly_rows['Close'].astype(float)).cumsum()) * weekly_rows['Close'].astype(float),
-    mode = 'lines',
-    name = 'Account Value'
-)
-trace2 = go.Scatter(
-    x = weekly_rows['Timestamp'],
-    y = weekly_rows['Close'].astype(float),
-    mode = 'lines',
-    name = 'Bitcoin Price'
-)
-plot_data = [trace0, trace1, trace2]
-iplot(plot_data)
-
-
-# ## Optimal Buy Times
-
-# In[ ]:
-
-
-# Create 'Day of Week' and 'Time Decimal' column for later
-dayOfWeek={0:'Mon', 1:'Tue', 2:'Wed', 3:'Thu', 4:'Fri', 5:'Sat', 6:'Sun'}
-data['Day of Week'] = data['Timestamp'].dt.dayofweek.map(dayOfWeek)
-
-data['Time Decimal'] = data['Timestamp'].dt.hour + data['Timestamp'].dt.minute/60
-
-
-# ### Best Day of Week to Buy
+# OK, so there are some vehicles and such on the road, just as we would expect. To see what those things are, we can look into the png file and extract the values emedded inside. From the Data page....
 # 
-# Determine which day of the week most often has the lowest price.
-
-# In[ ]:
-
-
-# find indices with min value of that week
-idx = data.groupby([pd.Grouper(key='Timestamp', freq='W-MON')])['Close'].transform(min) == data['Close']
-
-# remove duplicate day rows
-weekly_lows = data[idx].groupby([pd.Grouper(key='Timestamp', freq='D')]).first().reset_index()
-
-
-# In[ ]:
-
-
-# create histogram for day of week
-sns.countplot(x='Day of Week',data=weekly_lows, order=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
-
-
-# In[ ]:
-
-
-x = []
-y = []
-for key, day in dayOfWeek.items():
-    x.append(day)
-    y.append(weekly_lows['Day of Week'].value_counts()[day])
-bar_tracer = [go.Bar(x=x, y=y)]
-iplot(bar_tracer)
-
-
-# ### Best Time of Day to Buy
+# #### The training images labels are encoded in a format mixing spatial and label/instance information:
 # 
-# Determine what time of day most often has the lowest price.
-
-# In[ ]:
-
-
-# find indices with min value of that day
-daily_lows = data[data.groupby([pd.Grouper(key='Timestamp', freq='D')])['Close'].transform(min) == data['Close']]
-
-
-# In[ ]:
-
-
-sns.boxplot(x="Day of Week", y="Time Decimal", data=daily_lows, palette='rainbow')
-
-
-# In[ ]:
-
-
-box_tracer = []
-for key, day in dayOfWeek.items():
-    box_tracer.append(
-        go.Box(
-            y = daily_lows[daily_lows['Day of Week'] == day]['Time Decimal'],
-            name = day
-        )
-    )
-iplot(box_tracer)
-
-
-# ### Tuesday Low Histogram
+# * All the images are the same size (width, height) of the original images
+# * Pixel values indicate both the label and the instance.
+# * Each label could contain multiple object instances.
+# * int(PixelValue / 1000) is the label (class of object)
+# * PixelValue % 1000 is the instance id
+# * For example, a pixel value of 33000 means it belongs to label 33 (a car), is instance #0, while the pixel value of 33001 means it also belongs to class 33 (a car) , and is instance #1. These represent two different cars in an image.
 # 
-# Let's take a closer look into the distrobution of the lows on Tuesdays.
+# Clever, eh? Let's look.
 
-# In[ ]:
-
-
-sns.distplot(daily_lows[daily_lows['Day of Week'] == 'Tue']['Time Decimal'], bins=24, kde=False);
+# In[27]:
 
 
-# In[ ]:
+classdict = {0:'others', 1:'rover', 17:'sky', 33:'car', 34:'motorbicycle', 35:'bicycle', 36:'person', 37:'rider', 38:'truck', 39:'bus', 40:'tricycle', 49:'road', 50:'siderwalk', 65:'traffic_cone', 66:'road_pile', 67:'fence', 81:'traffic_light', 82:'pole', 83:'traffic_sign', 84:'wall', 85:'dustbin', 86:'billboard', 97:'building', 98:'bridge', 99:'tunnel', 100:'overpass', 113:'vegatation', 161:'car_groups', 162:'motorbicycle_group', 163:'bicycle_group', 164:'person_group', 165:'rider_group', 166:'truck_group', 167:'bus_group', 168:'tricycle_group'}
+
+tlabel = np.asarray(Image.open("../input/train_label/170908_061523257_Camera_5_instanceIds.png"))
+cls = np.unique(tlabel)//1000
+unique, counts = np.unique(cls, return_counts=True)
+d = dict(zip(unique, counts))
+df = pd.DataFrame.from_dict(d, orient='index').transpose()
+df.rename(columns=classdict, inplace=True)
+df
 
 
-histo_tracer = [go.Histogram(x=daily_lows[daily_lows['Day of Week'] == 'Tue']['Time Decimal'])]
-iplot(histo_tracer)
+# According to the data we have 5 cars, a bus, a tricycle and a traffic cone (see note below for 'traffic cone'). OK, sure... Let's also look at Camera 6 for the same instance.
+# 
 
+# In[28]:
+
+
+im = Image.open("../input/train_color/170908_073302618_Camera_6.jpg")
+tlabel = np.asarray(Image.open("../input/train_label/170908_073302618_Camera_6_instanceIds.png"))//1000
+tlabel[tlabel != 0] = 255
+plt.imshow(Image.blend(im, Image.fromarray(tlabel).convert('RGB'), alpha=0.6))
+
+tlabel = np.asarray(Image.open("../input/train_label/170908_061523257_Camera_6_instanceIds.png"))
+cls = np.unique(tlabel)//1000
+unique, counts = np.unique(cls, return_counts=True)
+d = dict(zip(unique, counts))
+df = pd.DataFrame.from_dict(d, orient='index').transpose()
+df.rename(columns=classdict, inplace=True)
+
+display(plt.show())
+df
+
+
+# Camera 6 shows a different view as we might expect. The [First Look](https://www.kaggle.com/aakashnain/firstlook) kernel has more instances of images and masks.
+
+# ### Labels (masks)
+# Let's now pull labels for the training images and look at some basic stats. (Note: The code below can probably be further optimized for better performance. I have it down to less than 1/2 of the original code. I'll still work with a sample here for now to save time.)
+
+# In[29]:
+
+
+allfilenames = os.listdir(dirs[1])
+filenames = random.sample(allfilenames, 1000)
+fullpaths = ["../input/train_label/" + f for f in filenames]
+labarray = np.zeros((len(filenames), 66))
+
+@jit
+def getcounts():
+    for i,f in enumerate(tqdm(fullpaths)):
+        tlabel = io.imread(f, plugin='pil')
+        cls = np.unique(tlabel)
+        unique,counts = np.unique(cls//1000, return_counts=True)
+        labarray[i, unique] = counts
+
+getcounts()
+labels_df = pd.DataFrame(labarray, index=filenames)
+labels_df = labels_df.loc[:, (labels_df != 0).any(axis=0)]
+labels_df.rename(columns=classdict, inplace=True)        
+labels_df.head(6)
+
+
+# We can look at the frequency of classes in the images by summing the occurrences across all images.
+
+# In[31]:
+
+
+labels_df.drop('others', axis=1, inplace=True)
+classes_df = pd.melt(labels_df)
+groups = classes_df.groupby('variable')
+sums = groups.sum()
+
+
+plt.figure();
+sums.plot.bar()
+
+
+# The most prevalent class is cars by far, as you might expect. I find it curious that most of the classes are not represented anywhere. Assuming the code is correct, it could be due to the limited sample, or the classes may be extremely rare. 
+# 
+# Edit: as pointed out in [this discussion](https://www.kaggle.com/c/cvpr-2018-autonomous-driving/discussion/53845), only 7 of the classes will be used for evaluation. These are car, motorbicycle, bicycle, person, truck, bus, and tricycle. Class 65, traffic cone, is actually a false label, It comes from pixel value 65535 which represents the "ignoring label".
+# 
+# Anyway, let's look at the differences among images. Here are histograms of Total Objects per image and Distinct Classes per image.
+
+# In[32]:
+
+
+labels_df['objects'] = labels_df.sum(axis=1)
+labels_df['classes'] = labels_df[labels_df>0].count(axis=1)-1
+labels_df.head()
+
+
+# In[33]:
+
+
+plt.figure();
+plt.title("Total # of Objects")
+labels_df['objects'].plot.hist()
+
+plt.figure();
+plt.title("# of Distinct Classes")
+labels_df['classes'].plot.hist()
+
+
+# It's interesting to see quite a difference among the images, expecially for total counts. 
+# 
+# There's a lot more that can be done with this data, of course, and I look forward to seeing some great kernels!
+# 
+# 

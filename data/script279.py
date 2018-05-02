@@ -1,127 +1,173 @@
 
 # coding: utf-8
 
-# # Exploring BNP Data Distributions
+# Based on the discussion here: https://www.kaggle.com/c/talkingdata-adtracking-fraud-detection/discussion/52374
+# I did some analysis on IP assignment.
 # 
-# Hopefully this will run on Kaggle servers.  You should see a lot of plots (I can only see one right now, before pressing view HTML output).  
-# If it doesn't I guess you'll have to run the code on your own machine. 
+# **It looks very much like the organizers used different patterns in assigning dummy IPs in TEST and TRAIN sets.******
+# 
+# In the Train set, there is a strong correlation to assign IPs with higher frequencies to lower numbers.  The pattern **DOES NOT hold in Test**.
+# 
+# To copy my comment from discussion:
+# 
+# " Based on train_sample.csv and my own subsamples (i haven't been able to run a test on full train set), it appears that lower number IPs are strongly associated with higher number of clicks. i.e. numbers in the range 1 through 125000 have substantially more clicks than IPs in the range 300000 and up. It's almost as if when the ip values were generated to mask real ips, the data was pre-sorted by the number of clicks per IP, in a few major chunks. (So they gathered most frequent group, and assigned numbers from 1 to 125000, than next group and another bulk of numbers, than next, etc). I see about 4 bands of frequencies.
+# 
+# However, based on a few test subsamples I ran, the pattern does not repeat in test data. The ips over test seem to be mapped truly randomly, and if anything have consistent click density.
+# 
+# Also, (and somebody please check these calculations!) there appear to be the following distribution of IPs:
+# 
+# **Overall the number of IPs (test OR train): 333168 <br>
+# Number of IPs that are in both (test AND train): 38164 <br>
+# Number of IPs that are in Train and NOT in Test: 239232<br> Number of IPs that are in Test and NOT in Train: 55772**
+# 
+# That means that way over half of IPs in test do not follow the mapping rules of train data.
+# 
+# Hense I think need to be careful in validation. The pattern of IP assignment in Train does not mimic the one in test. If you go by using IP value as a signal in train, your final test results will be off substantially."
+# 
+# ** see below for visualization based on Train subsample and full Test data**
+# 
 
-# In[ ]:
+# In[26]:
 
 
-# imports
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn import preprocessing
+import seaborn as sns
+import datetime
+import gc
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[ ]:
+# In[27]:
 
 
-# Read the Data
-train = pd.read_csv("../input/train.csv")
-train = train.drop(['ID'],axis=1)
-test = pd.read_csv("../input/test.csv")
-test = test.drop(['ID'],axis=1)
-target = train.target
-featureNames = train.columns.values
+input_path = '../input/'
 
 
-# In[ ]:
+# ### TRAIN SAMPLE
+
+# In[3]:
 
 
-# Function to convert to hexavigesimal base
-def az_to_int(az,nanVal=None):
-    if az==az:  #catch NaN
-        hv = 0
-        for i in range(len(az)):
-            hv += (ord(az[i].lower())-ord('a')+1)*26**(len(az)-1-i)
-        return hv
-    else:
-        if nanVal is not None:
-            return nanVal
-        else:
-            return az
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        'is_attributed' : 'uint8',
+        }
+
+train = pd.read_csv(input_path+'train_sample.csv', dtype=dtypes)
+train.head()
 
 
-# In[ ]:
+# In[12]:
 
 
-# Prepare the data: combine, process, split
-test['target'] = -999
-all_data = train.append(test)
+#convert to date/time
+train['click_time'] = pd.to_datetime(train['click_time'])
+train['attributed_time'] = pd.to_datetime(train['attributed_time'])
 
-# convert v22 to hexavigesimal
-all_data.v22 = all_data.v22.apply(az_to_int)
-
-for c in all_data.columns.values:
-    if all_data[c].dtype=='object':
-        all_data[c], tmpItter = all_data[c].factorize()
-
-# replace all NA's with -1
-all_data.fillna(-1, inplace=True)
-
-# split the data
-train = all_data[all_data['target']>-999]
-test = all_data[all_data['target']==-999]
-test = test.drop(['target'],axis=1)
+#extract hour as a feature
+train['click_hour']=train['click_time'].dt.hour
 
 
-# ## Plot Descriptions
-# 
-# ### Histogram Plots on the the left:
-# * Blue:  All of the train data (normalized)
-# * Red:  Train Data where the target variable is one (again normalized)
-# * Na's are -1, so the first column is usually large
-# 
-# ### CDF Plots on the right:
-# * Blue and red as before
-# * Black line is the difference in the CDF's (x10 + 0.5 for visualization)
-# 
-# ### A few interesting insights:
-# * It's easy to see why v50 is such a powerful predictor
-# * Somewhat counterintuitive, most of the features have more NA's when the target is true.  This is indicated both by the first red bar on the left being higher than the blue and by the cdf difference line being negative at the start.  Perhaps it's the presence of certain information, not the lack of it, that prevents fast-track processing.
-# * With v22 coded in hexavigesimal, there is some large scale structure in the pdf, and possibly some structure in the CDF difference plot
-
-# In[ ]:
+# In[28]:
 
 
-plt.rcParams['figure.max_open_warning']=300
-nbins=20
-for c in  featureNames:
-    if train[c].dtype != 'object' and c != 'target':
-        if c=='v22':
-            hbins = 100
-        else:
-            hbins = nbins
-        fig=plt.figure(figsize=(14,4))
-        ax1 = fig.add_subplot(1,2,1) 
-        
-        dataset1 = train[c][~np.isnan(train[c])]
-        dataset2 = train[c][~np.isnan(train[c]) & train.target]
-        
-        # left plot
-        hd = ax1.hist((dataset1, dataset2), bins=hbins, histtype='bar',normed=True,
-                        color=["blue", "red"],label=['all','target=1'])
-        ax1.set_xlabel('Feature: '+c)
-        ax1.set_xlim((-1,max(train[c])))
-        
-        binwidth = hd[1][1]-hd[1][0]
-        midpts = (hd[1][:-1]+hd[1][1:])/2
-        cdf_all= np.cumsum(hd[0][0])*binwidth
-        cdf_ones = np.cumsum(hd[0][1])*binwidth
+def plotStrip(x, y, hue, figsize = (14, 9)):
+    
+    fig = plt.figure(figsize = figsize)
+    colours = plt.cm.tab10(np.linspace(0, 1, 9))
+    with sns.axes_style('ticks'):
+        ax = sns.stripplot(x, y,              hue = hue, jitter = 0.4, marker = '.',              size = 4, palette = colours)
+        ax.set_xlabel('')
+        for axis in ['top','bottom','left','right']:
+            ax.spines[axis].set_linewidth(2)
 
-        # right plot
-        ax2 = fig.add_subplot(1,2,2) 
-        ax2.set_ylim((0,1))
-        ax2.set_xlim((0,nbins))
-        ax2.plot(midpts,cdf_all,color='b')
-        ax2.plot(midpts,cdf_ones,color='r')
-        ax2.plot(midpts,0.5+10*(cdf_all-cdf_ones),color='k')
-        ax2.grid()
-        ax2.set_xlim((-1,max(train[c])))
-        ax2.set_xlabel('cdfs plus cdf_diff*10+0.5')
-        ax2.axhline(0.5,color='gray',linestyle='--')
+        handles, labels = ax.get_legend_handles_labels()
+        plt.legend(handles, ['col1', 'col2'], bbox_to_anchor=(1, 1),                loc=2, borderaxespad=0, fontsize = 16);
+    return ax
+
+
+# In[18]:
+
+
+X = train
+Y = X['is_attributed']
+
+
+# In[19]:
+
+
+ax = plotStrip(X.click_hour, X.ip, Y)
+ax.set_ylabel('ip', size = 16)
+ax.set_title('IP (vertical), by HOUR(horizontal), split by converted or not(color)', size = 20);
+
+
+# In[42]:
+
+
+del train
+gc.collect()
+
+
+# ### TEST SUBSAMPLE
+
+# In[44]:
+
+
+total_rows = 18790470
+sample_size = total_rows//120
+
+def get_skiprows(total_rows, sample_size):
+    inc = total_rows // sample_size
+    return [row for row in range(1, total_rows) if row % inc != 0]
+
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        }
+
+test = pd.read_csv(input_path+'test.csv',
+                 skiprows=get_skiprows(total_rows,sample_size), dtype=dtypes)
+test.head()
+
+
+# In[45]:
+
+
+#convert to date/time
+test['click_time'] = pd.to_datetime(test['click_time'])
+
+#extract hour as a feature
+test['click_hour']=test['click_time'].dt.hour
+
+
+# In[46]:
+
+
+#dummy variable for hour color bands in test
+test['band'] = np.where(test['click_hour']<=6, 0,                         np.where(test['click_hour']<=11, 1,                                 np.where(test['click_hour']<=15, 2, 3)))
+
+
+# In[47]:
+
+
+print(len(test))
+X = test
+Y = test['band']
+
+
+# In[48]:
+
+
+ax = plotStrip(X.click_hour, X.ip, Y)
+ax.set_ylabel('ip', size = 16)
+ax.set_title('IP (vertical), by HOUR(horizontal), split by hour band', size = 20);
 

@@ -4,441 +4,310 @@
 # In[ ]:
 
 
-# -*- coding: utf-8 -*-
-
 import numpy as np
-
-import os
-import glob
-import cv2
-import math
-import pickle
-import datetime
 import pandas as pd
 
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
 from sklearn.cross_validation import train_test_split
-from sklearn.cross_validation import KFold
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D,                                        ZeroPadding2D
 
-# from keras.layers.normalization import BatchNormalization
-# from keras.optimizers import Adam
-from keras.optimizers import SGD
-from keras.utils import np_utils
-from keras.models import model_from_json
-# from sklearn.metrics import log_loss
-from numpy.random import permutation
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+import math
 
 
-np.random.seed(2016)
-use_cache = 1
-# color type: 1 - grey, 3 - rgb
-color_type_global = 3
-
-# color_type = 1 - gray
-# color_type = 3 - RGB
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-def get_im(path, img_rows, img_cols, color_type=1):
-    # Load as grayscale
-    if color_type == 1:
-        img = cv2.imread(path, 0)
-    elif color_type == 3:
-        img = cv2.imread(path)
-    # Reduce size
-    resized = cv2.resize(img, (img_cols, img_rows))
-    # mean_pixel = [103.939, 116.799, 123.68]
-    # resized = resized.astype(np.float32, copy=False)
-
-    # for c in range(3):
-    #    resized[:, :, c] = resized[:, :, c] - mean_pixel[c]
-    # resized = resized.transpose((2, 0, 1))
-    # resized = np.expand_dims(img, axis=0)
-    return resized
+# In[ ]:
 
 
-def get_driver_data():
-    dr = dict()
-    path = os.path.join('..', 'input', 'driver_imgs_list.csv')
-    print('Read drivers data')
-    f = open(path, 'r')
-    line = f.readline()
-    while (1):
-        line = f.readline()
-        if line == '':
-            break
-        arr = line.strip().split(',')
-        dr[arr[2]] = arr[0]
-    f.close()
-    return dr
+def rmsle(y, y_pred):
+    assert len(y) == len(y_pred)
+    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
+    return (sum(to_sum) * (1.0/len(y))) ** 0.5
+#Source: https://www.kaggle.com/marknagelberg/rmsle-function
 
 
-def load_train(img_rows, img_cols, color_type=1):
-    X_train = []
-    y_train = []
-    driver_id = []
-
-    driver_data = get_driver_data()
-
-    print('Read train images')
-    for j in range(10):
-        print('Load folder c{}'.format(j))
-        path = os.path.join('..', 'input', 'imgs', 'train',
-                            'c' + str(j), '*.jpg')
-        files = glob.glob(path)
-        for fl in files:
-            flbase = os.path.basename(fl)
-            img = get_im(fl, img_rows, img_cols, color_type)
-            X_train.append(img)
-            y_train.append(j)
-            driver_id.append(driver_data[flbase])
-
-    unique_drivers = sorted(list(set(driver_id)))
-    print('Unique drivers: {}'.format(len(unique_drivers)))
-    print(unique_drivers)
-    return X_train, y_train, driver_id, unique_drivers
+# In[ ]:
 
 
-def load_test(img_rows, img_cols, color_type=1):
-    print('Read test images')
-    path = os.path.join('..', 'input', 'imgs', 'test', '*.jpg')
-    files = glob.glob(path)
-    X_test = []
-    X_test_id = []
-    total = 0
-    thr = math.floor(len(files)/10)
-    for fl in files:
-        flbase = os.path.basename(fl)
-        img = get_im(fl, img_rows, img_cols, color_type)
-        X_test.append(img)
-        X_test_id.append(flbase)
-        total += 1
-        if total % thr == 0:
-            print('Read {} images from {}'.format(total, len(files)))
-
-    return X_test, X_test_id
+#LOAD DATA
+print("Loading data...")
+train = pd.read_table("../input/train.tsv")
+test = pd.read_table("../input/test.tsv")
+print(train.shape)
+print(test.shape)
 
 
-def cache_data(data, path):
-    if not os.path.isdir('cache'):
-        os.mkdir('cache')
-    if os.path.isdir(os.path.dirname(path)):
-        file = open(path, 'wb')
-        pickle.dump(data, file)
-        file.close()
-    else:
-        print('Directory doesnt exists')
+# In[ ]:
 
 
-def restore_data(path):
-    data = dict()
-    if os.path.isfile(path):
-        print('Restore data from pickle........')
-        file = open(path, 'rb')
-        data = pickle.load(file)
-    return data
+#HANDLE MISSING VALUES
+print("Handling missing values...")
+def handle_missing(dataset):
+    dataset.category_name.fillna(value="missing", inplace=True)
+    dataset.brand_name.fillna(value="missing", inplace=True)
+    dataset.item_description.fillna(value="missing", inplace=True)
+    return (dataset)
+
+train = handle_missing(train)
+test = handle_missing(test)
+print(train.shape)
+print(test.shape)
 
 
-def save_model(model, index, cross=''):
-    json_string = model.to_json()
-    if not os.path.isdir('cache'):
-        os.mkdir('cache')
-    json_name = 'architecture' + str(index) + cross + '.json'
-    weight_name = 'model_weights' + str(index) + cross + '.h5'
-    open(os.path.join('cache', json_name), 'w').write(json_string)
-    model.save_weights(os.path.join('cache', weight_name), overwrite=True)
+# In[ ]:
 
 
-def read_model(index, cross=''):
-    json_name = 'architecture' + str(index) + cross + '.json'
-    weight_name = 'model_weights' + str(index) + cross + '.h5'
-    model = model_from_json(open(os.path.join('cache', json_name)).read())
-    model.load_weights(os.path.join('cache', weight_name))
+train.head(3)
+
+
+# In[ ]:
+
+
+#PROCESS CATEGORICAL DATA
+print("Handling categorical variables...")
+le = LabelEncoder()
+
+le.fit(np.hstack([train.category_name, test.category_name]))
+train.category_name = le.transform(train.category_name)
+test.category_name = le.transform(test.category_name)
+
+le.fit(np.hstack([train.brand_name, test.brand_name]))
+train.brand_name = le.transform(train.brand_name)
+test.brand_name = le.transform(test.brand_name)
+del le
+
+train.head(3)
+
+
+# In[ ]:
+
+
+#PROCESS TEXT: RAW
+print("Text to seq process...")
+from keras.preprocessing.text import Tokenizer
+raw_text = np.hstack([train.item_description.str.lower(), train.name.str.lower()])
+
+print("   Fitting tokenizer...")
+tok_raw = Tokenizer()
+tok_raw.fit_on_texts(raw_text)
+print("   Transforming text to seq...")
+
+train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
+test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
+train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
+test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
+train.head(3)
+
+
+# In[ ]:
+
+
+#SEQUENCES VARIABLES ANALYSIS
+max_name_seq = np.max([np.max(train.seq_name.apply(lambda x: len(x))), np.max(test.seq_name.apply(lambda x: len(x)))])
+max_seq_item_description = np.max([np.max(train.seq_item_description.apply(lambda x: len(x)))
+                                   , np.max(test.seq_item_description.apply(lambda x: len(x)))])
+print("max name seq "+str(max_name_seq))
+print("max item desc seq "+str(max_seq_item_description))
+
+
+# In[ ]:
+
+
+train.seq_name.apply(lambda x: len(x)).hist()
+
+
+# In[ ]:
+
+
+train.seq_item_description.apply(lambda x: len(x)).hist()
+
+
+# In[ ]:
+
+
+#EMBEDDINGS MAX VALUE
+#Base on the histograms, we select the next lengths
+MAX_NAME_SEQ = 10
+MAX_ITEM_DESC_SEQ = 75
+MAX_TEXT = np.max([np.max(train.seq_name.max())
+                   , np.max(test.seq_name.max())
+                  , np.max(train.seq_item_description.max())
+                  , np.max(test.seq_item_description.max())])+2
+MAX_CATEGORY = np.max([train.category_name.max(), test.category_name.max()])+1
+MAX_BRAND = np.max([train.brand_name.max(), test.brand_name.max()])+1
+MAX_CONDITION = np.max([train.item_condition_id.max(), test.item_condition_id.max()])+1
+
+
+# In[ ]:
+
+
+#SCALE target variable
+train["target"] = np.log(train.price+1)
+target_scaler = MinMaxScaler(feature_range=(-1, 1))
+train["target"] = target_scaler.fit_transform(train.target.reshape(-1,1))
+pd.DataFrame(train.target).hist()
+
+
+# In[ ]:
+
+
+#EXTRACT DEVELOPTMENT TEST
+dtrain, dvalid = train_test_split(train, random_state=123, train_size=0.99)
+print(dtrain.shape)
+print(dvalid.shape)
+
+
+# In[ ]:
+
+
+#KERAS DATA DEFINITION
+from keras.preprocessing.sequence import pad_sequences
+
+def get_keras_data(dataset):
+    X = {
+        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
+        ,'item_desc': pad_sequences(dataset.seq_item_description, maxlen=MAX_ITEM_DESC_SEQ)
+        ,'brand_name': np.array(dataset.brand_name)
+        ,'category_name': np.array(dataset.category_name)
+        ,'item_condition': np.array(dataset.item_condition_id)
+        ,'num_vars': np.array(dataset[["shipping"]])
+    }
+    return X
+
+X_train = get_keras_data(dtrain)
+X_valid = get_keras_data(dvalid)
+X_test = get_keras_data(test)
+
+
+# In[ ]:
+
+
+#KERAS MODEL DEFINITION
+from keras.layers import Input, Dropout, Dense, BatchNormalization, Activation, concatenate, GRU, Embedding, Flatten, BatchNormalization
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from keras import backend as K
+
+def get_callbacks(filepath, patience=2):
+    es = EarlyStopping('val_loss', patience=patience, mode="min")
+    msave = ModelCheckpoint(filepath, save_best_only=True)
+    return [es, msave]
+
+def rmsle_cust(y_true, y_pred):
+    first_log = K.log(K.clip(y_pred, K.epsilon(), None) + 1.)
+    second_log = K.log(K.clip(y_true, K.epsilon(), None) + 1.)
+    return K.sqrt(K.mean(K.square(first_log - second_log), axis=-1))
+
+def get_model():
+    #params
+    dr_r = 0.1
+    
+    #Inputs
+    name = Input(shape=[X_train["name"].shape[1]], name="name")
+    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
+    brand_name = Input(shape=[1], name="brand_name")
+    category_name = Input(shape=[1], name="category_name")
+    item_condition = Input(shape=[1], name="item_condition")
+    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
+    
+    #Embeddings layers
+    emb_name = Embedding(MAX_TEXT, 50)(name)
+    emb_item_desc = Embedding(MAX_TEXT, 50)(item_desc)
+    emb_brand_name = Embedding(MAX_BRAND, 10)(brand_name)
+    emb_category_name = Embedding(MAX_CATEGORY, 10)(category_name)
+    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
+    
+    #rnn layer
+    rnn_layer1 = GRU(16) (emb_item_desc)
+    rnn_layer2 = GRU(8) (emb_name)
+    
+    #main layer
+    main_l = concatenate([
+        Flatten() (emb_brand_name)
+        , Flatten() (emb_category_name)
+        , Flatten() (emb_item_condition)
+        , rnn_layer1
+        , rnn_layer2
+        , num_vars
+    ])
+    main_l = Dropout(dr_r) (Dense(128) (main_l))
+    main_l = Dropout(dr_r) (Dense(64) (main_l))
+    
+    #output
+    output = Dense(1, activation="linear") (main_l)
+    
+    #model
+    model = Model([name, item_desc, brand_name
+                   , category_name, item_condition, num_vars], output)
+    model.compile(loss="mse", optimizer="adam", metrics=["mae", rmsle_cust])
+    
     return model
 
-
-def split_validation_set(train, target, test_size):
-    random_state = 51
-    X_train, X_test, y_train, y_test =         train_test_split(train, target,
-                         test_size=test_size,
-                         random_state=random_state)
-    return X_train, X_test, y_train, y_test
+    
+model = get_model()
+model.summary()
+    
 
 
-def create_submission(predictions, test_id, info):
-    result1 = pd.DataFrame(predictions, columns=['c0', 'c1', 'c2', 'c3',
-                                                 'c4', 'c5', 'c6', 'c7',
-                                                 'c8', 'c9'])
-    result1.loc[:, 'img'] = pd.Series(test_id, index=result1.index)
-    now = datetime.datetime.now()
-    if not os.path.isdir('subm'):
-        os.mkdir('subm')
-    suffix = info + '_' + str(now.strftime("%Y-%m-%d-%H-%M"))
-    sub_file = os.path.join('subm', 'submission_' + suffix + '.csv')
-    result1.to_csv(sub_file, index=False)
+# In[ ]:
 
 
-def read_and_normalize_and_shuffle_train_data(img_rows, img_cols,
-                                              color_type=1):
+#FITTING THE MODEL
+BATCH_SIZE = 20000
+epochs = 5
 
-    cache_path = os.path.join('cache', 'train_r_' + str(img_rows) +
-                              '_c_' + str(img_cols) + '_t_' +
-                              str(color_type) + '.dat')
-
-    if not os.path.isfile(cache_path) or use_cache == 0:
-        train_data, train_target, driver_id, unique_drivers =             load_train(img_rows, img_cols, color_type)
-        cache_data((train_data, train_target, driver_id, unique_drivers),
-                   cache_path)
-    else:
-        print('Restore train from cache!')
-        (train_data, train_target, driver_id, unique_drivers) =             restore_data(cache_path)
-
-    train_data = np.array(train_data, dtype=np.uint8)
-    train_target = np.array(train_target, dtype=np.uint8)
-
-    if color_type == 1:
-        train_data = train_data.reshape(train_data.shape[0], color_type,
-                                        img_rows, img_cols)
-    else:
-        train_data = train_data.transpose((0, 3, 1, 2))
-
-    train_target = np_utils.to_categorical(train_target, 10)
-    train_data = train_data.astype('float32')
-    mean_pixel = [103.939, 116.779, 123.68]
-    for c in range(3):
-        train_data[:, c, :, :] = train_data[:, c, :, :] - mean_pixel[c]
-    # train_data /= 255
-    perm = permutation(len(train_target))
-    train_data = train_data[perm]
-    train_target = train_target[perm]
-    print('Train shape:', train_data.shape)
-    print(train_data.shape[0], 'train samples')
-    return train_data, train_target, driver_id, unique_drivers
+model = get_model()
+model.fit(X_train, dtrain.target, epochs=epochs, batch_size=BATCH_SIZE
+          , validation_data=(X_valid, dvalid.target)
+          , verbose=1)
 
 
-def read_and_normalize_test_data(img_rows=224, img_cols=224, color_type=1):
-    cache_path = os.path.join('cache', 'test_r_' + str(img_rows) +
-                              '_c_' + str(img_cols) + '_t_' +
-                              str(color_type) + '.dat')
-    if not os.path.isfile(cache_path) or use_cache == 0:
-        test_data, test_id = load_test(img_rows, img_cols, color_type)
-        cache_data((test_data, test_id), cache_path)
-    else:
-        print('Restore test from cache!')
-        (test_data, test_id) = restore_data(cache_path)
-
-    test_data = np.array(test_data, dtype=np.uint8)
-
-    if color_type == 1:
-        test_data = test_data.reshape(test_data.shape[0], color_type,
-                                      img_rows, img_cols)
-    else:
-        test_data = test_data.transpose((0, 3, 1, 2))
-
-    test_data = test_data.astype('float32')
-    mean_pixel = [103.939, 116.779, 123.68]
-    for c in range(3):
-        test_data[:, c, :, :] = test_data[:, c, :, :] - mean_pixel[c]
-    # test_data /= 255
-    print('Test shape:', test_data.shape)
-    print(test_data.shape[0], 'test samples')
-    return test_data, test_id
+# In[ ]:
 
 
-def dict_to_list(d):
-    ret = []
-    for i in d.items():
-        ret.append(i[1])
-    return ret
+#EVLUEATE THE MODEL ON DEV TEST: What is it doing?
+val_preds = model.predict(X_valid)
+val_preds = target_scaler.inverse_transform(val_preds)
+val_preds = np.exp(val_preds)+1
+
+#mean_absolute_error, mean_squared_log_error
+y_true = np.array(dvalid.price.values)
+y_pred = val_preds[:,0]
+v_rmsle = rmsle(y_true, y_pred)
+print(" RMSLE error on dev test: "+str(v_rmsle))
 
 
-def merge_several_folds_mean(data, nfolds):
-    a = np.array(data[0])
-    for i in range(1, nfolds):
-        a += np.array(data[i])
-    a /= nfolds
-    return a.tolist()
+# In[ ]:
 
 
-def merge_several_folds_geom(data, nfolds):
-    a = np.array(data[0])
-    for i in range(1, nfolds):
-        a *= np.array(data[i])
-    a = np.power(a, 1/nfolds)
-    return a.tolist()
+#CREATE PREDICTIONS
+preds = model.predict(X_test, batch_size=BATCH_SIZE)
+preds = target_scaler.inverse_transform(preds)
+preds = np.exp(preds)-1
+
+submission = test[["test_id"]]
+submission["price"] = preds
 
 
-def copy_selected_drivers(train_data, train_target, driver_id, driver_list):
-    data = []
-    target = []
-    index = []
-    for i in range(len(driver_id)):
-        if driver_id[i] in driver_list:
-            data.append(train_data[i])
-            target.append(train_target[i])
-            index.append(i)
-    data = np.array(data, dtype=np.float32)
-    target = np.array(target, dtype=np.float32)
-    index = np.array(index, dtype=np.uint32)
-    return data, target, index
+# In[ ]:
 
 
-def vgg_std16_model(img_rows, img_cols, color_type=1):
-    model = Sequential()
-    model.add(ZeroPadding2D((1, 1), input_shape=(color_type,
-                                                 img_rows, img_cols)))
-    model.add(Convolution2D(64, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(64, 3, 3, activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(128, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(128, 3, 3, activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(256, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(256, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(256, 3, 3, activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Convolution2D(512, 3, 3, activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-
-    model.add(Flatten())
-    model.add(Dense(4096, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(4096, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(1000, activation='softmax'))
-
-    model.load_weights('../input/vgg16_weights.h5')
-
-    # Code above loads pre-trained data and
-    model.layers.pop()
-    model.add(Dense(10, activation='softmax'))
-    # Learning rate is changed to 0.001
-    sgd = SGD(lr=1e-3, decay=1e-6, momentum=0.9, nesterov=True)
-    model.compile(optimizer=sgd, loss='categorical_crossentropy')
-    return model
+submission.to_csv("./myNNsubmission.csv", index=False)
+submission.price.hist()
 
 
-def run_cross_validation(nfolds=10, nb_epoch=10, split=0.2, modelStr=''):
-
-    # Now it loads color image
-    # input image dimensions
-    img_rows, img_cols = 224, 224
-    batch_size = 64
-    random_state = 20
-
-    train_data, train_target, driver_id, unique_drivers =         read_and_normalize_and_shuffle_train_data(img_rows, img_cols,
-                                                  color_type_global)
-
-    # ishuf_train_data = []
-    # shuf_train_target = []
-    # index_shuf = range(len(train_target))
-    # shuffle(index_shuf)
-    # for i in index_shuf:
-    #     shuf_train_data.append(train_data[i])
-    #     shuf_train_target.append(train_target[i])
-
-    # yfull_train = dict()
-    # yfull_test = []
-    num_fold = 0
-    kf = KFold(len(unique_drivers), n_folds=nfolds,
-               shuffle=True, random_state=random_state)
-    for train_drivers, test_drivers in kf:
-        num_fold += 1
-        print('Start KFold number {} from {}'.format(num_fold, nfolds))
-        # print('Split train: ', len(X_train), len(Y_train))
-        # print('Split valid: ', len(X_valid), len(Y_valid))
-        # print('Train drivers: ', unique_list_train)
-        # print('Test drivers: ', unique_list_valid)
-        # model = create_model_v1(img_rows, img_cols, color_type_global)
-        # model = vgg_bn_model(img_rows, img_cols, color_type_global)
-        model = vgg_std16_model(img_rows, img_cols, color_type_global)
-
-        model.fit(train_data, train_target, batch_size=batch_size,
-                  nb_epoch=nb_epoch,
-                  show_accuracy=True, verbose=1,
-                  validation_split=split, shuffle=True)
-
-        # print('losses: ' + hist.history.losses[-1])
-
-        # print('Score log_loss: ', score[0])
-
-        save_model(model, num_fold, modelStr)
-
-        # predictions_valid = model.predict(X_valid, batch_size=128, verbose=1)
-        # score = log_loss(Y_valid, predictions_valid)
-        # print('Score log_loss: ', score)
-        # Store valid predictions
-        # for i in range(len(test_index)):
-        #    yfull_train[test_index[i]] = predictions_valid[i]
-
-    print('Start testing............')
-    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols,
-                                                      color_type_global)
-    yfull_test = []
-
-    for index in range(1, num_fold + 1):
-        # 1,2,3,4,5
-        # Store test predictions
-        model = read_model(index, modelStr)
-        test_prediction = model.predict(test_data, batch_size=128, verbose=1)
-        yfull_test.append(test_prediction)
-
-    info_string = 'loss_' + modelStr                   + '_r_' + str(img_rows)                   + '_c_' + str(img_cols)                   + '_folds_' + str(nfolds)                   + '_ep_' + str(nb_epoch)
-
-    test_res = merge_several_folds_mean(yfull_test, nfolds)
-    create_submission(test_res, test_id, info_string)
-
-
-def test_model_and_submit(start=1, end=1, modelStr=''):
-    img_rows, img_cols = 224, 224
-    # batch_size = 64
-    # random_state = 51
-    nb_epoch = 15
-
-    print('Start testing............')
-    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols,
-                                                      color_type_global)
-    yfull_test = []
-
-    for index in range(start, end + 1):
-        # Store test predictions
-        model = read_model(index, modelStr)
-        test_prediction = model.predict(test_data, batch_size=128, verbose=1)
-        yfull_test.append(test_prediction)
-
-    info_string = 'loss_' + modelStr                   + '_r_' + str(img_rows)                   + '_c_' + str(img_cols)                   + '_folds_' + str(end - start + 1)                   + '_ep_' + str(nb_epoch)
-
-    test_res = merge_several_folds_mean(yfull_test, end - start + 1)
-    create_submission(test_res, test_id, info_string)
-
-# nfolds, nb_epoch, split
-run_cross_validation(2, 20, 0.15, '_vgg_16_2x20')
-
-# nb_epoch, split
-# run_one_fold_cross_validation(10, 0.1)
-
-# test_model_and_submit(1, 10, 'high_epoch')
-
+# This was just an example how nn can solve this problems. Potencial improvements of the kernel:
+#     - Increase the embeddings factos
+#     - Decrease the batch size
+#     - Add Batch Normalization
+#     - Try LSTM, Bidirectional RNN, stack RNN
+#     - Try with more dense layers or more rnn outputs
+#     -  etc. Or even try a new architecture!
+#     
+# Any comment will be welcome. Thanks!
+#  
+#     

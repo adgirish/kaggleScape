@@ -1,246 +1,207 @@
 
 # coding: utf-8
 
-# <h3>Note:  in the Discussion section they said that data from figshare has some overlap with the current test set (https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/46177). So it's possible that using features/scores based on this data may overfit to the current test set.  Once they change the test set, the LB scores may change.
-# So at this point, I think it's hard to tell whether using features based on these datasets will ultimately help your LB score. It may still help, but we won't know for sure until the new test set is released.<h3>
-
-# **The idea for this kernel is to use the public datasets at https://conversationai.github.io/ to train models and use those models to score the train and test sets for this challenge. You can then use the scores as features when training the real models. So the output of this kernel isn't meant to be submitted as is. The output is the original train/test datasets, with additional columns/features.**
+# ## Gradient boosting from scratch
+# ### Medium post with explaination: https://medium.com/@pgrover3/gradient-boosting-from-scratch-1e317ae4587d
 # 
-# Using these enhanced train/test sets improved my logistic-regression based models from 0.047 to 0.044 log-loss. I haven't done much if any tuning for these models below, so you should be able to tweak things and get even better results.
-# 
-# I understand that there are PerspectiveAPI models that may be similar. But rather than wait for an API key, and so I could play around with the models more myself, I trained the models in this kernel.
+
+# The logic of **gradient boosting** is very simple (if explained intuitively, without using mathematical notation). I expect that whoever is reading this would have done simple linear regression modeling.
+# One of the very basic assumption of linear regression is that it's sum of residuals is 0. Although, tree based models are not based on any of such assumptions, but if we think logic (not statistics) behind these assumptions, we might argue that, if sum of residuals is not 0, then most probably there is some pattern in the residuals of our model which can be leveraged to make our model better.
+# So, the intuition behind gradient boosting algorithm is to `leverage the pattern in residuals and strenghten a weak prediction model, until our residuals become randomly (maybe random normal too) distributed`. Once we reach a stage that residuals do not have any pattern that could be modeled, we can stop modeling residuals (otherwise it might lead to overfitting). Algorithmically, we are minimizing our loss function, such that test loss reach it’s minima.
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-
-# In[ ]:
-
-
-toxic_cmt = pd.read_table('../input/conversationaidataset/toxicity_annotated_comments.tsv')
-toxic_annot = pd.read_table('../input/conversationaidataset/toxicity_annotations.tsv')
-aggr_cmt = pd.read_table('../input/conversationaidataset/aggression_annotated_comments.tsv')
-aggr_annot = pd.read_table('../input/conversationaidataset/aggression_annotations.tsv')
-attack_cmt = pd.read_table('../input/conversationaidataset/attack_annotated_comments.tsv')
-attack_annot = pd.read_table('../input/conversationaidataset/attack_annotations.tsv')
-
-
-# **Find the mean score for toxicity, aggression, attack, and join with the corresponding comment**
-# For each comment/rev_id, multiple workers have labeld/annotated. So then you have to decide what your overall label is for a given comment/rev_id. I simply took the mean value, and will train a regression model. You could try other aggregations/methods. You could, e.g., instead go with majority vote, and train binary classifiers, etc.
-
-# In[ ]:
-
-
-def JoinAndSanitize(cmt, annot):
-    df = cmt.set_index('rev_id').join(annot.groupby(['rev_id']).mean())
-    df = Sanitize(df)
-    return df
-
-
-# **Basic cleaning/standardizing -- can potentially do more (or less) here**
-
-# In[ ]:
-
-
-def Sanitize(df):
-    comment = 'comment' if 'comment' in df else 'comment_text'
-    df[comment] = df[comment].str.lower().str.replace('newline_token', ' ')
-    df[comment] = df[comment].fillna('erikov')
-    return df
+import pandas as pd
+import numpy as np
+from IPython.display import display
+from fastai.imports import *
+from sklearn import metrics
 
 
 # In[ ]:
 
 
-toxic = JoinAndSanitize(toxic_cmt, toxic_annot)
-attack = JoinAndSanitize(attack_cmt, attack_annot)
-aggression = JoinAndSanitize(aggr_cmt, aggr_annot)
+class DecisionTree():
+    def __init__(self, x, y, idxs = None, min_leaf=2):
+        if idxs is None: idxs=np.arange(len(y))
+        self.x,self.y,self.idxs,self.min_leaf = x,y,idxs,min_leaf
+        self.n,self.c = len(idxs), x.shape[1]
+        self.val = np.mean(y[idxs])
+        self.score = float('inf')
+        self.find_varsplit()
+        
+    def find_varsplit(self):
+        for i in range(self.c): self.find_better_split(i)
+        if self.score == float('inf'): return
+        x = self.split_col
+        lhs = np.nonzero(x<=self.split)[0]
+        rhs = np.nonzero(x>self.split)[0]
+        self.lhs = DecisionTree(self.x, self.y, self.idxs[lhs])
+        self.rhs = DecisionTree(self.x, self.y, self.idxs[rhs])
 
+    def find_better_split(self, var_idx):
+        x,y = self.x.values[self.idxs,var_idx], self.y[self.idxs]
+        sort_idx = np.argsort(x)
+        sort_y,sort_x = y[sort_idx], x[sort_idx]
+        rhs_cnt,rhs_sum,rhs_sum2 = self.n, sort_y.sum(), (sort_y**2).sum()
+        lhs_cnt,lhs_sum,lhs_sum2 = 0,0.,0.
 
-# **The attack and aggression labeled datasets are actually the same with only very slightly different annotations/labels**
-# So probably only the scores from one model will be needed, but I left both here for completeness.
+        for i in range(0,self.n-self.min_leaf-1):
+            xi,yi = sort_x[i],sort_y[i]
+            lhs_cnt += 1; rhs_cnt -= 1
+            lhs_sum += yi; rhs_sum -= yi
+            lhs_sum2 += yi**2; rhs_sum2 -= yi**2
+            if i<self.min_leaf or xi==sort_x[i+1]:
+                continue
 
-# In[ ]:
+            lhs_std = std_agg(lhs_cnt, lhs_sum, lhs_sum2)
+            rhs_std = std_agg(rhs_cnt, rhs_sum, rhs_sum2)
+            curr_score = lhs_std*lhs_cnt + rhs_std*rhs_cnt
+            if curr_score<self.score: 
+                self.var_idx,self.score,self.split = var_idx,curr_score,xi
 
-
-len(attack), len(aggression)
-
-
-# In[ ]:
-
-
-attack['comment'].equals(aggression['comment'])
-
-
-# Check how correlated the mean value for the annotations between the attack and aggression datasets are
-
-# In[ ]:
-
-
-attack['attack'].corr(aggression['aggression'])
-
-
-# **Check dataset**
-
-# In[ ]:
-
-
-toxic.head()
-#attack.head()
-#aggression.head()
-
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-def Tfidfize(df):
-    # can tweak these as desired
-    max_vocab = 200000
-    split = 0.1
-
-    comment = 'comment' if 'comment' in df else 'comment_text'
+    @property
+    def split_name(self): return self.x.columns[self.var_idx]
     
-    tfidfer = TfidfVectorizer(ngram_range=(1,2), max_features=max_vocab,
-                   use_idf=1, stop_words='english',
-                   smooth_idf=1, sublinear_tf=1 )
-    tfidf = tfidfer.fit_transform(df[comment])
+    @property
+    def split_col(self): return self.x.values[self.idxs,self.var_idx]
 
-    return tfidf, tfidfer
-
-
-# Get the tfidf values for the training sets, as well as the fit tfidf vectorizer to be used later to transform the train/test sets for the real challenge datasets.
-
-# In[ ]:
-
-
-X_toxic, tfidfer_toxic = Tfidfize(toxic)
-y_toxic = toxic['toxicity'].values
-X_attack, tfidfer_attack = Tfidfize(attack)
-y_attack = attack['attack'].values
-X_aggression, tfidfer_aggression = Tfidfize(aggression)
-y_aggression = aggression['aggression'].values
-
-
-# **Model Training Strategy**
-# 
-# Rather than converting the 'toxicity', 'attack', 'aggression' into a binary label (e.g., >= 0.5), let's train a regression model to use as much information as possible. The output score from these models could be used as features in training the further refined models in the current challenge ('severe_toxic', 'obscene', etc.).
-# 
-# The toxicity/attack/aggression may not have a 1-1 mapping with the desired targets for the challenge, but they may be features that can help.
-
-# In[ ]:
-
-
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import cross_val_score
-
-ridge = Ridge()
-mse_toxic = -cross_val_score(ridge, X_toxic, y_toxic, scoring='neg_mean_squared_error')
-mse_attack = -cross_val_score(ridge, X_attack, y_attack, scoring='neg_mean_squared_error')
-mse_aggression = -cross_val_score(ridge, X_aggression, y_aggression, scoring='neg_mean_squared_error')
-
-
-# In[ ]:
-
-
-mse_toxic.mean(), mse_attack.mean(), mse_aggression.mean()
-
-
-# **If the cross-validation scores look okay, train on the full dataset**
-
-# In[ ]:
-
-
-model_toxic = ridge.fit(X_toxic, y_toxic)
-model_attack = ridge.fit(X_attack, y_attack)
-model_aggression = ridge.fit(X_aggression, y_aggression)
-
-
-# **Now score the original train and test sets, and save out as an additional feature for those datasets. (These can then be used when training/scoring with our real model**
-
-# In[ ]:
-
-
-train_orig = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test_orig = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-
-
-# In[ ]:
-
-
-train_orig = Sanitize(train_orig)
-test_orig = Sanitize(test_orig)
-
-
-# In[ ]:
-
-
-def TfidfAndPredict(tfidfer, model):
-    tfidf_train = tfidfer.transform(train_orig['comment_text'])
-    tfidf_test = tfidfer.transform(test_orig['comment_text'])
-    train_scores = model.predict(tfidf_train)
-    test_scores = model.predict(tfidf_test)
+    @property
+    def is_leaf(self): return self.score == float('inf')
     
-    return train_scores, test_scores
+    def __repr__(self):
+        s = f'n: {self.n}; val:{self.val}'
+        if not self.is_leaf:
+            s += f'; score:{self.score}; split:{self.split}; var:{self.split_name}'
+        return s
+
+    def predict(self, x):
+        return np.array([self.predict_row(xi) for xi in x])
+
+    def predict_row(self, xi):
+        if self.is_leaf: return self.val
+        t = self.lhs if xi[self.var_idx]<=self.split else self.rhs
+        return t.predict_row(xi)
+
+
+# ## Data simulation
+
+# In[ ]:
+
+
+x = np.arange(0,50)
+x = pd.DataFrame({'x':x})
 
 
 # In[ ]:
 
 
-toxic_tr_scores, toxic_t_scores = TfidfAndPredict(tfidfer_toxic, model_toxic)
+# just random uniform distributions in differnt range
+
+y1 = np.random.uniform(10,15,10)
+y2 = np.random.uniform(20,25,10)
+y3 = np.random.uniform(0,5,10)
+y4 = np.random.uniform(30,32,10)
+y5 = np.random.uniform(13,17,10)
+
+y = np.concatenate((y1,y2,y3,y4,y5))
+y = y[:,None]
+
+
+# ## Scatter plot of data
+
+# In[ ]:
+
+
+x.shape, y.shape
 
 
 # In[ ]:
 
 
-toxic_tr_scores.shape, toxic_t_scores.shape
+plt.figure(figsize=(7,5))
+plt.plot(x,y, 'o')
+plt.title("Scatter plot of x vs. y")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.show()
+
+
+# ## Gradient Boosting (DecisionTrees in a loop)
+# 
+
+# In[ ]:
+
+
+def std_agg(cnt, s1, s2): return math.sqrt((s2/cnt) - (s1/cnt)**2)
 
 
 # In[ ]:
 
 
-attack_tr_scores, attack_t_scores = TfidfAndPredict(tfidfer_attack, model_attack)
+xi = x # initialization of input
+yi = y # initialization of target
+# x,y --> use where no need to change original y
+ei = 0 # initialization of error
+n = len(yi)  # number of rows
+predf = 0 # initial prediction 0
+
+for i in range(30): # like n_estimators
+    tree = DecisionTree(xi,yi)
+    tree.find_better_split(0)
+    
+    r = np.where(xi == tree.split)[0][0]    
+    
+    left_idx = np.where(xi <= tree.split)[0]
+    right_idx = np.where(xi > tree.split)[0]
+    
+    predi = np.zeros(n)
+    np.put(predi, left_idx, np.repeat(np.mean(yi[left_idx]), r))  # replace left side mean y
+    np.put(predi, right_idx, np.repeat(np.mean(yi[right_idx]), n-r))  # right side mean y
+    
+    predi = predi[:,None]  # make long vector (nx1) in compatible with y
+    predf = predf + predi  # final prediction will be previous prediction value + new prediction of residual
+    
+    ei = y - predf  # needed originl y here as residual always from original y    
+    yi = ei # update yi as residual to reloop
+    
+    
+    # plotting after prediction
+    xa = np.array(x.x) # column name of x is x 
+    order = np.argsort(xa)
+    xs = np.array(xa)[order]
+    ys = np.array(predf)[order]
+    
+    #epreds = np.array(epred[:,None])[order]
+
+    f, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize = (13,2.5))
+
+    ax1.plot(x,y, 'o')
+    ax1.plot(xs, ys, 'r')
+    ax1.set_title(f'Prediction (Iteration {i+1})')
+    ax1.set_xlabel('x')
+    ax1.set_ylabel('y / y_pred')
+
+    ax2.plot(x, ei, 'go')
+    ax2.set_title(f'Residuals vs. x (Iteration {i+1})')
+    ax2.set_xlabel('x')
+    ax2.set_ylabel('Residuals')
+    
+    
 
 
-# In[ ]:
+# Errors are not changing much after `20th iteration` and pattern in residuals is also removed. Residuals look distributed around the mean
 
+# ### Maths behind this logic
 
-attack_tr_scores.shape, attack_t_scores.shape
+# $ Predictions = y_i^p $  
+# $ Loss = L(y_i, y_i^p) $  
+# $ Loss = MSE = \sum {(y_i - y_i^p)}^2 $  
+# $ y_i^p = y_i^p + \alpha * \delta {L(y_i, y_i^p)}/ \delta{y_i^p } $  
+# $ y_i^p = y_i^p + \alpha * \delta {\sum {(y_i - y_i^p)}^2}/ \delta{y_i^p } $  
+# $ y_i^p = y_i^p - \alpha * 2*{\sum {(y_i - y_i^p)}} $  
 
-
-# In[ ]:
-
-
-aggression_tr_scores, aggression_t_scores = TfidfAndPredict(tfidfer_aggression, model_aggression)
-
-
-# In[ ]:
-
-
-aggression_tr_scores.shape, aggression_t_scores.shape
-
-
-# **Ok, now write out these scores alongside the original train and test datasets**
-
-# In[ ]:
-
-
-# toxic_level, to not be confused with original label 'toxic'
-train_orig['toxic_level'] = toxic_tr_scores
-train_orig['attack'] = attack_tr_scores
-train_orig['aggression'] = aggression_tr_scores
-test_orig['toxic_level'] = toxic_t_scores
-test_orig['attack'] = attack_t_scores
-test_orig['aggression'] = aggression_t_scores
-
-
-# In[ ]:
-
-
-train_orig.to_csv('train_with_convai.csv', index=False)
-test_orig.to_csv('test_with_convai.csv', index=False)
-
+# where, $y_i$ = ith target value, $y_i^p$ = ith prediction, $ L(y_i, y_i^p) $ is Loss function, $\alpha$ is learning rate. So the last equation tells us that, we need to adjust predictions based on our residuals, i.e. $\sum {(y_i - y_i^p)}$. This is what we did, we adjusted our predictions using the fit on residuals. (accordingly adjusting value of $\alpha$

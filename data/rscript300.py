@@ -1,325 +1,269 @@
-# -*- coding: utf-8 -*-
+from csv import DictReader
+from math import sqrt, log, expm1
+from datetime import datetime
 
-import numpy as np
-np.random.seed(2016)
-
-import os
-import glob
-import cv2
-import math
-import pickle
-import datetime
-import pandas as pd
-import statistics
-
-from sklearn.cross_validation import train_test_split
-from sklearn.cross_validation import KFold
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D
-from keras.optimizers import SGD
-from keras.utils import np_utils
-from keras.models import model_from_json
-from sklearn.metrics import log_loss
-from scipy.misc import imread, imresize
-
-use_cache = 1
-# color type: 1 - grey, 3 - rgb
-color_type_global = 1
+# TL; DR, the main training process starts on line: 250,
+# you may want to start reading the code from there
 
 
-# color_type = 1 - gray
-# color_type = 3 - RGB
-def get_im_skipy(path, img_rows, img_cols, color_type=1):
-    # Load as grayscale
-    if color_type == 1:
-        img = imread(path, True)
-    elif color_type == 3:
-        img = imread(path)
-    # Reduce size
-    resized = imresize(img, (img_cols, img_rows))
-    return resized
+##############################################################################
+# parameters #################################################################
+##############################################################################
+
+# A, paths
+train = '../input/train.csv'               # path to training file
+test = '../input/test.csv'                 # path to testing file
+submission = 'submission.csv'  # path of to be outputted submission file
+
+# B, model
+alpha = .02  # learning rate
+beta = 1.   # smoothing parameter for adaptive learning rate
+L1 = 0.     # L1 regularization, larger value means more regularized
+L2 = 1.     # L2 regularization, larger value means more regularized
+
+# C, feature/hash trick
+D = 2 ** 23             # number of weights to use
+interaction = True     # whether to enable poly2 feature interactions
+
+# D, training/validation
+epoch = 3  # learn training data for N passes
+holdout = 9  # use week holdout validation
 
 
-def get_im_cv2(path, img_rows, img_cols, color_type=1):
-    # Load as grayscale
-    if color_type == 1:
-        img = cv2.imread(path, 0)
-    elif color_type == 3:
-        img = cv2.imread(path)
-    # Reduce size
-    resized = cv2.resize(img, (img_cols, img_rows))
-    return resized
+##############################################################################
+# class, function, generator definitions #####################################
+##############################################################################
+
+class ftrl_proximal(object):
+    ''' Our main algorithm: Follow the regularized leader - proximal
+
+        In short,
+        this is an adaptive-learning-rate sparse regression with
+        efficient L1-L2-regularization
+
+        Reference:
+        http://www.eecs.tufts.edu/~dsculley/papers/ad-click-prediction.pdf
+    '''
+
+    def __init__(self, alpha, beta, L1, L2, D, interaction):
+        # parameters
+        self.alpha = alpha
+        self.beta = beta
+        self.L1 = L1
+        self.L2 = L2
+
+        # feature related parameters
+        self.D = D
+        self.interaction = interaction
+
+        # model
+        # n: squared sum of past gradients
+        # z: weights
+        # w: lazy weights
+        self.n = [0.] * D
+        self.z = [0.] * D
+        self.w = {}
+
+    def _indices(self, x):
+        ''' A helper generator that yields the indices in x
+
+            The purpose of this generator is to make the following
+            code a bit cleaner when doing feature interaction.
+        '''
+
+        # first yield index of the bias term
+        yield 0
+
+        # then yield the normal indices
+        for index in x:
+            yield index
+
+        # now yield interactions (if applicable)
+        if self.interaction:
+            D = self.D
+            L = len(x)
+            for i in range(L):
+                for j in range(i+1, L):
+                    yield abs(hash(str(x[i]) + '_' + str(x[j]))) % D
+                    for k in range(j+1, L):
+                        yield abs(hash(str(x[i]) + '_' + str(x[j]) +
+                                  '_' + str(x[k]))) % D
+                        for l in range(k+1, L):
+                            yield abs(hash(str(x[i]) + '_' + str(x[j]) +
+                                      '_' + str(x[k]) + '_' + str(x[l]))) % D
+
+    def predict(self, x):
+        ''' Get demand estimation on x
+
+            INPUT:
+                x: features
+
+            OUTPUT:
+                demand
+        '''
+
+        # parameters
+        alpha = self.alpha
+        beta = self.beta
+        L1 = self.L1
+        L2 = self.L2
+
+        # model
+        n = self.n
+        z = self.z
+        w = {}
+
+        # wTx is the inner product of w and x
+        wTx = 0.
+        for i in self._indices(x):
+            sign = -1. if z[i] < 0 else 1.  # get sign of z[i]
+
+            # build w on the fly using z and n, hence the name - lazy weights
+            # we are doing this at prediction instead of update time is because
+            # this allows us for not storing the complete w
+            if ((L1 > 0) & (sign * z[i] <= L1)):
+                # w[i] vanishes due to L1 regularization
+                w[i] = 0.
+            else:
+                # apply prediction time L1, L2 regularization to z and get w
+                w[i] = (sign * L1 - z[i]) / ((beta + sqrt(n[i])) / alpha + L2)
+
+            wTx += w[i]
+
+        # cache the current w for update stage
+        self.w = w
+
+        # Raw Output
+        return wTx
+
+    def update(self, x, p, y):
+        ''' Update model using x, p, y
+
+            INPUT:
+                x: feature, a list of indices
+                p: demand prediction of our model
+                y: answer
+
+            MODIFIES:
+                self.n: increase by squared gradient
+                self.z: weights
+        '''
+
+        # parameter
+        alpha = self.alpha
+
+        # model
+        n = self.n
+        z = self.z
+        w = self.w
+
+        # gradient under logloss
+        g = p - y
+
+        # update z and n
+        for i in self._indices(x):
+            sigma = (sqrt(n[i] + g * g) - sqrt(n[i])) / alpha
+            z[i] += g - sigma * w[i]
+            n[i] += g * g
 
 
-def get_driver_data():
-    dr = dict()
-    path = os.path.join('..', 'input', 'driver_imgs_list.csv')
-    print('Read drivers data')
-    f = open(path, 'r')
-    line = f.readline()
-    while (1):
-        line = f.readline()
-        if line == '':
-            break
-        arr = line.strip().split(',')
-        dr[arr[2]] = arr[0]
-    f.close()
-    return dr
+def data(path, D):
+    ''' GENERATOR: Apply hash-trick to the original csv row
+                   and for simplicity, we one-hot-encode everything
+
+        INPUT:
+            path: path to training or testing file
+            D: the max index that we can hash to
+
+        YIELDS:
+            ID: id of the instance, mainly useless
+            x: a list of hashed and one-hot-encoded 'indices'
+               we only need the index since all values are either 0 or 1
+            y: y: log(actual demand +1)
+    '''
+
+    for t, row in enumerate(DictReader(open(path))):
+        ID = 0
+        week = 0
+        y = 0.
+        if 'id' in row:
+            ID = row['id']
+            del row['id']
+        if 'Demanda_uni_equil' in row:
+            y = log(float(row['Demanda_uni_equil'])+1.)
+            del row['Demanda_uni_equil']
+        if 'Semana' in row:
+            week = int(row['Semana'])
+            del row['Semana']
+        # build x
+        x = []
+        for key in row:
+            if(key == 'Canal_ID' or key == 'Ruta_SAK' or
+               key == 'Cliente_ID' or key == 'Producto_ID' or
+               key == 'Agencia_ID'):
+                value = row[key]
+                # one-hot encode everything with hash trick
+                index = abs(hash(key + '_' + value)) % D
+                x.append(index)
+
+        yield t, week, ID, x, y
 
 
-def load_train(img_rows, img_cols, color_type=1):
-    X_train = []
-    y_train = []
-    driver_id = []
+##############################################################################
+# start training #############################################################
+##############################################################################
+if __name__ == "__main__":
+    print('Use PYPY!!!!')
+    print('Remove the next line!!!!')
+    exit(0)
+    start = datetime.now()
 
-    driver_data = get_driver_data()
+    # initialize ourselves a learner
+    learner = ftrl_proximal(alpha, beta, L1, L2, D, interaction)
 
-    print('Read train images')
-    for j in range(10):
-        print('Load folder c{}'.format(j))
-        path = os.path.join('..', 'input', 'train', 'c' + str(j), '*.jpg')
-        files = glob.glob(path)
-        for fl in files:
-            flbase = os.path.basename(fl)
-            img = get_im_cv2(fl, img_rows, img_cols, color_type)
-            X_train.append(img)
-            y_train.append(j)
-            driver_id.append(driver_data[flbase])
+    # start training
+    for e in range(epoch):
+        loss = 0.
+        count = 0
+        for t, week, ID, x, y in data(train, D):  # data is a generator
+            #   t: just a instance counter
+            #   week: you know what this is
+            #   ID: id provided in original data
+            #   x: features
+            #   y: log(actual demand + 1)
+            # step 1, get prediction from learner
+            p = learner.predict(x)
+            if((t % 100000) == 0):
+                print(t)
 
-    unique_drivers = sorted(list(set(driver_id)))
-    print('Unique drivers: {}'.format(len(unique_drivers)))
-    print(unique_drivers)
-    return X_train, y_train, driver_id, unique_drivers
+            if ((holdout != 0) and (week >= holdout)):
+                # step 2-1, calculate validation loss
+                #           we do not train with the validation data so our
+                #           validation loss is an accurate estimation
+                #
+                # holdout: train instances from day 1 to day N -1
+                #            validate with instances from day N and after
+                #
+                loss += (max(0, p)-y)**2
+                count += 1
+            else:
+                # step 2-2, update learner with demand information
+                learner.update(x, p, y)
 
+        count = max(count, 1)
+        print('Epoch %d finished, validation RMSLE: %f, elapsed time: %s' %
+              (e, sqrt(loss/count), str(datetime.now() - start)))
 
-def load_test(img_rows, img_cols, color_type=1):
-    print('Read test images')
-    path = os.path.join('..', 'input', 'test', '*.jpg')
-    files = glob.glob(path)
-    X_test = []
-    X_test_id = []
-    total = 0
-    thr = math.floor(len(files)/10)
-    for fl in files:
-        flbase = os.path.basename(fl)
-        img = get_im_cv2(fl, img_rows, img_cols, color_type)
-        X_test.append(img)
-        X_test_id.append(flbase)
-        total += 1
-        if total%thr == 0:
-            print('Read {} images from {}'.format(total, len(files)))
+    #########################################################################
+    # start testing, and build Kaggle's submission file #####################
+    #########################################################################
 
-    return X_test, X_test_id
-
-
-def cache_data(data, path):
-    if os.path.isdir(os.path.dirname(path)):
-        file = open(path, 'wb')
-        pickle.dump(data, file)
-        file.close()
-    else:
-        print('Directory doesnt exists')
-
-
-def restore_data(path):
-    data = dict()
-    if os.path.isfile(path):
-        file = open(path, 'rb')
-        data = pickle.load(file)
-    return data
-
-
-def save_model(model):
-    json_string = model.to_json()
-    if not os.path.isdir('cache'):
-        os.mkdir('cache')
-    open(os.path.join('cache', 'architecture.json'), 'w').write(json_string)
-    model.save_weights(os.path.join('cache', 'model_weights.h5'), overwrite=True)
-
-
-def read_model():
-    model = model_from_json(open(os.path.join('cache', 'architecture.json')).read())
-    model.load_weights(os.path.join('cache', 'model_weights.h5'))
-    return model
-
-
-def split_validation_set(train, target, test_size):
-    random_state = 51
-    X_train, X_test, y_train, y_test = train_test_split(train, target, test_size=test_size, random_state=random_state)
-    return X_train, X_test, y_train, y_test
-
-
-def create_submission(predictions, test_id, info):
-    result1 = pd.DataFrame(predictions, columns=['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9'])
-    result1.loc[:, 'img'] = pd.Series(test_id, index=result1.index)
-    now = datetime.datetime.now()
-    if not os.path.isdir('subm'):
-        os.mkdir('subm')
-    suffix = info + '_' + str(now.strftime("%Y-%m-%d-%H-%M"))
-    sub_file = os.path.join('subm', 'submission_' + suffix + '.csv')
-    result1.to_csv(sub_file, index=False)
-
-
-def read_and_normalize_train_data(img_rows, img_cols, color_type=1):
-    cache_path = os.path.join('cache', 'train_r_' + str(img_rows) + '_c_' + str(img_cols) + '_t_' + str(color_type) + '.dat')
-    if not os.path.isfile(cache_path) or use_cache == 0:
-        train_data, train_target, driver_id, unique_drivers = load_train(img_rows, img_cols, color_type)
-        cache_data((train_data, train_target, driver_id, unique_drivers), cache_path)
-    else:
-        print('Restore train from cache!')
-        (train_data, train_target, driver_id, unique_drivers) = restore_data(cache_path)
-
-    train_data = np.array(train_data, dtype=np.uint8)
-    train_target = np.array(train_target, dtype=np.uint8)
-    train_data = train_data.reshape(train_data.shape[0], color_type, img_rows, img_cols)
-    train_target = np_utils.to_categorical(train_target, 10)
-    train_data = train_data.astype('float32')
-    train_data /= 255
-    print('Train shape:', train_data.shape)
-    print(train_data.shape[0], 'train samples')
-    return train_data, train_target, driver_id, unique_drivers
-
-
-def read_and_normalize_test_data(img_rows, img_cols, color_type=1):
-    cache_path = os.path.join('cache', 'test_r_' + str(img_rows) + '_c_' + str(img_cols) + '_t_' + str(color_type) + '.dat')
-    if not os.path.isfile(cache_path) or use_cache == 0:
-        test_data, test_id = load_test(img_rows, img_cols, color_type)
-        cache_data((test_data, test_id), cache_path)
-    else:
-        print('Restore test from cache!')
-        (test_data, test_id) = restore_data(cache_path)
-
-    test_data = np.array(test_data, dtype=np.uint8)
-    test_data = test_data.reshape(test_data.shape[0], color_type, img_rows, img_cols)
-    test_data = test_data.astype('float32')
-    test_data /= 255
-    print('Test shape:', test_data.shape)
-    print(test_data.shape[0], 'test samples')
-    return test_data, test_id
-
-
-def dict_to_list(d):
-    ret = []
-    for i in d.items():
-        ret.append(i[1])
-    return ret
-
-
-def merge_several_folds_mean(data, nfolds):
-    a = np.array(data[0])
-    for i in range(1, nfolds):
-        a += np.array(data[i])
-    a /= nfolds
-    return a.tolist()
-
-
-def merge_several_folds_geom(data, nfolds):
-    a = np.array(data[0])
-    for i in range(1, nfolds):
-        a *= np.array(data[i])
-    a = np.power(a, 1/nfolds)
-    return a.tolist()
-
-
-def copy_selected_drivers(train_data, train_target, driver_id, driver_list):
-    data = []
-    target = []
-    index = []
-    for i in range(len(driver_id)):
-        if driver_id[i] in driver_list:
-            data.append(train_data[i])
-            target.append(train_target[i])
-            index.append(i)
-    data = np.array(data, dtype=np.float32)
-    target = np.array(target, dtype=np.float32)
-    index = np.array(index, dtype=np.uint32)
-    return data, target, index
-
-
-def create_model_v1(img_rows, img_cols, color_type=1):
-    nb_classes = 10
-    # number of convolutional filters to use
-    nb_filters = 8
-    # size of pooling area for max pooling
-    nb_pool = 2
-    # convolution kernel size
-    nb_conv = 2
-    model = Sequential()
-    model.add(Convolution2D(nb_filters, nb_conv, nb_conv,
-                            border_mode='valid',
-                            input_shape=(color_type, img_rows, img_cols)))
-    model.add(Activation('relu'))
-    model.add(Convolution2D(nb_filters, nb_conv, nb_conv))
-    model.add(Activation('relu'))
-    model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
-    model.add(Dropout(0.25))
-
-    model.add(Flatten())
-    model.add(Dense(128))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(nb_classes))
-    model.add(Activation('softmax'))
-
-    sgd = SGD(lr=0.1, decay=0, momentum=0, nesterov=False)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd)
-    return model
-
-
-def run_single():
-    # input image dimensions
-    img_rows, img_cols = 24, 32
-    batch_size = 32
-    nb_epoch = 2
-    random_state = 51
-
-    train_data, train_target, driver_id, unique_drivers = read_and_normalize_train_data(img_rows, img_cols, color_type_global)
-    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols, color_type_global)
-
-    yfull_train = dict()
-    yfull_test = []
-    unique_list_train = ['p002', 'p012', 'p014', 'p015', 'p016', 'p021', 'p022', 'p024',
-                     'p026', 'p035', 'p039', 'p041', 'p042', 'p045', 'p047', 'p049',
-                     'p050', 'p051', 'p052', 'p056', 'p061', 'p064', 'p066', 'p072',
-                     'p075']
-    X_train, Y_train, train_index = copy_selected_drivers(train_data, train_target, driver_id, unique_list_train)
-    unique_list_valid = ['p081']
-    X_valid, Y_valid, test_index = copy_selected_drivers(train_data, train_target, driver_id, unique_list_valid)
-
-    print('Start Single Run')
-    print('Split train: ', len(X_train), len(Y_train))
-    print('Split valid: ', len(X_valid), len(Y_valid))
-    print('Train drivers: ', unique_list_train)
-    print('Test drivers: ', unique_list_valid)
-
-    model = create_model_v1(img_rows, img_cols, color_type_global)
-    model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch,
-              show_accuracy=True, verbose=1, validation_data=(X_valid, Y_valid))
-
-    # score = model.evaluate(X_valid, Y_valid, show_accuracy=True, verbose=0)
-    # print('Score log_loss: ', score[0])
-
-    predictions_valid = model.predict(X_valid, batch_size=128, verbose=1)
-    score = log_loss(Y_valid, predictions_valid)
-    print('Score log_loss: ', score)
-
-    # Store valid predictions
-    for i in range(len(test_index)):
-        yfull_train[test_index[i]] = predictions_valid[i]
-
-    # Store test predictions
-    test_prediction = model.predict(test_data, batch_size=128, verbose=1)
-    yfull_test.append(test_prediction)
-
-    print('Final log_loss: {}, rows: {} cols: {} epoch: {}'.format(score, img_rows, img_cols, nb_epoch))
-    info_string = 'loss_' + str(score) \
-                    + '_r_' + str(img_rows) \
-                    + '_c_' + str(img_cols) \
-                    + '_ep_' + str(nb_epoch)
-
-    test_res = merge_several_folds_mean(yfull_test, 1)
-    create_submission(test_res, test_id, info_string)
-
-
-run_single()
+    with open(submission, 'w') as outfile:
+        outfile.write('id,Demanda_uni_equil\n')
+        for t, date, ID, x, y in data(test, D):
+            p = learner.predict(x)
+            outfile.write('%s,%.3f\n' % (ID,
+                                         expm1(max(0, p))))
+            if((t % 100000) == 0):
+                print(t)
+    print('Finished')

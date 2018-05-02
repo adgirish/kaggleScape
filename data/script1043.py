@@ -1,432 +1,571 @@
 
 # coding: utf-8
 
-# Like Nitin Surya's kernel but excluding same-week reservations.
-
-# In addition to the 3 models used in the *surpise me 2!* script, I have added a feed forward neural network for the prediction of visitors.
+# Rent Interest Classifier 
+# ===
+# ---
+# 
+#  - This classification model predicts the degree of popularity for a rental listing judged by its profiles such as the number of rooms, location, price, etc.  
+#  - It predicts whether a given listing would receive "low," "medium," or
+#    "high" interest with its corresponding probability to a particular listing.
+# 
+# ---
+# **Multiclass Classifier with Probability Estimates**
+# ---
+# The problem of classification is considered as learning a model that maps instances to class labels. While useful for many purposes, there are numerous applications in which the estimation of the probabilities of the different classes is more desirable than just selecting one of them, in that probabilities are useful as a measure of the reliability of a classification.
+# 
+# **Datasets**
+# ---
+# NYC rent listing data from the rental website RentHop which is used to find the desired home.
+# Datasets include 
+# 
+#  1. ***train*** and ***test*** databases, both provided in a JavaScript Object Notation format,
+#  2. ***sample submission*** listing_id with interest level probabilities for each class i.e., high, medium, and low, 
+#  3. ***image sample*** of selective 100 listings, and
+#  4. ***kaggle-renthop*** zipfile that contains all listing images where the file size is 78.5GB. 
+# 
+# The JSON dataset is a structured database that contains the listing information as the number of bathrooms and bedrooms, building_id, created, description, display_address, features, latitude, listing_id, longitude, manager_id, photos links, price, street_address,  and interest_level.
 
 # In[ ]:
 
 
-"""
-Contributions from:
-DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
-https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
-JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
-https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
-hklee - weighted mean comparisons, LB 0.497, 1ST
-https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
-tunguz - Surprise Me 2!
-https://www.kaggle.com/tunguz/surprise-me-2/code
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-Also all comments for changes, encouragement, and forked scripts rock
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-Keep the Surprise Going
-"""
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-import glob, re
-import numpy as np
-import pandas as pd
-from sklearn import *
-from datetime import datetime
-from xgboost import XGBRegressor
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-from keras.layers import Embedding, Input, Dense
-import keras
-import keras.backend as K
+# Any results you write to the current directory are saved as output.
 
 import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+sns.set(style="whitegrid", color_codes=True)
+sns.set(font_scale=1)
+
+import plotly.plotly as py
+import plotly.graph_objs as go
+from plotly import tools
+
+from plotly.offline import download_plotlyjs, init_notebook_mode, iplot
+init_notebook_mode(connected=True)
+
+train = pd.read_json("../input/train.json")
+test = pd.read_json("../input/test.json")
 
 
 # In[ ]:
 
 
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_dow'] = data[df]['visit_datetime'].dt.dayofweek
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    # Exclude same-week reservations
-    data[df] = data[df][data[df]['reserve_datetime_diff'] > data[df]['visit_dow']]
-    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['doy'] = data['tra']['visit_date'].dt.dayofyear
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['week'] = data['tra']['visit_date'].dt.week
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['doy'] = data['tes']['visit_date'].dt.dayofyear
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['week'] = data['tes']['visit_date'].dt.week
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-#tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-#stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-# NEW FEATURES FROM Georgii Vyshnia
-stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
-stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
-lbl = preprocessing.LabelEncoder()
-for i in range(10):
-    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
-
-train = pd.merge(train, stores, how='inner', on=['air_store_id','dow']) 
-test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
-
-train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
-train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
-train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
-
-test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
-test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
-test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
-
-# NEW FEATURES FROM JMBULL
-train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-train['var_max_lat'] = train['latitude'].max() - train['latitude']
-train['var_max_long'] = train['longitude'].max() - train['longitude']
-test['var_max_lat'] = test['latitude'].max() - test['latitude']
-test['var_max_long'] = test['longitude'].max() - test['longitude']
-
-# NEW FEATURES FROM Georgii Vyshnia
-train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
-test['lon_plus_lat'] = test['longitude'] + test['latitude']
-
-lbl = preprocessing.LabelEncoder()
-train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
-test['air_store_id2'] = lbl.transform(test['air_store_id'])
-
-col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
+print ('There are {0} rows and {1} attributes.'.format(train.shape[0], train.shape[1]))
+print (len(train['listing_id'].unique()))
+train = train.set_index('listing_id')
+train.head()
 
 
 # In[ ]:
 
 
-def RMSLE(y, pred):
-    return metrics.mean_squared_error(y, pred)**0.5
+print ('There are {0} rows and {1} attributes.'.format(test.shape[0], test.shape[1]))
+test.tail()
 
 
-# Here we prepare data required for the neural network model.
+# **Pre-processing and feature extraction**
+# ---
+# **Feature Selection in Python with Scikit-Learn**
 # 
-# **value_col**:  taken as float input(which are normalized)
+# Feature selection is a process where you automatically select affective features in your data that contribute most to the prediction variable or target output. In order to maximize the performance of machine learning techniques,  important attributes are selected before creating a machine learning model using the Scikit-learn library having the feature_importances_ member variable of the trained model. 
 # 
-# **nn_col - value_col**: taken as categorical inputs(embedding layers used)
+# Given an importance score for each attribute where the larger score the more important the attribute. The scores show price, the number of features/photos/words, and date as the importance attributes.
 
 # In[ ]:
 
 
-value_col = ['holiday_flg','min_visitors','mean_visitors','median_visitors', # 'max_visitors',
-             'count_observations',
-'rs1_x','rv1_x','rs2_x','rv2_x','rs1_y','rv1_y','rs2_y','rv2_y','total_reserv_sum','total_reserv_mean',
-'total_reserv_dt_diff_mean','date_int','var_max_lat','var_max_long','lon_plus_lat']
-
-nn_col = value_col + ['dow', 'year', 'month', 'air_store_id2', 'air_area_name', 'air_genre_name',
-'air_area_name0', 'air_area_name1', 'air_area_name2', 'air_area_name3', 'air_area_name4',
-'air_area_name5', 'air_area_name6', 'air_genre_name0', 'air_genre_name1',
-'air_genre_name2', 'air_genre_name3', 'air_genre_name4']
+train.info()
+train.describe()
 
 
-X = train.copy()
-X_test = test[nn_col].copy()
+# ----------
+# **Interest Level Distribution**
+# ----------
+# Distributions: 
+#  - **Low (69.5%)**
+#  - Medium (22.8%)
+#  - Hight (7.8%)
 
-value_scaler = preprocessing.MinMaxScaler()
-for vcol in value_col:
-    X[vcol] = value_scaler.fit_transform(X[vcol].values.astype(np.float64).reshape(-1, 1))
-    X_test[vcol] = value_scaler.transform(X_test[vcol].values.astype(np.float64).reshape(-1, 1))
-
-X_train = list(X[nn_col].T.as_matrix())
-Y_train = np.log1p(X['visitors']).values
-nn_train = [X_train, Y_train]
-nn_test = [list(X_test[nn_col].T.as_matrix())]
-print("Train and test data prepared")
+# In[ ]:
 
 
-# Following function implements the Keras neural network model.
+plt.subplots(figsize=(10, 8))
+sizes = train['interest_level'].value_counts().values
+patches, texts, autotexts= plt.pie(sizes, labels=['Low', 'Medium', 'High'],
+                                  colors=['mediumaquamarine','lightcoral', 'steelblue'],
+                                  explode=[0.1, 0, 0], autopct="%1.1f%%", 
+                                  startangle=90)
+
+texts[0].set_fontsize(13)
+texts[1].set_fontsize(13)
+texts[2].set_fontsize(13)
+plt.title('Interest level', fontsize=18)
+plt.show()
+
+
+# ----------
+# **Feature Importance**
+# ----------
+# Ensemble methods are a promising solution to highly imbalanced nonlinear classification tasks with mixed variable types and noisy patterns with high variance. Methods compute the relative importance of each attribute. These importance values can be used to inform a feature selection process. This shows the construction of an Extra Trees ensemble of the dataset and the display of the relative feature importance.
 # 
-# Basic structure:
-# - categorical columns get independent inputs, passed through embedding layer and then flattened.
-# - numeric columns are simply taken as float32 inputs
-# - the final tensors of categorical and numerical are then concatenated together
-# - following the concatenated layer and simple feed forward neural network is implemented.
-# - output layer has 'ReLU' activation function
+# As can be seen in the *train.info()* table, data types are mixed.
+# 
+#  1. **Categorical**: description, display_address, features, manager_id, building_id, street_address
+#  2. **Numeric**: bathrooms, bedrooms, latitude, longitude, price
+#  3. Other: created, photos 
+# 
+# In order to generate the feature importance matrix, non-numeric data types attributes should be converted to numerical values. Following assumptions are considered.
+# 
+#  - **description**: The more words and well-described listings might be spotted. 
+#  - **features**: Some features are more preferred over others.
+#  - **photos**: The more images might get more views with having interest.
 
 # In[ ]:
 
 
-def get_nn_complete_model(train, hidden1_neurons=35, hidden2_neurons=15):
-    """
-    Input:
-        train:           train dataframe(used to define the input size of the embedding layer)
-        hidden1_neurons: number of neurons in the first hidden layer
-        hidden2_neurons: number of neurons in the first hidden layer
-    Output:
-        return 'keras neural network model'
-    """
-    K.clear_session()
+from wordcloud import WordCloud,STOPWORDS
+from nltk.corpus import stopwords
+from textblob import TextBlob
 
-    air_store_id = Input(shape=(1,), dtype='int32', name='air_store_id')
-    air_store_id_emb = Embedding(len(train['air_store_id2'].unique()) + 1, 15, input_shape=(1,),
-                                 name='air_store_id_emb')(air_store_id)
-    air_store_id_emb = keras.layers.Flatten(name='air_store_id_emb_flatten')(air_store_id_emb)
+def room_price(x, y):
+    if y == 0:
+        return 0
+    return x/y
 
-    dow = Input(shape=(1,), dtype='int32', name='dow')
-    dow_emb = Embedding(8, 3, input_shape=(1,), name='dow_emb')(dow)
-    dow_emb = keras.layers.Flatten(name='dow_emb_flatten')(dow_emb)
+train['nb_images'] = train['photos'].apply(len)
+train['nb_features'] = train['features'].apply(len)
+train['nb_description'] = train['description'].apply(lambda x: len(x.split(' ')))
+train['description_len'] = train['description'].apply(len)
+train = train.join(
+                   train['description'].apply(
+                       lambda x: TextBlob(x).sentiment.polarity).rename('sentiment'))
 
-    month = Input(shape=(1,), dtype='int32', name='month')
-    month_emb = Embedding(13, 3, input_shape=(1,), name='month_emb')(month)
-    month_emb = keras.layers.Flatten(name='month_emb_flatten')(month_emb)
+train['price_room'] = train.apply(lambda row: room_price(row['price'], 
+                                                         row['bedrooms']), axis=1)
 
-    air_area_name, air_genre_name = [], []
-    air_area_name_emb, air_genre_name_emb = [], []
-    for i in range(7):
-        area_name_col = 'air_area_name' + str(i)
-        air_area_name.append(Input(shape=(1,), dtype='int32', name=area_name_col))
-        tmp = Embedding(len(train[area_name_col].unique()), 3, input_shape=(1,),
-                        name=area_name_col + '_emb')(air_area_name[-1])
-        tmp = keras.layers.Flatten(name=area_name_col + '_emb_flatten')(tmp)
-        air_area_name_emb.append(tmp)
 
-        if i > 4:
-            continue
-        area_genre_col = 'air_genre_name' + str(i)
-        air_genre_name.append(Input(shape=(1,), dtype='int32', name=area_genre_col))
-        tmp = Embedding(len(train[area_genre_col].unique()), 3, input_shape=(1,),
-                        name=area_genre_col + '_emb')(air_genre_name[-1])
-        tmp = keras.layers.Flatten(name=area_genre_col + '_emb_flatten')(tmp)
-        air_genre_name_emb.append(tmp)
+# ----------
+# Attribute: Building ID
+# ---
 
-    air_genre_name_emb = keras.layers.concatenate(air_genre_name_emb)
-    air_genre_name_emb = Dense(4, activation='sigmoid', name='final_air_genre_emb')(air_genre_name_emb)
+# In[ ]:
 
-    air_area_name_emb = keras.layers.concatenate(air_area_name_emb)
-    air_area_name_emb = Dense(4, activation='sigmoid', name='final_air_area_emb')(air_area_name_emb)
+
+# Number of listings based on building ID
+top_buildings = train['building_id'].value_counts().nlargest(10)
+print (top_buildings)
+print (len(train['building_id'].unique()))
+
+grouped_building = train.groupby(
+                           ['building_id', 'interest_level']
+                          )['building_id'].count().unstack('interest_level').fillna(0)
+
+grouped_building['sum'] = grouped_building.sum(axis=1)
+x = grouped_building[(grouped_building['sum'] > 50) & (grouped_building['high'] > 10)]
+
+# x = x[x.index != '0'] # Ignore N/A value
+
+fig = plt.figure(figsize=(10, 6))
+
+plt.title('Hight-interest buildings', fontsize=13)
+plt.xlabel('High interest level', fontsize=13)
+plt.ylabel('Building ID', fontsize=13)
+x['high'].plot.barh(color="palevioletred");
+
+build_counts = pd.DataFrame(train.building_id.value_counts())
+build_counts['b_counts'] = build_counts['building_id']
+build_counts['building_id'] = build_counts.index
+build_counts['b_count_log'] = np.log2(build_counts['b_counts'])
+train = pd.merge(train, build_counts, on="building_id")
+
+
+# ----------
+# Attribute: Manager ID
+# ---------
+
+# In[ ]:
+
+
+# Hight-interest managers
+top_managers = train['manager_id'].value_counts().nlargest(10)
+print (top_managers)
+print (len(train['manager_id'].unique()))
+
+grouped_manager = train.groupby(
+    ['manager_id', 'interest_level'])['manager_id'].count().unstack('interest_level').fillna(0)
+
+grouped_manager['sum'] = grouped_manager.sum(axis=1)
+print (grouped_manager.head())
+
+x = grouped_manager.loc[(grouped_manager['high'] > 20 ) & (grouped_manager['sum'] > 50)]
+
+plt.title('High-interest managers', fontsize=13)
+plt.xlabel('High interest level', fontsize=13)
+plt.ylabel('Manager ID', fontsize=13)
+x['high'].plot.barh(figsize=(10, 9), color="teal");
+
+man_counts = pd.DataFrame(train.manager_id.value_counts())
+man_counts['m_counts'] = man_counts['manager_id']
+man_counts['manager_id'] = man_counts.index
+man_counts['m_count_log'] = np.log10(man_counts['m_counts'])
+train = pd.merge(train, man_counts, on="manager_id")
+
+
+# ----------
+# Feature Importance Ranking
+# ---------
+
+# In[ ]:
+
+
+from sklearn.ensemble import ExtraTreesClassifier
+from xgboost import XGBClassifier
+from xgboost import plot_importance
+from matplotlib import pyplot
+
+numerical_features = train[['bathrooms', 'bedrooms', 'price', 'price_room',
+                            'latitude','longitude', 'nb_images','nb_features', 
+                            'nb_description', 'description_len','sentiment',
+                            'b_counts', 'm_counts',
+                            'b_count_log', 'm_count_log']]
+
+# Fit an Extra Trees model to the data
+model = ExtraTreesClassifier()
+model.fit(numerical_features, train['interest_level'])
+
+# Display the relative importance of each attribute
+print (model.feature_importances_)
+
+# Plot feature importance
+plt.subplots(figsize=(13, 6))
+plt.title('Feature ranking', fontsize = 18)
+plt.ylabel('Importance degree', fontsize = 13)
+# plt.xlabel("Features", fontsize = 14)
+
+feature_names = numerical_features.columns
+plt.xticks(range(numerical_features.shape[1]), feature_names, fontsize = 9)
+pyplot.bar(range(len(model.feature_importances_)), model.feature_importances_)
+pyplot.show()
+
+
+# In[ ]:
+
+
+# Use feature importance for feature selection
+from numpy import sort
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.feature_selection import SelectFromModel
+
+# Converting categorical values for Interest Level to numeric values
+# Low: 1, Medium: 2, High: 3
+train['interest'] = np.where(train['interest_level']=='low', 1,
+                             np.where(train['interest_level']=='medium', 2, 3))
+
+X = numerical_features
+Y = train['interest']
+
+# Split data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, 
+                                                    random_state=7)
+
+# Fit model on all training data
+model = XGBClassifier()
+model.fit(X_train, y_train)
+
+# Make predictions for test data and evaluate
+y_pred = model.predict(X_test)
+predictions = [round(value) for value in y_pred]
+accuracy = accuracy_score(y_test, predictions)
+print("Accuracy: %.2f%%" % (accuracy * 100.0))
+
+# Fit model using each importance as a threshold
+thresholds = sort(model.feature_importances_)
+for thresh in thresholds:
+	# Select features using threshold
+	selection = SelectFromModel(model, threshold=thresh, prefit=True)
+	select_X_train = selection.transform(X_train)
     
-    air_area_code = Input(shape=(1,), dtype='int32', name='air_area_code')
-    air_area_code_emb = Embedding(len(train['air_area_name'].unique()), 8, input_shape=(1,), name='air_area_code_emb')(air_area_code)
-    air_area_code_emb = keras.layers.Flatten(name='air_area_code_emb_flatten')(air_area_code_emb)
+	# Train model
+	selection_model = XGBClassifier()
+	selection_model.fit(select_X_train, y_train)
     
-    air_genre_code = Input(shape=(1,), dtype='int32', name='air_genre_code')
-    air_genre_code_emb = Embedding(len(train['air_genre_name'].unique()), 5, input_shape=(1,),
-                                   name='air_genre_code_emb')(air_genre_code)
-    air_genre_code_emb = keras.layers.Flatten(name='air_genre_code_emb_flatten')(air_genre_code_emb)
+	# Evalation model
+	select_X_test = selection.transform(X_test)
+	y_pred = selection_model.predict(select_X_test)
+	predictions = [round(value) for value in y_pred]
+	accuracy = accuracy_score(y_test, predictions)
+	print ("Thresh=%.3f, n=%d, Accuracy: %.2f%%" % (thresh, select_X_train.shape[1], 
+                                                    accuracy*100.0))
 
+
+# ----------
+# Correlation Graph
+# ---------
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(13, 13))
+corr = numerical_features.corr()
+sns.heatmap(corr, mask=np.zeros_like(corr, dtype=np.bool), 
+            cmap=sns.diverging_palette(220, 10, as_cmap=True),
+            square=True, ax=ax)
+
+
+# ----------
+# Correlation Matrix
+# ---------
+
+# In[ ]:
+
+
+cmap = cmap=sns.diverging_palette(5, 250, as_cmap=True)
+
+def magnify():
+    return [dict(selector="th",
+                 props=[("font-size", "10pt")]),
+            dict(selector="td",
+                 props=[('padding', "0em 0em")]),
+            dict(selector="th:hover",
+                 props=[("font-size", "11pt")]),
+            dict(selector="tr:hover td:hover",
+                 props=[('max-width', '200px'),
+                        ('font-size', '11pt')])]
+
+corr.style.background_gradient(cmap, axis=1)    .set_properties(**{'max-width': '80px', 'font-size': '8pt'})    .set_caption('Correlation Matrix')    .set_precision(2)    .set_table_styles(magnify())
+
+
+# In[ ]:
+
+
+numerical_features[['bathrooms', 'bedrooms', 'price', 'price_room',
+                    'latitude','longitude', 'nb_images','nb_features', 
+                    'nb_description', 'description_len','sentiment',
+                    'b_counts', 'm_counts',
+                    'b_count_log', 'm_count_log']].hist(figsize=(12, 12))
+plt.show()
+
+
+# ----------
+# **Attribute:  Bathrooms, Bedrooms**
+# ----------
+
+# In[ ]:
+
+
+'''
+subplot grid parameters encoded as a single integer.
+ijk means i x j grid, k-th subplot
+subplot(221) #top left
+subplot(222) #top right
+subplot(223) #bottom left
+subplot(224) #bottom right 
+'''
+fig = plt.figure(figsize=(12, 6))
+
+# Number of listings
+sns.countplot(train['bathrooms'], ax = plt.subplot(121));
+plt.xlabel('NB of bathrooms', fontsize=13);
+plt.ylabel('NB of listings', fontsize=13);
+
+sns.countplot(train['bedrooms'], ax = plt.subplot(122));
+plt.xlabel('NB of bedrooms', fontsize=13);
+plt.ylabel('NB of listings', fontsize=13);
+
+
+# In[ ]:
+
+
+# Number of rooms based on Interest level
+grouped_bathroom = train.groupby(
+    ['bathrooms', 'interest_level'])['bathrooms'].count().unstack('interest_level').fillna(0)
+grouped_bathroom[['low', 'medium', 'high']].plot.barh(stacked=True, figsize=(12, 4));
+
+grouped_bedroom = train.groupby(
+    ['bedrooms', 'interest_level'])['bedrooms'].count().unstack('interest_level').fillna(0)
+grouped_bedroom[['low', 'medium', 'high']].plot.barh(stacked=True, figsize=(12.25, 4));
+
+
+# ----------
+# **Attribute:  Geographical information - latitude, longitude**
+# ----------
+
+# In[ ]:
+
+
+'''
+seaborn.lmplot(x, y, data, hue=None, col=None, row=None, palette=None, 
+col_wrap=None, size=5, aspect=1, markers='o', sharex=True, sharey=True, 
+hue_order=None, col_order=None, row_order=None, legend=True, legend_out=True, 
+x_estimator=None, x_bins=None, x_ci='ci', scatter=True, fit_reg=True, ci=95, 
+n_boot=1000, units=None, order=1, logistic=False, lowess=False, robust=False, 
+logx=False, x_partial=None, y_partial=None, truncate=False, x_jitter=None, 
+y_jitter=None, scatter_kws=None, line_kws=None)
+'''
+
+# Rent interest based on geographical information
+sns.lmplot(x='longitude', y='latitude', fit_reg=False, hue='interest_level',
+           hue_order=['low', 'medium', 'high'], size=9, aspect=1, scatter_kws={'alpha':0.4,'s':30},
+           data=train[(train['longitude']>train['longitude'].quantile(0.1))
+                      &(train['longitude']<train['longitude'].quantile(0.9))
+                      &(train['latitude']>train['latitude'].quantile(0.1))                           
+                      &(train['latitude']<train['latitude'].quantile(0.9))]);
+plt.xlabel('Longitude', fontsize=13);
+plt.ylabel('Latitude', fontsize=13);
+
+
+# **Methods**
+# ---
+# **Building the Classification Model**
+# 
+# Two main techniques are considered to build the classification model: Decision Tree and Ensemble Method. Let us start with the definitions. 
+# 
+#  - A decision tree is a tree structure, where the classification process starts from a root node and is split on every subsequent step based on the features and their values. The exact structure of a given decision tree is determined by a tree induction algorithm; there are a number of different induction algorithms which are based on different splitting criteria such as information gain.
+#  - Ensemble learning method constructs a collection of individual classifiers that are diverse yet accurate. 
+#     1. Bagging
+#    - One of the most popular techniques for constructing ensembles is boostrap aggregation called
+#    ‘bagging’. In bagging, each training set is constructed by forming a bootstrap replicate of the original training set. So this bagging algorithm is promising ensemble learner that improves the results of any decision tree based learning algorithm.
+#     2. Boosting
+#    - Gradient boosting is also powerful techniques for building predictive models. While bagging considers candidate models equally, boosting technique is based on whether a weak learner can be modified to become better. XGBoost is an implementation of gradient boosted decision trees designed for speed and performance. XGBoost stands for eXtreme Gradient Boosting.
+# 
+# I generated a set of new features derived from the datasets as a preprocessing. A table with a new set of 15 features is generated in a CSV format instead of original mixed data types instances and it is mapped into inputs in XGBoost classification model. Other classification models - Support Vector Machine, Rnadom Forest, and Gradient Random Boosting were used to compare its performances.
+
+# In[ ]:
+
+
+from sklearn import svm
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn import model_selection
+from sklearn.model_selection import train_test_split
+from textblob import TextBlob
+from sklearn.metrics import accuracy_score
+import time
+
+def pre_processing(data):
     
-    holiday_flg = Input(shape=(1,), dtype='float32', name='holiday_flg')
-    year = Input(shape=(1,), dtype='float32', name='year')
-    min_visitors = Input(shape=(1,), dtype='float32', name='min_visitors')
-    mean_visitors = Input(shape=(1,), dtype='float32', name='mean_visitors')
-    median_visitors = Input(shape=(1,), dtype='float32', name='median_visitors')
-#    max_visitors = Input(shape=(1,), dtype='float32', name='max_visitors')
-    count_observations = Input(shape=(1,), dtype='float32', name='count_observations')
-    rs1_x = Input(shape=(1,), dtype='float32', name='rs1_x')
-    rv1_x = Input(shape=(1,), dtype='float32', name='rv1_x')
-    rs2_x = Input(shape=(1,), dtype='float32', name='rs2_x')
-    rv2_x = Input(shape=(1,), dtype='float32', name='rv2_x')
-    rs1_y = Input(shape=(1,), dtype='float32', name='rs1_y')
-    rv1_y = Input(shape=(1,), dtype='float32', name='rv1_y')
-    rs2_y = Input(shape=(1,), dtype='float32', name='rs2_y')
-    rv2_y = Input(shape=(1,), dtype='float32', name='rv2_y')
-    total_reserv_sum = Input(shape=(1,), dtype='float32', name='total_reserv_sum')
-    total_reserv_mean = Input(shape=(1,), dtype='float32', name='total_reserv_mean')
-    total_reserv_dt_diff_mean = Input(shape=(1,), dtype='float32', name='total_reserv_dt_diff_mean')
-    date_int = Input(shape=(1,), dtype='float32', name='date_int')
-    var_max_lat = Input(shape=(1,), dtype='float32', name='var_max_lat')
-    var_max_long = Input(shape=(1,), dtype='float32', name='var_max_long')
-    lon_plus_lat = Input(shape=(1,), dtype='float32', name='lon_plus_lat')
-
-    date_emb = keras.layers.concatenate([dow_emb, month_emb, year, holiday_flg])
-    date_emb = Dense(5, activation='sigmoid', name='date_merged_emb')(date_emb)
-
-    cat_layer = keras.layers.concatenate([holiday_flg, min_visitors, mean_visitors,
-                    median_visitors, # max_visitors, 
-                    count_observations, rs1_x, rv1_x,
-                    rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y,
-                    total_reserv_sum, total_reserv_mean, total_reserv_dt_diff_mean,
-                    date_int, var_max_lat, var_max_long, lon_plus_lat,
-                    date_emb, air_area_name_emb, air_genre_name_emb,
-                    air_area_code_emb, air_genre_code_emb, air_store_id_emb])
-
-    m = Dense(hidden1_neurons, name='hidden1',
-             kernel_initializer=keras.initializers.RandomNormal(mean=0.0,
-                            stddev=0.05, seed=None))(cat_layer)
-    m = keras.layers.PReLU()(m)
-    m = keras.layers.BatchNormalization()(m)
+    global important_features
+    important_features = ['bathrooms', 'bedrooms', 'price', 'price_room',
+                          'latitude','longitude', 'nb_images','nb_features',
+                          'sentiment', 'nb_description', 'description_len',
+                          'b_counts', 'm_counts','b_count_log', 'm_count_log']
     
-    m1 = Dense(hidden2_neurons, name='sub1')(m)
-    m1 = keras.layers.PReLU()(m1)
-    m = Dense(1, activation='relu')(m1)
+    data['nb_images'] = data['photos'].apply(len)
+    data['nb_features'] = data['features'].apply(len)
+    data['nb_description'] = data['description'].apply(lambda x: len(x.split(' ')))
+    data['description_len'] = data['description'].apply(len)
+    
+    def room_price(x, y):
+        if y == 0:
+            return 0
+        return x/y
+    
+    def sentiment_analysis(x):
+        if len(x) == 0:
+            return 0
+        return TextBlob(x[0]).sentiment.polarity
+    
+    data = data.join(data['description'].apply(
+                         lambda x: TextBlob(x).sentiment.polarity).rename('sentiment'))
+    data['price_room'] = data.apply(lambda row: 
+                                    room_price(row['price'],row['bedrooms']), axis=1)
+    
+    build_counts = pd.DataFrame(data.building_id.value_counts())
+    build_counts['b_counts'] = build_counts['building_id']
+    build_counts['building_id'] = build_counts.index
+    build_counts['b_count_log'] = np.log2(build_counts['b_counts'])
+    data = pd.merge(data, build_counts, on='building_id')
+    
+    man_counts = pd.DataFrame(data.manager_id.value_counts())
+    man_counts['m_counts'] = man_counts['manager_id']
+    man_counts['manager_id'] = man_counts.index
+    man_counts['m_count_log'] = np.log10(man_counts['m_counts'])
+    data = pd.merge(data, man_counts, on='manager_id')
+    
+    return data[important_features]
 
-    inp_ten = [
-        holiday_flg, min_visitors, mean_visitors, median_visitors, # max_visitors, 
-        count_observations,
-        rs1_x, rv1_x, rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y, total_reserv_sum, total_reserv_mean,
-        total_reserv_dt_diff_mean, date_int, var_max_lat, var_max_long, lon_plus_lat,
-        dow, year, month, air_store_id, air_area_code, air_genre_code
-    ]
-    inp_ten += air_area_name
-    inp_ten += air_genre_name
-    model = keras.Model(inp_ten, m)
-    model.compile(loss='mse', optimizer='rmsprop', metrics=['acc'])
+def print_scores(test_name, train, test):
+    print ('{0} train score: {1}\n{0} test score: {2}\n'.format(test_name,
+                                                               train,
+                                                               test))
 
-    return model
+def classification(train_data, test_data, target, test_size=0.2, random_state=42):    
+    # Split data into X and y
+    X = numerical_features
+    Y = train['interest_level']
 
+    # Split data into train and test sets
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=test_size,
+                                                        random_state=random_state)
+    
+    # Support vector machine
+    svm_model = svm.SVC(decision_function_shape='ovo', tol=0.00000001)
+    svm_model = svm_model.fit(X_train, y_train)
+    print_scores("Support Vector Machine",
+                 svm_model.score(X_train, y_train),
+                 accuracy_score(y_test, svm_model.predict(X_test)))
 
-# In[ ]:
+    # Random Forest
+    random_forest = RandomForestClassifier(n_estimators=10)
+    random_forest = random_forest.fit(X_train, y_train)
+    print_scores("Random Forest",
+                 random_forest.score(X_train, y_train),
+                 accuracy_score(y_test, random_forest.predict(X_test)))
 
+    # GradientBoostingClassifier
+    gradientB_model = GradientBoostingClassifier(n_estimators=20,
+                                      learning_rate=1.0,
+                                      max_depth=1,
+                                      random_state=0).fit(X_train, y_train)
+    gradientB_model = gradientB_model.fit(X_train, y_train)
+    print_scores("Gradient Boosting Classifier",
+                 gradientB_model.score(X_train, y_train),
+                 accuracy_score(y_test, gradientB_model.predict(X_test)))
 
-model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3,
-                    n_estimators=200, subsample=0.8, max_depth =10)
-model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
-model3 = XGBRegressor(learning_rate=0.02, random_state=2, n_estimators=1000, subsample=0.8, 
-                      colsample_bytree=0.75, max_depth =10, reg_lambda=.25)
-model4 = get_nn_complete_model(train, hidden2_neurons=12)
-
-model1.fit(train[col], np.log1p(train['visitors'].values))
-print("Model1 trained")
-model2.fit(train[col], np.log1p(train['visitors'].values))
-print("Model2 trained")
-model3.fit(train[col], np.log1p(train['visitors'].values))
-print("Model3 trained")
-
-for i in range(5):
-    model4.fit(nn_train[0], nn_train[1], epochs=3, verbose=1,
-        batch_size=256, shuffle=True, validation_split=0.15)
-    model4.fit(nn_train[0], nn_train[1], epochs=8, verbose=0,
-        batch_size=256, shuffle=True)
-print("Model4 trained")
-
-preds1 = model1.predict(train[col])
-preds2 = model2.predict(train[col])
-preds3 = model3.predict(train[col])
-preds4 = pd.Series(model4.predict(nn_train[0]).reshape(-1)).clip(0, 6.8).values
-
-print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds1))
-print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds2))
-print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds3))
-print('RMSE NeuralNetwork: ', RMSLE(np.log1p(train['visitors'].values), preds4))
-
-preds1 = model1.predict(test[col])
-preds2 = model2.predict(test[col])
-preds3 = model3.predict(test[col])
-preds4 = pd.Series(model4.predict(nn_test[0]).reshape(-1)).clip(0, 6.8).values
-
-test['visitors'] = 0.15*preds1+0.15*preds2+0.4*preds3+0.3*preds4
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
-print("Model predictions done.")
-# del train; del data;
-
-
-# In[ ]:
-
-
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
-
-for k, v in dfs.items(): locals()[k] = v
-
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
-
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
-
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
-
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
-
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub2 = sub2.fillna(-1)
+processed_test_data = pre_processing(test)
+print ('A set of 15 derived features:{0}'.format(important_features))
+'''
+start_time = time.time()
+classification(numerical_features, processed_test_data, train['interest_level'])
+print ('--- %s seconds ---' % (time.time() - start_time))
+'''
 
 
-# In[ ]:
-
-
-def final_visitors(x, alt=False):
-    visitors_x, visitors_y = x['visitors_x'], x['visitors_y']
-    if x['visitors_y'] == -1:
-        return visitors_x
-    else:
-        return 0.7*visitors_x + 0.3*visitors_y* 1.1
-
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
-sub_merge['visitors'] = sub_merge.apply(lambda x: final_visitors(x), axis=1)
-print("Done")
-sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
-
-
-# In[ ]:
-
-
-sub_merge.head()
-
+#  1. - XGBoost Classifier train score: 0.727565157924
+#     - XGBoost Classifier test score: 0.708742781886
+#  2. - Support Vector Machine train score: 0.976672323396 
+#    - Support Vector Machine test score: 0.694053287408
+#  3. - Random Forest train score: 0.96651553912 
+#    - Random Forest test score: 0.702360449802
+#  4. - Gradient Boosting Classifier train score: 0.717155087257
+#    - Gradient Boosting Classifier test score: 0.700638233208
+# 
+# --- 787.343513966 seconds
+# 
+# 
+# Reference
+# ----------
+# 
+#  - Classification models:
+# 
+# 1. https://blog.nycdatascience.com/student-works/renthop-kaggle-competition-team-null/
+# 2. http://machinelearningmastery.com/feature-importance-and-feature-selection-with-xgboost-in-python/
+# 
+#  - EDA:
+#    https://www.kaggle.com/poonaml/two-sigma-connect-rental-listing-inquiries/two-sigma-renthop-eda

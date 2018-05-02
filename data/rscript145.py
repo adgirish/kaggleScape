@@ -1,100 +1,274 @@
-import numpy as np
+'''
+In this script, we will employ Evolutionary Algoritms for optimizing XGboost parameters. 
+First, some data pre-processing is carried out.
+'''
+
+# Data preprocessing based on https://www.kaggle.com/justdoit/rossmann-store-sales/xgboost-in-python-with-rmspe/code
+# Data preprocessing based on https://www.kaggle.com/cast42/rossmann-store-sales/xgboost-in-python-with-rmspe-v2/code
 import pandas as pd
+import numpy as np
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
+
+def rmspe(y, yhat):
+    return np.sqrt(np.mean((yhat/y-1) ** 2))
+
+def rmspe_xg(yhat, y):
+    y = np.expm1(y.get_label())
+    yhat = np.expm1(yhat)
+    return "rmspe", rmspe(y,yhat)
+
+def toBinary(featureCol, df):
+    values = set(df[featureCol].unique())
+    newCol = [featureCol + val for val in values]
+    for val in values:
+        df[featureCol + val] = df[featureCol].map(lambda x: 1 if x == val else 0)
+    return newCol
+
+def RMSPE_objective(predts, dtrain):
+  #labels =np.expm1(dtrain.get_label())
+  #predts =np.expm1(predts)
+  labels =dtrain.get_label()
+  grad =  -1/labels+predts/(labels**2)
+  grad[labels==0]=0
+  hess = 1/(labels**2)
+  hess[labels==0]=0
+  return grad, hess 
+  
+# Gather some features
+def build_features(features, data):
+    # remove NaNs
+    data.fillna(0, inplace=True)
+    data.loc[data.Open.isnull(), 'Open'] = 1
+    # Use some properties directly
+    features.extend(['Store', 'CompetitionDistance', 'CompetitionOpenSinceMonth',
+                     'CompetitionOpenSinceYear', 'Promo', 'Promo2', 'Promo2SinceWeek', 'Promo2SinceYear'])
+
+    # add some more with a bit of preprocessing
+    features.append('SchoolHoliday')
+    data['SchoolHoliday'] = data['SchoolHoliday'].astype(float)
+
+    features.append('StateHoliday')
+    data.loc[data['StateHoliday'] == 'a', 'StateHoliday'] = '1'
+    data.loc[data['StateHoliday'] == 'b', 'StateHoliday'] = '2'
+    data.loc[data['StateHoliday'] == 'c', 'StateHoliday'] = '3'
+    data['StateHoliday'] = data['StateHoliday'].astype(float)
+
+    features.append('DayOfWeek')
+    features.append('month')
+    features.append('day')
+    features.append('year')
+    data['year'] = data.Date.dt.year
+    data['month'] = data.Date.dt.month
+    data['day'] = data.Date.dt.day
+    data['DayOfWeek'] = data.Date.dt.dayofweek
+
+    for x in ['a', 'b', 'c', 'd']:
+        features.append('StoreType' + x)
+        data['StoreType' + x] = data['StoreType'].map(lambda y: 1 if y == x else 0)
+
+    newCol = toBinary('Assortment', data)
+    features += newCol
+
+## Start of main script
+
+print("Load the training, test and store data using pandas")
+train = pd.read_csv("../input/train.csv", parse_dates=[2])
+test = pd.read_csv("../input/test.csv", parse_dates=[3])
+store = pd.read_csv("../input/store.csv")
+
+print("Assume store open, if not provided")
+train.fillna(1, inplace=True)
+test.fillna(1, inplace=True)
+
+print("Consider only open stores for training. Closed stores wont count into the score.")
+train = train[train["Open"] != 0]
+print("Use only Sales bigger then zero. Simplifies calculation of rmspe")
+train = train[train["Sales"] > 0]
+
+print("Join with store")
+train = pd.merge(train, store, on='Store')
+test = pd.merge(test, store, on='Store')
+
+features = []
+
+print("augment features")
+build_features(features, train)
+build_features([], test)
+print(features)
+print('Training data processed!')
+
+X_train, X_valid = train_test_split(train, test_size=0.012)
+y_train = np.log1p(X_train.Sales)
+y_valid = np.log1p(X_valid.Sales)
+dtrain = xgb.DMatrix(X_train[features], y_train)
+dvalid = xgb.DMatrix(X_valid[features], y_valid)
 
 
-def Outputs(data):
-    return np.round(1.-(1./(1.+np.exp(-data))))
+##############################Evolutionary search #########################
+'''
+Data preprocessing is done. Now we are in place for some parameter optimization. 
+Evolutionary Algorithm is a randomized meta optimization procedure that mimics natural evolution.
+The algorithm proceeds with first creating an initial random population of
+parameter values. The instances are scored using xgboost 5-fold CV. 
+Next, a new generation of population  is created as follows:
+- A small proportion of elite (i.e. top scoring) individuals is carried forward directly to the new population
+- The rest of the population is filled with randomly created individuals, by:
+    +randomly picking two parents from the top performing individuals of the last population (e.g. top 50%)
+    +combine the 'genes' (parameter values) randomly to create a new individual that inherits 
+    50% of the genes from each parent.
+    +with a small probability, we mutate some gene's value
+    
+- The new population is evaluated, and the loop continues until convergence, or until 
+a predefined number of generations has been reached. 
+'''
 
+from random import randint
+import random
 
-def GeneticFunction(data):
-    return ((np.minimum( ((((0.058823499828577 + data["Sex"]) - np.cos((data["Pclass"] / 2.0))) * 2.0)),  ((0.885868))) * 2.0) +
-            np.maximum( ((data["SibSp"] - 2.409090042114258)),  ( -(np.minimum( (data["Sex"]),  (np.sin(data["Parch"]))) * data["Pclass"]))) +
-            (0.138462007045746 * ((np.minimum( (data["Sex"]),  (((data["Parch"] / 2.0) / 2.0))) * data["Age"]) - data["Cabin"])) +
-            np.minimum( ((np.sin((data["Parch"] * ((data["Fare"] - 0.720430016517639) * 2.0))) * 2.0)),  ((data["SibSp"] / 2.0))) +
-            np.maximum( (np.minimum( ( -np.cos(data["Embarked"])),  (0.138462007045746))),  (np.sin(((data["Cabin"] - data["Fare"]) * 2.0)))) +
-            -np.minimum( ((((data["Age"] * data["Parch"]) * data["Embarked"]) + data["Parch"])),  (np.sin(data["Pclass"]))) +
-            np.minimum( (data["Sex"]),  ((np.sin( -(data["Fare"] * np.cos((data["Fare"] * 1.630429983139038)))) / 2.0))) +
-            np.minimum( ((0.230145)),  (np.sin(np.minimum( (((67.0 / 2.0) * np.sin(data["Fare"]))),  (0.31830988618379069))))) +
-            np.sin((np.sin(data["Cabin"]) * (np.sin((12.6275)) * np.maximum( (data["Age"]),  (data["Fare"]))))) +
-            np.sin(((np.minimum( (data["Fare"]),  ((data["Cabin"] * data["Embarked"]))) / 2.0) *  -data["Fare"])) +
-            np.minimum( (((2.675679922103882 * data["SibSp"]) * np.sin(((96) * np.sin(data["Cabin"]))))),  (data["Parch"])) +
-            np.sin(np.sin((np.maximum( (np.minimum( (data["Age"]),  (data["Cabin"]))),  ((data["Fare"] * 0.31830988618379069))) * data["Cabin"]))) +
-            np.maximum( (np.sin(((12.4148) * (data["Age"] / 2.0)))),  (np.sin((-3.0 * data["Cabin"])))) +
-            (np.minimum( (np.sin((((np.sin(((data["Fare"] * 2.0) * 2.0)) * 2.0) * 2.0) * 2.0))),  (data["SibSp"])) / 2.0) +
-            ((data["Sex"] - data["SibSp"]) * (np.cos(((data["Embarked"] - 0.730768978595734) + data["Age"])) / 2.0)) +
-            ((np.sin(data["Cabin"]) / 2.0) - (np.cos(np.minimum( (data["Age"]),  (data["Embarked"]))) * np.sin(data["Embarked"]))) +
-            np.minimum( (0.31830988618379069),  ((data["Sex"] * (2.212120056152344 * (0.720430016517639 - np.sin((data["Age"] * 2.0))))))) +
-            (np.minimum( (np.cos(data["Fare"])),  (np.maximum( (np.sin(data["Age"])),  (data["Parch"])))) * np.cos((data["Fare"] / 2.0))) +
-            np.sin((data["Parch"] * np.minimum( ((data["Age"] - 1.5707963267948966)),  ((np.cos((data["Pclass"] * 2.0)) / 2.0))))) +
-            (data["Parch"] * (np.sin(((data["Fare"] * (0.623655974864960 * data["Age"])) * 2.0)) / 2.0)) +
-            (0.31830988618379069 * np.cos(np.maximum( ((0.602940976619720 * data["Fare"])),  ((np.sin(0.720430016517639) * data["Age"]))))) +
-            (np.minimum( ((data["SibSp"] / 2.0)),  (np.sin(((data["Pclass"] - data["Fare"]) * data["SibSp"])))) * data["SibSp"]) +
-            np.tanh((data["Sex"] * np.sin((5.199999809265137 * np.sin((data["Cabin"] * np.cos(data["Fare"]))))))) +
-            (np.minimum( (data["Parch"]),  (data["Sex"])) * np.cos(np.maximum( ((np.cos(data["Parch"]) + data["Age"])),  (3.1415926535897931)))) +
-            (np.minimum( (np.tanh(((data["Cabin"] / 2.0) + data["Parch"]))),  ((data["Sex"] + np.cos(data["Age"])))) / 2.0) +
-            (np.sin((np.sin(data["Sex"]) * (np.sin((data["Age"] * data["Pclass"])) * data["Pclass"]))) / 2.0) +
-            (data["Sex"] * (np.cos(((data["Sex"] + data["Fare"]) * ((8.48635) * (63)))) / 2.0)) +
-            np.minimum( (data["Sex"]),  ((np.cos((data["Age"] * np.tanh(np.sin(np.cos(data["Fare"]))))) / 2.0))) +
-            (np.tanh(np.tanh( -np.cos((np.maximum( (np.cos(data["Fare"])),  (0.094339601695538)) * data["Age"])))) / 2.0) +
-            (np.tanh(np.cos((np.cos(data["Age"]) + (data["Age"] + np.minimum( (data["Fare"]),  (data["Age"])))))) / 2.0) +
-            (np.tanh(np.cos((data["Age"] * ((-2.0 + np.sin(data["SibSp"])) + data["Fare"])))) / 2.0) +
-            (np.minimum( (((281) - data["Fare"])),  (np.sin((np.maximum( ((176)),  (data["Fare"])) * data["SibSp"])))) * 2.0) +
-            np.sin(((np.maximum( (data["Embarked"]),  (data["Age"])) * 2.0) * (((785) * 3.1415926535897931) * data["Age"]))) +
-            np.minimum( (data["Sex"]),  (np.sin( -(np.minimum( ((data["Cabin"] / 2.0)),  (data["SibSp"])) * (data["Fare"] / 2.0))))) +
-            np.sin(np.sin((data["Cabin"] * (data["Embarked"] + (np.tanh( -data["Age"]) + data["Fare"]))))) +
-            (np.cos(np.cos(data["Fare"])) * (np.sin((data["Embarked"] - ((734) * data["Fare"]))) / 2.0)) +
-            ((np.minimum( (data["SibSp"]),  (np.cos(data["Fare"]))) * np.cos(data["SibSp"])) * np.sin((data["Age"] / 2.0))) +
-            (np.sin((np.sin((data["SibSp"] * np.cos((data["Fare"] * 2.0)))) + (data["Cabin"] * 2.0))) / 2.0) +
-            (((data["Sex"] * data["SibSp"]) * np.sin(np.sin( -(data["Fare"] * data["Cabin"])))) * 2.0) +
-            (np.sin((data["SibSp"] * ((((5.428569793701172 + 67.0) * 2.0) / 2.0) * data["Age"]))) / 2.0) +
-            (data["Pclass"] * (np.sin(((data["Embarked"] * data["Cabin"]) * (data["Age"] - (1.07241)))) / 2.0)) +
-            (np.cos((((( -data["SibSp"] + data["Age"]) + data["Parch"]) * data["Embarked"]) / 2.0)) / 2.0) +
-            (0.31830988618379069 * np.sin(((data["Age"] * ((data["Embarked"] * np.sin(data["Fare"])) * 2.0)) * 2.0))) +
-            ((np.minimum( ((data["Age"] * 0.058823499828577)),  (data["Sex"])) - 0.63661977236758138) * np.tanh(np.sin(data["Pclass"]))) +
-            -np.minimum( ((np.cos(((727) * ((data["Fare"] + data["Parch"]) * 2.0))) / 2.0)),  (data["Fare"])) +
-            (np.minimum( (np.cos(data["Fare"])),  (data["SibSp"])) * np.minimum( (np.sin(data["Parch"])),  (np.cos((data["Embarked"] * 2.0))))) +
-            (np.minimum( (((data["Fare"] / 2.0) - 2.675679922103882)),  (0.138462007045746)) * np.sin((1.5707963267948966 * data["Age"]))) +
-            np.minimum( ((0.0821533)),  (((np.sin(data["Fare"]) + data["Embarked"]) - np.cos((data["Age"] * (9.89287)))))))
+popSize=6; #population size, set from 20 to 100
+eliteSize=0.1; #percentage of elite instances to be ratained 
 
+paramList=['depth','nRound','eta','gamma','min_child_weight','lamda','alpha','colsample_bytree','subsample','fitness']
 
-def MungeData(data):
-    # Sex
-    data.drop(['Ticket', 'Name'], inplace=True, axis=1)
-    data.Sex.fillna('0', inplace=True)
-    data.loc[data.Sex != 'male', 'Sex'] = 0
-    data.loc[data.Sex == 'male', 'Sex'] = 1
-    # Cabin
-    data.Cabin.fillna('0', inplace=True)
-    data.loc[data.Cabin.str[0] == 'A', 'Cabin'] = 1
-    data.loc[data.Cabin.str[0] == 'B', 'Cabin'] = 2
-    data.loc[data.Cabin.str[0] == 'C', 'Cabin'] = 3
-    data.loc[data.Cabin.str[0] == 'D', 'Cabin'] = 4
-    data.loc[data.Cabin.str[0] == 'E', 'Cabin'] = 5
-    data.loc[data.Cabin.str[0] == 'F', 'Cabin'] = 6
-    data.loc[data.Cabin.str[0] == 'G', 'Cabin'] = 7
-    data.loc[data.Cabin.str[0] == 'T', 'Cabin'] = 8
-    # Embarked
-    data.loc[data.Embarked == 'C', 'Embarked'] = 1
-    data.loc[data.Embarked == 'Q', 'Embarked'] = 2
-    data.loc[data.Embarked == 'S', 'Embarked'] = 3
-    data.Embarked.fillna(0, inplace=True)
-    data.fillna(-1, inplace=True)
-    return data.astype(float)
+#Creating an initial population
+population=pd.DataFrame(np.zeros(shape=(popSize,len(paramList))),columns = paramList);
+population.depth=[randint(6,15) for p in range(0,popSize)]
+#population.nRound=[randint(50,500) for p in range(0,popSize)]  #number of boosting round
+population.nRound=[randint(5,10) for p in range(0,popSize)] #quick test
+population.eta=[random.uniform(0.6, 1) for p in range(0,popSize)]
+population.gamma=[random.uniform(0.01, 0.03) for p in range(0,popSize)]
+population.min_child_weight=[randint(1,20) for p in range(0,popSize)]
+population.lamda =[random.uniform(0.1,1) for p in range(0,popSize)]
+population.alpha =[random.uniform(0.1, 1) for p in range(0,popSize)]
+population.colsample_bytree=[random.uniform(0.7, 1) for p in range(0,popSize)]
+population.subsample=[random.uniform(0.7, 1) for p in range(0,popSize)]
+population.fitness=[random.uniform(100, 100) for p in range(0,popSize)]
 
+#Creating a new population based on an existing one
+def createNewPopulation(population,eliteSize=0.1,mutation_rate=0.2):
+    population.sort(['fitness'],ascending=1,inplace=True)
+    population.reset_index(drop=True,inplace=True)
+    popSize=population.shape[0]
+    nElite=int(round(eliteSize*popSize))
+    
+    new_population=population.copy(deep=True);
+    for i in range(nElite,popSize):    #form a new population from the top 50% instances
+        #get two random parents
+        p1=randint(nElite,int(popSize/2))
+        p2=randint(nElite,int(popSize/2))
+        
+        for attr in list(new_population.columns.values):
+            #print attr, population[attr][i]
+            if(random.uniform(0,1)>0.5 ):
+                new_population.ix[i,attr]=population.ix[p1,attr]
+            else:
+                new_population.ix[i,attr]=population.ix[p2,attr]
 
-if __name__ == "__main__":
-    train = pd.read_csv('../input/train.csv')
-    test = pd.read_csv('../input/test.csv')
-    mungedtrain = MungeData(train)
-    trainPredictions = Outputs(GeneticFunction(mungedtrain))
+            #injecting some mutation
+            if(random.uniform(0,1)<mutation_rate ):
+                attr=list(new_population.columns.values)[randint(0,8)]
+                if(attr=='depth'):
+                    new_population.ix[i,attr]= max(3,new_population.ix[i,attr]+randint(-2,2))
+                elif(attr=='nRound'):
+                    new_population.ix[i,attr]= max(10,new_population.ix[i,attr]+randint(-50,50))
+                elif(attr=='eta'):
+                    new_population.ix[i,attr]= max(0.1,new_population.ix[i,attr]+random.uniform(-0.05,0.05))
+                elif(attr=='gamma'):
+                    new_population.ix[i,attr]= max(0.1,new_population.ix[i,attr]+random.uniform(-0.005,0.005))
+                elif(attr=='min_child_weight'):
+                    new_population.ix[i,attr]= max(0,new_population.ix[i,attr]+randint(-2,2)  )                  
+                elif(attr=='lamda'):
+                    new_population.ix[i,attr]= max(0.1,new_population.ix[i,attr]+random.uniform(-0.05,0.05))                   
+                elif(attr=='alpha'):
+                    new_population.ix[i,attr]= max(0.1,new_population.ix[i,attr]+random.uniform(-0.05,0.05))                   
+                elif(attr=='colsample_bytree'):
+                    new_population.ix[i,attr]= max(0.6,new_population.ix[i,attr]+random.uniform(-0.05,0.05)) 
+                elif(attr=='subsample'):
+                    new_population.ix[i,attr]= max(0.6,new_population.ix[i,attr]+random.uniform(-0.05,0.05))                      
+    return new_population
 
-    pdtrain = pd.DataFrame({'PassengerId': mungedtrain.PassengerId.astype(int),
-                            'Predicted': trainPredictions.astype(int),
-                            'Survived': mungedtrain.Survived.astype(int)})
-    pdtrain.to_csv('gptrain.csv', index=False)
-    mungedtest = MungeData(test)
-    testPredictions = Outputs(GeneticFunction(mungedtest))
+#score each instance using 5-fold CV
+def testInstance(population,i,dtrain):
+    params = {"objective": "reg:linear",
+          "eta": population.eta[i],
+          "max_depth": population.depth[i],
+          "subsample": population.subsample[i],
+          "colsample_bytree": population.colsample_bytree[i],
+          "num_boost_round":int(population.nRound[i]),
+          "lambda":population.lamda[i],
+          "alpha":population.alpha[i],
+          "gamma":population.gamma[i],
+          "min_child_weight":population.min_child_weight[i],
+          "silent": 1,
+          #"seed": 1301
+          } 
+    history = xgb.cv(
+        params,
+        dtrain,  
+        #early_stopping_rounds=30, #no early stopping in Python yet!!!
+        num_boost_round  =int(population.nRound[i]),
+        nfold=5, # number of CV folds
+        #nthread=12, # number of CPU threads  
+        show_progress=False,
+        feval=rmspe_xg, # custom evaluation metric
+        obj=RMSPE_objective
+        #maximize=0 # the lower the evaluation score the better
+        )
+    return history["test-rmspe-mean"].iget(-1)
 
-    pdtest = pd.DataFrame({'PassengerId': mungedtest.PassengerId.astype(int),
-                            'Survived': testPredictions.astype(int)})
-    pdtest.to_csv('gptest.csv', index=False)
+def printResult(filename,population,i,generation): #print best instances to file
+    f1=open(filename, 'a')
+    f1.write('Generation %d Best fitness %f\n' % (generation , population.fitness[i]))
+    f1.write('"eta":%f\n'%population.eta[i])    
+    f1.write('"max_depth":%f\n'%population.depth[i])    
+    f1.write('"subsample":%f\n'%population.subsample[i])    
+    f1.write('"colsample_bytree":%f\n'%population.colsample_bytree[i])    
+    f1.write('"lambda":%f\n'%population.lamda[i])    
+    f1.write('"alpha":%f\n'%population.alpha[i])    
+    f1.write('"min_child_weight":%f\n'%population.min_child_weight[i])    
+    f1.write('"num_boost_round":%f\n'%population.nRound[i])  
+    f1.close()
+           
+#Main loop of the Evolutionary Algorithm: 
+#Populations are created and avaluated.
+
+nGeneration=2; #number of generations
+for run in range(nGeneration):
+    print("Generation %d\n" %run)
+    population=createNewPopulation(population,eliteSize=0.1,mutation_rate=0.2)
+    for i in range(popSize):
+        print ("Testing instance %d "%i)
+        population.ix[i,'fitness']=testInstance(population,i,dtrain)
+        print ("--Fitness %f \n " % population.fitness[i])
+    population.sort(['fitness'],ascending=1,inplace=True)
+    population.reset_index(drop=True,inplace=True)
+    printResult('Result.txt',population,0,run) #print best instances to file
+    print("Generation %d Best fitness (5-fold RMSPE CV): %f" %(run, population.fitness[0]))                
+                    
+                    
+                    
+##############################Testing#########################
+i=0 #selecting the best instance
+params = {"objective": "reg:linear",
+          "eta": population.eta[i],
+          "max_depth": population.depth[i],
+          "subsample": population.subsample[i],
+          "colsample_bytree": population.colsample_bytree[i],
+          "num_boost_round":int(population.nRound[i]),
+          "lambda":population.lamda[i],
+          "alpha":population.alpha[i],
+          "gamma":population.gamma[i],
+          "min_child_weight":population.min_child_weight[i],
+          "silent": 1          
+} 
+#train the final xgboost model
+gbm=xgb.train(params, dtrain,  feval=rmspe_xg, num_boost_round=int(population.nRound[i]), obj=RMSPE_objective, verbose_eval=True)
+          
+print("Make predictions on the test set")
+dtest = xgb.DMatrix(test[features])
+test_probs = gbm.predict(dtest)
+# Make Submission
+result = pd.DataFrame({"Id": test["Id"], 'Sales': np.expm1(test_probs)})
+result.to_csv("xgboost_10_submission.csv", index=False)  
+                    

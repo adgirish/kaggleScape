@@ -1,191 +1,634 @@
 
 # coding: utf-8
 
-# This kernel started as a demonstration of the impact of rounding the prediction to integers using some realistic examples (in line with the opinions stated in the Discussion (https://www.kaggle.com/c/web-traffic-time-series-forecasting/discussion/38727). In this version I used this cross-validation framework to explore the popular ideas (such as the use of the median of medians (MM) by Ehsan and the use of weekly seasonality by Clustifier (WK). The example as published here - a simple combination of both ideas - leads to LB 44.5 and with one small unpublished modification to 44.0 (top 3% as of yesterday). Both MM and WK are reasonably robust on all sets where I tested it  though I would not be suprised to see the score deteriorate to 46 in the future as it happened on some previous 60 days sets.
-#     
+# <a id='1'>1.About Kiva</a><br>
+# <a id='2'>2.Load Libraries</a><br>
+# <a id='3'>3.Getting the Data</a><br>
+# <a id='4'>4.Overview Of The Data</a><br>
+# <a id='5'>5.Looking For Missing Values</a><br>
+# <a id='6'>6.Lets Analyse The Data</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.1'>6.1 Top Countries to get Frequent Loans</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.2'>6.2.Top Sector to get Frequent Loans</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.3'>6.3 Top Uses to get Frequent Loans</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.4'>6.4 Top Activity to get Frequent Loans</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.5'>6.5 Distribution of loan across different region around the globe </a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.6'>6.6 Top Lender per Loan</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.7'>6.7 Popular Repayment Mode Of Loan</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='6.8'>6.8 Popular Loan Term(In Months)</a><br>
+# <a id='7'>7.Diving Deeper Now</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.1'>7.1 Distribution Of Loan Amount</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.2'>7.2 Distribution of Funded Amount</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.3'>Top Countries to get the highest Laont</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.4'>Top Sector to get the highest Laont</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.5'>Top Activity to get the highest Laont</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='7.6'>Top Use to get the highest Laont</a><br>
+# <a id='8'>8.Kiva Over The Years</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='8.1'>8.1 Year-wise Breakdown of Loan/Funding</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='8.2'>8.2 Month-Wise Breakdown of Loan </a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='8.3'>8.3.Average loan Amount Over the Years</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='8.4'>8.4 Average Fund amount over the years</a><br>
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a id='8.5'>8.5 Different Region Of Funding Over The Years</a><br>
+
+# # [1. ](# 1)About KIVA
+# 
+# Kiva Microfunds (commonly known by its domain name, Kiva.org) is a 501(c)(3) non-profit organization[2] that allows people to lend money via the Internet to low-income entrepreneurs and students in over 80 countries. 
+#                    Kiva's mission is “to connect people through lending to alleviate poverty
+# Kiva operates two models—Kiva.org and KivaZip.org. Kiva.org relies on a network of field partners to administer the loans on the ground. These field partners can be microfinance institutions, social businesses, schools or non-profit organizations. KivaZip.org facilitates loans at 0% directly to entrepreneurs via mobile payments and PayPal. In both Kiva.org and KivaZip.org, Kiva includes personal stories of each person who needs a loan because they want their lenders to connect with their entrepreneurs on a human level.                   
+#      [Another Cell](# another_cell)              
+
+# # [2. ](# 2)Lets Load the libraries
 # 
 
-# The idea is to split the 551 days that were given to us into 60-day segments and then use each 60-day segment as a validation for prediction trained on the previous sets. For example use the last 60 days for testing and previous 490 days for traing, next use the last 120 to 60 days for testing and the previous 430 for traing etc. Furthermore we can also remove any smaller number of days from the end of the dataset (eg the last 10 and then repeat the exercise)
-# 
-# The botom line: a) rounding matters, b) median of medians is beter than just medians, c) weekly seasonality matters
-# 
+# In[2]:
+
+
+
+import pandas as pd # package for high-performance, easy-to-use data structures and data analysis
+import numpy as np # fundamental package for scientific computing with Python
+import matplotlib
+import matplotlib.pyplot as plt # for plotting
+import seaborn as sns # for making plots with seaborn
+color = sns.color_palette()
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.offline as offline
+offline.init_notebook_mode()
+import plotly.tools as tls
+import squarify
+import mpl_toolkits
+from numpy import array
+from matplotlib import cm
+import folium
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings("ignore")
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# # [3. ](# 3) Lets get the dataset
+
+# ### Kiva CrowdFunding dataset.....
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import gc
 
-train = pd.read_csv('../input/train_1.csv', usecols=[0]+list(range(1,551)) ) # select a subset 
-train.fillna(0, inplace=True)
-train_flattened60 = pd.melt(train[list(train.columns[-60:])+['Page']], id_vars='Page', var_name='D60', value_name='V60')
-train_flattened120 = pd.melt(train[list(train.columns[-120:-60])+['Page']], id_vars='Page', var_name='D120', value_name='V120')
-train_flattened180 = pd.melt(train[list(train.columns[-180:-120])+['Page']], id_vars='Page', var_name='D180', value_name='V180')
-train_flattened120.drop(['Page'],axis=1,inplace=True)
-train_flattened180.drop(['Page'],axis=1,inplace=True)
-test = pd.concat([train_flattened60, train_flattened120, train_flattened180], axis=1, join_axes=[train_flattened60.index])
-del train_flattened60, train_flattened120, train_flattened180
-test.head(2)
+kiva_loans = pd.read_csv('../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv',parse_dates=['date'])
+kiva_mpi_locations= pd.read_csv('../input/data-science-for-good-kiva-crowdfunding/kiva_mpi_region_locations.csv')
+loan_theme_ids = pd.read_csv('../input/data-science-for-good-kiva-crowdfunding/loan_theme_ids.csv')
+loan_theme_region = pd.read_csv('../input/data-science-for-good-kiva-crowdfunding/loan_themes_by_region.csv')
 
+
+# ### Additional Kiva snapshot....
 
 # In[ ]:
 
 
-# create some means (m), medians (M), median of medians (MofM), means of medians (mofM) etc 
-# predictions (with different time windows):
+country_stats=pd.read_csv('../input/additional-kiva-snapshot/country_stats.csv')
+lenders=pd.read_csv('../input/additional-kiva-snapshot/lenders.csv')
+loan_coords=pd.read_csv('../input/additional-kiva-snapshot/loan_coords.csv')
+loans=pd.read_csv('../input/additional-kiva-snapshot/loans.csv')
+locations=pd.read_csv('../input/additional-kiva-snapshot/locations.csv')
 
-Windows= [7,14,28,35,42,49,56]
-tmp=train['Page'].to_frame()
-for i in Windows: tmp['M'+str(i)]=train.iloc[:,-i-60:-60].median(axis=1)
-tmp['MofM']=tmp.iloc[:,1:].median(axis=1) 
-tmp['mofM']=tmp.iloc[:,1:-1].mean(axis=1) 
-for i in [7,14]: tmp['m'+str(i)]=train.iloc[:,-i-60:-60].mean(axis=1)
-test=test.merge(tmp, on = 'Page')
-del tmp
-test.head(2)
 
+# ### Multidimensional Poverty Index dataset...
 
 # In[ ]:
 
 
-def smape(true,pred):
-    return 200.* (  (true-pred).abs()/(pred.abs()+true.abs()).replace({0:1}) ).mean()
+mpi_national=pd.read_csv('../input/mpi/MPI_national.csv')
 
+
+# ## [4. ](# 4)Lets have a quicklook of the datasets
+
+# #### kiva_loans data
 
 # In[ ]:
 
 
-# Create sample predictions first as floating mumbers and again 
-# as rounded to integers and then with ceiling  and floor
-# to be compared with the "true" set of the last 60 days
+kiva_loans.head(5)
 
-predictions=['pred1','M14', 'M49', 'MofM',  'm7','m14','mofM']         # float
-true=test['V60'].astype(int)
-test['weight']=np.random.uniform(0,1,len(test))
-test['pred1']=test['V120']*test['weight']+test['V180']*(1-test['weight'])
 
-plt.clf()
-s=pd.DataFrame(0,index=predictions,columns=['float','round','ceil','floor'])
-for j in predictions:
-    Float = smape(true,test[j])
-    Round = smape(true,test[j].round().astype(int))
-    Ceil = smape(true,np.ceil(test[j]))
-    Floor = smape(true,np.floor(test[j]))
-    s.loc[j,['float','round', 'ceil', 'floor']] = (Float,Round,Ceil,Floor)
-    print('{:>7} is {:.2f} round {:.2f} ceil {:.2f} floor {:.2f} '.
-          format(str(j),Float,Round,Ceil,Floor))
+# #### Kiva Mpi Region data
 
-s.plot(kind='bar',ylim=(42,62), figsize=(10,6))
+# In[ ]:
+
+
+kiva_mpi_locations.head(5)
+
+
+# #### Loan_Theme_ids data
+
+# In[ ]:
+
+
+loan_theme_ids.head(5)
+
+
+# #### Loan_themes_by_region data
+
+# In[ ]:
+
+
+loan_theme_region.head(5)
+
+
+# #### country_stats data
+
+# In[ ]:
+
+
+country_stats.head(5)
+
+
+# #### Lenders data
+
+# In[ ]:
+
+
+lenders.head(5)
+
+
+# #### Loans data
+
+# In[ ]:
+
+
+loans.head(5)
+
+
+# #### Mpi national data..
+
+# In[ ]:
+
+
+mpi_national.head()
+
+
+# # [5. ](# 5)Missing Values
+
+# ### Kiva_loans Missing
+
+# In[ ]:
+
+
+kiva_miss=kiva_loans.isnull().sum().sort_values(ascending=False).reset_index()
+kiva_miss.columns=['Column','Count%']
+kiva_miss=kiva_miss[kiva_miss['Count%']>0]
+kiva_miss['Count%']=(kiva_miss['Count%']*100)/kiva_loans.shape[0]
+kiva_miss
+
+
+# ## Country_stats Missing Data
+
+# In[ ]:
+
+
+country_miss=country_stats.isnull().sum().sort_values(ascending=False).reset_index()
+country_miss.columns=['Column','Count%']
+country_miss=kiva_miss[country_miss['Count%']>0]
+country_miss['Count%']=(country_miss['Count%']*100)/country_stats.shape[0]
+country_miss
+
+
+# # [6. ](# 6)Analysis Of The Data
+
+# ## [6.1 ](# 6.1)Top Countries to get Frequent loan
+# 1.  As we know kiva operates in many countries,but here we will only consider top 10 countries.
+# 2. As kiva's policy is to lend money to low-income entrepreneurs so chances are high that countries with low GDP tends to get more loan.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+country_count=kiva_loans['country'].value_counts()
+top_country=country_count.head(10)
+sns.barplot(top_country.values,top_country.index)
+
+plt.xlabel('Loan Counts',fontsize=12)
+plt.ylabel('Country Name',fontsize=12)
+plt.title('Top countries to take loan from Kiva',fontsize=18)
+plt.show()
+
+
+# ### Top 5 countries to get highest number of loans are:<br>
+# **Philippines<br>
+# Kenya<br>
+# El Salvador<br>
+# Combodia<br>
+# Pakistan**<br>
+
+# In[ ]:
+
+
+country = kiva_loans['country'].value_counts().reset_index()
+country.columns = ['country', 'Total_loans']
+
+
+
+data = [ dict(
+        type = 'choropleth',
+        locations = country['country'],
+        locationmode = 'country names',
+        z = country['Total_loans'],
+        text = country['country'],
+        colorscale='Rainbow',
+        marker = dict(line = dict (width = 0.5) ),
+        colorbar = dict(autotick = False,tickprefix = '',title = 'Number of Loans'),
+      ) ]
+
+layout = dict(
+    title = 'Total Loans for Different Countries',
+    geo = dict(
+        showframe = False,
+        showcoastlines = True,
+        projection = dict(
+            type = 'Mercator'
+        )
+    )
+)
+
+fig = dict( data=data, layout=layout )
+py.iplot( fig, validate=False, filename='loans-world-map')
+
+
+# ## [6.2 ](# 6.2)Top Sectors to get frequent Number of Loans
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+sector_count=kiva_loans['sector'].value_counts()
+
+top_sector=sector_count.head(10)
+sns.barplot(top_sector.values,top_sector.index)
+
+plt.xlabel('Loan Counts',fontsize=12)
+plt.ylabel('Sector Name',fontsize=12)
+plt.title('Important sector for Kiva',fontsize=18)
+plt.show()
+
+
+# ### Top sector is Agriculture which is also an indication that most of the loans are given to developing countries as agro-food sector is the backbone for their gwoth.
+
+# ## [6.3 ](# 6.3)Top Uses to get frequent Number of Loans
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+use_count=kiva_loans['use'].value_counts()
+top_use=use_count.head(10)
+sns.barplot(top_use.values,top_use.index)
+
+plt.xlabel('Loan Counts',fontsize=12)
+plt.ylabel('Use of the Loan Name',fontsize=12)
+plt.title('Important Use of Loan',fontsize=18)
+plt.show()
+
+
+# ## [6.4 ](# 6.4)Top Activities to get frequent Number of Loans
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+country_count=kiva_loans['activity'].value_counts()
+top_country=country_count.head(10)
+sns.barplot(top_country.values,top_country.index)
+
+plt.xlabel('Loan Counts',fontsize=12)
+plt.ylabel('Activity Name',fontsize=12)
+plt.title('Top activities for Kiva laon',fontsize=18)
+plt.show()
+
+
+# #### Agriculture,Food,Farming are important activies which is predictable 
+
+# In[ ]:
+
+
+index=['Higher education costs','Home Applicances','Clothing Sales','Retail','Pigs','Agriculture','Food Production/Sales','Personal Housing Expenses','General Store','Farming']
+activity_list = []
+top=kiva_loans[kiva_loans['activity'].isin(index)]
+for sector in top["activity"].values:
+    activity_list.extend( [lst.strip() for lst in sector.split(",")] )
+temp = pd.Series(activity_list).value_counts()
+
+tag = (np.array(temp.index))
+sizes = (np.array((temp / temp.sum())*100))
+plt.figure(figsize=(15,8))
+
+trace = go.Pie(labels=tag, values=sizes)
+layout = go.Layout(title='Activity Distribution')
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="Activity Distribution")
+plt.show()
+
+
+# ## [6.5 ](# 6.5)Distribution Of loan across differnt regions around the globe
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+world_region_count=kiva_mpi_locations['world_region'].value_counts()
+top_sector=world_region_count
+sns.barplot(top_sector.values,top_sector.index)
+
+plt.xlabel('Loan Counts',fontsize=12)
+plt.ylabel('World Regions',fontsize=12)
+plt.title('World Region for Kiva loans',fontsize=18)
+plt.show()
+
+
+# ## [6.6](# 6.6)Top Lender Count Per Loan
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+lender_count=kiva_loans['lender_count'].value_counts()
+top_lender=lender_count.head(10)
+sns.barplot(top_lender.index,top_lender.values)
+
+plt.xlabel('Leander Count per Lo',fontsize=12)
+plt.ylabel('Total cases',fontsize=12)
+plt.title('Number Of Lenders per Loan',fontsize=18)
+plt.show()
+
+
+# ## [6.7 ](# 6.7)Popular Repayment Mode of Loan
+
+# In[ ]:
+
+
+repay_list = []
+for repay in kiva_loans["repayment_interval"].values:
+    repay_list.extend( [lst.strip() for lst in repay.split(",")] )
+temp = pd.Series(repay_list).value_counts()
+
+tag = (np.array(temp.index))
+sizes = (np.array((temp / temp.sum())*100))
+plt.figure(figsize=(15,8))
+
+trace = go.Pie(labels=tag, values=sizes)
+layout = go.Layout(title='Repay Distribution')
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig, filename="Repay Distribution")
+plt.show()
+
+
+# ## [6.8 ](# 6.8)Popular Loan Term(in months)
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+
+country_count=kiva_loans['term_in_months'].value_counts().sort_values(ascending=False)
+top_country=country_count.head(30)
+sns.barplot(top_country.index,top_country.values)
+
+plt.xlabel('Number Of Weeks',fontsize=12)
+plt.ylabel('Total Case',fontsize=12)
+plt.title('Loan Term for Kiva loans',fontsize=18)
+plt.show()
+
+
+# # [7. ](# 7)Lets Dive Deeper Now
+
+# ## [7.1 ](# 7.1)Distribution of Loan Amount<br>
+# Let's take a look at how requested loan amounts are distributed
+
+# In[ ]:
+
+
+fig=plt.figure(figsize=(10,8))
+sns.distplot(kiva_loans['loan_amount'])
+
+plt.show()
+
+
+# Let's look at 95th percentile for plotting this data.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+sns.distplot(kiva_loans[kiva_loans['loan_amount'] < kiva_loans['loan_amount'].quantile(.95) ]['loan_amount'])
+plt.show()
+
+
+# ## [7.2 ](# 7.2)Distribution Of Funded Amount<br>
+# Lets look at the spread of distributed amount
+
+# In[ ]:
+
+
+fig=plt.figure(figsize=(10,8))
+sns.distplot(kiva_loans['funded_amount'])
+
+plt.show()
+
+
+# Lets look at the 95th percentile of the data
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+sns.distplot(kiva_loans[kiva_loans['funded_amount'] < kiva_loans['funded_amount'].quantile(.95) ]['funded_amount'])
+plt.show()
+
+
+# ## [7.3 ](# 7.3)Top Country which Get Highest Loan(In terms of mean loan value)
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+country = (kiva_loans.groupby(['country'])['loan_amount'].mean().sort_values(ascending=False).head(10))
+sns.barplot(country.values, country.index, )
+
+plt.xlabel('Mean loan amount ', fontsize=20)
+plt.ylabel('Countries', fontsize=20)
+plt.title('Countries Getting Highest Loan Amount', fontsize=24)
+plt.show()
+
+
+# ## [7.4 ](# 7.4)Top Sector which got highest loan(average loan value)
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+country = (kiva_loans.groupby(['sector'])['loan_amount'].mean().sort_values(ascending=False).head(10))
+sns.barplot(country.values, country.index, )
+
+plt.xlabel('Mean loan amount ', fontsize=20)
+plt.ylabel('Sector', fontsize=20)
+plt.title('Sector Getting Highest Loan Amount', fontsize=24)
+plt.show()
+
+
+# ## [7.5 ](# 7.5)Top Activity which got the highest loan
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+activity = (kiva_loans.groupby(['activity'])['loan_amount'].mean().sort_values(ascending=False).head(10))
+sns.barplot(activity.values, activity.index, )
+
+plt.xlabel('Mean loan amount ', fontsize=20)
+plt.ylabel('Top Activity', fontsize=20)
+plt.title('Activity Getting Highest Loan Amount', fontsize=24)
+plt.show()
+
+
+# ## [7.6 ](# 7.6)Top use of the Loan(In terms of mean amount Spend on that activity)
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,12))
+use = (kiva_loans.groupby(['use'])['loan_amount'].mean().sort_values(ascending=False).head(10))
+sns.barplot(use.values, use.index, )
+
+plt.xlabel('Mean loan amount ', fontsize=20)
+plt.ylabel('Top Use', fontsize=20)
+plt.title('Top use of the Loan Money', fontsize=24)
+plt.show()
+
+
+# # [8. ](# 8)Kiva Over The Years(Kiva's Spending) 
+
+# ## [8.1 ](# 8.1)Year-Wise Breakdown of Loan/Funding
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,10))
+kiva_loans['Year']=kiva_loans.date.dt.year
+year_count=kiva_loans['Year'].value_counts().sort_values(ascending=False)
+top_country=year_count.head(30)
+sns.barplot(top_country.index,top_country.values)
+
+plt.xlabel('Year',fontsize=12)
+plt.ylabel('Total',fontsize=12)
+plt.title('Year-wise Breakdown of Loan/Funding',fontsize=18)
 plt.show()
 
 
 # In[ ]:
 
 
-Float = smape(true,test['mofM'])
-Round1 = smape(true,test['mofM'].round())
-Round2 = smape(true,test['mofM'].where(test['mofM']>=0.5,0))
-Round3 = smape(true,test['mofM'].where(test['mofM']>1,0))
-print(' float {:.2f} round {:.2f}  1/2: {:.2f}  1: {:.2f}'.format(Float, Round1,Round2,Round3))
+df=kiva_loans.loc[:,['Year','funded_amount']]
+year_count=df['Year'].value_counts()
+
+figure=plt.figure(figsize=(12,10))
+sns.pointplot(year_count.index,year_count.values)
+
+plt.xlabel('Year',fontsize=12)
+plt.ylabel('Total NUmber Of Loans',fontsize=12)
+plt.title('Year-Wise Breakdown',fontsize=18)
+plt.show()
 
 
-# We see that rounding is usually better than taking the ceiling or floor and also that most of the gain is from replacing values between 0 and 1/2 by 0 since by definition smape is 0 for 0/0 (even though rounding still matters for numbers greater than 1 as well).
-# 
-# Next we look at the weekly seasonality:
-
-# In[ ]:
-
-
-for i in ['D60','D120','D180']: test[i] = test[i].astype('datetime64[ns]')
-test['wk_60']= test.D60.dt.dayofweek >=5  
-test['wk_120']= test.D120.dt.dayofweek >=5  
-test['wk_180']= test.D180.dt.dayofweek >=5  
-
+# ## [8.2 ](# 8.2)Monthwise Breakdown of Kiva Loans for differnt Years
 
 # In[ ]:
 
 
-colm=test.columns[7:7+len(Windows)]    # save the names of the median columns
+kiva_loans['Months']=kiva_loans.date.dt.month
+fig=plt.figure(figsize=(15,8))
+df=kiva_loans.groupby(['Year', 'Months']).count()
+df=df.reset_index()
+sns.pointplot(df.Months,df.loan_amount,hue=df.Year)
 
-cv=60    # chose 60 or 120 or 180 
-if cv !=60:   
-    tmp=train['Page'].to_frame()
-    test1=test['Page'].to_frame()
-    for i in Windows: tmp['M'+str(i)]=train.iloc[:,-i-cv:-cv].median(axis=1)
-    test1=test1.merge(tmp, on = 'Page')
-    for i in Windows: test['M'+str(i)]=test1['M'+str(i)]
-    del tmp, test1
-
-colmw=[]
-for i in Windows:
-    print(cv,i, end=' ')
-    val='MW'+str(i)
-    colmw=colmw+[val]
-    tmp = pd.melt(train[list(train.columns[-i-cv:-cv])+['Page']], 
-                  id_vars='Page', var_name='D', value_name=val)
-    tmp['D'] = tmp['D'].astype('datetime64[ns]')
-    tmp['wk_'+str(cv)]= tmp.D.dt.dayofweek  >= 5
-    tmp1 = tmp.groupby(['Page','wk_'+str(cv)]).median().reset_index()
-    test = test.merge(tmp1, how='left')
-
-print(test.shape)
-del tmp,tmp1
-gc.collect()
+plt.xlabel('Month(Jan-Dec)',fontsize=12)
+plt.ylabel('Total number Of Loans',fontsize=12)
+plt.title('Month-Wise Breakdown',fontsize=18)
+plt.show()
 
 
-# Let us plot the score for the median prediction with (MW) and without (M) grouping by weekends as well as the median of medians of the medians (MMW) that take into account the seasonality. The last one starts with taking just two medians and ends with taking all. The conclusion is that taking the median of the full set of medians with weekly seasonality is better. 
-# 
+# ## [8.3 ](# 8.3)Mean Loan Amount monthwise over-the Years
 
 # In[ ]:
 
 
-plt.clf()
-true=test['V'+str(cv)]
-smape_all=pd.DataFrame(0,index=colm,columns=[ 'M','MW','MMW'])
-for i in range(0,len(colm)) :   
-    smape_all.loc[colm[i],'M'] = smape(true,test[colm[i]])
-    smape_all.loc[colm[i],'MW'] = smape(true,test[colmw[i]])
-    smape_all.loc[colm[i],'MMW'] = smape(true,test.loc[:,colmw[0:i]].median(axis=1).round())        
-    print(' M smape from {:>7} is {:.2f} with wk {:.2f} and MM {:.2f}'.format(
-        colm[i], smape_all.loc[colm[i],'M'],smape_all.loc[colm[i],'MW']
-         ,smape_all.loc[colm[i],'MMW']))
+fig=plt.figure(figsize=(15,8))
+df=kiva_loans.groupby(['Year', 'Months']).mean()
+df=df.reset_index()
+sns.pointplot(df.Months,df.loan_amount,hue=df.Year)
 
-test['MMW']=test.loc[:,colmw].median(axis=1).round()
-smape_all.plot(ylim=(43,50), figsize=(10,6))
-plt.show()    
-gc.collect()
+plt.xlabel('Month(Jan-Dec)',fontsize=12)
+plt.ylabel('Mean Loan Amount',fontsize=12)
+plt.title('Month-Wise Breakdown',fontsize=18)
+plt.show()
 
 
-# And finally:
+# ## [8.4 ](# 8.4)Mean Funded Amount monthwise over-the Years
 
 # In[ ]:
 
 
-#this scores 44.5 on LB  (and with one small modification 44.0, ie top 3% as of yesterday)
+fig=plt.figure(figsize=(15,8))
+df=kiva_loans.groupby(['Year', 'Months']).mean()
+df=df.reset_index()
+sns.pointplot(df.Months,df.funded_amount,hue=df.Year)
 
-# define the Windows according to Ehsan's kernel
-r = 1.61803398875  
-Windows = np.round(r**np.arange(0,9) * 7).astype(int)
+plt.xlabel('Month(Jan-Dec)',fontsize=12)
+plt.ylabel('Average Funded Amount',fontsize=12)
+plt.title('Month-Wise Breakdown',fontsize=18)
+plt.show()
 
-test = pd.read_csv('../input/key_1.csv')
-test['Date'] = test.Page.apply(lambda x: x[-10:])
-test['Page'] = test.Page.apply(lambda x: x[:-11])
-test['Date'] = test['Date'].astype('datetime64[ns]')
-test['wk']= test.Date.dt.dayofweek >=5
 
-for i in Windows:
-    print(i,end= ' ')
-    val='MW'+str(i)
-    tmp = pd.melt(train[list(train.columns[-i:])+['Page']], 
-                  id_vars='Page', var_name='D', value_name=val)
-    tmp['D'] = tmp['D'].astype('datetime64[ns]')
-    tmp['wk']= tmp.D.dt.dayofweek  >=5           
-    tmp1 = tmp.groupby(['Page','wk']).median().reset_index()
-    test = test.merge(tmp1, how='left')
-    
-test['Visits']=test.iloc[:,4:].median(axis=1).round().astype(int)
-test[['Id','Visits']].to_csv('sub.csv', index=False)
-gc.collect()
+# ## [8.5 ](# 8.5)Different Area Of Funding Over The Years
+
+# In[ ]:
+
+
+for x in range(2014,2018):
+    kiva_loans_14=kiva_loans[kiva_loans['Year']==x]
+    country = kiva_loans_14['country'].value_counts().reset_index()
+    country.columns = ['country', 'Total_loans']
+
+
+
+    data = [ dict(
+        type = 'choropleth',
+        locations = country['country'],
+        locationmode = 'country names',
+        z = country['Total_loans'],
+        text = country['country'],
+        colorscale='Reds',
+        marker = dict(line = dict (width = 0.5) ),
+        colorbar = dict(autotick = False,tickprefix = '',title = 'Number of Loans'),
+      ) ]
+
+    layout = dict(
+      title = ('Total Loans for Different Countries ('+str(x))+')',
+      geo = dict(
+        showframe = False,
+        showcoastlines = True,
+        projection = dict(
+            type = 'Mercator'
+           )
+        )
+     )
+
+    fig = dict( data=data, layout=layout )
+    py.iplot( fig, validate=False, filename='loans-world-map')
 

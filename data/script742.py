@@ -1,78 +1,86 @@
 
 # coding: utf-8
 
+# # The Problem:
+# #### The training data, `train.csv` is a large file (~5 GB) - this can be problematic if you have relatively low RAM (8 GB).
+# # The Solution:
+# ## Set `low_memory=True` in Pandas' `read_csv`
+# On a machine with relatively low RAM, attempting to load the entire file in a pandas DataFrame can lead to failure caused by running out of memory.  One way of fixing this issue is to make use of the `low_memory=True` argument of `read_csv`.  With this method, the csv file is processed in chunks requiring lower memory usage, while at the same time reading the csv's contents into a single DataFrame.
+# ## But the Jupyter kernel still keeps restarting even with `low_memory=True`....why?
+# The dtypes of the columns of the DataFrame must be specified in `read_csv` if we wish to set `low_memory=True`.  This is because not specifying dtypes forces pandas to guess column dtypes - which is a memory-intensive task.  Please see this Stack Overflow answer for a additional explanation:
+# https://stackoverflow.com/a/27232309
 # 
-# **Parsing Nested JSON with Pandas**
-# 
-# Nested JSON files can be painful to flatten and load into Pandas. Follow along with this quick tutorial as:
-# 
-# * I use the nested '''raw_nyc_phil.json''' to create a flattened pandas datafram from one nested array
-# * You flatten another array. 
-# * We unpack a deeply nested array
-# 
-# Fork this notebook if you want to try it out!
-
-# In[ ]:
-
-
-import json 
-import pandas as pd 
-from pandas.io.json import json_normalize #package for flattening json in pandas df
-
-#load json object
-with open('../input/raw_nyc_phil.json') as f:
-    d = json.load(f)
-
-#lets put the data into a pandas df
-#clicking on raw_nyc_phil.json under "Input Files"
-#tells us parent node is 'programs'
-nycphil = json_normalize(d['programs'])
-nycphil.head(3)
-
-
-# We see (at least) two nested columns, ```concerts``` and ```works```. Json_normalize [docs](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.io.json.json_normalize.html) give us some hints how to flatten semi-structured data further. Let's unpack the ```works``` column into a  standalone dataframe. We'll also  grab the flat columns so we can do analysis. The parameters here are a bit unorthodox, see if you can understand what is happening.
+# # The Complete Solution
+# We first create a new file called `small_train.csv` using only the first row of data from `train.csv`:
 # 
 
 # In[ ]:
 
 
-works_data = json_normalize(data=d['programs'], record_path='works', 
-                            meta=['id', 'orchestra','programID', 'season'])
-works_data.head(3)
+get_ipython().system('head -2 train.csv > small_train.csv')
 
-
-# Great! We:
-# 
-# 1. passed the json object data path ```d[programs]```
-# 
-# 2. passed the record path within the object we wanted to parse ```works```
-# 
-# 3. passed the parent metadata we wanted to append
-# 
-# Your turn: can you unpack the ```concerts``` data?
-# 
 
 # In[ ]:
 
 
-#flatten concerts column here
-concerts_data = 
+import pandas as pd
 
-
-# **Deeply Nested Data**
-# 
-# So what if you run into a nested array inside your nested array? If you go back and look at the flattened ```works_data```, you can see a *second* nested column, ```soloists```. Luckily, json_normalize docs show that you can pass in a list of columns, rather than a single column, to the record path to directly unflatten deeply nested json.
-# 
-# Let's flatten the ```'soloists'``` data here by passing a list. Since ```soloists``` is nested in ```works```, we can pass that as:
 
 # In[ ]:
 
 
-soloist_data = json_normalize(data=d['programs'], record_path=['works', 'soloists'], 
-                              meta=['id'])
-soloist_data.head(3)
+small_train = pd.read_csv('../input/small-train/small_train.csv')
+print(small_train)
 
 
-# Hope you enjoyed this quick tutorial and JSON parsing is a bit less daunting. 
+# In[ ]:
+
+
+types_dict = small_train.dtypes.to_dict()
+types_dict
+
+
+# Next, let's update types of some columns to make them more memory efficient.  This is based on information shared in the following kernel:
 # 
-# **Fork this notebook** to complete the ```concerts``` dataframe, and try playing around with changing the different parameters.
+# https://www.kaggle.com/jagangupta/memory-optimization-and-eda-on-entire-dataset
+# 
+# I highly recommend looking at the link above - it shows additonal steps for making your dataframe even more memory efficient.
+
+# In[ ]:
+
+
+types_dict = {'id': 'int32',
+             'item_nbr': 'int32',
+             'store_nbr': 'int8',
+             'unit_sales': 'float32'}
+
+
+# Now, we can use `types_dict` to specify the dtypes of each column of the DataFrame we are loading the `train.csv` file into:
+
+# In[ ]:
+
+
+grocery_train = pd.read_csv('train.csv', low_memory=True, dtype=types_dict)
+
+
+# The steps above will let you load the entire 5 GB file in memory without crashing the Jupyter kernel.
+
+# # Feather Format: Quickly Reloading Saved Training Dataframe
+
+# Every time you reopen your Jupyter notebook, you need not rerun the steps shown in the previous section.  Instead, simply use the **feather** format to save the `grocery_train` dataframe after you load it in memory the first time.  The feather format enables very fast read and write access for working with dataframes, both in `R` and `Python` (read more here: https://blog.rstudio.com/2016/03/29/feather/).  Note that your pandas version must be 0.20.0 or newer for the code below to work.
+
+# In[ ]:
+
+
+os.makedirs('tmp', exist_ok=True)  # Make a temp dir for storing the feather file
+# Save feather file, requires pandas 0.20.0 at least:
+grocery_train.to_feather('./tmp/grocery_train_raw')
+
+
+# ### Going forward, you can read the `grocery_train` dataframe directly from the feather file as shown below:
+
+# In[ ]:
+
+
+grocery_train = pd.read_feather('./tmp/train_sub_raw')
+

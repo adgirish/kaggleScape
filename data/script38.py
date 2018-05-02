@@ -1,202 +1,133 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-# Inspiration 1: https://www.kaggle.com/tunguz/logistic-regression-with-words-and-char-n-grams/code
-# Inspiration 2: https://www.kaggle.com/jhoward/nb-svm-strong-linear-baseline
-
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LogisticRegression
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-import re, string
-import time
-from scipy.sparse import hstack
-from scipy.special import logit, expit
-
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score
-
+# * **Introduction**
+# 
+# I am using RNN method to predict the BTC price. 
 
 # In[ ]:
 
 
-# Functions
-def tokenize(s): return re_tok.sub(r' \1 ', s).split()
+# First step, import libraries.
+import numpy as np 
+import pandas as pd 
+from matplotlib import pyplot as plt
 
 
-def pr(y_i, y, x):
-    p = x[y==y_i].sum(0)
-    return (p+1) / ((y==y_i).sum()+1)
-
-
-def get_mdl(y,x, c0 = 4):
-    y = y.values
-    r = np.log(pr(1,y,x) / pr(0,y,x))
-    m = LogisticRegression(C= c0, dual=True)
-    x_nb = x.multiply(r)
-    return m.fit(x_nb, y), r
-
-
-def multi_roc_auc_score(y_true, y_pred):
-    assert y_true.shape == y_pred.shape
-    columns = y_true.shape[1]
-    column_losses = []
-    for i in range(0, columns):
-        column_losses.append(roc_auc_score(y_true[:, i], y_pred[:, i]))
-    return np.array(column_losses).mean()
-
+# *** Import the datasets.**
+# 
+# Second, import the dataset. After reviewing the dataset, I think I need to recode the datetime since it is better to use the dataset sorted by date not by minutes. Then I group the dataset by date and take the average price of all minutes in the day as the price of the day.
 
 # In[ ]:
 
 
-model_type = 'lrchar'
-todate = time.strftime("%d%m")
+# Import the dataset and encode the date
+df = pd.read_csv('../input/coinbaseUSD_1-min_data_2014-12-01_to_2017-10-20.csv.csv')
+df['date'] = pd.to_datetime(df['Timestamp'],unit='s').dt.date
+group = df.groupby('date')
+Real_Price = group['Weighted_Price'].mean()
 
 
-# # Data
-
-# In[ ]:
-
-
-# read data
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-subm = pd.read_csv('../input/sample_submission.csv')
-
-id_train = train['id'].copy()
-id_test = test['id'].copy()
-
-# add empty label for None
-label_cols = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-train['none'] = 1-train[label_cols].max(axis=1)
-# fill missing values
-COMMENT = 'comment_text'
-train[COMMENT].fillna("unknown", inplace=True)
-test[COMMENT].fillna("unknown", inplace=True)
-
+# *** Split the dataset.** 
+# 
+# I want to predict the BTC price for a month, so I take the data of last 30 days as the test set
 
 # In[ ]:
 
 
-# Tf-idf
-# prepare tokenizer
-re_tok = re.compile(f'([{string.punctuation}“”¨«»®´·º½¾¿¡§£₤‘’])')
-
-# create sparse matrices
-n = train.shape[0]
-#vec = TfidfVectorizer(ngram_range=(1,2), tokenizer=tokenize,  min_df=3, max_df=0.9, strip_accents='unicode',
-#                      use_idf=1, smooth_idf=1, sublinear_tf=1 )
-
-word_vectorizer = TfidfVectorizer(
-    tokenizer=tokenize,
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='word', 
-    min_df = 5,
-    token_pattern=r'\w{1,}',
-    ngram_range=(1, 3))
-#     ,
-#     max_features=250000)
-
-all1 = pd.concat([train[COMMENT], test[COMMENT]])
-word_vectorizer.fit(all1)
-xtrain1 = word_vectorizer.transform(train[COMMENT])
-xtest1 = word_vectorizer.transform(test[COMMENT])
-
-char_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='char',
-    min_df = 3,
-    ngram_range=(1, 6))
-#     ,
-#     max_features=250000)
-
-all1 = pd.concat([train[COMMENT], test[COMMENT]])
-char_vectorizer.fit(all1)
-
-xtrain2 = char_vectorizer.transform(train[COMMENT])
-xtest2 = char_vectorizer.transform(test[COMMENT])
+# split data
+prediction_days = 30
+df_train= Real_Price[:len(Real_Price)-prediction_days]
+df_test= Real_Price[len(Real_Price)-prediction_days:]
 
 
-# # Model
+# *** Process Data**
+# 
+# I feature scale the data and reshape it since I want to use Keras
 
 # In[ ]:
 
 
-nfolds = 5
-xseed = 29
-cval = 4
+# Data preprocess
+training_set = df_train.values
+training_set = np.reshape(training_set, (len(training_set), 1))
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+training_set = sc.fit_transform(training_set)
+X_train = training_set[0:len(training_set)-1]
+y_train = training_set[1:len(training_set)]
+X_train = np.reshape(X_train, (len(X_train), 1, 1))
 
-# data setup
-xtrain = hstack([xtrain1, xtrain2], format='csr')
-xtest = hstack([xtest1,xtest2], format='csr')
-ytrain = np.array(train[label_cols].copy())
 
-# stratified split
-skf = StratifiedKFold(n_splits= nfolds, random_state= xseed)
-
-# storage structures for prval / prfull
-predval = np.zeros((xtrain.shape[0], len(label_cols)))
-predfull = np.zeros((xtest.shape[0], len(label_cols)))
-scoremat = np.zeros((nfolds,len(label_cols) ))
-score_vec = np.zeros((len(label_cols),1))
-
+# * **Building the model **
+# 
+# I build the RNN model using Keras. Choose some appropriate parameters
 
 # In[ ]:
 
 
-for (lab_ind,lab) in enumerate(label_cols):   
-    y = train[lab].copy()
-    print('label:' + str(lab_ind))
-    for (f, (train_index, test_index)) in enumerate(skf.split(xtrain, y)):
-        # split 
-        x0, x1 = xtrain[train_index], xtrain[test_index]
-        y0, y1 = y[train_index], y[test_index]    
-        # fit model for prval
-        m,r = get_mdl(y0,x0, c0 = cval)
-        predval[test_index,lab_ind] = m.predict_proba(x1.multiply(r))[:,1]
-        scoremat[f,lab_ind] = roc_auc_score(y1,predval[test_index,lab_ind])
-        # fit model full
-        m,r = get_mdl(y,xtrain, c0 = cval)
-        predfull[:,lab_ind] += m.predict_proba(xtest.multiply(r))[:,1]
-        print('fit:'+ str(lab) + ' fold:' + str(f) + ' score:%.6f' %(scoremat[f,lab_ind]))
-#    break
-predfull /= nfolds 
+# Importing the Keras libraries and packages
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# Initialising the RNN
+regressor = Sequential()
+
+# Adding the input layer and the LSTM layer
+regressor.add(LSTM(units = 4, activation = 'sigmoid', input_shape = (None, 1)))
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 5, epochs = 100)
 
 
-# In[ ]:
-
-
-score_vec = np.zeros((len(label_cols),1))
-for ii in range(len(label_cols)):
-    score_vec[ii] = roc_auc_score(ymat[:,ii], predval[:,ii])
-print(score_vec.mean())
-print(multi_roc_auc_score(ymat, predval))
-
-
-# # Store resultss
+# * **Prediction**
+# 
+# Notice that I only predict the price of the next day using the price today. Since there must be a lot of influence factors and it must have a lot of error when you predict a longer time.
 
 # In[ ]:
 
 
-# store prval
-prval = pd.DataFrame(predval)
-prval.columns = label_cols
-prval['id'] = id_train
-prval.to_csv('prval_'+model_type+'x'+str(cval)+'f'+str(nfolds)+'_'+todate+'.csv', index= False)
+# Making the predictions
+test_set = df_test.values
+inputs = np.reshape(test_set, (len(test_set), 1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (len(inputs), 1, 1))
+predicted_BTC_price = regressor.predict(inputs)
+predicted_BTC_price = sc.inverse_transform(predicted_BTC_price)
 
-# store prfull
-prfull = pd.DataFrame(predfull)
-prfull.columns = label_cols
-prfull['id'] = id_test
-prfull.to_csv('prfull_'+model_type+'x'+str(cval)+'f'+str(nfolds)+'_'+todate+'.csv', index= False)
 
-# store submission
-submid = pd.DataFrame({'id': subm["id"]})
-submission = pd.concat([submid, pd.DataFrame(prfull, columns = label_cols)], axis=1)
-submission.to_csv('sub_'+model_type+'x'+str(cval)+'f'+str(nfolds)+'_'+todate+'.csv', index= False)
+# * **Visualising**
+# 
+# Plot the predicted price and the real price. Compare the diference. The difference is larger when the time is further to the training set. That is why I only want to predict the price of one month
 
+# In[ ]:
+
+
+# Visualising the results
+plt.figure(figsize=(25,15), dpi=80, facecolor='w', edgecolor='k')
+ax = plt.gca()  
+plt.plot(test_set, color = 'red', label = 'Real BTC Price')
+plt.plot(predicted_BTC_price, color = 'blue', label = 'Predicted BTC Price')
+plt.title('BTC Price Prediction', fontsize=40)
+df_test = df_test.reset_index()
+x=df_test.index
+labels = df_test['date']
+plt.xticks(x, labels, rotation = 'vertical')
+for tick in ax.xaxis.get_major_ticks():
+    tick.label1.set_fontsize(18)
+for tick in ax.yaxis.get_major_ticks():
+    tick.label1.set_fontsize(18)
+plt.xlabel('Time', fontsize=40)
+plt.ylabel('BTC Price(USD)', fontsize=40)
+plt.legend(loc=2, prop={'size': 25})
+plt.show()
+
+
+# **Thank you **

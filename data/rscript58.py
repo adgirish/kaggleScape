@@ -1,402 +1,154 @@
-# coding: utf-8
-
-# mainly forking from notebook
-# https://www.kaggle.com/johnfarrell/simple-rnn-with-keras-script
-
-# ADDED
-# 5x scaled test set
-# category name embedding
-# some small changes like lr, decay, batch_size~
-
-# In[ ]:
-import os
-import gc
-import time
-start_time = time.time()
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn import ensemble, neighbors, linear_model, metrics, preprocessing
+from datetime import datetime
+import glob, re
 
+# from JdPaletto & the1owl1
+# JdPaletto - https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503?scriptVersionId=1867420
+# the1owl1 - https://www.kaggle.com/the1owl/surprise-me
 
-import scipy
-from sklearn.linear_model import Ridge, LogisticRegression
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from scipy.sparse import csr_matrix, hstack
-from sklearn.linear_model import SGDRegressor
-
-
-NUM_BRANDS = 4500
-NUM_CATEGORIES = 1000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 60000
-
-def handle_missing_inplace(dataset):
-    dataset['category_name'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
-
-
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category = dataset['category_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['category_name'].isin(pop_category), 'category_name'] = 'missing'
-
-
-def to_categorical(dataset):
-    dataset['category_name'] = dataset['category_name'].astype('category')
-    dataset['brand_name'] = dataset['brand_name'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
-    
-
-df_train =train = pd.read_csv('../input/train.tsv', sep='\t')
-df_test = test = pd.read_csv('../input/test.tsv', sep='\t')
-
-train['target'] = np.log1p(train['price'])
-# In[ ]:
-
-
-print(train.shape)
-print('5 folds scaling the test_df')
-print(test.shape)
-test_len = test.shape[0]
-def simulate_test(test):
-    if test.shape[0] < 800000:
-        indices = np.random.choice(test.index.values, 2800000)
-        test_ = pd.concat([test, test.iloc[indices]], axis=0)
-        return test_.copy()
-    else:
-        return test
-test = simulate_test(test)
-print('new shape ', test.shape)
-print('[{}] Finished scaling test set...'.format(time.time() - start_time))
-
-
-# In[ ]:
-
-#HANDLE MISSING VALUES
-print("Handling missing values...")
-def handle_missing(dataset):
-    dataset.category_name.fillna(value="missing", inplace=True)
-    dataset.brand_name.fillna(value="missing", inplace=True)
-    dataset.item_description.fillna(value="missing", inplace=True)
-    return (dataset)
-
-train = handle_missing(train)
-test = handle_missing(test)
-print(train.shape)
-print(test.shape)
-
-print('[{}] Finished handling missing data...'.format(time.time() - start_time))
-
-
-# In[ ]:
-
-
-#PROCESS CATEGORICAL DATA
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
-print("Handling categorical variables...")
-le = LabelEncoder()
-
-le.fit(np.hstack([train.category_name, test.category_name]))
-train['category'] = le.transform(train.category_name)
-test['category'] = le.transform(test.category_name)
-
-le.fit(np.hstack([train.brand_name, test.brand_name]))
-train['brand'] = le.transform(train.brand_name)
-test['brand'] = le.transform(test.brand_name)
-del le, train['brand_name'], test['brand_name']
-
-print('[{}] Finished PROCESSING CATEGORICAL DATA...'.format(time.time() - start_time))
-train.head(3)
-
-
-# In[ ]:
-
-
-#PROCESS TEXT: RAW
-print("Text to seq process...")
-print("   Fitting tokenizer...")
-from keras.preprocessing.text import Tokenizer
-raw_text = np.hstack([train.category_name.str.lower(), 
-                      train.item_description.str.lower(), 
-                      train.name.str.lower()])
-
-tok_raw = Tokenizer()
-tok_raw.fit_on_texts(raw_text)
-print("   Transforming text to seq...")
-train["seq_category_name"] = tok_raw.texts_to_sequences(train.category_name.str.lower())
-test["seq_category_name"] = tok_raw.texts_to_sequences(test.category_name.str.lower())
-train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
-test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
-train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
-test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
-train.head(3)
-
-print('[{}] Finished PROCESSING TEXT DATA...'.format(time.time() - start_time))
-
-
-# In[ ]:
-
-
-#EXTRACT DEVELOPTMENT TEST
-from sklearn.model_selection import train_test_split
-dtrain, dvalid = train_test_split(train, random_state=233, train_size=0.99)
-print(dtrain.shape)
-print(dvalid.shape)
-
-# In[ ]:
-
-
-#EMBEDDINGS MAX VALUE
-#Base on the histograms, we select the next lengths
-MAX_NAME_SEQ = 20 #17
-MAX_ITEM_DESC_SEQ = 60 #60 #269
-MAX_CATEGORY_NAME_SEQ = 20 #8
-MAX_TEXT = np.max([np.max(train.seq_name.max())
-                   , np.max(test.seq_name.max())
-                   , np.max(train.seq_category_name.max())
-                   , np.max(test.seq_category_name.max())
-                   , np.max(train.seq_item_description.max())
-                   , np.max(test.seq_item_description.max())])+2
-MAX_CATEGORY = np.max([train.category.max(), test.category.max()])+1
-MAX_BRAND = np.max([train.brand.max(), test.brand.max()])+1
-MAX_CONDITION = np.max([train.item_condition_id.max(), 
-                        test.item_condition_id.max()])+1
-
-print('[{}] Finished EMBEDDINGS MAX VALUE...'.format(time.time() - start_time))
-
-
-# In[ ]:
-
-
-#KERAS DATA DEFINITION
-from keras.preprocessing.sequence import pad_sequences
-
-def get_keras_data(dataset):
-    X = {
-        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
-        ,'item_desc': pad_sequences(dataset.seq_item_description
-                                    , maxlen=MAX_ITEM_DESC_SEQ)
-        ,'brand': np.array(dataset.brand)
-        ,'category': np.array(dataset.category)
-        ,'category_name': pad_sequences(dataset.seq_category_name
-                                        , maxlen=MAX_CATEGORY_NAME_SEQ)
-        ,'item_condition': np.array(dataset.item_condition_id)
-        ,'num_vars': np.array(dataset[["shipping"]])
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
     }
-    return X
 
-X_train = get_keras_data(dtrain)
-X_valid = get_keras_data(dvalid)
-X_test = get_keras_data(test)
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-print('[{}] Finished DATA PREPARARTION...'.format(time.time() - start_time))
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(
+        lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    data[df] = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[[
+        'reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date'})
+
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': 
+    [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].max().rename(columns={'visitors':'max_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+lbl = preprocessing.LabelEncoder()
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
+
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+
+train = pd.merge(data['tra'], stores, how='left', on=['air_store_id','dow']) 
+test = pd.merge(data['tes'], stores, how='left', on=['air_store_id','dow'])
+
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+
+col = [c for c in train if c not in ['id', 'air_store_id','visit_date','visitors']]
+train = train.fillna(-1)
+test = test.fillna(-1)
+
+def RMSLE(y, pred):
+    return metrics.mean_squared_error(y, pred)**0.5
+
+etc = ensemble.ExtraTreesRegressor(n_estimators=225, max_depth=5, n_jobs=-1, random_state=3)
+knn = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
+etc.fit(train[col], np.log1p(train['visitors'].values))
+knn.fit(train[col], np.log1p(train['visitors'].values))
+
+test['visitors'] = (etc.predict(test[col]) / 2) +(knn.predict(test[col]) / 2)
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
 
 
-# In[ ]:
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
+for k, v in dfs.items(): locals()[k] = v
 
-#KERAS MODEL DEFINITION
-from keras.layers import Input, Dropout, Dense, BatchNormalization, \
-    Activation, concatenate, GRU, Embedding, Flatten
-from keras.models import Model
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping#, TensorBoard
-from keras import backend as K
-from keras import optimizers
-from keras import initializers
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
 
-def rmsle(y, y_pred):
-    import math
-    assert len(y) == len(y_pred)
-    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 \
-              for i, pred in enumerate(y_pred)]
-    return (sum(to_sum) * (1.0/len(y))) ** 0.5
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
-dr = 0.25
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
 
-def get_model():
-    #params
-    dr_r = dr
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
+    how='left')['visitors_y'].values
+
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
+    on='air_store_id', how='left')['visitors_y'].values
     
-    #Inputs
-    name = Input(shape=[X_train["name"].shape[1]], name="name")
-    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
-    brand = Input(shape=[1], name="brand")
-    category = Input(shape=[1], name="category")
-    category_name = Input(shape=[X_train["category_name"].shape[1]], 
-                          name="category_name")
-    item_condition = Input(shape=[1], name="item_condition")
-    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
-    
-    #Embeddings layers
-    emb_size = 60
-    
-    emb_name = Embedding(MAX_TEXT, emb_size//3)(name)
-    emb_item_desc = Embedding(MAX_TEXT, emb_size)(item_desc)
-    emb_category_name = Embedding(MAX_TEXT, emb_size//3)(category_name)
-    emb_brand = Embedding(MAX_BRAND, 10)(brand)
-    emb_category = Embedding(MAX_CATEGORY, 10)(category)
-    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
-    
-    rnn_layer1 = GRU(25) (emb_item_desc)
-    rnn_layer2 = GRU(12) (emb_category_name)
-    rnn_layer3 = GRU(12) (emb_name)
-    
-    #main layer
-    main_l = concatenate([
-        Flatten() (emb_brand)
-        , Flatten() (emb_category)
-        , Flatten() (emb_item_condition)
-        , rnn_layer1
-        , rnn_layer2
-        , rnn_layer3
-        , num_vars
-    ])
-    main_l = Dropout(0.1)(Dense(512,activation='relu') (main_l))
-    main_l = Dropout(0.1)(Dense(64,activation='relu') (main_l))
-    
-    #output
-    output = Dense(1,activation="linear") (main_l)
-    
-    #model
-    model = Model([name, item_desc, brand
-                   , category, category_name
-                   , item_condition, num_vars], output)
-    #optimizer = optimizers.RMSprop()
-    optimizer = optimizers.Adam()
-    model.compile(loss="mse", 
-                  optimizer=optimizer)
-    return model
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
 
-def eval_model(model):
-    val_preds = model.predict(X_valid)
-    val_preds = np.expm1(val_preds)
-    
-    y_true = np.array(dvalid.price.values)
-    y_pred = val_preds[:, 0]
-    v_rmsle = rmsle(y_true, y_pred)
-    print(" RMSLE error on dev test: "+str(v_rmsle))
-    return v_rmsle
-#fin_lr=init_lr * (1/(1+decay))**(steps-1)
-exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
+## Arithmetric Mean 
+sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y'])/2
+sub_merge[['id', 'visitors']].to_csv('sub_math_mean.csv', index=False)
 
-print('[{}] Finished DEFINEING MODEL...'.format(time.time() - start_time))
+## Geometric Mean  
+sub_merge['visitors'] = (sub_merge['visitors_x'] * sub_merge['visitors_y']) ** (1/2)
+sub_merge[['id', 'visitors']].to_csv('sub_geo_mean.csv', index=False)
 
-
-# In[ ]:
-
-gc.collect()
-#FITTING THE MODEL
-epochs = 2
-BATCH_SIZE = 512 * 3
-steps = int(len(X_train['name'])/BATCH_SIZE) * epochs
-lr_init, lr_fin = 0.013, 0.009
-lr_decay = exp_decay(lr_init, lr_fin, steps)
-log_subdir = '_'.join(['ep', str(epochs),
-                    'bs', str(BATCH_SIZE),
-                    'lrI', str(lr_init),
-                    'lrF', str(lr_fin),
-                    'dr', str(dr)])
-
-model = get_model()
-K.set_value(model.optimizer.lr, lr_init)
-K.set_value(model.optimizer.decay, lr_decay)
-
-history = model.fit(X_train, dtrain.target
-                    , epochs=epochs
-                    , batch_size=BATCH_SIZE
-                    , validation_split=0.01
-                    #, callbacks=[TensorBoard('./logs/'+log_subdir)]
-                    , verbose=10
-                    )
-print('[{}] Finished FITTING MODEL...'.format(time.time() - start_time))
-#EVLUEATE THE MODEL ON DEV TEST
-v_rmsle = eval_model(model)
-print('[{}] Finished predicting valid set...'.format(time.time() - start_time))
-
-# In[ ]:
-
-
-#CREATE PREDICTIONS
-preds = model.predict(X_test, batch_size=BATCH_SIZE)
-preds = np.expm1(preds)
-# preds = np.round(preds)
-print('[{}] Finished predicting test set...'.format(time.time() - start_time))
-submission = test[["test_id"]][:test_len]
-submission["price"] = preds[:test_len]*0.76
-submission.to_csv("./myNN"+log_subdir+"_{:.6}.csv".format(v_rmsle), index=False)
-print('[{}] Finished submission...'.format(time.time() - start_time))
-
-del train
-del test
-gc.collect()
-
-#Ridge https://www.kaggle.com/apapiu/ridge-script
-
-nrow_train = df_train.shape[0]
-y = np.log1p(df_train["price"])
-merge: pd.DataFrame = pd.concat([df_train, df_test])
-
-del df_train
-del df_test
-gc.collect()
-
-handle_missing_inplace(merge)
-print('[{}] Finished to handle missing'.format(time.time() - start_time))
-
-cutting(merge)
-print('[{}] Finished to cut'.format(time.time() - start_time))
-
-to_categorical(merge)
-print('[{}] Finished to convert categorical'.format(time.time() - start_time))
-
-cv = CountVectorizer(min_df=NAME_MIN_DF)
-X_name = cv.fit_transform(merge['name'])
-print('[{}] Finished count vectorize `name`'.format(time.time() - start_time))
-
-cv = CountVectorizer()
-X_category = cv.fit_transform(merge['category_name'])
-print('[{}] Finished count vectorize `category_name`'.format(time.time() - start_time))
-
-tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                         ngram_range=(1, 3),
-                         stop_words='english')
-X_description = tv.fit_transform(merge['item_description'])
-print('[{}] Finished TFIDF vectorize `item_description`'.format(time.time() - start_time))
-
-lb = LabelBinarizer(sparse_output=True)
-X_brand = lb.fit_transform(merge['brand_name'])
-print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
-
-X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-print('[{}] Finished to get dummies on `item_condition_id` and `shipping`'.format(time.time() - start_time))
-
-sparse_merge = hstack((X_dummies, X_description, X_brand, X_category, X_name)).tocsr()
-print('[{}] Finished to create sparse merge'.format(time.time() - start_time))
-
-X = sparse_merge[:nrow_train]
-X_test = sparse_merge[nrow_train:]
-model = Ridge(solver="sag", fit_intercept=True, alpha = 3.5, random_state=666)
-model.fit(X, y)
-print('[{}] Finished to train ridge'.format(time.time() - start_time))
-predsR = model.predict(X=X_test)
-print('[{}] Finished to predict ridge'.format(time.time() - start_time))
-predsR = np.expm1(predsR)
-predsR = predsR*0.16
-submission["price"] += predsR
-
-model = SGDRegressor(penalty='elasticnet', l1_ratio=0.25)
-model.fit(X, y).sparsify()
-print('[{}] Train sgd completed'.format(time.time() - start_time))
-predsR2 = model.predict(X=X_test)
-predsR2 = np.expm1(predsR2)
-predsR2 = predsR2*0.08
-submission["price"] += predsR2
-print('[{}] Predict sgd completed.'.format(time.time() - start_time))
-
-submission.to_csv("submission_rnn_ridge_sgdr.csv", index = False)
+## Harmonic Mean 
+sub_merge['visitors'] = 2/(1/sub_merge['visitors_x'] + 1/sub_merge['visitors_y'])
+sub_merge[['id', 'visitors']].to_csv('sub_hrm_mean.csv', index=False)

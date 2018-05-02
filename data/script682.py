@@ -1,427 +1,660 @@
 
 # coding: utf-8
 
-# # House price prediction using multiple regression analysis
-# 
-# # Part 2: Regression Models
-# 
-# The following notebook presents a thought process of predicting a continuous variable through Machine Learning methods. More specifically, we want to predict house prices based on multiple features using regression analysis. 
-# 
-# As an example, we will use a dataset of house sales in King County, where Seattle is located.
-# 
-# In the [first][1] part of the analysis, we set up the context using map visualization, and highlighted the association between the variables in our dataset. 
-# 
-# This is, for example, a map of King County showing the average house price per zipcode. We can see the disparities between the different zipcodes. The location of the houses should play an important role in our regression model. 
-# 
-# ![price per zipcode][2]
-# 
-# In this second notebook we will apply multiple regression models. We will talk about model complexity and how we can select the best predictive model using a validation set or cross-validation techniques.
-# 
-# ## 1. Preparation
-# 
-# As in Part 1, Let's first load the libraries and the dataset
-# 
-# 
-#   [1]: https://www.kaggle.com/harlfoxem/d/harlfoxem/housesalesprediction/house-price-prediction-part-1/notebook
-#   [2]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/price.png
-
 # In[ ]:
 
 
-import numpy as np # NumPy is the fundamental package for scientific computing
-
-import pandas as pd # Pandas is an easy-to-use data structures and data analysis tools
-pd.set_option('display.max_columns', None) # To display all columns
-
-import matplotlib.pyplot as plt # Matplotlib is a python 2D plotting library
-get_ipython().run_line_magic('matplotlib', 'inline')
-# A magic command that tells matplotlib to render figures as static images in the Notebook.
-
-import seaborn as sns # Seaborn is a visualization library based on matplotlib (attractive statistical graphics).
-sns.set_style('whitegrid') # One of the five seaborn themes
+## imports
+import os
+import re
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from plotly.offline import plot, iplot, init_notebook_mode
 import warnings
-warnings.filterwarnings('ignore') # To ignore some of seaborn warning msg
+from subprocess import check_output
+from IPython.core.display import display, HTML
+pd.set_option('display.max_columns', 100)
+pd.set_option('display.max_rows', 100)
+pd.set_option('precision', 4)
+warnings.simplefilter('ignore')
+init_notebook_mode()
+display(HTML("<style>.container { width:100% !important; }</style>"))
 
-from scipy import stats
-
-from sklearn import linear_model # Scikit learn library that implements generalized linear models
-from sklearn import neighbors # provides functionality for unsupervised and supervised neighbors-based learning methods
-from sklearn.metrics import mean_squared_error # Mean squared error regression loss
-from sklearn import preprocessing # provides functions and classes to change raw feature vectors
-
-from math import log
-
-
-# In[ ]:
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-data = pd.read_csv("../input/kc_house_data.csv", parse_dates = ['date']) # load the data into a pandas dataframe
-data.head(2) # Show the first 2 lines
-
-
-# ### Data Cleaning
+# ![](https://sc01.alicdn.com/kf/UT8Y1g1XKRXXXagOFbXU/cocoa-beans.jpg_350x350.jpg)
+# ## Chocolate Bar Ratings
+# Chocolate is one of the most popular candies in the world. Each year, residents of the United States collectively eat more than 2.8 billions pounds. However, not all chocolate bars are created equal! This dataset contains expert ratings of over 1,700 individual chocolate bars, along with information on their regional origin, percentage of cocoa, the variety of chocolate bean used and where the beans were grown.
 # 
-# Let's reduce the dataset by dropping columns that won't be used during the analysis.
-
-# In[ ]:
-
-
-data.drop(['id', 'date'], axis = 1, inplace = True)
-
-
-# ### Data Transformation
+# ### Flavors of Cacao Rating System:
+# - 5= Elite (Transcending beyond the ordinary limits)
+# - 4= Premium (Superior flavor development, character and style)
+# - 3= Satisfactory(3.0) to praiseworthy(3.75) (well made with special qualities)
+# - 2= Disappointing (Passable but contains at least one significant flaw)
+# - 1= Unpleasant (mostly unpalatable)
 # 
-# Following the correlation analysis in Part 1, let's create some new variables in our dataset. 
-
-# In[ ]:
-
-
-data['basement_present'] = data['sqft_basement'].apply(lambda x: 1 if x > 0 else 0) # Indicate whether there is a basement or not
-data['renovated'] = data['yr_renovated'].apply(lambda x: 1 if x > 0 else 0) # 1 if the house has been renovated
-
-
-# ### Encode categorical variables using dummies
+# ### Data description
+# - __Company  (Maker-if known)__ - Name of the company manufacturing the bar.
+# - __Specific Bean Origin or Bar Name__ - The specific geo-region of origin for the bar.
+# - __REF__ - <font color='red'>Help us describe this column...</font> __What is it?__
+# - __Review Date__ - Date of publication of the review.
+# - __Cocoa Percent__ - Cocoa percentage (darkness) of the chocolate bar being reviewed.
+# - __Company Location__ - Manufacturer base country.
+# - __Rating __- Expert rating for the bar.
+# - __Bean Type__ - The variety (breed) of bean used, if provided.
+# - __Broad Bean Origin__ - The broad geo-region of origin for the bean.
 # 
-# A Dummy variable is an artificial variable created to represent an attribute with two or more distinct categories/levels. In this example, we will analyse *bedrooms* and *bathrooms* as continuous and therefore will encode the following:
-# 
-# * floors
-# * view
-# * condition and
-# * grade
+# ### Table of content
+# 1. [Data preparation + EDA](#eda)
+# 2. [Feature engineering](#fe)
+# 3. [Data visualization](#dv)
+# 4. [WHAT IS REF?!](#ref)
+
+# ## Author's summary
+# Hello everyone! This is my very first kernel in Kaggle platform. I hope that you will enjoy my work.  Thx.
+
+# <a id="eda">
+# #### 1. Data preparation + EDA
 
 # In[ ]:
 
 
-categorial_cols = ['floors', 'view', 'condition', 'grade']
-
-for cc in categorial_cols:
-    dummies = pd.get_dummies(data[cc], drop_first=False)
-    dummies = dummies.add_prefix("{}#".format(cc))
-    data.drop(cc, axis=1, inplace=True)
-    data = data.join(dummies)
-
-
-# We saw that zipcodes are also related to price. However, encoded all zipcodes will add 70 dummies variables. Instead, we will only encode the 6 most expensive zipcodes as shown in the map.
-
-# In[ ]:
-
-
-dummies_zipcodes = pd.get_dummies(data['zipcode'], drop_first=False)
-dummies_zipcodes.reset_index(inplace=True)
-dummies_zipcodes = dummies_zipcodes.add_prefix("{}#".format('zipcode'))
-dummies_zipcodes = dummies_zipcodes[['zipcode#98004','zipcode#98102','zipcode#98109','zipcode#98112','zipcode#98039','zipcode#98040']]
-data.drop('zipcode', axis=1, inplace=True)
-data = data.join(dummies_zipcodes)
-
-data.dtypes
-
-
-# ### Split the data
-# 
-# We will split the dataframe into training and testing data using a 80%/20% ratio
-
-# In[ ]:
-
-
-from sklearn.cross_validation import train_test_split
-train_data, test_data = train_test_split(data, train_size = 0.8, random_state = 10)
-
-
-# ## 2. Regression Models
-# 
-# In this section, we will train numerous regression models on the train data (e.g., simple linear regression, lasso, nearest neighbor) and evaluate their performance using Root Mean Squared Error (RMSE) on the test data.
-# 
-# ### 2.1 Simple Linear Regression
-# 
-# Let's first predict house prices using simple (one input) linear regression.
-
-# In[ ]:
-
-
-# A function that take one input of the dataset and return the RMSE (of the test data), and the intercept and coefficient
-def simple_linear_model(train, test, input_feature):
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = [input_feature]), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
-                              regr.predict(test.as_matrix(columns = [input_feature])))**0.5 # Calculate the RMSE on test data
-    return RMSE, regr.intercept_[0], regr.coef_[0][0]
-
-
-# Let's create a simple linear regression model using sqft_living as input and calculate the RMSE on the test data.
-
-# In[ ]:
-
-
-RMSE, w0, w1 = simple_linear_model(train_data, test_data, 'sqft_living')
-print ('RMSE for sqft_living is: %s ' %RMSE)
-print ('intercept is: %s' %w0)
-print ('coefficient is: %s' %w1)
-
-
-# Similarly, we can run the same test on all the features in the dataset and assess which one would be the best estimator of house price using just a single linear regression model.
-
-# In[ ]:
-
-
-input_list = data.columns.values.tolist() # list of column name
-input_list.remove('price')
-simple_linear_result = pd.DataFrame(columns = ['feature', 'RMSE', 'intercept', 'coefficient'])
-
-# loop that calculate the RMSE of the test data for each input 
-for p in input_list:
-    RMSE, w1, w0 = simple_linear_model(train_data, test_data, p)
-    simple_linear_result = simple_linear_result.append({'feature':p, 'RMSE':RMSE, 'intercept':w0, 'coefficient': w1}
-                                                       ,ignore_index=True)
-simple_linear_result.sort_values('RMSE').head(10) # display the 10 best estimators
-
-
-# When using simple linear regression, sqft_living provides the smallest test error estimate of house price for the dataset considered.
-# 
-# ### 2.2 Multiple Regression
-# 
-# Now let's try to predict *price* using multiple features. We can modify the simple linear regression function above to take multiple features as input.
-
-# In[ ]:
-
-
-# A function that take multiple features as input and return the RMSE (of the test data), and the  intercept and coefficients
-def multiple_regression_model(train, test, input_features):
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = input_features), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
-                              regr.predict(test.as_matrix(columns = input_features)))**0.5 # Calculate the RMSE on test data
-    return RMSE, regr.intercept_[0], regr.coef_ 
-
-
-# Let's try with a few examples:
-
-# In[ ]:
-
-
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','bathrooms','bedrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_above','view#0','bathrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['bathrooms','bedrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['view#0','grade#12','bedrooms','sqft_basement']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','bathrooms','view#0']))
-
-
-# We can also try to fit a higher-order polynomial on the input. For example, we can try to fit a qudratic function on sqft_living
-
-# In[ ]:
-
-
-train_data['sqft_living_squared'] = train_data['sqft_living'].apply(lambda x: x**2) # create a new column in train_data
-test_data['sqft_living_squared'] = test_data['sqft_living'].apply(lambda x: x**2) # create a new column in test_data
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','sqft_living_squared']))
-
-
-# While we can get better performance than simple linear models, a few problems remain. 
-# 
-# * First, we don't know which feature to select. Obviously some combinations of features will yield smaller RMSE on the test set.
-# * Second, we don't know how many features to select. This is because the more features we incorporate in the train model, the more overfit we get on the train data, resulting in higher error on the test data.
-# 
-# One solution would be to test multiple features combinations (all?) and keep the solution with the smallest error value calculated on the test data. However, this is an overly optimistic approach, since the model complexity is selected to minimize the test error (error is biased). A more sophisticated approach is to use two sets for testing our models, a.k.a: a validation set and a test set. We select model complexity to minimize error on the validation set and approximate the generalization error based on the test set.
-# 
-# Going through all subsets of features combinations is most often computationally infeasible. For example, having 30 features yield more than 1 billion combinations. Another approach is to use a greedy technique like a forward stepwise algorithm where the best estimator feature is added to the set of already selected features at each iteration. For example, let's pretend that the best single estimator is sqft_living. In the 2nd step of the greedy algorithm, we test all the remaining features one by one in combinations with sqft_living (e.g., sqft_living and bedrooms, sqft_living and waterfront, etc) and select the best combination using training error. At the end, we select the model complexity (number of features) using the validation error and estimate the generalization error using the test set.
-# 
-# Let's try this method.
-
-# In[ ]:
-
-
-# we're first going to add more features into the dataset.
-
-# sqft_living cubed
-train_data['sqft_living_cubed'] = train_data['sqft_living'].apply(lambda x: x**3) 
-test_data['sqft_living_cubed'] = test_data['sqft_living'].apply(lambda x: x**3) 
-
-# bedrooms_squared: this feature will mostly affect houses with many bedrooms.
-train_data['bedrooms_squared'] = train_data['bedrooms'].apply(lambda x: x**2) 
-test_data['bedrooms_squared'] = test_data['bedrooms'].apply(lambda x: x**2)
-
-# bedrooms times bathrooms gives what's called an "interaction" feature. It is large when both of them are large.
-train_data['bed_bath_rooms'] = train_data['bedrooms']*train_data['bathrooms']
-test_data['bed_bath_rooms'] = test_data['bedrooms']*test_data['bathrooms']
-
-# Taking the log of squarefeet has the effect of bringing large values closer together and spreading out small values.
-train_data['log_sqft_living'] = train_data['sqft_living'].apply(lambda x: log(x))
-test_data['log_sqft_living'] = test_data['sqft_living'].apply(lambda x: log(x))
-
-train_data.shape
+## Load data
+choko = pd.read_csv('../input/flavors_of_cacao.csv')
+choko.shape # How many revies we have
 
 
 # In[ ]:
 
 
-# split the train_data to include a validation set (train_data2 = 60%, validation_data = 20%, test_data = 20%)
-train_data_2, validation_data = train_test_split(train_data, train_size = 0.75, random_state = 50)
+# Explore first 5 rows
+choko.head().T
 
 
 # In[ ]:
 
 
-# A function that take multiple features as input and return the RMSE (of the train and validation data)
-def RMSE(train, validation, features, new_input):
-    features_list = list(features)
-    features_list.append(new_input)
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = features_list), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE_train = mean_squared_error(train.as_matrix(columns = ['price']), 
-                              regr.predict(train.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
-    RMSE_validation = mean_squared_error(validation.as_matrix(columns = ['price']), 
-                              regr.predict(validation.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
-    return RMSE_train, RMSE_validation 
+# Explore description
+choko.describe(include='all').T
 
 
 # In[ ]:
 
 
-input_list = train_data_2.columns.values.tolist() # list of column name
-input_list.remove('price')
+# Explore datatypes
+choko.dtypes
 
-# list of features included in the regression model and the calculated train and validation errors (RMSE)
-regression_greedy_algorithm = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])  
-i = 0
-temp_list = []
 
-# a while loop going through all the features in the dataframe
-while i < len(train_data_2.columns)-1:
-    
-    # a temporary dataframe to select the best feature at each iteration
-    temp = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])
-    
-    # a for loop to test all the remaining features
-    for p in input_list:
-        RMSE_train, RMSE_validation = RMSE(train_data_2, validation_data, temp_list, p)
-        temp = temp.append({'feature':p, 'train_error':RMSE_train, 'validation_error':RMSE_validation}, ignore_index=True)
+# In[ ]:
+
+
+## Before we continue - rename some columns, 
+original_colnames = choko.columns
+new_colnames = ['company', 'species', 'REF', 'review_year', 'cocoa_p',
+                'company_location', 'rating', 'bean_typ', 'country']
+choko = choko.rename(columns=dict(zip(original_colnames, new_colnames)))
+## And modify data types
+choko['cocoa_p'] = choko['cocoa_p'].str.replace('%','').astype(float)/100
+choko.head()
+
+
+# In[ ]:
+
+
+# Explore description
+choko.describe(include='all').T
+
+
+# In[ ]:
+
+
+## Look at most frequent species
+choko['species'].value_counts().head(10)
+
+
+# In[ ]:
+
+
+## Is where any N/A values in origin country?
+choko['country'].isnull().value_counts()
+
+
+# In[ ]:
+
+
+## Replace origin country
+choko['country'] = choko['country'].fillna(choko['species'])
+choko['country'].isnull().value_counts()
+
+
+# In[ ]:
+
+
+## Look at most frequent origin countries
+choko['country'].value_counts().head(10)
+
+
+# In[ ]:
+
+
+## Wee see that a lot of countries have ' ' value - means that this is 100% blend. Let's look at this
+choko[choko['country'].str.len()==1]['species'].unique()
+
+
+# In[ ]:
+
+
+## Is there another way to determine blends?
+choko[choko['species'].str.contains(',')]['species'].nunique()
+
+
+# In[ ]:
+
+
+## Is there any misspelling/reduction?
+choko['country'].sort_values().unique()
+
+
+# In[ ]:
+
+
+## Text preparation (correction) func
+def txt_prep(text):
+    replacements = [
+        ['-', ', '], ['/ ', ', '], ['/', ', '], ['\(', ', '], [' and', ', '], [' &', ', '], ['\)', ''],
+        ['Dom Rep|DR|Domin Rep|Dominican Rep,|Domincan Republic', 'Dominican Republic'],
+        ['Mad,|Mad$', 'Madagascar, '],
+        ['PNG', 'Papua New Guinea, '],
+        ['Guat,|Guat$', 'Guatemala, '],
+        ['Ven,|Ven$|Venez,|Venez$', 'Venezuela, '],
+        ['Ecu,|Ecu$|Ecuad,|Ecuad$', 'Ecuador, '],
+        ['Nic,|Nic$', 'Nicaragua, '],
+        ['Cost Rica', 'Costa Rica'],
+        ['Mex,|Mex$', 'Mexico, '],
+        ['Jam,|Jam$', 'Jamaica, '],
+        ['Haw,|Haw$', 'Hawaii, '],
+        ['Gre,|Gre$', 'Grenada, '],
+        ['Tri,|Tri$', 'Trinidad, '],
+        ['C Am', 'Central America'],
+        ['S America', 'South America'],
+        [', $', ''], [',  ', ', '], [', ,', ', '], ['\xa0', ' '],[',\s+', ','],
+        [' Bali', ',Bali']
+    ]
+    for i, j in replacements:
+        text = re.sub(i, j, text)
+    return text
+
+
+# In[ ]:
+
+
+choko['country'].str.replace('.', '').apply(txt_prep).unique()
+
+
+# In[ ]:
+
+
+## Replace country feature
+choko['country'] = choko['country'].str.replace('.', '').apply(txt_prep)
+
+
+# In[ ]:
+
+
+## Looks better
+choko['country'].value_counts().tail(10)
+
+
+# In[ ]:
+
+
+## How many countries may contain in Blend?
+(choko['country'].str.count(',')+1).value_counts()
+
+
+# In[ ]:
+
+
+## Is there any misspelling/reduction in company location?
+choko['company_location'].sort_values().unique()
+
+
+# In[ ]:
+
+
+## We need to make some replacements
+choko['company_location'] = choko['company_location'].str.replace('Amsterdam', 'Holland').str.replace('U.K.', 'England').str.replace('Niacragua', 'Nicaragua').str.replace('Domincan Republic', 'Dominican Republic')
+
+choko['company_location'].sort_values().unique()
+
+
+# In[ ]:
+
+
+## Is there any misspelling/reduction in company name?
+choko['company'].str.lower().sort_values().nunique() == choko['company'].sort_values().nunique()
+
+
+# <a id="fe">
+# #### 2. Feature engineering
+
+# In[ ]:
+
+
+## Let's define blend feature
+choko['is_blend'] = np.where(
+    np.logical_or(
+        np.logical_or(choko['species'].str.lower().str.contains(',|(blend)|;'),
+                      choko['country'].str.len() == 1),
+        choko['country'].str.lower().str.contains(',')
+    )
+    , 1
+    , 0
+)
+## How many blends/pure cocoa?
+choko['is_blend'].value_counts()
+
+
+# In[ ]:
+
+
+## Look at 5 blends/pure rows
+choko.groupby('is_blend').head(5)
+
+
+# In[ ]:
+
+
+## Define domestic feature
+choko['is_domestic'] = np.where(choko['country'] == choko['company_location'], 1, 0)
+choko['is_domestic'].value_counts()
+
+
+# <a id="dv">
+# #### 3. Data Visualization
+
+# In[ ]:
+
+
+## Look at distribution of Cocoa %
+fig, ax = plt.subplots(figsize=[16,4])
+sns.distplot(choko['cocoa_p'], ax=ax)
+ax.set_title('Cocoa %, Distribution')
+plt.show()
+
+
+# In[ ]:
+
+
+## Look at distribution of rating
+fig, ax = plt.subplots(figsize=[16,4])
+for i, c in choko.groupby('is_domestic'):
+    sns.distplot(c['cocoa_p'], ax=ax, label=['Not Domestic', 'Domestic'][i])
+ax.set_title('Cocoa %, Distribution, hue=Domestic')
+ax.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+## Look at distribution of rating
+fig, ax = plt.subplots(figsize=[16,4])
+sns.distplot(choko['rating'], ax=ax)
+ax.set_title('Rating, Distribution')
+plt.show()
+
+
+# In[ ]:
+
+
+## Look at distribution of rating
+fig, ax = plt.subplots(figsize=[16,4])
+for i, c in choko.groupby('is_domestic'):
+    sns.distplot(c['rating'], ax=ax, label=['Not Domestic', 'Domestic'][i])
+ax.set_title('Rating, Distribution, hue=Domestic')
+ax.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+## Look at boxplot over the countries, even Blends
+fig, ax = plt.subplots(figsize=[6, 16])
+sns.boxplot(
+    data=choko,
+    y='country',
+    x='rating'
+)
+ax.set_title('Boxplot, Rating for countries (+blends)')
+
+
+# In[ ]:
+
+
+## But hot we can see what country is biggest contributor in rating?
+choko_ = pd.concat([pd.Series(row['rating'], row['country'].split(',')) for _, row in choko.iterrows()]
+         ).reset_index()
+choko_.columns = ['country', 'rating']
+choko_['mean_rating'] = choko_.groupby(['country'])['rating'].transform('mean')
+
+## Look at boxplot over the countries (contributors in blends)
+fig, ax = plt.subplots(figsize=[6, 16])
+sns.boxplot(
+    data=choko_.sort_values('mean_rating', ascending=False),
+    y='country',
+    x='rating'
+)
+ax.set_title('Boxplot, Rating for countries (contributors)')
+
+
+# In[ ]:
+
+
+choko_.groupby(['country'])['rating'].mean().sort_values(ascending=False).head(10)
+
+
+# In[ ]:
+
+
+choko_ = pd.concat([pd.Series(row['cocoa_p'],
+                              row['country'].split(',')) for _, row in choko.iterrows()]
+         ).reset_index()
+choko_.columns = ['country', 'rating']
+choko_['mean_rating'] = choko_.groupby(['country'])['rating'].transform('mean')
+
+
+# In[ ]:
+
+
+## Look at boxplot over the countries (contributors in blends)
+choko_ = pd.concat([pd.Series(row['cocoa_p'], row['country'].split(',')) for _, row in choko.iterrows()]
+         ).reset_index()
+choko_.columns = ['country', 'cocoa_p']
+
+## Look at boxplot over the countries (contributors in blends)
+fig, ax = plt.subplots(figsize=[6, 16])
+sns.boxplot(
+    data=choko_,
+    y='country',
+    x='cocoa_p'
+)
+ax.set_title('Boxplot, Cocoa %, for countries (contributors)')
+
+
+# In[ ]:
+
+
+## Prepare full tidy choko_ dataframe
+def choko_tidy(choko):
+    data = []
+    for i in choko.itertuples():
+        for c in i.country.split(','):
+            data.append({
+                'company': i.company,
+                'species': i.species,
+                'REF': i.REF,
+                'review_year': i.review_year,
+                'cocoa_p': i.cocoa_p,
+                'company_location': i.company_location,
+                'rating': i.rating,
+                'bean_typ': i.bean_typ,
+                'country': c,
+                'is_blend': i.is_blend,
+                'is_domestic': i.is_domestic
+            })
+    return pd.DataFrame(data)
         
-    temp = temp.sort_values('train_error') # select the best feature using train error
-    best = temp.iloc[0,0]
-    temp_list.append(best)
-    regression_greedy_algorithm = regression_greedy_algorithm.append({'feature': best, 
-                                                  'train_error': temp.iloc[0,1], 'validation_error': temp.iloc[0,2]}, 
-                                                 ignore_index=True) # add the feature to the dataframe
-    input_list.remove(best) # remove the best feature from the list of available features
-    i += 1
-regression_greedy_algorithm
+choko_ = choko_tidy(choko)
+print(choko_.shape, choko.shape)
+choko_.head()
 
-
-# We can see that the validation error is minimum when we reach 25 features in the model (condition#4). We stop the selection here even if the training error keeps getting smaller (overfitting).
-# 
-# Let's now calculate an estimation of the generalization error using test_data
 
 # In[ ]:
 
 
-greedy_algo_features_list = regression_greedy_algorithm['feature'].tolist()[:24] # select the first 30 features
-test_error, _, _ = multiple_regression_model(train_data_2, test_data, greedy_algo_features_list)
-print ('test error (RMSE) is: %s' %test_error)
+## Look at rating by company location
+fig, ax = plt.subplots(figsize=[6, 16])
+sns.boxplot(
+    data=choko,
+    y='company_location',
+    x='rating'
+)
+ax.set_title('Boxplot, Rating by Company location')
 
-
-# The test error is getting smaller.
-# 
-# * Note 1: We could have used k-fold cross validation instead of a validation set.
-# * Note 2: Other greedy algorithms exist (e.g., backward stepwise, combining forward and backward steps)
-# 
-# Now, instead of searching over a discrete set of solutions using greedy algorithms, we can use another technique called regularization. We start with all possible features in the model and shrink the coefficients (weights). Two main regularization techniques exist, Ridge regression (a.k.a L2 regularization) and Lasso regression (a.k.a L1 regularization).
-# 
-# ### 2.3 Ridge Regression
-# 
-# Ridge regression aims to avoid overfitting by adding a cost to the Residual Sum of Squares (RSS) term of standard least squares that depends on the 2-norm of the coefficients.  The result is penalizing fits with large coefficients.  The strength of this penalty, and thus the fit vs. model complexity, is controlled by a parameter alpha (here called "L2_penalty").
-# 
-# Let's test two models using alpha equal 1 and 10.
 
 # In[ ]:
 
 
-input_feature = train_data.columns.values.tolist() # list of column name
-input_feature.remove('price')
+## What better? Domestic Or not?
+fig, ax = plt.subplots(figsize=[6, 6])
+sns.boxplot(
+    data=choko,
+    x='is_domestic',
+    y='rating',
+)
+ax.set_title('Boxplot, Rating by Domestic')
 
-for i in [1,10]:
-    ridge = linear_model.Ridge(alpha = i, normalize = True) # initialize the model
-    ridge.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              ridge.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
-
-
-# Now the question is, how do we pick alpha to minimize the error?
-# 
-# Alpha is a measure of model complexity. So, as before, we could use a validation set to select it. However, that approach has a major disadvantage: it leaves fewer observations available for training. A better approach to overcome this issue is to use a cross-validation technique. It uses all of the training set in a smart way. k-fold cross-validation for example involves dividing the training set into k segments of roughly equal size. Similar to the validation set method, we measure the validation error with one of the segments designated as the validation set. The major difference is that we repeat the process k times. We then compute the average of the k validation errors, and use it as an estimate of the generalization error. We then select the alpha value that generate the smallest validation error. The best approximation occurs for validation sets of size 1, where k is equal to the number of observations. It is called leave-one-out cross validation. It is however computationally intensive.
-# 
-# In this example we'll use a ridge regression with an implemented cross-validation method from the scikit learn library. By default, it performs Generalized Cross-Validation, which is a form of efficient Leave-One-Out cross-validation.
 
 # In[ ]:
 
 
-ridgeCV = linear_model.RidgeCV(alphas = np.linspace(1.0e-10,1,num = 100), normalize = True, store_cv_values = True) # initialize the model
-ridgeCV.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-print ('best alpha is: %s' %ridgeCV.alpha_) # get the best alpha
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              ridgeCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+## What better? Pure or blend?
+fig, ax = plt.subplots(figsize=[6, 6])
+sns.boxplot(
+    data=choko,
+    x='is_blend',
+    y='rating',
+)
+ax.set_title('Boxplot, Rating by Blend/Pure')
 
 
-# Using every features in the dataset and a ridge regression model with an efficient  LOO cross-validation method yield a test error of 171567.
-# 
-# ### 2.4 Lasso Regression
-# 
-# Lasso regression jointly shrinks coefficients to avoid overfitting, and implicitly performs feature selection by setting some coefficients exactly to 0 for sufficiently large penalty strength alpha (here called "L1_penalty"). In particular, lasso takes the RSS term of standard least squares and adds a 1-norm cost of the coefficients.
-# 
-# Let 's train multiple models using different alpha values and asses the test error.
-
-# In[ ]:
-
-
-for i in [0.01,0.1,1,250,500,1000]:
-    lasso = linear_model.Lasso(alpha = i, normalize = True) # initialize the model
-    lasso.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-    print (lasso.sparse_coef_.getnnz) # number of non zero weights
-    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              lasso.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
-
-
-# As alpha increases, the number of features included in the model decrease. As in Ridge regression, we also can use cross-validation methods that select the best alpha to provide the best predictive accuracy. However, this technique tends to favor less sparse solutions and smaller alpha than optimal choice for feature selection.
+# ### Hmmm
+# - Blend is better
+# - Domestic is worse 
 
 # In[ ]:
 
 
-lassoCV = linear_model.LassoCV(normalize = True) # initialize the model (alphas are set automatically)
-lassoCV.fit(train_data.as_matrix(columns = input_feature), np.ravel(train_data.as_matrix(columns = ['price']))) # fit the train data
-print ('best alpha is: %s' %lassoCV.alpha_) # get the best alpha
-print ('number of non zero weigths is: %s' %np.count_nonzero(lassoCV.coef_)) # number of non zero weights
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              lassoCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+choko_.head()
 
-
-# 39 features remain in the model, yielding a test error of 171369.
-# 
-# ### 2.5 k-Nearest Neighbors (NN) Regression
-# 
-# To finish, let's talk about another regression model, k-NN regression. The k-NN algorithm is used for estimating continuous variables. One such algorithm uses a weighted average of the k nearest neighbors, weighted by the inverse of their distance. It is the nonparamtric equivalent of ordinary least square regression.
 
 # In[ ]:
 
 
-# normalize the data
-train_X = train_data.as_matrix(columns = input_feature)
-scaler = preprocessing.StandardScaler().fit(train_X)
-train_X_scaled = scaler.transform(train_X)
-test_X = test_data.as_matrix(columns = [input_feature])
-test_X_scaled = scaler.transform(test_X)
+## Look at goodsflow
+flow = pd.crosstab(
+    choko_['company_location'],
+    choko_['country']
+)
+flow['tot'] = flow.sum(axis=1)
+flow = flow.sort_values('tot', ascending=False)
+flow = flow.drop('tot', axis=1)
 
-knn = neighbors.KNeighborsRegressor(n_neighbors=10, weights='distance') # initialize the model
-knn.fit(train_X_scaled, train_data.as_matrix(columns = ['price'])) # fit the train data
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              knn.predict(test_X_scaled))**0.5) # predict price and test error
+fig, ax = plt.subplots(figsize=[10,6])
+sns.heatmap(flow.head(20), cmap='Reds', linewidths=.5)
+ax.set_title('Goods Flow from origin to Company location')
 
 
-# Similarly, the number of neighbor k is related to the complexity of the regression model. We can optimize the model accuracy by running cross-validation on the number of k-neighbors to include. 
+# - Biggest manufactorer country - __U.S.A__
+# - Biggest ofigin coutry is __Equador__, and also biggest domestic manufactorer
+# - Also a lot of domestics from Colombia, Brazil, Madagascar, Venezuela
+
+# In[ ]:
+
+
+## What about quality(rating)
+## Look at goodsflow
+flow = pd.crosstab(
+    choko_['company_location'],
+    choko_['country'],
+    choko_['rating'], aggfunc='mean'
+)
+flow['tot'] = flow.sum(axis=1)
+flow = flow.sort_values('tot', ascending=False)
+flow = flow.drop('tot', axis=1)
+
+fig, ax = plt.subplots(figsize=[10,6])
+sns.heatmap(flow.head(20), cmap='RdBu_r', linewidths=.5)
+ax.set_title('Goods Flow from origin to Company location, mean rating')
+
+
+# - __USA__ have the biggest flow of manufactory but mean quality 3-3.5
+# - In __England__ and __Canada__ very good mean rating
+
+# In[ ]:
+
+
+## What about quality(rating) is case of years
+## Look at goodsflow
+flow = pd.crosstab(
+    choko_['company_location'],
+    choko_['review_year'],
+    choko_['rating'], aggfunc='mean'
+)
+flow['tot'] = flow.sum(axis=1)
+flow = flow.sort_values('tot', ascending=False)
+flow = flow.drop('tot', axis=1)
+
+fig, ax = plt.subplots(figsize=[10,6])
+sns.heatmap(flow.head(20), cmap='RdBu_r', linewidths=.5)
+ax.set_title('Goods Flow from Company location, mean rating by years')
+
+
+# #### Wow!
+# - __USA__, __Australia__ mean rating is getting better and better
+# - __ Canada__ rating is always good
+
+# In[ ]:
+
+
+## Look the same data at the tsplot
+flow.T.head()
+
+
+# In[ ]:
+
+
+flow_ = flow.T
+## Preprocess
+# for c in flow_.columns:
+#     flow_[c] = flow_[c] - flow_[c].dropna().iloc[0]
+
+fig, ax = plt.subplots(figsize=[16,8])
+for c in choko_['company_location'].value_counts().head(10).index:
+    ax.plot(flow_.index, flow_[c], label=c)
+ax.legend(ncol=1, loc=4)
+ax.set_title('Timeline of Cocoa Rating by Company location')
+plt.show()
+
+
+# In[ ]:
+
+
+## What country manufacture the best blend|pure?
+blends = pd.crosstab(
+    choko_['company_location'],
+    choko_['is_blend'],
+    choko_['rating'], aggfunc='mean'
+)
+blends['tot'] = blends.max(axis=1)
+blends = blends.sort_values('tot', ascending=False)
+blends = blends.drop('tot', axis=1)
+
+fig, ax = plt.subplots(figsize=[10,6])
+sns.heatmap(blends.head(25), cmap='RdBu_r', linewidths=.5)
+ax.set_title('Best Manufactorer from Company location, mean rating blend/pureness')
+
+
+# - __Lithuania, And Bolivia__ blends better than pure
+# - __Poland, Venezuela and Scotland__ blends are sucks
+# - __Iceland__ dont produce blends
+# - __Chile__ the best
+
+# In[ ]:
+
+
+## What country manufacture the best blend|pure?
+dom = pd.crosstab(
+    choko_['company_location'],
+    choko_['is_domestic'],
+    choko_['rating'], aggfunc='mean'
+)
+dom['tot'] = dom.max(axis=1)
+dom = dom.sort_values('tot', ascending=False)
+dom = dom.drop('tot', axis=1)
+
+fig, ax = plt.subplots(figsize=[10,6])
+sns.heatmap(dom.head(25), cmap='RdBu_r', linewidths=.5)
+ax.set_title('Best Manufactorer from Company location, mean rating by Domestic or not')
+
+
+# - __Equador, Nicaragua__ better not Domestic.
+# - Etc
+
+# <a id="ref">
+# ### 4. What is REF?!
+
+# In[ ]:
+
+
+## What is REF?
+sns.heatmap(choko_.corr(), cmap='coolwarm')
+
+
+# Hmmm.. REF is highli correlated with review_year
+
+# In[ ]:
+
+
+## Look at REF distribution
+sns.distplot(choko_['REF'])
+
+
+# In[ ]:
+
+
+## Look at YEAR distribution
+sns.distplot(choko_['review_year'])
+
+
+# In[ ]:
+
+
+fig, [ax1, ax2] = plt.subplots(2, 1, figsize=[16,8])
+ax1.plot(choko_['review_year'])
+ax2.plot(choko_['REF'])
+plt.show()
+
+
+# In[ ]:
+
+
+sns.boxplot(
+    data=choko_,
+    x='review_year',
+    y='REF'
+)
+
+
+# In[ ]:
+
+
+choko_.groupby('review_year').agg({'REF': ['min', 'max', 'mean', 'prod', 'nunique', 'count']})
+
+
+# In[ ]:
+
+
+choko['REF'].nunique(), choko.shape
+
+
+# - REF is highly correlated to review_year
+# - Sometimes intersects over the year, but never overlaps year cuts
+# - I think that REF is increment id of  bunch of reviews
 # 
-# ## Conclusion
-# 
-# In this notebook I tried to give on overview of regression methods using a dataset of house sales. Obviously, many other methods exit for regression (e.g., Elastic Net, kernel regression, Bayesian regression). Model selection should be based on your data and application.
+# Thx,

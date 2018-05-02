@@ -1,257 +1,191 @@
 
 # coding: utf-8
 
-# # Analysis of the MNIST dataset
+# In this notebook, we'll see if we can use some machine learning to classify whether a subject is relaxing, or doing math problems, using data from our dataset.
 # 
+# Along the way, we'll learn how to get the subject data we want, and how to turn the raw EEG data into useable feature vectors.
 # 
+# Ready?
 # 
-# In this analysis we will apply the following methods to the MNIST classification problem:
+# OK, first, we'll perform a few cleaning steps.
 # 
-# 1) Random forest classification
-# 
-# 2) Principal component analysis (PCA) + k-nearest neighbours (kNN)
+# - We'll convert all the timestamps from strings into Python datetimes.
+# - We'll convert the lists from strings into np arrays of floats.
 
 # In[ ]:
 
 
-# load the modules
-
-import numpy as np
+import json
 import pandas as pd
-import seaborn as sb
-sb.set_style("dark")
-import matplotlib.pyplot as plt
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.decomposition import PCA
+df = pd.read_csv("../input/eeg-data.csv")
 
-get_ipython().run_line_magic('pylab', 'inline')
+# convert to arrays from strings
+df.raw_values = df.raw_values.map(json.loads)
+df.eeg_power = df.eeg_power.map(json.loads)
 
+
+# Next, we'll grab some subject data. We're interested in the "relax" and "math" tasks, so we'll need to get the readings with those labels.
 
 # In[ ]:
 
 
-# We use this function in order to evaulate a classifier. It trains on a fraction of the data corresponding to 
-# aplit_ratio, and evaulates on the rest of the data
 
-def evaluate_classifier(clf, data, target, split_ratio):
-    trainX, testX, trainY, testY = train_test_split(data, target, train_size=split_ratio, random_state=0)
-    clf.fit(trainX, trainY)
-    return clf.score(testX,testY)
+relax = df[df.label == 'relax']
+math = df[(df.label == 'math1') |
+          (df.label == 'math2') |
+          (df.label == 'math3') |
+          (df.label == 'math4') |
+          (df.label == 'math5') |
+          (df.label == 'math6') |
+          (df.label == 'math7') |
+          (df.label == 'math8') |
+          (df.label == 'math9') |
+          (df.label == 'math10') |
+          (df.label == 'math11') |
+          (df.label == 'math12') ]
 
-
-# In[ ]:
-
-
-# read in the data
-
-train = pd.read_csv('../input/train.csv')
-test  = pd.read_csv('../input/test.csv')
-target = train["label"]
-train = train.drop("label",1)
-
-
-# In[ ]:
+len(relax)
+len(math)
 
 
-# plot some of the numbers
-
-figure(figsize(5,5))
-for digit_num in range(0,64):
-    subplot(8,8,digit_num+1)
-    grid_data = train.iloc[digit_num].as_matrix().reshape(28,28)  # reshape from 1d to 2d pixel array
-    plt.imshow(grid_data, interpolation = "none", cmap = "bone_r")
-    xticks([])
-    yticks([])
-
-
-# In[ ]:
-
-
-# check performance of random forest classifier, as function of number of estimators 
-# here we only take 1000 data points to train
-
-n_estimators_array = np.array([1,5,10,50,100,200,500])
-n_samples = 10
-n_grid = len(n_estimators_array)
-score_array_mu =np.zeros(n_grid)
-score_array_sigma = np.zeros(n_grid)
-j=0
-for n_estimators in n_estimators_array:
-    score_array=np.zeros(n_samples)
-    for i in range(0,n_samples):
-        clf = RandomForestClassifier(n_estimators = n_estimators, n_jobs=1, criterion="gini")
-        score_array[i] = evaluate_classifier(clf, train.iloc[0:1000], target.iloc[0:1000], 0.8)
-    score_array_mu[j], score_array_sigma[j] = mean(score_array), std(score_array)
-    j=j+1
-
-
-# In[ ]:
-
-
-# it looks like the performace saturates around 50-100 estimators
-
-figure(figsize(7,3))
-errorbar(n_estimators_array, score_array_mu, yerr=score_array_sigma, fmt='k.-')
-xscale("log")
-xlabel("number of estimators",size = 20)
-ylabel("accuracy",size = 20)
-xlim(0.9,600)
-grid(which="both")
-
-
-# Are there any feature that are particularly important? We can check this using clf.feature_importances:
-
-# In[ ]:
-
-
-importances = clf.feature_importances_
-indices = np.argsort(importances)[::-1]
-
-print("Feature ranking:")
-for f in range(0,10):
-    print("%d. feature %d (%f)" % (f + 1, indices[f], importances[indices[f]]))
-
-# Plot the feature importances
-
-figure(figsize(7,3))
-plot(indices[:],importances[indices[:]],'k.')
-yscale("log")
-xlabel("feature",size=20)
-ylabel("importance",size=20)
-
-
-# It looks like there are no significantly important features (i.e., pixels) in the original data. Next, let us try to decompose the data using a principal component analysis (PCA):
-
-# In[ ]:
-
-
-pca = PCA(n_components=2)
-pca.fit(train)
-transform = pca.transform(train)
-
-figure(figsize(6,5))
-plt.scatter(transform[:,0],transform[:,1], s=20, c = target, cmap = "nipy_spectral", edgecolor = "None")
-plt.colorbar()
-clim(0,9)
-
-xlabel("PC1")
-ylabel("PC2")
-
-
-# It is interesting to see how well PCA separates the feature space into visible clusters already for 2 components. Next, let's look at what happens if we increase the number of components in PCA. In particular, we would like to know how many components are needed to capture most of the variance in the data. For this we will use the pca.explained_variance_ratio function.
-
-# In[ ]:
-
-
-n_components_array=([1,2,3,4,5,10,20,50,100,200,500])
-vr = np.zeros(len(n_components_array))
-i=0;
-for n_components in n_components_array:
-    pca = PCA(n_components=n_components)
-    pca.fit(train)
-    vr[i] = sum(pca.explained_variance_ratio_)
-    i=i+1    
-
-
-# In[ ]:
-
-
-figure(figsize(8,4))
-plot(n_components_array,vr,'k.-')
-xscale("log")
-ylim(9e-2,1.1)
-yticks(linspace(0.2,1.0,9))
-xlim(0.9)
-grid(which="both")
-xlabel("number of PCA components",size=20)
-ylabel("variance ratio",size=20)
-
-
-# We see that ~100 PCA components are needed to capture ~90% of the variance in the data. This seems a lot of components. Maybe the more important question is: How good is our prediction as a function of number of components? Let's look at this next. We will train a kNN classifier on the PCA output.
-
-# In[ ]:
-
-
-clf = KNeighborsClassifier()
-n_components_array=([1,2,3,4,5,10,20,50,100,200,500])
-score_array = np.zeros(len(n_components_array))
-i=0
-
-for n_components in n_components_array:
-    pca = PCA(n_components=n_components)
-    pca.fit(train)
-    transform = pca.transform(train.iloc[0:1000])
-    score_array[i] = evaluate_classifier(clf, transform, target.iloc[0:1000], 0.8)
-    i=i+1
-
-
-# In[ ]:
-
-
-figure(figsize(8,4))
-plot(n_components_array,score_array,'k.-')
-xscale('log')
-xlabel("number of PCA components", size=20)
-ylabel("accuracy", size=20)
-grid(which="both")
-
-
-# The accuracy seems to saturate at ~90% (roughly matching the performance of the random forest classifier) for >~20 PCA components. In fact, the accuracy even seems to drop for much larger numbers, even though a larger number of PCA components captures more of the variance in the data, as seen in the plot above. The drop in accuracy is probably due to overfitting.
+# Now that we have our feature vectors, let's try to build a binary classifier!
 # 
-# Finally, we will train on the whole training set and prepare a submit file for the Kaggle competition.
+# An SVM should do the trick for now. We'll make a `cross_val_svm` convenience method for doing n-fold cross-validation on the data.
 
 # In[ ]:
 
 
-# PCA + kNN
-    
-pca = PCA(n_components=50)
-pca.fit(train)
-transform_train = pca.transform(train)
-transform_test = pca.transform(test)
-
-clf = KNeighborsClassifier()
-clf.fit(transform_train, target)
-results=clf.predict(transform_test)
-
-# prepare submit file
-
-np.savetxt('results.csv', 
-           np.c_[range(1,len(test)+1),results], 
-           delimiter=',', 
-           header = 'ImageId,Label', 
-           comments = '', 
-           fmt='%d')
-
-# Kaggle score 0.97343
+from sklearn.model_selection import cross_val_score
+from sklearn import svm
+def cross_val_svm (X,y,n):
+    clf = svm.SVC()
+    scores = cross_val_score(clf, X, y, cv=n)
+    return scores                                              
 
 
-# This gives a score on Kaggle of 0.97343 - not too bad! Using the random forest classifier:
+# We'll also make a `vectors_labels` convenience function to produce an `X` list of vectors and a `y` list of labels, given two lists of vectors as input.
 
 # In[ ]:
 
 
-# random forest classification
-
-clf = RandomForestClassifier(n_estimators = 100, n_jobs=1, criterion="gini")
-clf.fit(train, target)
-results=clf.predict(test)
-
-# prepare submit file
-
-np.savetxt('results.csv', 
-           np.c_[range(1,len(test)+1),results], 
-           delimiter=',', 
-           header = 'ImageId,Label', 
-           comments = '', 
-           fmt='%d')
-
-# Kaggle score ~0.96
+def vectors_labels (list1, list2):
+    def label (l):
+        return lambda x: l
+    X = list1 + list2
+    y = list(map(label(0), list1)) + list(map(label(1), list2))
+    return X, y
 
 
-# This gives a slightly worse score (0.96).
+# OK! Now, let's try the simplest feature vectors that could possibly work: the EEG power arrays produced by the Neurosky device.
 # 
-# Any feedback on my analysis is more than welcome!
+# To keep things from getting **too** crazy, let's just use data from just one (random) subject for these examples.
+
+# In[ ]:
+
+
+one_math = math[math['id']==12]
+one_relax = relax[relax['id']==12]
+X, y = vectors_labels(one_math.eeg_power.tolist(), one_relax.eeg_power.tolist())
+cross_val_svm(X,y,7)
+
+
+# Not so impressive, is it?
+# 
+# Let's build some better feature vectors. Roughly, we take each group of 512 raw values produced by the device, and FFT them to produce a power spectrum. Then, we take groups of 3 power spectra, average them, and logarithmically bin the result to produce feature vectors of 100 values.
+# 
+# I wrote a [blog post](http://blog.cosmopol.is/eeg/2015/06/26/pre-processing-EEG-consumer-devices.html) about this technique, if you're interested in more depth about how these feature vectors work. There'a also a [paper about this](http://people.ischool.berkeley.edu/~chuang/pubs/MMJC15.pdf) if you're into that sort of thing.
+# 
+# Ok, feature vector time!
+
+# In[ ]:
+
+
+from scipy import stats
+from scipy.interpolate import interp1d
+import itertools
+import numpy as np
+
+def spectrum (vector):
+    '''get the power spectrum of a vector of raw EEG data'''
+    A = np.fft.fft(vector)
+    ps = np.abs(A)**2
+    ps = ps[:len(ps)//2]
+    return ps
+
+def binned (pspectra, n):
+    '''compress an array of power spectra into vectors of length n'''
+    l = len(pspectra)
+    array = np.zeros([l,n])
+    for i,ps in enumerate(pspectra):
+        x = np.arange(1,len(ps)+1)
+        f = interp1d(x,ps)#/np.sum(ps))
+        array[i] = f(np.arange(1, n+1))
+    index = np.argwhere(array[:,0]==-1)
+    array = np.delete(array,index,0)
+    return array
+
+def feature_vector (readings, bins=100): # A function we apply to each group of power spectra
+  '''
+  Create 100, log10-spaced bins for each power spectrum.
+  For more on how this particular implementation works, see:
+  http://coolworld.me/pre-processing-EEG-consumer-devices/
+  '''
+  bins = binned(list(map(spectrum, readings)), bins)
+  return np.log10(np.mean(bins, 0))
+
+ex_readings = one_relax.raw_values[:3]
+feature_vector(ex_readings)
+
+def grouper(n, iterable, fillvalue=None):
+    "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
+    args = [iter(iterable)] * n
+    return itertools.zip_longest(*args, fillvalue=fillvalue)
+
+def vectors (df):
+    return [feature_vector(group) for group in list(grouper(3, df.raw_values.tolist()))[:-1]]
+
+
+# In[ ]:
+
+
+X,y = vectors_labels(
+    vectors(one_math),
+    vectors(one_relax))
+
+cross_val_svm(X,y,7).mean()
+
+
+# Now that's more like it! I bet we can do even better if we scale the data:
+
+# In[ ]:
+
+
+from sklearn import preprocessing
+X = preprocessing.scale(X)
+cross_val_svm(X,y,7).mean()
+
+
+# Woohoo!
+# 
+# Let's see what kind of accuracy we get classifying relax and math readings for each subject
+#  in the dataset.
+
+# In[ ]:
+
+
+def estimated_accuracy (subject):
+    m = math[math['id']==subject]
+    r = relax[relax['id']==subject]
+    X,y = vectors_labels(vectors(m),vectors(r))
+    X=preprocessing.scale(X)
+    return cross_val_svm(X,y,7).mean()
+
+[('subject '+str(subj), estimated_accuracy(subj)) for subj in range(1,31)]
+
+
+# Not bad! 
+# 
+# I wonder why some people are easier to classify than others? Maybe not everyone was paying attention to the math (or not everyone was relaxing during the relax task).
+# 
+# Well, I trust this will be enough to make your own feature vectors, and explore the data yourself. Enjoy!

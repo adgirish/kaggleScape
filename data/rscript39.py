@@ -1,162 +1,77 @@
-import numpy as np
+# -*- coding: utf-8 -*-
 import pandas as pd
-import xgboost as xgb
+from datetime import timedelta
 
-from datetime import datetime
-from sklearn.metrics import mean_absolute_error
-from sklearn.cross_validation import KFold
-from scipy.stats import skew, boxcox
-from sklearn.preprocessing import StandardScaler
-import itertools
+dtypes = {'id':'uint32', 'item_nbr':'int32', 'store_nbr':'int8', 'unit_sales':'float32'}
 
-shift = 200
-COMB_FEATURE = 'cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,' \
-               'cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,' \
-               'cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,' \
-               'cat4,cat14,cat38,cat24,cat82,cat25'.split(',')
+train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                    skiprows=range(1, 86672217) #Skip dates before 2016-08-01
+                    )
 
-def encode(charcode):
-    r = 0
-    ln = len(str(charcode))
-    for i in range(ln):
-        r += (ord(str(charcode)[i]) - ord('A') + 1) * 26 ** (ln - i - 1)
-    return r
+train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
+train['dow'] = train['date'].dt.dayofweek
 
-fair_constant = 2
-def fair_obj(preds, dtrain):
-    labels = dtrain.get_label()
-    x = (preds - labels)
-    den = abs(x) + fair_constant
-    grad = fair_constant * x / (den)
-    hess = fair_constant * fair_constant / (den * den)
-    return grad, hess
+#Days of Week Means
+#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
+ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(
+        ['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw').reset_index()
+ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(
+        ['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk').reset_index()
 
-def xg_eval_mae(yhat, dtrain):
-    y = dtrain.get_label()
-    return 'mae', mean_absolute_error(np.exp(y)-shift,
-                                      np.exp(yhat)-shift)
-def mungeskewed(train, test, numeric_feats):
-    ntrain = train.shape[0]
-    test['loss'] = 0
-    train_test = pd.concat((train, test)).reset_index(drop=True)
-    skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna()))
-    skewed_feats = skewed_feats[skewed_feats > 0.25]
-    skewed_feats = skewed_feats.index
+train.drop('dow',1,inplace=True)
 
-    for feats in skewed_feats:
-        train_test[feats] = train_test[feats] + 1
-        train_test[feats], lam = boxcox(train_test[feats])
-    return train_test, ntrain
+# creating records for all items, in all markets on all dates
+# for correct calculation of daily unit sales averages.
+u_dates = train.date.unique()
+u_stores = train.store_nbr.unique()
+u_items = train.item_nbr.unique()
+train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
+train = train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=['date','store_nbr','item_nbr']
+    )
+).reset_index()
 
-if __name__ == "__main__":
+del u_dates, u_stores, u_items
 
-    print('\nStarted')
-    directory = '../input/'
-    train = pd.read_csv(directory + 'train.csv')
-    test = pd.read_csv(directory + 'test.csv')
+train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
+lastdate = train.iloc[train.shape[0]-1].date
 
-    numeric_feats = [x for x in train.columns[1:-1] if 'cont' in x]
-    categorical_feats = [x for x in train.columns[1:-1] if 'cat' in x]
-    train_test, ntrain = mungeskewed(train, test, numeric_feats)
+#Moving Averages
+ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(
+        ['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais')
 
-    print('')
-    for comb in itertools.combinations(COMB_FEATURE, 2):
-        feat = comb[0] + "_" + comb[1]
-        train_test[feat] = train_test[comb[0]] + train_test[comb[1]]
-        train_test[feat] = train_test[feat].apply(encode)
-        print('Analyzing Columns:', feat)
+for i in [112,56,28,14,7,3,1]:
+    tmp = train[train.date>lastdate-timedelta(int(i))]
+    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
+    ma_is = ma_is.join(tmpg, how='left')
 
-    categorical_feats = [x for x in train_test.columns[1:] if 'cat' in x]
+del tmp,tmpg,train
 
-    print('')
-    for col in categorical_feats:
-        print('Analyzing Column:', col)
-        train_test[col] = train_test[col].apply(encode)
+ma_is['mais']=ma_is.median(axis=1)
+ma_is.reset_index(inplace=True)
+ma_is.drop(list(ma_is.columns.values)[3:],1,inplace=True)
 
-    print(train_test[categorical_feats])
+#Load test
+test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
+test['dow'] = test['date'].dt.dayofweek
+test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
 
-    ss = StandardScaler()
-    train_test[numeric_feats] = \
-        ss.fit_transform(train_test[numeric_feats].values)
+del ma_is, ma_wk, ma_dw
 
-    train = train_test.iloc[:ntrain, :].copy()
-    test = train_test.iloc[ntrain:, :].copy()
+#Forecasting Test
+test['unit_sales'] = test.mais 
+pos_idx = test['mawk'] > 0
+test_pos = test.loc[pos_idx]
+test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
+test.loc[:, "unit_sales"].fillna(0, inplace=True)
+test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) # restoring unit values 
 
-    print('\nMedian Loss:', train.loss.median())
-    print('Mean Loss:', train.loss.mean())
+#50% more for promotion items
+test.loc[test['onpromotion'] == True, 'unit_sales'] *= 1.5
 
-    ids = pd.read_csv('input/test.csv')['id']
-    train_y = np.log(train['loss'] + shift)
-    train_x = train.drop(['loss','id'], axis=1)
-    test_x = test.drop(['loss','id'], axis=1)
-
-    n_folds = 10
-    cv_sum = 0
-    early_stopping = 100
-    fpred = []
-    xgb_rounds = []
-
-    d_train_full = xgb.DMatrix(train_x, label=train_y)
-    d_test = xgb.DMatrix(test_x)
-
-    kf = KFold(train.shape[0], n_folds=n_folds)
-    for i, (train_index, test_index) in enumerate(kf):
-        print('\n Fold %d' % (i+1))
-        X_train, X_val = train_x.iloc[train_index], train_x.iloc[test_index]
-        y_train, y_val = train_y.iloc[train_index], train_y.iloc[test_index]
-
-        rand_state = 2016
-
-        params = {
-            'seed': 0,
-            'colsample_bytree': 0.7,
-            'silent': 1,
-            'subsample': 0.7,
-            'learning_rate': 0.03,
-            'objective': 'reg:linear',
-            'max_depth': 12,
-            'min_child_weight': 100,
-            'booster': 'gbtree'}
-
-        d_train = xgb.DMatrix(X_train, label=y_train)
-        d_valid = xgb.DMatrix(X_val, label=y_val)
-        watchlist = [(d_train, 'train'), (d_valid, 'eval')]
-
-        clf = xgb.train(params,
-                        d_train,
-                        100000,
-                        watchlist,
-                        early_stopping_rounds=50,
-                        obj=fair_obj,
-                        feval=xg_eval_mae)
-
-        xgb_rounds.append(clf.best_iteration)
-        scores_val = clf.predict(d_valid, ntree_limit=clf.best_ntree_limit)
-        cv_score = mean_absolute_error(np.exp(y_val), np.exp(scores_val))
-        print('eval-MAE: %.6f' % cv_score)
-        y_pred = np.exp(clf.predict(d_test, ntree_limit=clf.best_ntree_limit)) - shift
-
-        if i > 0:
-            fpred = pred + y_pred
-        else:
-            fpred = y_pred
-        pred = fpred
-        cv_sum = cv_sum + cv_score
-
-    mpred = pred / n_folds
-    score = cv_sum / n_folds
-    print('Average eval-MAE: %.6f' % score)
-    n_rounds = int(np.mean(xgb_rounds))
-
-    print("Writing results")
-    result = pd.DataFrame(mpred, columns=['loss'])
-    result["id"] = ids
-    result = result.set_index("id")
-    print("%d-fold average prediction:" % n_folds)
-
-    now = datetime.now()
-    score = str(round((cv_sum / n_folds), 6))
-    sub_file = 'output/submission_5fold-average-xgb_fairobj_' + str(score) + '_' + str(
-        now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    print("Writing submission: %s" % sub_file)
-    result.to_csv(sub_file, index=True, index_label='id')
+test[['id','unit_sales']].to_csv('ma8dwof.csv.gz', index=False, float_format='%.3f', compression='gzip')

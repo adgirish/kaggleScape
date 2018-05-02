@@ -1,216 +1,255 @@
-BATCHSIZE = 2**14
-EPOCHS = 1
-LR = 1.3e-3
 
-import numpy as np
+"""
+Beating the Benchmark 
+Search Results Relevance @ Kaggle
+__author__ : Abhishek
+
+"""
 import pandas as pd
-from keras.layers import Input, Embedding, Dense, Flatten, Dropout, concatenate
-from keras.layers import BatchNormalization, SpatialDropout1D, GaussianDropout
-from keras.callbacks import Callback
-from keras.models import Model
-from keras.optimizers import Adam
-import gc
-
-import os
-print(os.listdir("../input"))
-
-
-def do_count( df, group_cols, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Aggregating by ", group_cols , '...' )
-    gp = df[group_cols][group_cols].groupby(group_cols).size().rename(agg_name).to_frame().reset_index()
-    df = df.merge(gp, on=group_cols, how='left')
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
-
-
-
-##### THE TRAINING DATA #####
-
-df = pd.read_pickle('../input/preprocessed-subsamples-including-all-positives/sample0.pkl.gz')
-
-max_app = df['app'].max()+1
-max_ch = df['channel'].max()+1
-max_dev = df['device'].max()+1
-max_os = df['os'].max()+1
-max_h = df['hour'].max()+1
-max_agg1 = df['nip_day_test_hh'].max()+1
-max_agg2 = df['nip_day_hh'].max()+1
-max_agg3 = df['nip_hh_os'].max()+1
-max_agg4 = df['nip_hh_app'].max()+1
-max_agg5 = df['nip_hh_dev'].max()+1
-
-df['agg1_float'] = df['nip_day_test_hh'].astype('float32') / np.float32(max_agg1)
-df['agg2_float'] = df['nip_day_hh'].astype('float32') / np.float32(max_agg2)
-df['agg3_float'] = df['nip_hh_os'].astype('float32') / np.float32(max_agg3)
-df['agg4_float'] = df['nip_hh_app'].astype('float32') / np.float32(max_agg4)
-df['agg5_float'] = df['nip_hh_dev'].astype('float32') / np.float32(max_agg5)
-print( df.info() )
-
-y_train = df['is_attributed'].values
-df.drop(['is_attributed'],1,inplace=True)
-
-def get_keras_data(dataset):
-    X = {
-        'app': np.array(dataset.app),
-        'ch': np.array(dataset.channel),
-        'dev': np.array(dataset.device),
-        'os': np.array(dataset.os),
-        'h': np.array(dataset.hour),
-        'agg1': np.array(dataset.nip_day_test_hh),
-        'agg2': np.array(dataset.nip_day_hh),
-        'agg3': np.array(dataset.nip_hh_os),
-        'agg4': np.array(dataset.nip_hh_app),
-        'agg5': np.array(dataset.nip_hh_dev),
-        'agg1_float': np.array(dataset.agg1_float),
-        'agg2_float': np.array(dataset.agg2_float),
-        'agg3_float': np.array(dataset.agg3_float),
-        'agg4_float': np.array(dataset.agg4_float),
-        'agg5_float': np.array(dataset.agg5_float),
-    }
-    return X
-df = get_keras_data(df)
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import SVC
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn import decomposition, pipeline, metrics, grid_search
+from nltk.stem.porter import *
+import pandas as pd
+import numpy as np
+import re
+from bs4 import BeautifulSoup
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction import text
+# array declarations
+sw=[]
+s_data = []
+s_labels = []
+t_data = []
+t_labels = []
+#stopwords tweak - more overhead
+stop_words = ['http','www','img','border','0','1','2','3','4','5','6','7','8','9']
+stop_words = text.ENGLISH_STOP_WORDS.union(stop_words)
+for stw in stop_words:
+    sw.append("q"+stw)
+    sw.append("z"+stw)
+stop_words = text.ENGLISH_STOP_WORDS.union(sw)
 
 
+# The following 3 functions have been taken from Ben Hamner's github repository
+# https://github.com/benhamner/Metrics
+def confusion_matrix(rater_a, rater_b, min_rating=None, max_rating=None):
+    """
+    Returns the confusion matrix between rater's ratings
+    """
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(rater_a + rater_b)
+    if max_rating is None:
+        max_rating = max(rater_a + rater_b)
+    num_ratings = int(max_rating - min_rating + 1)
+    conf_mat = [[0 for i in range(num_ratings)]
+                for j in range(num_ratings)]
+    for a, b in zip(rater_a, rater_b):
+        conf_mat[a - min_rating][b - min_rating] += 1
+    return conf_mat
 
 
-#### THE MODEL ####
-
-emb_n = 50
-dense_n1 = 1000
-dense_n2 = 1400
-dense_n3 = 200
-dense_n4 = 40
-in_app = Input(shape=[1], name = 'app')
-emb_app = Embedding(max_app, emb_n)(in_app)
-in_ch = Input(shape=[1], name = 'ch')
-emb_ch = Embedding(max_ch, emb_n)(in_ch)
-in_dev = Input(shape=[1], name = 'dev')
-emb_dev = Embedding(max_dev, emb_n+30)(in_dev)
-in_os = Input(shape=[1], name = 'os')
-emb_os = Embedding(max_os, emb_n)(in_os)
-in_h = Input(shape=[1], name = 'h')
-emb_h = Embedding(max_h, emb_n-33)(in_h) 
-in_agg1 = Input(shape=[1], name = 'agg1')
-emb_agg1 = Embedding(max_agg1, emb_n-10)(in_agg1) 
-in_agg2 = Input(shape=[1], name = 'agg2')
-emb_agg2 = Embedding(max_agg2, emb_n-10)(in_agg2) 
-in_agg3 = Input(shape=[1], name = 'agg3')
-emb_agg3 = Embedding(max_agg3, emb_n-10)(in_agg3) 
-in_agg4 = Input(shape=[1], name = 'agg4')
-emb_agg4 = Embedding(max_agg4, emb_n-10)(in_agg4) 
-in_agg5 = Input(shape=[1], name = 'agg5')
-emb_agg5 = Embedding(max_agg5, emb_n-10)(in_agg5) 
-
-agg1_float = Input(shape=[1], dtype='float32', name='agg1_float')
-agg2_float = Input(shape=[1], dtype='float32', name='agg2_float')
-agg3_float = Input(shape=[1], dtype='float32', name='agg3_float')
-agg4_float = Input(shape=[1], dtype='float32', name='agg4_float')
-agg5_float = Input(shape=[1], dtype='float32', name='agg5_float')
-
-fe = concatenate([(emb_app), (emb_ch), (emb_dev), (emb_os), (emb_h), 
-                  (emb_agg1), (emb_agg2), (emb_agg3), (emb_agg4), (emb_agg5)])
-embs = GaussianDropout(0.2)(fe)
-embs = Flatten()(embs)
-
-x = concatenate([embs, agg1_float, agg2_float, agg3_float, agg4_float, agg5_float])
-x = (BatchNormalization())(x)
-x = GaussianDropout(0.2)(Dense(dense_n1,activation='relu')(x))
-x = (BatchNormalization())(x)
-x = GaussianDropout(0.3)(Dense(dense_n2,activation='relu')(x))
-x = (BatchNormalization())(x)
-x = GaussianDropout(0.25)(Dense(dense_n3,activation='relu')(x))
-x = (BatchNormalization())(x)
-x = GaussianDropout(0.2)(Dense(dense_n4,activation='relu')(x))
-outp = Dense(1,activation='sigmoid')(x)
-model = Model(inputs=[in_app, in_ch, in_dev, in_os, in_h,
-                      in_agg1, in_agg2, in_agg3, in_agg4, in_agg5,
-                      agg1_float, agg2_float, agg3_float, agg4_float, agg5_float], outputs=outp)
-
-model.compile(loss='binary_crossentropy',optimizer=Adam(lr=LR),metrics=['accuracy'])
-
-model.summary()
+def histogram(ratings, min_rating=None, max_rating=None):
+    """
+    Returns the counts of each type of rating that a rater made
+    """
+    if min_rating is None:
+        min_rating = min(ratings)
+    if max_rating is None:
+        max_rating = max(ratings)
+    num_ratings = int(max_rating - min_rating + 1)
+    hist_ratings = [0 for x in range(num_ratings)]
+    for r in ratings:
+        hist_ratings[r - min_rating] += 1
+    return hist_ratings
 
 
+def quadratic_weighted_kappa(y, y_pred):
+    """
+    Calculates the quadratic weighted kappa
+    axquadratic_weighted_kappa calculates the quadratic weighted kappa
+    value, which is a measure of inter-rater agreement between two raters
+    that provide discrete numeric ratings.  Potential values range from -1
+    (representing complete disagreement) to 1 (representing complete
+    agreement).  A kappa value of 0 is expected if all agreement is due to
+    chance.
+    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
+    each correspond to a list of integer ratings.  These lists must have the
+    same length.
+    The ratings should be integers, and it is assumed that they contain
+    the complete range of possible ratings.
+    quadratic_weighted_kappa(X, min_rating, max_rating), where min_rating
+    is the minimum possible rating, and max_rating is the maximum possible
+    rating
+    """
+    rater_a = y
+    rater_b = y_pred
+    min_rating=None
+    max_rating=None
+    rater_a = np.array(rater_a, dtype=int)
+    rater_b = np.array(rater_b, dtype=int)
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(min(rater_a), min(rater_b))
+    if max_rating is None:
+        max_rating = max(max(rater_a), max(rater_b))
+    conf_mat = confusion_matrix(rater_a, rater_b,
+                                min_rating, max_rating)
+    num_ratings = len(conf_mat)
+    num_scored_items = float(len(rater_a))
+
+    hist_rater_a = histogram(rater_a, min_rating, max_rating)
+    hist_rater_b = histogram(rater_b, min_rating, max_rating)
+
+    numerator = 0.0
+    denominator = 0.0
+
+    for i in range(num_ratings):
+        for j in range(num_ratings):
+            expected_count = (hist_rater_a[i] * hist_rater_b[j]
+                              / num_scored_items)
+            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
+            numerator += d * conf_mat[i][j] / num_scored_items
+            denominator += d * expected_count / num_scored_items
+
+    return (1.0 - numerator / denominator)
 
 
-##### THE FIT #####
+if __name__ == '__main__':
 
-epochs=1
-model.fit(df, y_train, batch_size=BATCHSIZE, epochs=EPOCHS, shuffle=True, verbose=2)
+    # Load the training file
+    train = pd.read_csv('../input/train.csv')
+    test = pd.read_csv('../input/test.csv')
+    
+    # we dont need ID columns
+    idx = test.id.values.astype(int)
+    train = train.drop('id', axis=1)
+    test = test.drop('id', axis=1)
+    
+    # create labels. drop useless columns
+    y = train.median_relevance.values
+    train = train.drop(['median_relevance', 'relevance_variance'], axis=1)
+    
+    # do some lambda magic on text columns
+    traindata = list(train.apply(lambda x:'%s %s' % (x['query'],x['product_title']),axis=1))
+    testdata = list(test.apply(lambda x:'%s %s' % (x['query'],x['product_title']),axis=1))
+    
+    # the infamous tfidf vectorizer (Do you remember this one?)
+    tfv = TfidfVectorizer(min_df=3,  max_features=None, 
+            strip_accents='unicode', analyzer='word',token_pattern=r'\w{1,}',
+            ngram_range=(1, 2), use_idf=1,smooth_idf=1,sublinear_tf=1,
+            stop_words = 'english')
+    
+    # Fit TFIDF
+    tfv.fit(traindata)
+    X =  tfv.transform(traindata) 
+    X_test = tfv.transform(testdata)
+    
+    # Initialize SVD
+    svd = TruncatedSVD()
+    
+    # Initialize the standard scaler 
+    scl = StandardScaler()
+    
+    # We will use SVM here..
+    svm_model = SVC()
+    
+    # Create the pipeline 
+    clf = pipeline.Pipeline([('svd', svd),
+    						 ('scl', scl),
+                    	     ('svm', svm_model)])
+    
+    # Create a parameter grid to search for best parameters for everything in the pipeline
+    param_grid = {'svd__n_components' : [400],
+                  'svm__C': [10]}
+    
+    # Kappa Scorer 
+    kappa_scorer = metrics.make_scorer(quadratic_weighted_kappa, greater_is_better = True)
+    
+    # Initialize Grid Search Model
+    model = grid_search.GridSearchCV(estimator = clf, param_grid=param_grid, scoring=kappa_scorer,
+                                     verbose=10, n_jobs=-1, iid=True, refit=True, cv=2)
+                                     
+    # Fit Grid Search Model
+    model.fit(X, y)
+    print("Best score: %0.3f" % model.best_score_)
+    print("Best parameters set:")
+    best_parameters = model.best_estimator_.get_params()
+    for param_name in sorted(param_grid.keys()):
+    	print("\t%s: %r" % (param_name, best_parameters[param_name]))
+    
+    # Get best model
+    best_model = model.best_estimator_
+    
+    # Fit model with best parameters optimized for quadratic_weighted_kappa
+    best_model.fit(X,y)
+    preds = best_model.predict(X_test)
+    
+    #load data
+    train = pd.read_csv("../input/train.csv").fillna("")
+    test  = pd.read_csv("../input/test.csv").fillna("")
+    
+    #remove html, remove non text or numeric, make query and title unique features for counts using prefix (accounted for in stopwords tweak)
+    stemmer = PorterStemmer()
+    ## Stemming functionality
+    class stemmerUtility(object):
+        """Stemming functionality"""
+        @staticmethod
+        def stemPorter(review_text):
+            porter = PorterStemmer()
+            preprocessed_docs = []
+            for doc in review_text:
+                final_doc = []
+                for word in doc:
+                    final_doc.append(porter.stem(word))
+                    #final_doc.append(wordnet.lemmatize(word)) #note that lemmatize() can also takes part of speech as an argument!
+                preprocessed_docs.append(final_doc)
+            return preprocessed_docs
+    
+    
+    for i in range(len(train.id)):
+        s=(" ").join(["q"+ z for z in BeautifulSoup(train["query"][i]).get_text(" ").split(" ")]) + " " + (" ").join(["z"+ z for z in BeautifulSoup(train.product_title[i]).get_text(" ").split(" ")]) + " " + BeautifulSoup(train.product_description[i]).get_text(" ")
+        s=re.sub("[^a-zA-Z0-9]"," ", s)
+        s= (" ").join([stemmer.stem(z) for z in s.split(" ")])
+        s_data.append(s)
+        s_labels.append(str(train["median_relevance"][i]))
+    for i in range(len(test.id)):
+        s=(" ").join(["q"+ z for z in BeautifulSoup(test["query"][i]).get_text().split(" ")]) + " " + (" ").join(["z"+ z for z in BeautifulSoup(test.product_title[i]).get_text().split(" ")]) + " " + BeautifulSoup(test.product_description[i]).get_text()
+        s=re.sub("[^a-zA-Z0-9]"," ", s)
+        s= (" ").join([stemmer.stem(z) for z in s.split(" ")])
+        t_data.append(s)
+    #create sklearn pipeline, fit all, and predit test data
+    clf = Pipeline([('v',TfidfVectorizer(min_df=5, max_df=500, max_features=None, strip_accents='unicode', analyzer='word', token_pattern=r'\w{1,}', ngram_range=(1, 2), use_idf=True, smooth_idf=True, sublinear_tf=True, stop_words = 'english')), 
+    ('svd', TruncatedSVD(n_components=200, algorithm='randomized', n_iter=5, random_state=None, tol=0.0)), 
+    ('scl', StandardScaler(copy=True, with_mean=True, with_std=True)), 
+    ('svm', SVC(C=10.0, kernel='rbf', degree=3, gamma=0.0, coef0=0.0, shrinking=True, probability=False, tol=0.001, cache_size=200, class_weight=None, verbose=False, max_iter=-1, random_state=None))])
+    clf.fit(s_data, s_labels)
+    t_labels = clf.predict(t_data)
+    
+    import math
+    p3 = []
+    for i in range(len(preds)):
+        x = (int(t_labels[i]) + preds[i])/2
+        x = math.floor(x)
+        p3.append(int(x))
+        
+        
+    
+    # p3 = (t_labels + preds)/2
+    # p3 = p3.apply(lambda x:math.floor(x))
+    # p3 = p3.apply(lambda x:int(x))
+    
+    # preds12 = 
 
-
-
-
-##### THE TEST DATA #####
-
-del y_train
-del df
-gc.collect()
-
-print('load test...')
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'click_id'      : 'uint32'
-        }
-test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
-df = pd.read_csv("../input/talkingdata-adtracking-fraud-detection/test.csv", dtype=dtypes, usecols=test_cols)
-
-gc.collect()
-
-print('data prep...')
-
-most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
-least_freq_hours_in_test_data = [6, 11, 15]
-
-df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
-df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
-df.drop(['click_time'], axis=1, inplace=True)
-gc.collect()
-
-df['in_test_hh'] = (   3 
-                     - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
-                     - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
-
-df = do_count( df, ['ip', 'day', 'in_test_hh'], 'nip_day_test_hh' )
-df = do_count( df, ['ip', 'day', 'hour'], 'nip_day_hh', 'uint16', show_max=True )
-df = do_count( df, ['ip', 'day', 'os', 'hour'], 'nip_hh_os', 'uint16' )
-df = do_count( df, ['ip', 'day', 'app', 'hour'], 'nip_hh_app', 'uint16' )
-df = do_count( df, ['ip', 'day', 'device', 'hour'], 'nip_hh_dev', 'uint16', show_max=True )
-
-df.drop( ['ip','day'], axis=1, inplace=True )
-gc.collect()
-
-df['agg1_float'] = df['nip_day_test_hh'].astype('float32') / np.float32(max_agg1)
-df['agg2_float'] = df['nip_day_hh'].astype('float32') / np.float32(max_agg2)
-df['agg3_float'] = df['nip_hh_os'].astype('float32') / np.float32(max_agg3)
-df['agg4_float'] = df['nip_hh_app'].astype('float32') / np.float32(max_agg4)
-df['agg5_float'] = df['nip_hh_dev'].astype('float32') / np.float32(max_agg5)
-
-
-
-
-##### THE PREDICTION #####
-
-sub = pd.DataFrame()
-sub['click_id'] = df['click_id'].astype('int')
-df.drop(['click_id'],1,inplace=True)
-df = get_keras_data(df)
-gc.collect()
-
-print("predicting....")
-sub['is_attributed'] = model.predict(df, batch_size=BATCHSIZE, verbose=2)
-del df; gc.collect()
-print(sub.head())
-
-print("writing....")
-sub.to_csv('gpu_test1.csv', index=False, float_format='%.9f')
-print("Done")
+    # Create your first submission file
+    submission = pd.DataFrame({"id": idx, "prediction": p3})
+    submission.to_csv("beating_the_benchmark_yet_again.csv", index=False)

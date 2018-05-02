@@ -1,333 +1,621 @@
 
 # coding: utf-8
 
-# # Count the Sea Lions in the first image
-# 
-# - [Firs part:][1] 
-#  - I am using the first picture to extract Sea Lion coordinates using blob detection
-# 
-# - [Second part:][2]
-#  - I extract 64 by 64 images centered on the extracted coordinates
-#  - In addition to the previous script, I add negative examples to the training data
-#  - I train a simple keras model on the full data
-#  - In the third part I will test on the training data, so overfitting is not a bug, is a feature
-# 
-# - Third part:
-#  - Built a test set by tiling the first image
-#  - Use the previously built model to decide if in each tile there is a Sea Lion
-#  - **I am aware that I am training and testing on the same data**
-# 
-#   [1]: https://www.kaggle.com/radustoicescu/noaa-fisheries-steller-sea-lion-population-count/get-coordinates-using-blob-detection
-#   [2]: https://www.kaggle.com/radustoicescu/noaa-fisheries-steller-sea-lion-population-count/use-keras-to-classify-sea-lions-0-91-accuracy
+# # Predicting the Number of Daily Trips
 
-# # First Part
+# After performing an exploratory analysis on the bike sharing services in San Francisco and Seattle (https://github.com/Currie32/Bike-Sharing-in-SF-and-Seattle), I wanted to follow this up by building a predictive model. The goal for this report is to create a model that can accurately predict the number of trips taken, on a given day, with San Francisco's bike sharing service. I will only be using information that the bike sharing company could know at the start of the day, i.e. weather report, number of bikes availble, type of day (business day vs holiday vs weekend). 
+
+# ### Load the Packages
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import os
-import cv2
-import matplotlib.pyplot as plt
-import skimage.feature
+import numpy as np
+from scipy.stats.stats import pearsonr  
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
+from datetime import datetime
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelBinarizer
-import keras
-from keras.models import Sequential, load_model
-from keras.layers import Dense, Dropout, Activation, Flatten, Conv2D, MaxPooling2D, Lambda, Cropping2D
-from keras.utils import np_utils
-
-from collections import Counter
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# ### Initialize variables
-
-# In[ ]:
-
-
-class_names = ['adult_females', 'adult_males', 'juveniles', 'pups', 'subadult_males']
-
-file_names = os.listdir("../input/Train/")
-file_names = sorted(file_names, key=lambda 
-                    item: (int(item.partition('.')[0]) if item[0].isdigit() else float('inf'), item)) 
-
-# select a subset of files to run on
-file_names = file_names[0:1]
-
-# dataframe to store results in
-coordinates_df = pd.DataFrame(index=file_names, columns=class_names)
+import math
+import matplotlib.pyplot as plt
+from sklearn.feature_selection import SelectKBest
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
+from sklearn.grid_search import GridSearchCV
+from sklearn.pipeline import FeatureUnion
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.cross_validation import KFold
+from sklearn.metrics import mean_squared_error, median_absolute_error
+import xgboost as xgb
 
 
-# ### Extract coordinates
+# ### Import the Data
 
 # In[ ]:
 
 
-for filename in file_names:
-    
-    # read the Train and Train Dotted images
-    image_1 = cv2.imread("../input/TrainDotted/" + filename)
-    image_2 = cv2.imread("../input/Train/" + filename)
-    
-    cut = np.copy(image_2)
-    
-    # absolute difference between Train and Train Dotted
-    image_3 = cv2.absdiff(image_1,image_2)
-    
-    # mask out blackened regions from Train Dotted
-    mask_1 = cv2.cvtColor(image_1, cv2.COLOR_BGR2GRAY)
-    mask_1[mask_1 < 20] = 0
-    mask_1[mask_1 > 0] = 255
-    
-    mask_2 = cv2.cvtColor(image_2, cv2.COLOR_BGR2GRAY)
-    mask_2[mask_2 < 20] = 0
-    mask_2[mask_2 > 0] = 255
-    
-    image_3 = cv2.bitwise_or(image_3, image_3, mask=mask_1)
-    image_3 = cv2.bitwise_or(image_3, image_3, mask=mask_2) 
-    
-    # convert to grayscale to be accepted by skimage.feature.blob_log
-    image_3 = cv2.cvtColor(image_3, cv2.COLOR_BGR2GRAY)
-    
-    # detect blobs
-    blobs = skimage.feature.blob_log(image_3, min_sigma=3, max_sigma=4, num_sigma=1, threshold=0.02)
-    
-    adult_males = []
-    subadult_males = []
-    pups = []
-    juveniles = []
-    adult_females = [] 
-    
-    image_circles = image_1
-    
-    for blob in blobs:
-        # get the coordinates for each blob
-        y, x, s = blob
-        # get the color of the pixel from Train Dotted in the center of the blob
-        g,b,r = image_1[int(y)][int(x)][:]
-        
-        # decision tree to pick the class of the blob by looking at the color in Train Dotted
-        if r > 200 and g < 50 and b < 50: # RED
-            adult_males.append((int(x),int(y)))
-            cv2.circle(image_circles, (int(x),int(y)), 20, (0,0,255), 10) 
-        elif r > 200 and g > 200 and b < 50: # MAGENTA
-            subadult_males.append((int(x),int(y))) 
-            cv2.circle(image_circles, (int(x),int(y)), 20, (250,10,250), 10)
-        elif r < 100 and g < 100 and 150 < b < 200: # GREEN
-            pups.append((int(x),int(y)))
-            cv2.circle(image_circles, (int(x),int(y)), 20, (20,180,35), 10)
-        elif r < 100 and  100 < g and b < 100: # BLUE
-            juveniles.append((int(x),int(y))) 
-            cv2.circle(image_circles, (int(x),int(y)), 20, (180,60,30), 10)
-        elif r < 150 and g < 50 and b < 100:  # BROWN
-            adult_females.append((int(x),int(y)))
-            cv2.circle(image_circles, (int(x),int(y)), 20, (0,42,84), 10)  
-            
-        cv2.rectangle(cut, (int(x)-112,int(y)-112),(int(x)+112,int(y)+112), 0,-1)
-            
-    coordinates_df["adult_males"][filename] = adult_males
-    coordinates_df["subadult_males"][filename] = subadult_males
-    coordinates_df["adult_females"][filename] = adult_females
-    coordinates_df["juveniles"][filename] = juveniles
-    coordinates_df["pups"][filename] = pups
+df = pd.read_csv("../input/trip.csv")
+weather = pd.read_csv("../input/weather.csv")
+stations = pd.read_csv("../input/station.csv")
 
 
-# In[ ]:
-
-
-f, ax = plt.subplots(1,1,figsize=(10,16))
-ax.imshow(cv2.cvtColor(image_circles, cv2.COLOR_BGR2RGB))
-plt.show()
-
-
-# # Second Part
-
-# ### Extract 32 by 32 images of Sea Lions
-
-# Use the previosly created image of the landscape with all the SeaLions cut out as template to extract negative examples
-
-# In[ ]:
-
-
-f, ax = plt.subplots(1,1,figsize=(10,16))
-ax.imshow(cv2.cvtColor(cut, cv2.COLOR_BGR2RGB))
-plt.show()
-
-
-# In[ ]:
-
-
-x = []
-y = []
-
-for filename in file_names:    
-    image = cv2.imread("../input/Train/" + filename)
-    for lion_class in class_names:
-        for coordinates in coordinates_df[lion_class][filename]:
-            thumb = image[coordinates[1]-32:coordinates[1]+32,coordinates[0]-32:coordinates[0]+32,:]
-            if np.shape(thumb) == (64, 64, 3):
-                x.append(thumb)
-                y.append(lion_class)
-
-
-# ### Add negative examples to the dataset
-
-# In[ ]:
-
-
-for i in range(0,np.shape(cut)[0],224):
-    for j in range(0,np.shape(cut)[1],224):                
-        thumb = cut[i:i+64,j:j+64,:]
-        if np.amin(cv2.cvtColor(thumb, cv2.COLOR_BGR2GRAY)) != 0:
-            if np.shape(thumb) == (64,64,3):
-                x.append(thumb)
-                y.append("negative")              
-                
-
-
-# In[ ]:
-
-
-class_names.append("negative")
-
-
-# In[ ]:
-
-
-x = np.array(x)
-y = np.array(y)
-
-
-# ### Plot examples
-
-# In[ ]:
-
-
-for lion_class in class_names:
-    f, ax = plt.subplots(1,10,figsize=(12,1.5))
-    f.suptitle(lion_class)
-    axes = ax.flatten()
-    j = 0
-    for a in axes:
-        a.set_xticks([])
-        a.set_yticks([])
-        for i in range(j,len(x)):
-            if y[i] == lion_class:
-                j = i+1
-                a.imshow(cv2.cvtColor(x[i], cv2.COLOR_BGR2RGB))
-                break
-
-
-# ### One hot encoding
-
-# In[ ]:
-
-
-encoder = LabelBinarizer()
-encoder.fit(y)
-y = encoder.transform(y).astype(float)
-
-
-# ### Build Keras model
-
-# In[ ]:
-
-
-model = Sequential()
-
-model.add(Lambda(lambda x: (x / 255.0) - 0.5, input_shape=(64,64,3)))
-
-
-model.add(Conv2D(32, (5, 5), activation='relu', padding='same'))
-model.add(MaxPooling2D(pool_size=(2,2)))
-model.add(Conv2D(64, (5, 5), activation='relu', padding='same'))
-model.add(MaxPooling2D(pool_size=(2,2)))
-model.add(Conv2D(128, (5, 5), activation='relu', padding='same'))
-
-model.add(Flatten())
-
-model.add(Dense(512, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(6, activation='softmax'))
-
-model.compile(loss='categorical_crossentropy',optimizer='adam',metrics=['accuracy'])
-
-
-# ### Training
-
-# In[ ]:
-
-
-history = model.fit(x, y, epochs=10, verbose=0)
-
-
-# In[ ]:
-
-
-plt.plot(history.history['acc'])
-plt.title('model accuracy')
-plt.ylabel('accuracy')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
-
-
-# # Third Part
-
-# ### Build the test 
-
-# In[ ]:
-
-
-img = cv2.imread("../input/Train/" + filename)
-
-x_test = []
-
-for i in range(0,np.shape(img)[0],64):
-    for j in range(0,np.shape(img)[1],64):                
-        thumb = img[i:i+64,j:j+64,:]        
-        if np.shape(thumb) == (64,64,3):
-            x_test.append(thumb)
-
-x_test = np.array(x_test)
-
-
-# ### Predict
-
-# In[ ]:
-
-
-y_predicted = model.predict(x_test, verbose=0)
-
-
-# In[ ]:
-
-
-y_predicted = encoder.inverse_transform(y_predicted)
-
-
-# In[ ]:
-
-
-print(Counter(y_predicted).items())
-
-
-# ### Correct numbers
-
-# In[ ]:
-
-
-reference = pd.read_csv('../input/Train/train.csv')
-reference.ix[0:0]
-
-
-# # Conclusions
-
-# The numbers are way off, not what I expected. Especially since I tested on the same data I trained.
+# ## Explore the Trips data frame
 # 
-# For some reason it detects a lot of pups.
+# If you would like to see a comprehensive exploration of this data, please visit my other report: https://github.com/Currie32/Bike-Sharing-in-SF-and-Seattle
+
+# In[ ]:
+
+
+df.head()
+
+
+# In[ ]:
+
+
+df.isnull().sum()
+
+
+# In[ ]:
+
+
+df.duration.describe()
+
+
+# In[ ]:
+
+
+#Change duration from seconds to minutes
+df.duration /= 60
+
+
+# In[ ]:
+
+
+df.duration.describe()
+
+
+# In[ ]:
+
+
+#I want to remove major outliers from the data; trips longer than 6 hours. This will remove less than 0.5% of the data.
+df['duration'].quantile(0.995)
+df = df[df.duration <= 360]
+
+
+# In[ ]:
+
+
+df.shape
+
+
+# In[ ]:
+
+
+#Convert to datetime so that it can be manipulated more easily
+df.start_date = pd.to_datetime(df.start_date, format='%m/%d/%Y %H:%M')
+
+
+# In[ ]:
+
+
+#Extract the year, month, and day from start_date
+df['date'] = df.start_date.dt.date
+
+
+# In[ ]:
+
+
+#Each entry in the date feature is a trip. 
+#By finding the total number of times a date is listed, we know how many trips were taken on that date.
+dates = {}
+for d in df.date:
+    if d not in dates:
+        dates[d] = 1
+    else:
+        dates[d] += 1
+
+
+# In[ ]:
+
+
+#Create the data frame that will be used for training, with the dictionary we just created.
+df2 = pd.DataFrame.from_dict(dates, orient = "index")
+df2['date'] = df2.index
+df2['trips'] = df2.ix[:,0]
+train = df2.ix[:,1:3]
+train.reset_index(drop = True, inplace = True)
+
+
+# In[ ]:
+
+
+train
+
+
+# In[ ]:
+
+
+#All sorted now!
+train = train.sort('date')
+train.reset_index(drop=True, inplace=True)
+
+
+# ## Explore the Weather data frame
+
+# In[ ]:
+
+
+weather.head()
+
+
+# In[ ]:
+
+
+weather.isnull().sum()
+
+
+# In[ ]:
+
+
+weather.date = pd.to_datetime(weather.date, format='%m/%d/%Y')
+
+
+# In[ ]:
+
+
+#The weather data frame is 5 times as long as the train data frame, 
+#therefore there are 5 entries per date.
+print (train.shape)
+print (weather.shape)
+
+
+# In[ ]:
+
+
+#It seems we have one entry per zip code
+weather.zip_code.unique()
+
+
+# In[ ]:
+
+
+#Let's see which zip code has the cleanest date.
+for zc in weather.zip_code.unique():
+    print (weather[weather.zip_code == zc].isnull().sum())
+    print ()
+
+
+# In[ ]:
+
+
+#I used this zip code for my other report as well. It is missing only a bit of data and is formatted rather well.
+weather = weather[weather.zip_code == 94107]
+
+
+# In[ ]:
+
+
+weather.events.unique()
+
+
+# In[ ]:
+
+
+weather.loc[weather.events == 'rain', 'events'] = "Rain"
+weather.loc[weather.events.isnull(), 'events'] = "Normal"
+
+
+# In[ ]:
+
+
+weather.events
+
+
+# In[ ]:
+
+
+events = pd.get_dummies(weather.events)
+
+
+# In[ ]:
+
+
+weather = weather.merge(events, left_index = True, right_index = True)
+
+
+# In[ ]:
+
+
+#Remove features we don't need
+weather = weather.drop(['events','zip_code'],1)
+
+
+# In[ ]:
+
+
+#max_wind and max_gust are well correlated, so we can use max_wind to help fill the null values of max_gust
+print (pearsonr(weather.max_wind_Speed_mph[weather.max_gust_speed_mph >= 0], 
+               weather.max_gust_speed_mph[weather.max_gust_speed_mph >= 0]))
+
+
+# In[ ]:
+
+
+#For each value of max_wind, find the median max_gust and use that to fill the null values.
+weather.loc[weather.max_gust_speed_mph.isnull(), 'max_gust_speed_mph'] = weather.groupby('max_wind_Speed_mph').max_gust_speed_mph.apply(lambda x: x.fillna(x.median()))
+
+
+# In[ ]:
+
+
+weather.isnull().sum()
+
+
+# In[ ]:
+
+
+#Change this feature from a string to numeric.
+#Use errors = 'coerce' because some values currently equal 'T' and we want them to become NAs.
+weather.precipitation_inches = pd.to_numeric(weather.precipitation_inches, errors = 'coerce')
+
+
+# In[ ]:
+
+
+#Change null values to the median, of values > 0, because T, I think, means True. 
+#Therefore we want to find the median amount of precipitation on days when it rained.
+weather.loc[weather.precipitation_inches.isnull(), 
+            'precipitation_inches'] = weather[weather.precipitation_inches.notnull()].precipitation_inches.median()
+
+
+# In[ ]:
+
+
+train = train.merge(weather, on = train.date)
+
+
+# In[ ]:
+
+
+#Need to remove the extra date columns, otherwise good!
+train.head()
+
+
+# In[ ]:
+
+
+train['date'] = train['date_x']
+train.drop(['date_y','date_x'],1, inplace= True)
+
+
+# ## Explore the Stations data frame
+
+# In[ ]:
+
+
+stations.head()
+
+
+# In[ ]:
+
+
+#Good, each stations is only listed once
+print (len(stations.name.unique()))
+print (stations.shape)
+
+
+# In[ ]:
+
+
+stations.installation_date = pd.to_datetime(stations.installation_date, format = "%m/%d/%Y").dt.date
+
+
+# In[ ]:
+
+
+#The min date is before any in the train data frame, therefore stations were installed before the first trips (good).
+#The max date is before the end of the train data frame, therefore the service has not been adding new stations recently.
+print (stations.installation_date.min())
+print (stations.installation_date.max())
+
+
+# In[ ]:
+
+
+#For each day in train.date, find the number of docks (parking spots for individual bikes) that were installed 
+#on or before that day.
+total_docks = []
+for day in train.date:
+    total_docks.append(sum(stations[stations.installation_date <= day].dock_count))
+
+
+# In[ ]:
+
+
+train['total_docks'] = total_docks
+
+
+# ## Add Special Date Features
+
+# In[ ]:
+
+
+#Find all of the holidays during our time span
+calendar = USFederalHolidayCalendar()
+holidays = calendar.holidays(start=train.date.min(), end=train.date.max())
+
+
+# In[ ]:
+
+
+holidays
+
+
+# In[ ]:
+
+
+#Find all of the business days in our time span
+us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+business_days = pd.DatetimeIndex(start=train.date.min(), end=train.date.max(), freq=us_bd)
+
+
+# In[ ]:
+
+
+business_days
+
+
+# In[ ]:
+
+
+business_days = pd.to_datetime(business_days, format='%Y/%m/%d').date
+holidays = pd.to_datetime(holidays, format='%Y/%m/%d').date
+
+
+# In[ ]:
+
+
+#A 'business_day' or 'holiday' is a date within either of the respected lists.
+train['business_day'] = train.date.isin(business_days)
+train['holiday'] = train.date.isin(holidays)
+
+
+# In[ ]:
+
+
+train.head()
+
+
+# In[ ]:
+
+
+#Convert True to 1 and False to 0
+train.business_day = train.business_day.map(lambda x: 1 if x == True else 0)
+train.holiday = train.holiday.map(lambda x: 1 if x == True else 0)
+
+
+# In[ ]:
+
+
+#Convert date to the important features, year, month, weekday (0 = Monday, 1 = Tuesday...)
+#We don't need day because what it represents changes every year.
+train['year'] = pd.to_datetime(train['date']).dt.year
+train['month'] = pd.to_datetime(train['date']).dt.month
+train['weekday'] = pd.to_datetime(train['date']).dt.weekday
+
+
+# In[ ]:
+
+
+labels = train.trips
+train = train.drop(['trips', 'date'], 1)
+
+
+# ## Train the Model
+
+# In[ ]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(train, labels, test_size=0.2, random_state = 2)
+
+
+# In[ ]:
+
+
+#15 fold cross validation. Multiply by -1 to make values positive.
+#Used median absolute error to learn how many trips my predictions are off by.
+
+def scoring(clf):
+    scores = cross_val_score(clf, X_train, y_train, cv=15, n_jobs=1, scoring = 'neg_median_absolute_error')
+    print (np.median(scores) * -1)
+
+
+# In[ ]:
+
+
+rfr = RandomForestRegressor(n_estimators = 55,
+                            min_samples_leaf = 3,
+                            random_state = 2)
+scoring(rfr)
+
+
+# In[ ]:
+
+
+gbr = GradientBoostingRegressor(learning_rate = 0.12,
+                                n_estimators = 150,
+                                max_depth = 8,
+                                min_samples_leaf = 1,
+                                random_state = 2)
+scoring(gbr)
+
+
+# In[ ]:
+
+
+dtr = DecisionTreeRegressor(min_samples_leaf = 3,
+                            max_depth = 8,
+                            random_state = 2)
+scoring(dtr)
+
+
+# In[ ]:
+
+
+abr = AdaBoostRegressor(n_estimators = 100,
+                        learning_rate = 0.1,
+                        loss = 'linear',
+                        random_state = 2)
+scoring(abr)
+
+
+# In[ ]:
+
+
+import warnings
+warnings.filterwarnings("ignore")
+
+random_state = 2
+params = {
+        'eta': 0.15,
+        'max_depth': 6,
+        'min_child_weight': 2,
+        'subsample': 1,
+        'colsample_bytree': 1,
+        'verbose_eval': True,
+        'seed': random_state,
+    }
+
+n_folds = 15 #number of Kfolds
+cv_scores = [] #The sum of the mean_absolute_error for each fold.
+early_stopping_rounds = 100
+iterations = 10000
+printN = 50
+fpred = [] #stores the sums of predicted values for each fold.
+
+testFinal = xgb.DMatrix(X_test)
+
+kf = KFold(len(X_train), n_folds=n_folds)
+
+for i, (train_index, test_index) in enumerate(kf):
+    print('\n Fold %d' % (i+1))
+    Xtrain, Xval = X_train.iloc[train_index], X_train.iloc[test_index]
+    Ytrain, Yval = y_train.iloc[train_index], y_train.iloc[test_index]
+    
+    xgtrain = xgb.DMatrix(Xtrain, label = Ytrain)
+    xgtest = xgb.DMatrix(Xval, label = Yval)
+    watchlist = [(xgtrain, 'train'), (xgtest, 'eval')] 
+    
+    xgbModel = xgb.train(params, 
+                         xgtrain, 
+                         iterations, 
+                         watchlist,
+                         verbose_eval = printN,
+                         early_stopping_rounds=early_stopping_rounds
+                        )
+    
+    scores_val = xgbModel.predict(xgtest, ntree_limit=xgbModel.best_ntree_limit)
+    cv_score = median_absolute_error(Yval, scores_val)
+    print('eval-MSE: %.6f' % cv_score)
+    y_pred = xgbModel.predict(testFinal, ntree_limit=xgbModel.best_ntree_limit)
+    print(xgbModel.best_ntree_limit)
+
+    if i > 0:
+        fpred = pred + y_pred #sum predictions
+    else:
+        fpred = y_pred
+    pred = fpred
+    cv_scores.append(cv_score)
+
+xgb_preds = pred / n_folds #find the average values for the predictions
+score = np.median(cv_scores)
+print('Median error: %.6f' % score)
+
+
+# In[ ]:
+
+
+#Train and make predictions with the best models.
+rfr = rfr.fit(X_train, y_train)
+gbr = gbr.fit(X_train, y_train)
+
+rfr_preds = rfr.predict(X_test)
+gbr_preds = gbr.predict(X_test)
+
+#Weight the top models to find the best prediction
+final_preds = rfr_preds*0.32 + gbr_preds*0.38 + xgb_preds*0.3
+print ("Daily error of trip count:", median_absolute_error(y_test, final_preds))
+
+
+# In[ ]:
+
+
+#A reminder of the range of values in number of daily trips.
+labels.describe()
+
+
+# In[ ]:
+
+
+y_test.reset_index(drop = True, inplace = True)
+
+
+# In[ ]:
+
+
+fs = 16
+plt.figure(figsize=(8,5))
+plt.plot(final_preds)
+plt.plot(y_test)
+plt.legend(['Prediction', 'Acutal'])
+plt.ylabel("Number of Trips", fontsize = fs)
+plt.xlabel("Predicted Date", fontsize = fs)
+plt.title("Predicted Values vs Actual Values", fontsize = fs)
+plt.show()
+
+
+# In[ ]:
+
+
+#Create a plot that ranks the features by importance.
+def plot_importances(model, model_name):
+    importances = model.feature_importances_
+    std = np.std([model.feature_importances_ for feature in model.estimators_],
+                 axis=0)
+    indices = np.argsort(importances)[::-1]    
+
+    # Plot the feature importances of the forest
+    plt.figure(figsize = (8,5))
+    plt.title("Feature importances of " + model_name)
+    plt.bar(range(X_train.shape[1]), importances[indices], color="r", align="center")
+    plt.xticks(range(X_train.shape[1]), indices)
+    plt.xlim([-1, X_train.shape[1]])
+    plt.show()
+
+
+# In[ ]:
+
+
+# Print the feature ranking
+print("Feature ranking:")
+
+i = 0
+for feature in X_train:
+    print (i, feature)
+    i += 1
+    
+plot_importances(rfr, "Random Forest Regressor")
+plot_importances(gbr, "Gradient Boosting Regressor")
+
+
+# The feature importance ranking for the random forest regressor makes more sense to me than for the gradient boosting regressor. Features, such as 'business_day', 'total_docks', and 'month' match better with my exploratory analysis than 'wind_dir_degrees' and 'max_sea_level_pressure_inches.' Although I have not looked at the data yet, perhaps wind from a particular direction correlates with worse weather/cycling conditions.
+
+# ## Summary
+
+# I believe that I have made a good model to predict how many trips will occur with San Francisco's bike sharing service. My model has a median absolute error of almost 47 trips per day. This should give the company operating this service a good, general estimate of the traffic that will occur each day. 
 # 
-# The bad results could be in part a consequence of the huge number of negative examples in the test set.
+# I like how my model can provide a good estimate while only using information that is available to the company at the start of the day, i.e. weather forecast, type of day (business day, holiday, etc), and number of bikes that are available. There are a number of ways to make this model, or a similar model, more practical/useful, including: predicting the number of daily trips to/from each station, using the number of trips in the morning to predict the number of trips in the afternoon, and predicting when a station will run out of bikes.

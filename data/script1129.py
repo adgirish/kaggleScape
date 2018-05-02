@@ -4,709 +4,791 @@
 # In[ ]:
 
 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import pandas as pd
-import numpy as np
+import seaborn as sns
+plt.style.use('fivethirtyeight')
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from sklearn.model_selection import cross_val_predict
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import log_loss, accuracy_score
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.svm import SVC
-from sklearn.decomposition import TruncatedSVD
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
+from subprocess import check_output
 
-import gensim
+# Any results you write to the current directory are saved as output.
 
-import scikitplot.plotters as skplt
 
-import nltk
-
-from xgboost import XGBClassifier
-
-import os
-
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.models import Sequential
-from keras.layers import Dense, Embedding, LSTM
-from keras.utils.np_utils import to_categorical
-from keras.callbacks import ModelCheckpoint
-from keras.models import load_model
-from keras.optimizers import Adam
-
-
-# ## Load training_text and training_variants
-
-# In[ ]:
-
-
-df_train_txt = pd.read_csv('training_text', sep='\|\|', header=None, skiprows=1, names=["ID","Text"])
-df_train_txt.head()
-
-
-# In[ ]:
-
-
-df_train_var = pd.read_csv('training_variants')
-df_train_var.head()
-
-
-# In[ ]:
-
-
-df_test_txt = pd.read_csv('test_text', sep='\|\|', header=None, skiprows=1, names=["ID","Text"])
-df_test_txt.head()
-
-
-# In[ ]:
-
-
-df_test_var = pd.read_csv('test_variants')
-df_test_var.head()
-
-
-# ### Let's join them together
-
-# In[ ]:
-
-
-df_train = pd.merge(df_train_var, df_train_txt, how='left', on='ID')
-df_train.head()
-
-
-# In[ ]:
-
-
-df_test = pd.merge(df_test_var, df_test_txt, how='left', on='ID')
-df_test.head()
-
-
-# ## Run preliminary statistics on loaded data
-
-# In[ ]:
-
-
-df_train.describe(include='all')
-
-
-# In[ ]:
-
-
-df_test.describe(include='all')
-
-
-# In[ ]:
-
-
-df_train['Class'].value_counts().plot(kind="bar", rot=0)
-
-
-# ### Classes seem very imbalanced
-
-# # The main task here is to predict the class of the mutation given the text in the literature. Our approach will then be to apply some common NLP techniques to transform the free text into features for an ML classifier and see which ones work best.
-# 
-# ### Define a helper function to evaluate the effectiveness of transformed free text. We'll use a simple logistic regression with 3-fold stratified cross-validation for fast evaluation.
-
-# In[ ]:
-
-
-def evaluate_features(X, y, clf=None):
-    """General helper function for evaluating effectiveness of passed features in ML model
-    
-    Prints out Log loss, accuracy, and confusion matrix with 3-fold stratified cross-validation
-    
-    Args:
-        X (array-like): Features array. Shape (n_samples, n_features)
-        
-        y (array-like): Labels array. Shape (n_samples,)
-        
-        clf: Classifier to use. If None, default Log reg is use.
-    """
-    if clf is None:
-        clf = LogisticRegression()
-    
-    probas = cross_val_predict(clf, X, y, cv=StratifiedKFold(random_state=8), 
-                              n_jobs=-1, method='predict_proba', verbose=2)
-    pred_indices = np.argmax(probas, axis=1)
-    classes = np.unique(y)
-    preds = classes[pred_indices]
-    print('Log loss: {}'.format(log_loss(y, probas)))
-    print('Accuracy: {}'.format(accuracy_score(y, preds)))
-    skplt.plot_confusion_matrix(y, preds)
-
-
-# Let's do a quick test of evaluate_features
-
-# In[ ]:
-
-
-# Quick test of evaluate_features
-from sklearn.datasets import load_iris
-evaluate_features(*load_iris(True))
-
-
-# ## Start with a simple baseline. Bag of words
-
-# In[ ]:
-
-
-count_vectorizer = CountVectorizer(
-    analyzer="word", tokenizer=nltk.word_tokenize,
-    preprocessor=None, stop_words='english', max_features=None)    
-
-
-# In[ ]:
-
-
-bag_of_words = count_vectorizer.fit_transform(df_train['Text'])
-
-
-# In[ ]:
-
-
-len(count_vectorizer.get_feature_names())
-
-
-# #### 281586 unique words in corpus
-
-# In[ ]:
-
-
-svd = TruncatedSVD(n_components=25, n_iter=25, random_state=12)
-truncated_bag_of_words = svd.fit_transform(bag_of_words)
-
-
-# In[ ]:
-
-
-evaluate_features(truncated_bag_of_words, df_train['Class'].values.ravel())
-
-
-# In[ ]:
-
-
-evaluate_features(truncated_bag_of_words, df_train['Class'].values.ravel(), 
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# ### Bad results overall for the baseline
-# 
-# ## Let's try TFIDF
-
-# In[ ]:
-
-
-count_vectorizer = TfidfVectorizer(
-    analyzer="word", tokenizer=nltk.word_tokenize,
-    preprocessor=None, stop_words='english', max_features=None)    
-
-tfidf = count_vectorizer.fit_transform(df_train['Text'])
-
-len(count_vectorizer.get_feature_names())
-
-
-# In[ ]:
-
-
-svd = TruncatedSVD(n_components=25, n_iter=25, random_state=12)
-truncated_tfidf = svd.fit_transform(tfidf)
-
-
-# In[ ]:
-
-
-evaluate_features(truncated_tfidf, df_train['Class'].values.ravel())
-
-
-# In[ ]:
-
-
-evaluate_features(truncated_tfidf, df_train['Class'].values.ravel(), 
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# In[ ]:
-
-
-evaluate_features(tfidf, df_train['Class'].values.ravel(), 
-                  SVC(kernel='linear', probability=True))
-
-
-# ### A little better, but still bad. You can see from the confusion matrix that it's just classifying most samples into class 7.
-# 
-# ### Also tried a linear SVM for features straight from TFIDF (did not go through Truncated SVD). Worse log loss but confusion matrix seems to show better balance among predicted classes.
-# 
-# _____
-# 
-# ## This time, let's try the popular word2vec to get features
-# 
-# ### Define helper function get_word2vec  and helper class MySentences for training word2vec on the corpus of texts. (or loading if already trained and saved to disk)
-
-# In[ ]:
-
-
-class MySentences(object):
-    """MySentences is a generator to produce a list of tokenized sentences 
-    
-    Takes a list of numpy arrays containing documents.
-    
-    Args:
-        arrays: List of arrays, where each element in the array contains a document.
-    """
-    def __init__(self, *arrays):
-        self.arrays = arrays
- 
-    def __iter__(self):
-        for array in self.arrays:
-            for document in array:
-                for sent in nltk.sent_tokenize(document):
-                    yield nltk.word_tokenize(sent)
-
-def get_word2vec(sentences, location):
-    """Returns trained word2vec
-    
-    Args:
-        sentences: iterator for sentences
-        
-        location (str): Path to save/load word2vec
-    """
-    if os.path.exists(location):
-        print('Found {}'.format(location))
-        model = gensim.models.Word2Vec.load(location)
-        return model
-    
-    print('{} not found. training model'.format(location))
-    model = gensim.models.Word2Vec(sentences, size=100, window=5, min_count=5, workers=4)
-    print('Model done training. Saving to disk')
-    model.save(location)
-    return model
-
-
-# ### Start training the word2vec model. Since word2vec training is unsupervised, you can use both training and test datasets.
-# 
-# If training has already been done, the function will just load the word2vec to disk so you don't need to retrain if rerunning the notebook
-
-# In[ ]:
-
-
-w2vec = get_word2vec(MySentences(df_train['Text'].values, df_test['Text'].values),
-                     'w2vmodel')
-
-
-# ### Now that we have our word2vec model, how do we use it to transform each documents into a feature vector? In order to convert a document of multiple words into a single vector using our trained word2vec, we take the word2vec of all words in the document, then take its mean.
-# 
-# ### We'll define a transformer (with sklearn interface) to convert a document into its corresponding vector
-
-# In[ ]:
-
-
-class MyTokenizer:
-    def __init__(self):
-        pass
-    
-    def fit(self, X, y=None):
-        return self
-    
-    def transform(self, X):
-        transformed_X = []
-        for document in X:
-            tokenized_doc = []
-            for sent in nltk.sent_tokenize(document):
-                tokenized_doc += nltk.word_tokenize(sent)
-            transformed_X.append(np.array(tokenized_doc))
-        return np.array(transformed_X)
-    
-    def fit_transform(self, X, y=None):
-        return self.transform(X)
-
-class MeanEmbeddingVectorizer(object):
-    def __init__(self, word2vec):
-        self.word2vec = word2vec
-        # if a text is empty we should return a vector of zeros
-        # with the same dimensionality as all the other vectors
-        self.dim = len(word2vec.wv.syn0[0])
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X = MyTokenizer().fit_transform(X)
-        
-        return np.array([
-            np.mean([self.word2vec.wv[w] for w in words if w in self.word2vec.wv]
-                    or [np.zeros(self.dim)], axis=0)
-            for words in X
-        ])
-    
-    def fit_transform(self, X, y=None):
-        return self.transform(X)
-
-
-# In[ ]:
-
-
-mean_embedding_vectorizer = MeanEmbeddingVectorizer(w2vec)
-mean_embedded = mean_embedding_vectorizer.fit_transform(df_train['Text'])
-
-
-# In[ ]:
-
-
-evaluate_features(mean_embedded, df_train['Class'].values.ravel())
-
-
-# In[ ]:
-
-
-evaluate_features(mean_embedded, df_train['Class'].values.ravel(),
-                  RandomForestClassifier(n_estimators=1000, max_depth=15, verbose=1))
-
-
-# In[ ]:
-
-
-evaluate_features(mean_embedded, 
-                  df_train['Class'].values.ravel(),
-                  XGBClassifier(max_depth=4,
-                                objective='multi:softprob',
-                                learning_rate=0.03333,
-                                )
-                 )
-
-
-# ### As expected, we get better results than TF-IDF. 
-# 
-# The results are still not very good though. One way to explain this is that there is a lot of information loss from just getting the mean of all word vectors of the document. This is roughly analogous to taking the entire document, summarizing it into one word, and using that word to classify the entire text.
-
-# ## Let's try a quick and dirty LSTM in Keras to take into account the sequential nature of text
-# 
-# * We won't do any hyperparameter search 
-# * We'll go with 15 epochs, and save the model with the best validation loss after an epoch
-# * Max sequence length is cut down to a measly 2000 (longest text has 77000+ words), to shorten training time and prevent GPU OOM
-# 
-# Note: This takes about an hour to run on GPU
-
-# In[ ]:
-
-
-# Use the Keras tokenizer
-num_words = 2000
-tokenizer = Tokenizer(num_words=num_words)
-tokenizer.fit_on_texts(df_train['Text'].values)
-
-
-# In[ ]:
-
-
-# Pad the data 
-X = tokenizer.texts_to_sequences(df_train['Text'].values)
-X = pad_sequences(X, maxlen=2000)
-
-
-# In[ ]:
-
-
-# Build out our simple LSTM
-embed_dim = 128
-lstm_out = 196
-
-# Model saving callback
-ckpt_callback = ModelCheckpoint('keras_model', 
-                                 monitor='val_loss', 
-                                 verbose=1, 
-                                 save_best_only=True, 
-                                 mode='auto')
-
-model = Sequential()
-model.add(Embedding(num_words, embed_dim, input_length = X.shape[1]))
-model.add(LSTM(lstm_out, recurrent_dropout=0.2, dropout=0.2))
-model.add(Dense(9,activation='softmax'))
-model.compile(loss = 'categorical_crossentropy', optimizer='adam', metrics = ['categorical_crossentropy'])
-print(model.summary())
-
-
-# In[ ]:
-
-
-Y = pd.get_dummies(df_train['Class']).values
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size = 0.2, random_state = 42, stratify=Y)
-print(X_train.shape, Y_train.shape)
-print(X_test.shape, Y_test.shape)
-
-
-# In[ ]:
-
-
-batch_size = 32
-model.fit(X_train, Y_train, epochs=15, batch_size=batch_size, validation_split=0.2, callbacks=[ckpt_callback])
-
-
-# In[ ]:
-
-
-model = load_model('keras_model')
-
-
-# In[ ]:
-
-
-probas = model.predict(X_test)
-
-
-# In[ ]:
-
-
-pred_indices = np.argmax(probas, axis=1)
-classes = np.array(range(1, 10))
-preds = classes[pred_indices]
-print('Log loss: {}'.format(log_loss(classes[np.argmax(Y_test, axis=1)], probas)))
-print('Accuracy: {}'.format(accuracy_score(classes[np.argmax(Y_test, axis=1)], preds)))
-skplt.plot_confusion_matrix(classes[np.argmax(Y_test, axis=1)], preds)
-
-
-# ### The results of the quick LSTM are promising. 
-# 
-# On the first try with no hyperparameter search, 6th epoch, max sequence length cut down to a measly 2000 (longest text has 77000+ words), we get the best log loss so far of around 1.4. You can still see a bit of bias towards class 7 but the confusion matrix looks more balanced than anything we've seen so far.
-# 
-# ### Further tuning of the LSTM will likely produce better results.
-
-# ## So far, we've only used the text field to perform classification. But there is still the "Gene" and "Variation" fields.
-# 
-# Using only the Text field is a bit flawed. Looking closer at the statistics we calculated above, "training_text" actually has duplicates, and the duplicates have different classes. This is part of the challenge. A lot of papers are studies of 2 or more genes. It is our job to use the other fields to figure out which parts of the text are relevant for the particular Gene and Variation.
-# 
-# ### Let's use a LabelEncoder to encode Gene and Variation and combine it with TFIDF
-
-# In[ ]:
-
-
-gene_le = LabelEncoder()
-gene_encoded = gene_le.fit_transform(df_train['Gene'].values.ravel()).reshape(-1, 1)
-gene_encoded = gene_encoded / np.max(gene_encoded)
-
-
-# In[ ]:
-
-
-variation_le = LabelEncoder()
-variation_encoded = variation_le.fit_transform(df_train['Variation'].values.ravel()).reshape(-1, 1)
-variation_encoded = variation_encoded / np.max(variation_encoded)
-
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((gene_encoded, variation_encoded, truncated_tfidf)), df_train['Class'])
-
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((gene_encoded, variation_encoded, truncated_tfidf)), df_train['Class'],
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# ### Barely any difference, let's try our  label encoded features with our word2vec features
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((gene_encoded, variation_encoded, mean_embedded)), df_train['Class'])
-
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((gene_encoded, variation_encoded, mean_embedded)), df_train['Class'],
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# ### Doesn't make a difference either. Let's try one-hot encoding + SVD the "Gene" and "Variation" features
-
-# In[ ]:
-
-
-one_hot_gene = pd.get_dummies(df_train['Gene'])
-svd = TruncatedSVD(n_components=25, n_iter=25, random_state=12)
-truncated_one_hot_gene = svd.fit_transform(one_hot_gene.values)
-
-
-# In[ ]:
-
-
-one_hot_variation = pd.get_dummies(df_train['Variation'])
-svd = TruncatedSVD(n_components=25, n_iter=25, random_state=12)
-truncated_one_hot_variation = svd.fit_transform(one_hot_variation.values)
-
-
-# ### Truncated one hot encoding + TFIDF
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((truncated_one_hot_gene, truncated_one_hot_variation, truncated_tfidf)), df_train['Class'])
-
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((truncated_one_hot_gene, truncated_one_hot_variation, truncated_tfidf)), df_train['Class'],
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# ### Truncated one hot encoding + word2vec
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((truncated_one_hot_gene, truncated_one_hot_variation, mean_embedded)), df_train['Class'])
-
-
-# In[ ]:
-
-
-evaluate_features(np.hstack((truncated_one_hot_gene, truncated_one_hot_variation, mean_embedded)), df_train['Class'],
-                  RandomForestClassifier(n_estimators=1000, max_depth=5, verbose=1))
-
-
-# ### Interestingly, performance is actually a bit worse than simple label encoding
-
-# ## Before going into a summary of the insights we've discovered, let's generate some submissions from our best models and see how they fare in the public leaderboard
-# 
-# ### We'll start by generating a submission from our word2vec model
-
-# In[ ]:
-
-
-lr_w2vec = LogisticRegression()
-lr_w2vec.fit(mean_embedded, df_train['Class'])
-
-
-# In[ ]:
-
-
-mean_embedded_test = mean_embedding_vectorizer.transform(df_test['Text'])
-
-
-# In[ ]:
-
-
-probas = lr_w2vec.predict_proba(mean_embedded_test)
-
-
-# In[ ]:
-
-
-submission_df = pd.DataFrame(probas, columns=['class'+str(c+1) for c in range(9)])
-submission_df['ID'] = df_test['ID']
-submission_df.head()
-
-
-# In[ ]:
-
-
-submission_df.to_csv('submission.csv', index=False)
-
-
-# ### Test out XGB and SVC
-
-# In[ ]:
-
-
-xgb_w2vec = XGBClassifier(max_depth=4,
-                          objective='multi:softprob',
-                          learning_rate=0.03333)
-xgb_w2vec.fit(mean_embedded, df_train['Class'])
-probas = xgb_w2vec.predict_proba(mean_embedded_test)
-submission_df = pd.DataFrame(probas, columns=['class'+str(c+1) for c in range(9)])
-submission_df['ID'] = df_test['ID']
-submission_df.to_csv('submission.csv', index=False)
-
-
-# In[ ]:
-
-
-svc_w2vec = SVC(kernel='linear', probability=True)
-svc_w2vec.fit(mean_embedded, df_train['Class'])
-probas = svc_w2vec.predict_proba(mean_embedded_test)
-submission_df = pd.DataFrame(probas, columns=['class'+str(c+1) for c in range(9)])
-submission_df['ID'] = df_test['ID']
-submission_df.to_csv('submission.csv', index=False)
-
-
-# #### Public LB Score Log Reg: 1.032000
-# 
-# #### Public LB Score XGB: 0.96536
-# 
-# #### Public LB Score SVC: 0.97059
-# 
-# ### Let's try our Keras model
-
-# In[ ]:
-
-
-Xtest = tokenizer.texts_to_sequences(df_test['Text'].values)
-Xtest = pad_sequences(Xtest, maxlen=2000)
-
-
-# In[ ]:
-
-
-probas = model.predict(Xtest)
-
-
-# In[ ]:
-
-
-submission_df = pd.DataFrame(probas, columns=['class'+str(c+1) for c in range(9)])
-submission_df['ID'] = df_test['ID']
-submission_df.head()
-
-
-# In[ ]:
-
-
-submission_df.to_csv('submission.csv', index=False)
-
-
-# #### Public LB Score: 1.00234
-
-# ## Summary
-# 
-# The aim of this notebook was to do some quick exploration of the dataset and apply some common ML techniques to the classification task. The metric to maximize is multiclass log loss.
-# 
-# A big part of the problem is to teach an ML model how to "read" medical literature and classify the given Gene and Variation into 1 out of 9 classes.
-# 
-# Thus, the first part of this notebook focused on applying common techniques to preprocess and vectorize free text and evaluate its effectiveness by running them through vanilla Logistic Regression and Random Forest.
-# 
-# The techniques used, from least effective to most effective, were:
-# 
-# * Bag of Words
-# * TF-IDF
-# * Word2Vec
-# 
-# Because the above approaches did not take into account the temporal patterns in free text, a quick LSTM was tried as well. This approach scored higher than the above without any tuning.
-# 
-# In the second part of the notebook, I added the "Gene" and "Variation" features next to the free text features. I tried both label encoding and one-hot encoding, however, the results did not show much improvement.
-# 
-# In the third part of the notebook, I generated submissions for both Word2Vec (multiple classifiers) and Keras LSTM and recorded the public leaderboard scores of each submission. The scores were better (around 1) but did not show the same relationships with each other as my own CV (they were mostly close to each other). This is a common occurrence in Kaggle competitions since the public leaderboard is scored on a smaller subset of the test data. Most Kagglers' advice is to ignore the public leaderboard and trust your own CV.
-# 
-# ## Further things to try
-# 
-# This notebook's aim was mostly figuring out which techniques are worth exploring and was not intended to generate very competitive submissions. The following is a list of suggestions to try for further improvement.
-# 
-# * There are tons of other techniques for free text other than the ones I listed above. Make sure to explore other techniques such as Doc2Vec, DeepIR, and Word Mover's distance
-# 
-# * Focus more on capturing the relationship between "Gene" and "Variation" with the free text features. Since "Text" is sometimes duplicated (with different classes!), taking into account "Gene" and "Variation" is very important.
-# 
-# * Explore different deep learning architectures for the data. One idea for an architecture is to combine a simple Embedding + LSTM for the free text and concatenate the input with "Gene" and "Variation" Embeddings, leading into a final fully connected layer for the classes. Hopefully, this will capture the relationship between the text and the "Gene" + "Variation" columns.
-# 
-# * Train Word2Vec on a bigger corpus of genetic and medical data. Since Word2Vec is unsupervised, we can get better embeddings with more data, and consequently, better predictions
-# 
-# * Don't forget to do hyperparameter optimization when you're happy with a set of features. Stacked ensembling is also an almost guaranteed way to get a small boost to your score. We skipped this entirely in this notebook as this is usually the last step in the process. Try http://xcessiv.readthedocs.io/.
+# ### What is [BigQuery](https://cloud.google.com/bigquery/what-is-bigquery)??
 # 
 # 
+# Storing and querying massive datasets can be time consuming and expensive without the right hardware and infrastructure. Google BigQuery is an enterprise data warehouse that solves this problem by enabling super-fast SQL queries using the processing power of Google's infrastructure. Simply move your data into BigQuery and let us handle the hard work. You can control access to both the project and your data based on your business needs, such as giving others the ability to view or query your data.
+# 
+# You can access BigQuery by using a [web UI ](https://bigquery.cloud.google.com/project/nice-particle-195309)or a [command-line tool](https://cloud.google.com/bigquery/bq-command-line-tool), or by making calls to the BigQuery REST API using a variety of client libraries such as Java, .NET, or Python. There are also a variety of third-party tools that you can use to interact with BigQuery, such as visualizing the data or loading the data.
+# Because the datasets on BigQuery can be very large, there are some restrictions on how much data you can access. 
+# 
+# *But You dont need to go to Google, Since Kaggle kernels allows you to access TeraBytes of data from Google cloud with all saftey measures like not letting your query go above memory limits and helper APIs. Thanks to [Sohier](https://www.kaggle.com/sohier)'s [BigQuery helper module](https://github.com/SohierDane/BigQuery_Helper/blob/master/bq_helper.py).
+# Each Kaggle user can scan 5TB every 30 days for free.*
+# 
+# Let's first setup environment to run BigQueries in Kaggle Kernels.
+# 
+# ### Importing Kaggle's bq_helper package
+
+# In[ ]:
+
+
+import bq_helper 
+
+
+# ### Creating a helper object for  bigquery dataset
+# 
+# The addresses of BigQuery datasets look like this![](https://i.imgur.com/l11gdKx.png)
+# 
+# for us dataset is **github_repos**
+# 
+# [Rachael](https://www.kaggle.com/rtatman) from Kaggle has ran a 5 days BigQuery Introductory challenge called SQL Scavenger Hunt. We will go through day 1 to 5 using Github Repos Dataset.
+# 
+# Image is taken from [SQL Scavenger Handbook](https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook)
+
+# In[ ]:
+
+
+github_repos = bq_helper.BigQueryHelper(active_project= "bigquery-public-data", 
+                                       dataset_name = "github_repos")
+
+
+# ### Listing Tables
+
+# In[ ]:
+
+
+# print a list of all the tables in the github_repos dataset
+github_repos.list_tables()
+
+
+# ###  Printing Table Schema
+# 
+
+# In[ ]:
+
+
+# print information on all the columns in the "commits" table
+# in the github_repos dataset
+github_repos.table_schema("commits")
+
+
+# In[ ]:
+
+
+# preview the first couple lines of the "commits" table
+github_repos.head("commits")
+
+
+# **[SQL Scavenger Hunt: Day 1](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1)**
+# ### SELECT ... FROM ... WHERE
+# 
+# Or first query is going to be simple select a single column from a specific table. To do this, you need to tell SELECT which column to select and then specify what table that column is from using FROM.
+# 
+# When you're working with BigQuery datasets, you're almost always going to want to return only certain rows, usually based on the value of a different column. You can do this using the WHERE clause, which will only return the rows where the WHERE clause evaluates to true.
+# 
+# ### What are sizes of Github Repositories??
+# We will be using **contents** table.
+
+# In[ ]:
+
+
+github_repos.head("contents")
+
+
+# ### Checking the size of our query before we run it
+# Our Dataset is 3TBs so we can easily cross tha daily limit by running few queries. We should always estimate  how much data we need to scan for executing this query by **BigQueryHelper.estimate_query_size()** method.
+# 
+
+# In[ ]:
+
+
+query1= """SELECT size
+            FROM `bigquery-public-data.github_repos.contents`
+            WHERE binary = True
+            LIMIT 5000
+        """
+github_repos.estimate_query_size(query1)
+
+
+# Our query actually scanned 2.34 GB of data. By default any query scanning more than 1GB of data will get cancelled by kaggle kernel environment.
+# 
+# ### Running a query
+# 
+# There are 2 ways to do this:
+# 
+# 1. BigQueryHelper.query_to_pandas(query): This method takes a query and returns a Pandas dataframe.
+# 1. BigQueryHelper.query_to_pandas_safe(query, max_gb_scanned=1): This method takes a query and returns a Pandas dataframe only if the size of the query is less than the upperSizeLimit (1 gigabyte by default).
+# 
+# Here's an example of a query that is larger than the specified upper limit.
+
+# In[ ]:
+
+
+github_repo_sizes = github_repos.query_to_pandas_safe(query1, max_gb_scanned=2.34)
+github_repo_sizes.head()
+
+
+# Since this query has returned a pandasdataframe, we can work with it as we would any other dataframe. For example, we can get the min and max of the column size:
+# 
+# 
+
+# In[ ]:
+
+
+BYTES_PER_MB = 2**20
+print("Minimum git repo size is " , github_repo_sizes.min()/BYTES_PER_MB, " bytes")
+print("Maximum git repo size is " , github_repo_sizes.max()/BYTES_PER_MB, " bytes");
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+plt.plot(github_repo_sizes.divide(BYTES_PER_MB),color="black")
+plt.savefig('github-sizes-on-head-branch.png')
+plt.title("Sizes of Github Repos on Head Branch in MBs");
+
+
+# ### How many github repositories are in form of binary files?
+# A binary file is a file stored in binary format. A binary file is computer-readable but not human-readable. All executable programs are stored in binary files, as are most numeric data files.
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query2= """SELECT binary\n            FROM `bigquery-public-data.github_repos.contents`\n            LIMIT 50000\n        """\n\nbinary_files=github_repos.query_to_pandas_safe(query2)')
+
+
+# In[ ]:
+
+
+binary_files.head()
+sns.countplot(binary_files.binary)
+plt.savefig('github-binary-files.png')
+plt.title("Binary Vs. Text Files");
+
+
+# Looks like approximately 5% of the total files is dataset are binary files i.e executables rest all are normal text files.
+# 
+# ### Which are the Popular Languages in Github?
+
+# In[ ]:
+
+
+github_repos.head("languages")
+
+
+# In[ ]:
+
+
+#%%time
+query3= """SELECT language
+            FROM `bigquery-public-data.github_repos.languages`
+            LIMIT 5000
+        """
+github_repos.estimate_query_size(query3)
+
+
+# In[ ]:
+
+
+github_languages = github_repos.query_to_pandas_safe(query3)
+github_languages.head()
+
+
+# In[ ]:
+
+
+github_languages.language[0]
+languagesList=[]
+for lang in github_languages.language:
+    languagesList.extend(lang)
+languagesList[:5]
+
+
+# In[ ]:
+
+
+Languages_count={}
+for lang in languagesList:
+    if lang["name"] not in Languages_count:
+        Languages_count[lang["name"]]=0
+    Languages_count[lang["name"]]+=1
+#Languages_count
+
+
+# In[ ]:
+
+
+import operator
+sorted_Languages_counts = sorted(Languages_count.items(), key=operator.itemgetter(1),reverse=True)
+sorted_Languages_counts[:15]
+
+
+# In[ ]:
+
+
+language = list(zip(*sorted_Languages_counts[:15]))[0]
+count = list(zip(*sorted_Languages_counts[:15]))[1]
+x_pos = np.arange(len(language))
+
+
+# calculate slope and intercept for the linear trend line
+slope, intercept = np.polyfit(x_pos, count, 1)
+trendline = intercept + (slope * x_pos)
+plt.figure(figsize=(12,8))
+plt.plot(x_pos, trendline, color='black', linestyle='--')    
+plt.bar(x_pos, count,align='center',color=sns.color_palette("gist_rainbow",len(x_pos)))
+plt.xticks(x_pos, language,rotation=45) 
+plt.title('Language Popularity Score')
+plt.savefig('github-language-popularity.png');
+
+
+# My favourite being Python, I must say it's in top 5.
+# 
+# ### Which are the trending repositories on Github ??
+# 
+
+# In[ ]:
+
+
+github_repos.head("sample_repos")
+
+
+# In[ ]:
+
+
+query9 ="""
+        SELECT repo_name, watch_count
+        FROM `bigquery-public-data.github_repos.sample_repos`
+        ORDER BY watch_count DESC 
+        LIMIT 2000
+        """
+github_repos.estimate_query_size(query9)
+
+
+# In[ ]:
+
+
+github_repo_trending_repos = github_repos.query_to_pandas_safe(query9)
+github_repo_trending_repos.head(15)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+g = sns.barplot(y="repo_name", x="watch_count", data=github_repo_trending_repos[:20], palette="winter")
+plt.title('Trending Github Repositories')
+plt.ylabel("Repository Name")
+plt.xlabel("Watch Count")
+plt.savefig('github-trending-repo-by-watch-count.png');
+
+
+# Wohoo my favourite **FreeCodeCamp** repo is at the top and much ahead of others.
+# 
+# 
+# ### Who are the authors with Highest number of repositories?
+# 
+# The author on github is the person who originally wrote the code. 
+# In other words, the author is the person who originally wrote the patch.
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query4= """SELECT author\n            FROM `bigquery-public-data.github_repos.commits`\n            LIMIT 500000\n        """\ngithub_repos.query_to_pandas_safe(query4)')
+
+
+# In[ ]:
+
+
+github_repo_authors = github_repos.query_to_pandas_safe(query4, max_gb_scanned=17.5)
+github_repo_authors.head()
+
+
+# In[ ]:
+
+
+github_repo_authors.author[789]
+
+
+# In[ ]:
+
+
+authors_count={}
+for author in github_repo_authors.author.values:
+    if author["name"] not in authors_count:
+        authors_count[author["name"]]=0
+    authors_count[author["name"]]+=1
+#authors_count
+
+
+# In[ ]:
+
+
+import operator
+sorted_authors_counts = sorted(authors_count.items(), key=operator.itemgetter(1),reverse=True)
+sorted_authors_counts[:15]
+
+
+# In[ ]:
+
+
+authors = list(zip(*sorted_authors_counts[:15]))[0]
+count = list(zip(*sorted_authors_counts[:15]))[1]
+y_pos = np.arange(len(authors))
+plt.figure(figsize=(12,8))
+plt.barh(y_pos,count,align='center',color=sns.color_palette("viridis",len(x_pos)))
+plt.yticks(y_pos,authors,rotation=0) 
+plt.title('Authors and their total Repositories')
+plt.savefig('github-authors.png');
+
+
+# **Auto Pilot **running first here with more than 1600 repositories.
+# 
+# ## Who are the committers with highest commits?
+# 
+# The committer on github, is assumed to be the person who committed the code on behalf of the original author. 
+# Th commiter is who last applied the patch.
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query5= """SELECT committer\n            FROM `bigquery-public-data.github_repos.commits`\n            LIMIT 50000\n        """\ngithub_repos.query_to_pandas_safe(query5)')
+
+
+# In[ ]:
+
+
+github_repo_committers = github_repos.query_to_pandas_safe(query5, max_gb_scanned=17.5)
+github_repo_committers.head()
+
+
+# In[ ]:
+
+
+committers_count={}
+for committer in github_repo_committers.committer.values:
+    if committer["name"] not in committers_count:
+        committers_count[committer["name"]]=0
+    committers_count[committer["name"]]+=1
+#committers_count
+
+
+# In[ ]:
+
+
+import operator
+sorted_committers_count = sorted(committers_count.items(), key=operator.itemgetter(1),reverse=True)
+sorted_committers_count[:15]
+
+
+# In[ ]:
+
+
+committers = list(zip(*sorted_committers_count[:15]))[0]
+count = list(zip(*sorted_committers_count[:15]))[1]
+y_pos = np.arange(len(committers))
+
+plt.figure(figsize=(12,8))
+plt.barh(y_pos,count,align='center',color=sns.color_palette("inferno",len(y_pos)))
+plt.yticks(y_pos,committers,rotation=0) 
+plt.title('Committers and their total Repositories')
+plt.savefig('github-committers.png');
+
+
+# Looks like by default commiter is github followed by Duane F. King.
+# 
+# ### How commit messages look like?
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query6 = """\nSELECT message\nFROM `bigquery-public-data.github_repos.commits`\nWHERE LENGTH(message) > 10 AND LENGTH(message) <= 50\nLIMIT 500\n"""\ngithub_repos.query_to_pandas_safe(query6)')
+
+
+# In[ ]:
+
+
+github_repo_messages = github_repos.query_to_pandas_safe(query6, max_gb_scanned=17.6)
+github_repo_messages.head()
+
+
+# In[ ]:
+
+
+from wordcloud import WordCloud
+import random
+
+def grey_color_func(word, font_size, position, orientation, random_state=None, **kwargs):
+    return "hsl(0, 0%%, %d%%)" % random.randint(60, 100)
+
+commits = ' '.join(github_repo_messages.message).lower()
+# wordcloud for display address
+plt.figure(figsize=(12,6))
+wc = WordCloud(background_color='gold', max_font_size=200,
+                            width=1600,
+                            height=800,
+                            max_words=400,
+                            relative_scaling=.5).generate(commits)
+plt.imshow(wc.recolor(color_func=grey_color_func, random_state=3))
+#plt.imshow(wc)
+plt.title("Github Commit Messages", fontsize=20)
+plt.savefig('github-commit-messages-wordcloud.png')
+plt.axis("off");
+
+
+# ### Which Subject is most comman for Github Repositories??
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query7 = """\nSELECT subject\nFROM `bigquery-public-data.github_repos.commits`\nWHERE LENGTH(subject) > 5 AND LENGTH(subject) <= 10\nLIMIT 500\n"""\ngithub_repos.query_to_pandas_safe(query7)')
+
+
+# In[ ]:
+
+
+github_repo_subject = github_repos.query_to_pandas_safe(query7, max_gb_scanned=8.8)
+github_repo_subject.head()
+
+
+# In[ ]:
+
+
+from wordcloud import WordCloud
+import random
+
+commits = ' '.join(github_repo_subject.subject).lower()
+# wordcloud for display address
+plt.figure(figsize=(12,6))
+wc = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA"
+, max_font_size=200,
+                            width=1600,
+                            height=800,
+                            max_words=400,
+                            relative_scaling=.5).generate(commits)
+plt.imshow(wc)
+#plt.imshow(wc)
+plt.title("Github Subject", fontsize=20)
+plt.savefig('github-subject-wordcloud.png')
+plt.axis("off");
+
+
+# **[SQL Scavenger Hunt: Day 2](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2)**
+# 
+# ### GROUP BY... HAVING and COUNT
+# Now we will be learning how to **GROUP** data **BY** particular column and **COUNT** common occurences.
+# And also **ORDER** results **BY** count in ascending or DESCending order..
+# 
+# 
+# ### Which are popular licenses?
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'query8 ="""\n        SELECT license, COUNT(*) AS count\n        FROM `bigquery-public-data.github_repos.licenses`\n        GROUP BY license\n        ORDER BY COUNT(*) DESC\n        """\ngithub_repos.query_to_pandas_safe(query8)')
+
+
+# In[ ]:
+
+
+github_repo_licenses = github_repos.query_to_pandas_safe(query8)
+github_repo_licenses.head()
+
+
+# In[ ]:
+
+
+github_repo_licenses.shape
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,9))
+sns.barplot(y="license", x="count", data=github_repo_licenses, palette="viridis")
+plt.title('Licenses in order of their popularity in Github Repositories')
+plt.savefig('github-licenses-popularity.png');
+
+
+# **[SQL Scavenger Hunt: Day 5](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-5)**
+# 
+# ### JOIN
+# Till now we were using only single table. To get broader view of real life scenario where we have to use **JOIN** to join 2 tables together based on some column.
+# 
+# ### How many files are covered by each license?
+# 
+
+# In[ ]:
+
+
+query10 = ("""
+        -- Select all the columns we want in our joined table
+        SELECT L.license, COUNT(sf.path) AS number_of_files
+        FROM `bigquery-public-data.github_repos.sample_files` as sf
+        -- Table to merge into sample_files
+        INNER JOIN `bigquery-public-data.github_repos.licenses` as L 
+            ON sf.repo_name = L.repo_name -- what columns should we join on?
+        GROUP BY L.license
+        ORDER BY number_of_files DESC
+        """)
+
+file_count_by_license = github_repos.query_to_pandas_safe(query10, max_gb_scanned=6)
+
+
+# In[ ]:
+
+
+file_count_by_license.head()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,9))
+g = sns.barplot(y="license", x="number_of_files", data=file_count_by_license, palette="inferno")
+plt.title(' Number of Files covered by each License')
+plt.savefig('num-of-files-by-license.png')
+plt.xlabel("");
+
+
+# GNU General Public License v2.0	(gpl-2.0) Covered most of the files followed by MIT(mit) license.
+# 
+# ### How many commits have been made in repos written in the Python programming language?
+
+# In[ ]:
+
+
+query11 = """
+WITH python_repos AS (
+    SELECT DISTINCT repo_name -- Notice DISTINCT
+    FROM `bigquery-public-data.github_repos.sample_files`
+    WHERE path LIKE '%.py')
+SELECT commits.repo_name, COUNT(commit) AS num_commits
+FROM `bigquery-public-data.github_repos.sample_commits` AS commits
+JOIN python_repos
+    ON  python_repos.repo_name = commits.repo_name
+GROUP BY commits.repo_name
+ORDER BY num_commits DESC
+"""
+github_repo_num_commits_distinct = github_repos.query_to_pandas_safe(query11, max_gb_scanned=10)
+github_repo_num_commits_distinct
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,9))
+g = sns.barplot(y="repo_name", x="num_commits", data=github_repo_num_commits_distinct[:15], palette="inferno")
+plt.title(' Top Python Github Repositories by their commits Count')
+plt.savefig('python-by-commits.png')
+plt.xlabel("");
+
+
+# No doubt **LINUX Operating system**'s repo has been applied lot of patches .
+# 
+# ### Number of Python files in each repositories above
+# 
+
+# In[ ]:
+
+
+query12 = """
+SELECT repo_name, COUNT(path) AS num_python_files
+FROM `bigquery-public-data.github_repos.sample_files`
+WHERE repo_name IN ('torvalds/linux', 'apple/swift', 'Microsoft/vscode', 'facebook/react', 'tensorflow/tensorflow')
+    AND path LIKE '%.py'
+GROUP BY repo_name
+ORDER BY num_python_files DESC
+"""
+
+github_repo_num_python_files = github_repos.query_to_pandas_safe(query12, max_gb_scanned=10)
+github_repo_num_python_files
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,9))
+g = sns.barplot(y="repo_name", x="num_python_files", data=github_repo_num_python_files, palette="Spectral_r")
+plt.title(' Python Github Repositories by their files Count')
+plt.savefig('python-by-files-.png')
+plt.xlabel("");
+
+
+# Highest number of Python files are present in Tensorflow Deep Learning Library
+# 
+# On the similar lines we can find out
+# 
+# ### How many commits have been made in repos written in the Java programming language?
+
+# In[ ]:
+
+
+query13 = """
+WITH java_repos AS (
+    SELECT DISTINCT repo_name -- Notice DISTINCT
+    FROM `bigquery-public-data.github_repos.sample_files`
+    WHERE path LIKE '%.java')
+SELECT commits.repo_name, COUNT(commit) AS num_commits
+FROM `bigquery-public-data.github_repos.sample_commits` AS commits
+JOIN java_repos
+    ON  java_repos.repo_name = commits.repo_name
+GROUP BY commits.repo_name
+ORDER BY num_commits DESC
+"""
+github_repo_num_java_distinct = github_repos.query_to_pandas_safe(query13, max_gb_scanned=5.3)
+github_repo_num_java_distinct
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,9))
+g = sns.barplot(y="repo_name", x="num_commits", data=github_repo_num_java_distinct, palette="PuBu")
+plt.title(' Top Java Github Repositories by their commits Count')
+plt.savefig('java-by_commits.png')
+plt.xlabel("");
+
+
+# ### How many times 'This should never happen' appears??
+# 
+# This query uses a smaller sample table to find how many times the comment "this should never happen" is present.
+
+# In[ ]:
+
+
+query14 ="""
+SELECT
+  SUM(copies)
+FROM
+  `bigquery-public-data.github_repos.sample_contents`
+WHERE
+  NOT binary
+  AND content like '%This should never happen%'
+LIMIT 500
+"""
+github_repos.estimate_query_size(query14)
+
+
+# In[ ]:
+
+
+this_should_never_happen_count=github_repos.query_to_pandas_safe(query14, max_gb_scanned=23.7)
+this_should_never_happen_count
+
+
+# HAHA . This has happened 68486 times.
+# 
+# ### How many GO files are there?
+
+# In[ ]:
+
+
+query15="""
+SELECT COUNT(*)
+FROM `bigquery-public-data.github_repos.sample_files`
+WHERE path LIKE '%.go'
+LIMIT 500
+"""
+github_repos.estimate_query_size(query15)
+
+
+# In[ ]:
+
+
+go_files_count=github_repos.query_to_pandas_safe(query15, max_gb_scanned=3.7)
+go_files_count
+
+
+# there are 629226 GO files.
+# 
+# ### How many Python files are there?
+
+# In[ ]:
+
+
+query16="""
+SELECT COUNT(*)
+FROM `bigquery-public-data.github_repos.sample_files`
+WHERE path LIKE '%.py'
+LIMIT 500
+"""
+github_repos.estimate_query_size(query16)
+
+
+# In[ ]:
+
+
+python_files_count=github_repos.query_to_pandas_safe(query16, max_gb_scanned=3.7)
+python_files_count
+
+
+# there are 1231972  python files.
+
+# In[ ]:
+
+
+query17="""
+SELECT a.id id, size, content, binary, copies,
+  sample_repo_name, sample_path
+FROM (
+  SELECT id
+    , ANY_VALUE(path) sample_path
+    , ANY_VALUE(repo_name) sample_repo_name
+  FROM `bigquery-public-data.github_repos.sample_files` a
+  WHERE PATH LIKE '%.sql'
+  GROUP BY 1
+) a
+JOIN `bigquery-public-data.github_repos.sample_contents` b
+ON a.id=b.id
+"""
+github_repos.estimate_query_size(query17)
+
+
+# In[ ]:
+
+
+q_tab_or_space = ('''
+#standardSQL
+WITH
+  lines AS (
+  SELECT
+    SPLIT(content, '\\n') AS line,
+    id
+  FROM
+    `bigquery-public-data.github_repos.sample_contents`
+  WHERE
+    sample_path LIKE "%.sql" )
+SELECT
+  Indentation,
+  COUNT(Indentation) AS number_of_occurence
+FROM (
+  SELECT
+    CASE
+        WHEN MIN(CHAR_LENGTH(REGEXP_EXTRACT(flatten_line, r',\s*$')))>=1 THEN 'trailing'
+        WHEN MIN(CHAR_LENGTH(REGEXP_EXTRACT(flatten_line, r"^ +")))>=1 THEN 'Space'
+        ELSE 'Other'
+    END AS Indentation
+  FROM
+    lines
+  CROSS JOIN
+    UNNEST(lines.line) AS flatten_line
+  WHERE
+    REGEXP_CONTAINS(flatten_line, r"^\s+")
+  GROUP BY
+    id )
+GROUP BY
+  Indentation
+ORDER BY
+  number_of_occurence DESC
+''')
+

@@ -1,195 +1,121 @@
-import numpy as np
+import numpy as np 
 import pandas as pd
 import xgboost as xgb
+from sklearn.preprocessing import OneHotEncoder
 
-from datetime import datetime
-from sklearn.metrics import mean_absolute_error
-from sklearn.cross_validation import KFold
-from scipy.stats import skew, boxcox
-from sklearn import preprocessing
-from sklearn.preprocessing import StandardScaler
-import itertools
-
-shift = 200
-COMB_FEATURE = 'cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,' \
-               'cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,' \
-               'cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,' \
-               'cat4,cat14,cat38,cat24,cat82,cat25'.split(',')
-
-def encode(charcode):
-    r = 0
-    ln = len(str(charcode))
-    for i in range(ln):
-        r += (ord(str(charcode)[i]) - ord('A') + 1) * 26 ** (ln - i - 1)
-    return r
-
-fair_constant = 0.7
-def fair_obj(preds, dtrain):
-    labels = dtrain.get_label()
-    x = (preds - labels)
-    den = abs(x) + fair_constant
-    grad = fair_constant * x / (den)
-    hess = fair_constant * fair_constant / (den * den)
-    return grad, hess
-
-def xg_eval_mae(yhat, dtrain):
-    y = dtrain.get_label()
-    return 'mae', mean_absolute_error(np.exp(y)-shift,
-                                      np.exp(yhat)-shift)
-def mungeskewed(train, test, numeric_feats):
-    ntrain = train.shape[0]
-    test['loss'] = 0
-    train_test = pd.concat((train, test)).reset_index(drop=True)
-    skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna()))
-    skewed_feats = skewed_feats[skewed_feats > 0.25]
-    skewed_feats = skewed_feats.index
-
-    for feats in skewed_feats:
-        train_test[feats] = train_test[feats] + 1
-        train_test[feats], lam = boxcox(train_test[feats])
-    return train_test, ntrain
-
-if __name__ == "__main__":
-
-    print('\nStarted')
-    directory = '../input/'
-    train = pd.read_csv(directory + 'train.csv')
-    test = pd.read_csv(directory + 'test.csv')
-
-    numeric_feats = [x for x in train.columns[1:-1] if 'cont' in x]
-    categorical_feats = [x for x in train.columns[1:-1] if 'cat' in x]
-    train_test, ntrain = mungeskewed(train, test, numeric_feats)
+def reduce_dimen(dataset,column,toreplace):
+    for index,i in dataset[column].duplicated(keep=False).iteritems():
+        if i==False:
+            dataset.set_value(index,column,toreplace)
+    return dataset
     
-    # taken from Vladimir's script (https://www.kaggle.com/iglovikov/allstate-claims-severity/xgb-1114)
-    for column in list(train.select_dtypes(include=['object']).columns):
-        if train[column].nunique() != test[column].nunique():
-            set_train = set(train[column].unique())
-            set_test = set(test[column].unique())
-            remove_train = set_train - set_test
-            remove_test = set_test - set_train
+def act_data_treatment(dsname):
+    dataset = dsname
+    
+    for col in list(dataset.columns):
+        if col not in ['people_id', 'activity_id', 'date', 'char_38', 'outcome']:
+            if dataset[col].dtype == 'object':
+                dataset[col].fillna('type 0', inplace=True)
+                dataset[col] = dataset[col].apply(lambda x: x.split(' ')[1]).astype(np.int32)
+            elif dataset[col].dtype == 'bool':
+                dataset[col] = dataset[col].astype(np.int8)
+    
+    dataset['year'] = dataset['date'].dt.year
+    dataset['month'] = dataset['date'].dt.month
+    dataset['day'] = dataset['date'].dt.day
+    dataset['isweekend'] = (dataset['date'].dt.weekday >= 5).astype(int)
+    dataset = dataset.drop('date', axis = 1)
+    
+    return dataset
 
-            remove = remove_train.union(remove_test)
+act_train_data = pd.read_csv("../input/act_train.csv",dtype={'people_id': np.str, 'activity_id': np.str, 'outcome': np.int8}, parse_dates=['date'])
+act_test_data  = pd.read_csv("../input/act_test.csv", dtype={'people_id': np.str, 'activity_id': np.str}, parse_dates=['date'])
+people_data    = pd.read_csv("../input/people.csv", dtype={'people_id': np.str, 'activity_id': np.str, 'char_38': np.int32}, parse_dates=['date'])
 
+act_train_data=act_train_data.drop('char_10',axis=1)
+act_test_data=act_test_data.drop('char_10',axis=1)
 
-            def filter_cat(x):
-                if x in remove:
-                    return np.nan
-                return x
+print("Train data shape: " + format(act_train_data.shape))
+print("Test data shape: " + format(act_test_data.shape))
+print("People data shape: " + format(people_data.shape))
 
+act_train_data  = act_data_treatment(act_train_data)
+act_test_data   = act_data_treatment(act_test_data)
+people_data = act_data_treatment(people_data)
 
-            train_test[column] = train_test[column].apply(lambda x: filter_cat(x), 1)
+train = act_train_data.merge(people_data, on='people_id', how='left', left_index=True)
+test  = act_test_data.merge(people_data, on='people_id', how='left', left_index=True)
 
-    # taken from Ali's script (https://www.kaggle.com/aliajouz/allstate-claims-severity/singel-model-lb-1117)
-    train_test["cont1"] = np.sqrt(preprocessing.minmax_scale(train_test["cont1"]))
-    train_test["cont4"] = np.sqrt(preprocessing.minmax_scale(train_test["cont4"]))
-    train_test["cont5"] = np.sqrt(preprocessing.minmax_scale(train_test["cont5"]))
-    train_test["cont8"] = np.sqrt(preprocessing.minmax_scale(train_test["cont8"]))
-    train_test["cont10"] = np.sqrt(preprocessing.minmax_scale(train_test["cont10"]))
-    train_test["cont11"] = np.sqrt(preprocessing.minmax_scale(train_test["cont11"]))
-    train_test["cont12"] = np.sqrt(preprocessing.minmax_scale(train_test["cont12"]))
+del act_train_data
+del act_test_data
+del people_data
 
-    train_test["cont6"] = np.log(preprocessing.minmax_scale(train_test["cont6"]) + 0000.1)
-    train_test["cont7"] = np.log(preprocessing.minmax_scale(train_test["cont7"]) + 0000.1)
-    train_test["cont9"] = np.log(preprocessing.minmax_scale(train_test["cont9"]) + 0000.1)
-    train_test["cont13"] = np.log(preprocessing.minmax_scale(train_test["cont13"]) + 0000.1)
-    train_test["cont14"] = (np.maximum(train_test["cont14"] - 0.179722, 0) / 0.665122) ** 0.25
+train=train.sort_values(['people_id'], ascending=[1])
+test=test.sort_values(['people_id'], ascending=[1])
 
-    print('')
-    for comb in itertools.combinations(COMB_FEATURE, 2):
-        feat = comb[0] + "_" + comb[1]
-        train_test[feat] = train_test[comb[0]] + train_test[comb[1]]
-        train_test[feat] = train_test[feat].apply(encode)
-        print('Combining Columns:', feat)
+train_columns = train.columns.values
+test_columns = test.columns.values
+features = list(set(train_columns) & set(test_columns))
 
-    print('')
-    for col in categorical_feats:
-        print('Analyzing Column:', col)
-        train_test[col] = train_test[col].apply(encode)
+train.fillna('NA', inplace=True)
+test.fillna('NA', inplace=True)
 
-    print(train_test[categorical_feats])
+y = train.outcome
+train=train.drop('outcome',axis=1)
 
-    ss = StandardScaler()
-    train_test[numeric_feats] = \
-        ss.fit_transform(train_test[numeric_feats].values)
+whole=pd.concat([train,test],ignore_index=True)
+categorical=['group_1','activity_category','char_1_x','char_2_x','char_3_x','char_4_x','char_5_x','char_6_x','char_7_x','char_8_x','char_9_x','char_2_y','char_3_y','char_4_y','char_5_y','char_6_y','char_7_y','char_8_y','char_9_y']
+for category in categorical:
+    whole=reduce_dimen(whole,category,9999999)
+    
+X=whole[:len(train)]
+X_test=whole[len(train):]
 
-    train = train_test.iloc[:ntrain, :].copy()
-    test = train_test.iloc[ntrain:, :].copy()
+del train
+del whole
+    
+X=X.sort_values(['people_id'], ascending=[1])
 
-    print('\nMedian Loss:', train.loss.median())
-    print('Mean Loss:', train.loss.mean())
+X = X[features].drop(['people_id', 'activity_id'], axis = 1)
+X_test = X_test[features].drop(['people_id', 'activity_id'], axis = 1)
 
-    ids = pd.read_csv('input/test.csv')['id']
-    train_y = np.log(train['loss'] + shift)
-    train_x = train.drop(['loss','id'], axis=1)
-    test_x = test.drop(['loss','id'], axis=1)
+categorical=['group_1','activity_category','char_1_x','char_2_x','char_3_x','char_4_x','char_5_x','char_6_x','char_7_x','char_8_x','char_9_x','char_2_y','char_3_y','char_4_y','char_5_y','char_6_y','char_7_y','char_8_y','char_9_y']
+not_categorical=[]
+for category in X.columns:
+    if category not in categorical:
+        not_categorical.append(category)
 
-    n_folds = 10
-    cv_sum = 0
-    early_stopping = 100
-    fpred = []
-    xgb_rounds = []
+enc = OneHotEncoder(handle_unknown='ignore')
+enc=enc.fit(pd.concat([X[categorical],X_test[categorical]]))
+X_cat_sparse=enc.transform(X[categorical])
+X_test_cat_sparse=enc.transform(X_test[categorical])
 
-    d_train_full = xgb.DMatrix(train_x, label=train_y)
-    d_test = xgb.DMatrix(test_x)
+from scipy.sparse import hstack
+X_sparse=hstack((X[not_categorical], X_cat_sparse))
+X_test_sparse=hstack((X_test[not_categorical], X_test_cat_sparse))
 
-    kf = KFold(train.shape[0], n_folds=n_folds)
-    for i, (train_index, test_index) in enumerate(kf):
-        print('\n Fold %d' % (i+1))
-        X_train, X_val = train_x.iloc[train_index], train_x.iloc[test_index]
-        y_train, y_val = train_y.iloc[train_index], train_y.iloc[test_index]
+print("Training data: " + format(X_sparse.shape))
+print("Test data: " + format(X_test_sparse.shape))
+print("###########")
+print("One Hot enconded Test Dataset Script")
 
-        rand_state = 2016
+dtrain = xgb.DMatrix(X_sparse,label=y)
+dtest = xgb.DMatrix(X_test_sparse)
 
-        params = {
-            'seed': 0,
-            'colsample_bytree': 0.7,
-            'silent': 1,
-            'subsample': 0.7,
-            'learning_rate': 0.03,
-            'objective': 'reg:linear',
-            'max_depth': 12,
-            'min_child_weight': 100,
-            'booster': 'gbtree'}
+param = {'max_depth':10, 'eta':0.02, 'silent':1, 'objective':'binary:logistic' }
+param['nthread'] = 4
+param['eval_metric'] = 'auc'
+param['subsample'] = 0.7
+param['colsample_bytree']= 0.7
+param['min_child_weight'] = 0
+param['booster'] = "gblinear"
 
-        d_train = xgb.DMatrix(X_train, label=y_train)
-        d_valid = xgb.DMatrix(X_val, label=y_val)
-        watchlist = [(d_train, 'train'), (d_valid, 'eval')]
+watchlist  = [(dtrain,'train')]
+num_round = 300
+early_stopping_rounds=10
+bst = xgb.train(param, dtrain, num_round, watchlist,early_stopping_rounds=early_stopping_rounds)
 
-        clf = xgb.train(params,
-                        d_train,
-                        100000,
-                        watchlist,
-                        early_stopping_rounds=50,
-                        obj=fair_obj,
-                        feval=xg_eval_mae)
-
-        xgb_rounds.append(clf.best_iteration)
-        scores_val = clf.predict(d_valid, ntree_limit=clf.best_ntree_limit)
-        cv_score = mean_absolute_error(np.exp(y_val), np.exp(scores_val))
-        print('eval-MAE: %.6f' % cv_score)
-        y_pred = np.exp(clf.predict(d_test, ntree_limit=clf.best_ntree_limit)) - shift
-
-        if i > 0:
-            fpred = pred + y_pred
-        else:
-            fpred = y_pred
-        pred = fpred
-        cv_sum = cv_sum + cv_score
-
-    mpred = pred / n_folds
-    score = cv_sum / n_folds
-    print('Average eval-MAE: %.6f' % score)
-    n_rounds = int(np.mean(xgb_rounds))
-
-    print("Writing results")
-    result = pd.DataFrame(mpred, columns=['loss'])
-    result["id"] = ids
-    result = result.set_index("id")
-    print("%d-fold average prediction:" % n_folds)
-
-    now = datetime.now()
-    score = str(round((cv_sum / n_folds), 6))
-    sub_file = 'output/submission_5fold-average-xgb_fairobj_' + str(score) + '_' + str(
-        now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    print("Writing submission: %s" % sub_file)
-    result.to_csv(sub_file, index=True, index_label='id')
+ypred = bst.predict(dtest)
+output = pd.DataFrame({ 'activity_id' : test['activity_id'], 'outcome': ypred })
+output.head()
+output.to_csv('without_leak.csv', index = False)

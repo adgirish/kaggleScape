@@ -1,485 +1,155 @@
 
 # coding: utf-8
 
-# This was put together in a couple of hours using code that I used to participate in other Kaggle events. This is a basic startup for those that are interested in using residual networks using Keras. With the code below, the hardware that I was using is:
-# 
-# 1.    Ubuntu 14.04
-# 2.    x64 I7 processor
-# 3.    Python 2.7
-# 4.    Used PIP installer for all python packages (and apt-get for specialized code such as OpenCV)
-# 5.    SSD Harddrive with 1TB storage (I don't think you need more than 100GB though)
-# 6.    NVidia 1080 GTX Founders Edition graphics card
-# 
-# This was meant as a starting point to build upon for those that are interested.
-# 
-# Enjoy!
-# 
-# Rodney Thomas
-
 # In[ ]:
 
 
-from __future__ import division
-
-import six
-import numpy as np
+from multiprocessing import Pool, cpu_count
+import gc; gc.enable()
+import xgboost as xgb
 import pandas as pd
-import cv2
-import glob
-import random
+import numpy as np
+from sklearn import *
+import sklearn
 
-np.random.seed(2016)
-random.seed(2016)
+train = pd.read_csv('../input/train.csv')
+train = pd.concat((train, pd.read_csv('../input/train_v2.csv')), axis=0, ignore_index=True).reset_index(drop=True)
+test = pd.read_csv('../input/sample_submission_v2.csv')
 
-from keras.models import Model
-from keras.layers import Input, Activation, merge, Dense, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D, AveragePooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.regularizers import l2
-from keras import backend as K
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+transactions = pd.read_csv('../input/transactions.csv', usecols=['msno'])
+transactions = pd.concat((transactions, pd.read_csv('../input/transactions_v2.csv', usecols=['msno'])), axis=0, ignore_index=True).reset_index(drop=True)
+transactions = pd.DataFrame(transactions['msno'].value_counts().reset_index())
+transactions.columns = ['msno','trans_count']
+train = pd.merge(train, transactions, how='left', on='msno')
+test = pd.merge(test, transactions, how='left', on='msno')
+transactions = []; print('transaction merge...')
 
+user_logs = pd.read_csv('../input/user_logs_v2.csv', usecols=['msno'])
+#user_logs = pd.read_csv('../input/user_logs.csv', usecols=['msno'])
+#user_logs = pd.concat((user_logs, pd.read_csv('../input/user_logs_v2.csv', usecols=['msno'])), axis=0, ignore_index=True).reset_index(drop=True)
+user_logs = pd.DataFrame(user_logs['msno'].value_counts().reset_index())
+user_logs.columns = ['msno','logs_count']
+train = pd.merge(train, user_logs, how='left', on='msno')
+test = pd.merge(test, user_logs, how='left', on='msno')
+user_logs = []; print('user logs merge...')
 
-# ## Removes autoscroll throughout process
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('javascript', '', 'IPython.OutputArea.prototype._should_scroll = function(lines) {\n    return false;\n}')
-
-
-# ## Global Declarations
-
-# In[ ]:
-
-
-conf = dict()
-
-# How many patients will be in train and validation set during training. Range: (0; 1)
-conf['train_valid_fraction'] = 0.75
-
-# Batch size for CNN [Depends on GPU and memory available]
-conf['batch_size'] = 1
-
-# Number of epochs for CNN training
-#conf['nb_epoch'] = 200
-conf['nb_epoch'] = 1
-
-# Early stopping. Stop training after epochs without improving on validation
-conf['patience'] = 3
-
-# Shape of image for CNN (Larger the better, but you need to increase CNN as well)
-#conf['image_shape'] = (4160,4128)
-#conf['image_shape'] = (2080,2064)
-#conf['image_shape'] = (1024,1024)
-conf['image_shape'] = (64,64)
-
-
-# ## Residual Network Class
-
-# In[ ]:
-
-
-def _bn_relu(input):
-    """Helper to build a BN -> relu block
-    """
-    norm = BatchNormalization(axis=CHANNEL_AXIS)(input)
-    return Activation("relu")(norm)
+members = pd.read_csv('../input/members_v3.csv')
+train = pd.merge(train, members, how='left', on='msno')
+test = pd.merge(test, members, how='left', on='msno')
+members = []; print('members merge...') 
 
 
 # In[ ]:
 
 
-def _conv_bn_relu(**conv_params):
-    """Helper to build a conv -> BN -> relu block
-    """
-    nb_filter = conv_params["nb_filter"]
-    nb_row = conv_params["nb_row"]
-    nb_col = conv_params["nb_col"]
-    subsample = conv_params.setdefault("subsample", (1, 1))
-    init = conv_params.setdefault("init", "he_normal")
-    border_mode = conv_params.setdefault("border_mode", "same")
-    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
+gender = {'male':1, 'female':2}
+train['gender'] = train['gender'].map(gender)
+test['gender'] = test['gender'].map(gender)
 
-    def f(input):
-        conv = Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
-                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(input)
-        return _bn_relu(conv)
-
-    return f
+train = train.fillna(0)
+test = test.fillna(0)
 
 
 # In[ ]:
 
 
-def _bn_relu_conv(**conv_params):
-    """Helper to build a BN -> relu -> conv block.
-    This is an improved scheme proposed in http://arxiv.org/pdf/1603.05027v2.pdf
-    """
-    nb_filter = conv_params["nb_filter"]
-    nb_row = conv_params["nb_row"]
-    nb_col = conv_params["nb_col"]
-    subsample = conv_params.setdefault("subsample", (1,1))
-    init = conv_params.setdefault("init", "he_normal")
-    border_mode = conv_params.setdefault("border_mode", "same")
-    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
+transactions = pd.read_csv('../input/transactions_v2.csv') #pd.read_csv('../input/transactions.csv')
+#transactions = pd.concat((transactions, pd.read_csv('../input/transactions_v2.csv')), axis=0, ignore_index=True).reset_index(drop=True)
+transactions = transactions.sort_values(by=['transaction_date'], ascending=[False]).reset_index(drop=True)
+transactions = transactions.drop_duplicates(subset=['msno'], keep='first')
 
-    def f(input):
-        activation = _bn_relu(input)
-        return Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
-                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(activation)
-
-    return f
+train = pd.merge(train, transactions, how='left', on='msno')
+test = pd.merge(test, transactions, how='left', on='msno')
+transactions=[]
 
 
 # In[ ]:
 
 
-def _shortcut(input, residual):
-    """Adds a shortcut between input and residual block and merges them with "sum"
-    """
-    # Expand channels of shortcut to match residual.
-    # Stride appropriately to match residual (width, height)
-    # Should be int if network architecture is correctly configured.
-    input_shape = K.int_shape(input)
-    residual_shape = K.int_shape(residual)
-    stride_width = int(round(input_shape[ROW_AXIS] / residual_shape[ROW_AXIS]))
-    stride_height = int(round(input_shape[COL_AXIS] / residual_shape[COL_AXIS]))
-    equal_channels = input_shape[CHANNEL_AXIS] == residual_shape[CHANNEL_AXIS]
+def transform_df(df):
+    df = pd.DataFrame(df)
+    df = df.sort_values(by=['date'], ascending=[False])
+    df = df.reset_index(drop=True)
+    df = df.drop_duplicates(subset=['msno'], keep='first')
+    return df
 
-    shortcut = input
-    # 1 X 1 conv if shape is different. Else identity.
-    if stride_width > 1 or stride_height > 1 or not equal_channels:
-        shortcut = Convolution2D(nb_filter=residual_shape[CHANNEL_AXIS],
-                                 nb_row=1, nb_col=1,
-                                 subsample=(stride_width, stride_height),
-                                 init="he_normal", border_mode="valid",
-                                 W_regularizer=l2(0.0001))(input)
+def transform_df2(df):
+    df = df.sort_values(by=['date'], ascending=[False])
+    df = df.reset_index(drop=True)
+    df = df.drop_duplicates(subset=['msno'], keep='first')
+    return df
 
-    return merge([shortcut, residual], mode="sum")
+df_iter = pd.read_csv('../input/user_logs.csv', low_memory=False, iterator=True, chunksize=10000000)
+last_user_logs = []
+i = 0 #~400 Million Records - starting at the end but remove locally if needed
+for df in df_iter:
+    if i>35:
+        if len(df)>0:
+            print(df.shape)
+            p = Pool(cpu_count())
+            df = p.map(transform_df, np.array_split(df, cpu_count()))   
+            df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+            df = transform_df2(df)
+            p.close(); p.join()
+            last_user_logs.append(df)
+            print('...', df.shape)
+            df = []
+    i+=1
+last_user_logs.append(transform_df(pd.read_csv('../input/user_logs_v2.csv')))
+last_user_logs = pd.concat(last_user_logs, axis=0, ignore_index=True).reset_index(drop=True)
+last_user_logs = transform_df2(last_user_logs)
 
-
-# In[ ]:
-
-
-def _residual_block(block_function, nb_filter, repetitions, is_first_layer=False):
-    """Builds a residual block with repeating bottleneck blocks.
-    """
-    def f(input):
-        for i in range(repetitions):
-            init_subsample = (1, 1)
-            if i == 0 and not is_first_layer:
-                init_subsample = (2, 2)
-            input = block_function(nb_filter=nb_filter, init_subsample=init_subsample,
-                                   is_first_block_of_first_layer=(is_first_layer and i == 0))(input)
-        return input
-
-    return f
+train = pd.merge(train, last_user_logs, how='left', on='msno')
+test = pd.merge(test, last_user_logs, how='left', on='msno')
+last_user_logs=[]
 
 
 # In[ ]:
 
 
-def basic_block(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
-    """Basic 3 X 3 convolution blocks for use on resnets with layers <= 34.
-    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
-    """
-    def f(input):
+train = train.fillna(0)
+test = test.fillna(0)
 
-        if is_first_block_of_first_layer:
-            # don't repeat bn->relu since we just did bn->relu->maxpool
-            conv1 = Convolution2D(nb_filter=nb_filter,
-                                 nb_row=3, nb_col=3,
-                                 subsample=init_subsample,
-                                 init="he_normal", border_mode="same",
-                                 W_regularizer=l2(0.0001))(input)
-        else:
-            conv1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3,
-                                  subsample=init_subsample)(input)
-
-        residual = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv1)
-        return _shortcut(input, residual)
-
-    return f
+cols = [c for c in train.columns if c not in ['is_churn','msno']]
 
 
 # In[ ]:
 
 
-def bottleneck(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
-    """Bottleneck architecture for > 34 layer resnet.
-    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
+def xgb_score(preds, dtrain):
+    labels = dtrain.get_label()
+    return 'log_loss', metrics.log_loss(labels, preds)
 
-    Returns:
-        A final conv layer of nb_filter * 4
-    """
-    def f(input):
-
-        if is_first_block_of_first_layer:
-            # don't repeat bn->relu since we just did bn->relu->maxpool
-            conv_1_1 = Convolution2D(nb_filter=nb_filter,
-                                 nb_row=1, nb_col=1,
-                                 subsample=init_subsample,
-                                 init="he_normal", border_mode="same",
-                                 W_regularizer=l2(0.0001))(input)
-        else:
-            conv_1_1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=1, nb_col=1,
-                                     subsample=init_subsample)(input)
-
-        conv_3_3 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv_1_1)
-        residual = _bn_relu_conv(nb_filter=nb_filter * 4, nb_row=1, nb_col=1)(conv_3_3)
-        return _shortcut(input, residual)
-
-    return f
-
-
-# In[ ]:
-
-
-def _handle_dim_ordering():
-    global ROW_AXIS
-    global COL_AXIS
-    global CHANNEL_AXIS
-    if K.image_dim_ordering() == 'tf':
-        ROW_AXIS = 1
-        COL_AXIS = 2
-        CHANNEL_AXIS = 3
+fold = 1
+for i in range(fold):
+    params = {
+        'eta': 0.02, #use 0.002
+        'max_depth': 7,
+        'objective': 'binary:logistic',
+        'eval_metric': 'logloss',
+        'seed': i,
+        'silent': True
+    }
+    x1, x2, y1, y2 = model_selection.train_test_split(train[cols], train['is_churn'], test_size=0.3, random_state=i)
+    watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
+    model = xgb.train(params, xgb.DMatrix(x1, y1), 150,  watchlist, feval=xgb_score, maximize=False, verbose_eval=50, early_stopping_rounds=50) #use 1500
+    if i != 0:
+        pred += model.predict(xgb.DMatrix(test[cols]), ntree_limit=model.best_ntree_limit)
     else:
-        CHANNEL_AXIS = 1
-        ROW_AXIS = 2
-        COL_AXIS = 3
+        pred = model.predict(xgb.DMatrix(test[cols]), ntree_limit=model.best_ntree_limit)
+pred /= fold
+test['is_churn'] = pred.clip(0.+1e-15, 1-1e-15)
+test[['msno','is_churn']].to_csv('submission.csv', index=False)
+#test[['msno','is_churn']].to_csv('submission.csv.gz', index=False, compression='gzip')
 
 
 # In[ ]:
 
 
-def _get_block(identifier):
-    if isinstance(identifier, six.string_types):
-        res = globals().get(identifier)
-        if not res:
-            raise ValueError('Invalid {}'.format(identifier))
-        return res
-    return identifier
-
-
-# In[ ]:
-
-
-class ResnetBuilder(object):
-    @staticmethod
-    def build(input_shape, num_outputs, block_fn, repetitions):
-        """Builds a custom ResNet like architecture.
-
-        Args:
-            input_shape: The input shape in the form (nb_channels, nb_rows, nb_cols)
-            num_outputs: The number of outputs at final softmax layer
-            block_fn: The block function to use. This is either `basic_block` or `bottleneck`.
-                The original paper used basic_block for layers < 50
-            repetitions: Number of repetitions of various block units.
-                At each block unit, the number of filters are doubled and the input size is halved
-
-        Returns:
-            The keras `Model`.
-        """
-        _handle_dim_ordering()
-        if len(input_shape) != 3:
-            raise Exception("Input shape should be a tuple (nb_channels, nb_rows, nb_cols)")
-
-        # Permute dimension order if necessary
-        if K.image_dim_ordering() == 'tf':
-            input_shape = (input_shape[1], input_shape[2], input_shape[0])
-
-        # Load function from str if needed.
-        block_fn = _get_block(block_fn)
-
-        input = Input(shape=input_shape)
-        conv1 = _conv_bn_relu(nb_filter=64, nb_row=7, nb_col=7, subsample=(2, 2))(input)
-        pool1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), border_mode="same")(conv1)
-
-        block = pool1
-        nb_filter = 64
-        for i, r in enumerate(repetitions):
-            block = _residual_block(block_fn, nb_filter=nb_filter, repetitions=r, is_first_layer=(i == 0))(block)
-            nb_filter *= 2
-
-        # Last activation
-        block = _bn_relu(block)
-
-        block_norm = BatchNormalization(mode=0, axis=CHANNEL_AXIS)(block)
-        block_output = Activation("relu")(block_norm)
-
-        # Classifier block
-        block_shape = K.int_shape(block)
-        pool2 = AveragePooling2D(pool_size=(block_shape[ROW_AXIS], block_shape[COL_AXIS]),
-                                 strides=(1, 1))(block_output)
-        flatten1 = Flatten()(pool2)
-        dense = Dense(output_dim=num_outputs, init="he_normal", activation="softmax")(flatten1)
-        #dense = Dense(output_dim=num_outputs, W_regularizer=l2(0.01), init="he_normal", activation="linear")(flatten1)
-
-        model = Model(input=input, output=dense)
-        return model
-
-    @staticmethod
-    def build_resnet_test(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [1, 1, 1, 1])
-
-    @staticmethod
-    def build_resnet_18(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [2, 2, 2, 2])
-
-    @staticmethod
-    def build_resnet_34(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [3, 4, 6, 3])
-
-    @staticmethod
-    def build_resnet_50(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 6, 3])
-
-    @staticmethod
-    def build_resnet_101(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 23, 3])
-
-    @staticmethod
-    def build_resnet_152(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 8, 36, 3])
-
-
-# ## Batch Generator for model fit_generator
-
-# In[ ]:
-
-
-def batch_generator_train(files, batch_size):
-    number_of_batches = np.ceil(len(files)/batch_size)
-    counter = 0
-    random.shuffle(files)
-    while True:
-        batch_files = files[batch_size*counter:batch_size*(counter+1)]
-        image_list = []
-        mask_list = []
-        for f in batch_files:
-            image = cv2.imread(f)
-            image = cv2.resize(image, conf['image_shape'])
-
-            cancer_type = f[20:21] # relies on path lengths that is hard coded below
-            if cancer_type == '1':
-                mask = [1, 0, 0]
-            elif cancer_type == '2':
-                mask = [0, 1, 0]
-            else:
-                mask = [0, 0, 1]
-
-            image_list.append(image)
-            mask_list.append(mask)
-        counter += 1
-        image_list = np.array(image_list)
-        mask_list = np.array(mask_list)
-
-        yield image_list, mask_list
-
-        if counter == number_of_batches:
-            random.shuffle(files)
-            counter = 0
-
-
-# ## Hardcoded paths to training files. Note that the "additional" directories have been left out.
-
-# In[ ]:
-
-
-# file paths to training and additional samples
-filepaths = []
-filepaths.append('../input/train/Type_1/')
-filepaths.append('../input/train/Type_2/')
-filepaths.append('../input/train/Type_3/')
-
-
-# ## Get a list of all training files
-
-# In[ ]:
-
-
-allFiles = []
-
-for i, filepath in enumerate(filepaths):
-    files = glob.glob(filepath + '*.jpg')
-    allFiles = allFiles + files
-
-
-# ## Split data into training and validation sets
-
-# In[ ]:
-
-
-split_point = int(round(conf['train_valid_fraction']*len(allFiles)))
-
-random.shuffle(allFiles)
-
-train_list = allFiles[:split_point]
-valid_list = allFiles[split_point:]
-print('Train patients: {}'.format(len(train_list)))
-print('Valid patients: {}'.format(len(valid_list)))
-
-
-# ## Testing model generator
-
-# In[ ]:
-
-
-print('Create and compile model...')
-
-nb_classes = 3
-img_rows, img_cols = conf['image_shape'][1], conf['image_shape'][0]
-img_channels = 3
-
-model = ResnetBuilder.build_resnet_34((img_channels, img_rows, img_cols), nb_classes)
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-#model.compile(loss='hinge',optimizer='adadelta',metrics=['accuracy'])
-
-callbacks = [
-    EarlyStopping(monitor='val_loss', patience=conf['patience'], verbose=0),
-    ModelCheckpoint('cervical_best.hdf5', monitor='val_loss', save_best_only=True, verbose=0),
-]
-
-print('Fit model...')
-fit = model.fit_generator(generator=batch_generator_train(train_list, conf['batch_size']),
-                      nb_epoch=conf['nb_epoch'],
-                      #samples_per_epoch=len(train_list),
-                      samples_per_epoch=3,
-                      validation_data=batch_generator_train(valid_list, conf['batch_size']),
-                      #nb_val_samples=len(valid_list),
-                      nb_val_samples=1,
-                      verbose=1,
-                      callbacks=callbacks)
-
-
-# ## Create submission files with prediction for submission
-
-# In[ ]:
-
-
-#from keras.models import load_model
-#model = load_model('cervical_best.hdf5')
-
-sample_subm = pd.read_csv("../input/sample_submission.csv")
-ids = sample_subm['image_name'].values
-
-for id in ids:
-    print('Predict for image {}'.format(id))
-    files = glob.glob("../input/test/" + id)
-    image_list = []
-    for f in files:
-        image = cv2.imread(f)
-        image = cv2.resize(image, conf['image_shape'])
-        image_list.append(image)
-        
-    image_list = np.array(image_list)
-
-    predictions = model.predict(image_list, verbose=1, batch_size=1)
-
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_1'] = predictions[0,0]
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_2'] = predictions[0,1]
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_3'] = predictions[0,2]
-    
-sample_subm.to_csv("subm.csv", index=False)
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+plt.rcParams['figure.figsize'] = (7.0, 7.0)
+xgb.plot_importance(booster=model); plt.show()
 

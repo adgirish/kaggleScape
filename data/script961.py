@@ -1,417 +1,242 @@
 
 # coding: utf-8
 
-# # H1B Applications Exploration
+# Hello there, everyone.  I did a brief analysis on the "managers" since at first glance the average "interest level" seemed to differ substantially from one to another . 
 # 
-# ![](http://d2r2ijn7njrktv.cloudfront.net/apnlive/uploads/2017/01/H1B.jpg)
-# 
-# ### What is H1B Visa?
-# 
-# The H1B visa is an employment-based, non-immigrant visa for temporary workers. For this visa, an employer must offer a job in the US and apply for your H1B visa petition with the US Immigration Department. This approved petition is a work permit which allows you to obtain a visa stamp and work in the U.S. for that employer. The H1B visa is issued for a specialty occupation, requires theoretical and practical application of a body of specialized knowledge and requires the visa holder to have at least a **Bachelors degree** or its equivalent. As per my knowledge, majority of the H1B holders are from Asia especially from **India and China**, not because we asian's are talented by birth..:D, but due to the availability of **cheap labour**.
-# 
-# But recently there has been many issues with the H1B visa and many new regulations have been enforced on it, so that only deserving candidates can acquire a H1B visa. Lets not go into that and check the given dataset. So this dataset has records from H1B visa applications for the years **2011-2016**. The only thing I was a bit sad about was the unavailabililty of the source country, i.e the country of origin of the applicant.Lets not crave about it and start with our analysis.
+# Anyway, let me know what you think about it and like this notebook if you enjoyed reading it (it's my 1st one, be nice :D)
 
-# In[1]:
+# In[ ]:
 
 
-import pandas as pd
+# let's load the usual packages first
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-plt.style.use('fivethirtyeight')
-import warnings
-warnings.filterwarnings('ignore')
-import folium
-import folium.plugins
-from folium import IFrame
-from mpl_toolkits.basemap import Basemap
-from IPython.display import HTML
-import io
-import base64
-from matplotlib import animation,rc
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-from IPython.display import HTML
-import io
-import base64
-from matplotlib import animation,rc
-import os
-print(os.listdir("../input"))
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[2]:
+# ... and get the data...
+
+# In[ ]:
 
 
-df=pd.read_csv('../input/h1b_kaggle.csv')
+train_df = pd.read_json('../input/train.json')
+test_df = pd.read_json('../input/test.json')
 
 
-# In[3]:
+# First of all, let's see how many different managers we have on both datasets.
+
+# In[ ]:
 
 
-df.head()
+man_train_list = train_df.manager_id.unique()
+man_test_list = test_df.manager_id.unique()
+print("Train: {0}".format(len(man_train_list)))
+print("Test: {0}".format(len(man_test_list)))
 
 
-# In[4]:
-
-
-print('Total H1B cases:',df.shape[0])
-
-
-# So this dataset has more than **3 million** cases for H1B applications.
-
-# In[5]:
-
-
-df['SOC_NAME']=df['SOC_NAME'].str.upper()
-def state(data):
-    states = []
-    data_worksite = df['WORKSITE']
-
-    for worksite in data_worksite.iloc[:]:
-        state = worksite.split(', ')[1]
-        states.append(state)
-    return pd.DataFrame(states, columns=['State'])
-
-states=state(df)
-df['State']=states['State']
-
-
-# ## Some Basic Analysis
-
-# In[6]:
-
-
-plt.figure(figsize=(10,8))
-ax=df['CASE_STATUS'].value_counts().sort_values(ascending=True).plot.barh(width=0.9,color='#ffd700')
-for i, v in enumerate(df['CASE_STATUS'].value_counts().sort_values(ascending=True).values): 
-    ax.text(.8, i, v,fontsize=12,color='r',weight='bold')
-plt.title('Case Status for All Years')
-plt.show()
-
-
-# In[7]:
-
-
-plt.figure(figsize=(12,6))
-df['YEAR'].value_counts().sort_values().plot(marker='o')
-plt.title('H1B Applicants by Year')
-plt.xlim([2010,2017])
-plt.show()
-
-
-# The number of H1B visa applications are growing tremendously, with a spurt after 2013. But do all these appliactions get certified? Lets check..
-
-# In[8]:
-
-
-cer_den=df[df['CASE_STATUS'].isin(['CERTIFIED','DENIED'])]
-cer_den=cer_den.groupby(['YEAR','CASE_STATUS'])['JOB_TITLE'].count().reset_index()
-cer_den.pivot('YEAR','CASE_STATUS','JOB_TITLE').plot.bar(width=0.8)
-fig=plt.gcf()
-fig.set_size_inches(15,6)
-plt.title('Case Status by Year')
-plt.show()
-
-
-# Everyone says that **USA** is the largest hotspot for jobs, and with the growing number of startups, the demand for talented people is also increasing. It is evident from the above graph that the number of certifies applications are growing, whereas the number of denied applications are diminshing.
-
-# ### Regions with Highest Applications
-
-# In[9]:
-
-
-appli=df.groupby(['lat','lon'])['Unnamed: 0'].count().reset_index()
-appli.columns=[['lat','lon','applications']]
-locate=appli[['lat','lon']]
-count=appli['applications']
-def color_producer(elevation):
-    if elevation < 1000:
-        return 'red'
-    elif 1000 <= elevation < 3000:
-        return 'orange'
-    else:
-        return 'green'
-map1 = folium.Map(location=[39.50, -98.35],tiles='CartoDB dark_matter',zoom_start=3.5)
-for point in appli.index:
-    folium.CircleMarker(list(locate.loc[point].values),popup='<b>No of Applications:</b>'+str(count.loc[point].values[0]),radius=count.loc[point].values[0]*0.0002,color=color_producer(count.loc[point].values[0]),fill_color=color_producer(count.loc[point].values[0]),fill=True).add_to(map1)
-map1
-
-
-# The eastern coast has the highest number of applications, which covers states like **NY,NJ**,etc.
-
-# ## Inspiration 1: Which employers file the most petitions each year?
-
-# In[10]:
-
-
-plt.figure(figsize=(10,8))
-ax=df['EMPLOYER_NAME'].value_counts().sort_values(ascending=False)[:10].plot.barh(width=0.9,color='#ffd700')
-for i, v in enumerate(df['EMPLOYER_NAME'].value_counts().sort_values(ascending=False).values[:10]): 
-    ax.text(.8, i, v,fontsize=12,color='r',weight='bold')
-plt.title('Highest Employeer')
-fig=plt.gca()
-fig.invert_yaxis()
-plt.show()
-
-
-# I wasn't at all surprised to see the Top 3 employeers..:D. Anyone from India will agree that the Top 3 emoloyeers are the biggest recruiters in India, and thus they have the highest outsourcing powers. Lets check the number of certified and denied applications for these Top employeers.
-
-# In[11]:
-
-
-comp_den=df[df['CASE_STATUS'].isin(['CERTIFIED','DENIED'])]
-comp_den=comp_den[comp_den['EMPLOYER_NAME'].isin(comp_den['EMPLOYER_NAME'].value_counts().sort_values(ascending=False)[:10].index)]
-comp_den=comp_den.groupby(['EMPLOYER_NAME','CASE_STATUS'])['JOB_TITLE'].count().reset_index()
-comp_den=comp_den.pivot('EMPLOYER_NAME','CASE_STATUS','JOB_TITLE')
-plt.figure(figsize=(25,10))
-plt.scatter('CERTIFIED','DENIED',data=comp_den,s=comp_den['CERTIFIED']*0.03)
-for i in range(comp_den.shape[0]):
-    plt.text(comp_den['CERTIFIED'].values[i],comp_den['DENIED'].values[i],s=comp_den.index[i],color='r',weight='bold')
-plt.title('Status Certified vs Denied',size=30)
-plt.xlabel('CERTIFIED')
-plt.ylabel('DENIED')
-plt.show()
-
-
-# It is good to see that even with such high number of applications, Infosys has very few cases of **Denied** visa's. But the above graph has employeers with highest applications ,and it is possible that employeers with lesser applications have higher Certification rates.Lets check which all employeers have the highest **Certification rates.**
-
-# In[12]:
-
-
-emp_rate1=df[df['CASE_STATUS']=='CERTIFIED']
-emp_rate1=emp_rate1.groupby(['EMPLOYER_NAME','CASE_STATUS'])['YEAR'].count().reset_index()
-emp_rate2=df[df['CASE_STATUS']=='DENIED']
-emp_rate2=emp_rate2.groupby(['EMPLOYER_NAME','CASE_STATUS'])['YEAR'].count().reset_index()
-aa1=emp_rate2.sort_values('YEAR',ascending=False)[:100]
-aa2=emp_rate1.sort_values('YEAR',ascending=False)[:100]
-aa3=aa2.merge(aa1,left_on='EMPLOYER_NAME',right_on='EMPLOYER_NAME',how='left').dropna()
-aa3['Acceptance_rate']=aa3['YEAR_x']/(aa3['YEAR_x']+aa3['YEAR_y'])
-aa3.sort_values('Acceptance_rate',ascending=False)[['EMPLOYER_NAME','Acceptance_rate']][:10]
-
-
-# **Microsoft** has the highest acceptance or certification rate.
-
-# ### Employeer Applications by Year
-
-# In[13]:
-
-
-emp_year=df[df['EMPLOYER_NAME'].isin(df['EMPLOYER_NAME'].value_counts().sort_values(ascending=False)[:5].index)]
-emp_year=emp_year.groupby(['EMPLOYER_NAME','YEAR'])['CASE_STATUS'].count().reset_index()
-emp_year.pivot('YEAR','EMPLOYER_NAME','CASE_STATUS').plot.bar(width=0.7)
-fig=plt.gcf()
-fig.set_size_inches(15,8)
-plt.show()
-
-
-# ## Wage Distribution
+# There are more managers in the test dataset, which also features more records.
 # 
+# Let's create a dataframe with all the train and test managers, including the number of entries they are responsible for.
 
-# In[14]:
-
-
-plt.figure(figsize=(12,6))
-df[df['PREVAILING_WAGE']<150000].PREVAILING_WAGE.hist(bins=40,color='khaki')
-plt.axvline(df[df['PREVAILING_WAGE']<=150000].PREVAILING_WAGE.median(), color='green', linestyle='dashed', linewidth=4)
-plt.title('Wage Distribution')
-plt.show()
+# In[ ]:
 
 
-# There are many outliers in the prevailing wages, with values ranging up to billion dollars. The distribution is skewed towards the right. These are likely to bias the mean estimate. Thus we checked the **median** wage, which gives a better estimate as compared to the **mean** wage. Lets now split the wages by their CASE_STATUS.
-
-# In[15]:
-
-
-plt.figure(figsize=(12,6))
-df[(df['PREVAILING_WAGE']<150000)&(df['CASE_STATUS']=='CERTIFIED')].PREVAILING_WAGE.hist(bins=50, color="lightgreen", alpha=0.7, label='Certified', normed=True)
-plt.axvline(df[(df['PREVAILING_WAGE']<=150000)&(df['CASE_STATUS']=='CERTIFIED')].PREVAILING_WAGE.median(), color='green', linestyle='dashed', linewidth=4)
-df[(df['PREVAILING_WAGE']<150000)&(df['CASE_STATUS']=='DENIED')].PREVAILING_WAGE.hist(bins=50,color="tomato", alpha=0.7, label='Denied', normed=True)
-plt.axvline(df[(df['PREVAILING_WAGE']<=150000)&(df['CASE_STATUS']=='DENIED')].PREVAILING_WAGE.median(), color='red', linestyle='dashed', linewidth=4)
-plt.legend()
-plt.show()
+temp1 = train_df.groupby('manager_id').count().iloc[:,-1]
+temp2 = test_df.groupby('manager_id').count().iloc[:,-1]
+df_managers = pd.concat([temp1,temp2], axis = 1, join = 'outer')
+df_managers.columns = ['train_count','test_count']
+print(df_managers.head(20))
 
 
-# The median wage for Denied Cases is lower than that of Certified Cases. This might be a reason for Application denial, the applications might have a lower wage than required.
-
-#  ### Lowest Median Salaries by Top Employeers
-#  
-#  As suggested by Pranav Pandya Sir, lets check which employeer with high applications offers the lowest median wages.
-
-# In[16]:
-
-
-high_emp=df['EMPLOYER_NAME'].value_counts().sort_values(ascending=False)[:20].to_frame()
-df[df['EMPLOYER_NAME'].isin(high_emp.index)&(df['PREVAILING_WAGE']<=150000)].groupby(['EMPLOYER_NAME'])['PREVAILING_WAGE'].median().to_frame().sort_values(by='PREVAILING_WAGE')
-
-
-# ## Inspiration 2: Is the number of petitions with Data Engineer job title increasing over time?
-
-# In[17]:
-
-
-data_peeps=df.dropna(subset=['JOB_TITLE'])
-data_peeps=data_peeps[data_peeps['JOB_TITLE'].str.contains('DATA')]
-data_scientists=data_peeps[data_peeps['JOB_TITLE'].str.contains('DATA SCIENTIST')]
-data_analyst=data_peeps[data_peeps['JOB_TITLE'].str.contains('DATA ANALYST')]
-data_eng=data_peeps[data_peeps['JOB_TITLE'].str.contains('DATA ENG')]
-
-
-# In[18]:
-
-
-f,ax=plt.subplots(1,3,figsize=(22,8))
-data_scientists.groupby('YEAR')['CASE_STATUS'].count().plot(ax=ax[0],marker='o')
-data_analyst.groupby('YEAR')['CASE_STATUS'].count().plot(ax=ax[1],marker='o')
-data_eng.groupby('YEAR')['CASE_STATUS'].count().plot(ax=ax[2],marker='o')
-data_scientists[data_scientists['CASE_STATUS']=='CERTIFIED'].YEAR.value_counts().plot(marker='o',ax=ax[0])
-data_analyst[data_analyst['CASE_STATUS']=='CERTIFIED'].YEAR.value_counts().plot(marker='o',ax=ax[1])
-data_eng[data_eng['CASE_STATUS']=='CERTIFIED'].YEAR.value_counts().plot(marker='o',ax=ax[2])
-for i,j in zip([0,1,2],['Applications for Data Scientists','Applications for Data Analysts','Applications for Data Engineers']):
-    ax[i].set_title(j)
-for i in [0,1,2]:
-    ax[i].set_xlim([2010,2017])
-plt.show()
-
-
-# It is indeed True. The number of applications related to **Data Jobs** are increasing tremendously. Also the red line denotes the **number of Certified Applications**. The number of applications are almost going up by almost **100%**. As mentioned earlier that USA is a hotspot for jobs, this graph will probably keep growing at a similar rate.
-
-# ### Salary for Data Related Jobs
-
-# In[19]:
-
-
-f,ax=plt.subplots(1,3,figsize=(22,8))
-data_scientists[data_scientists['PREVAILING_WAGE']<150000].groupby(['YEAR'])['PREVAILING_WAGE'].median().plot(ax=ax[0],marker='o')
-data_analyst[data_analyst['PREVAILING_WAGE']<150000].groupby(['YEAR'])['PREVAILING_WAGE'].median().plot(ax=ax[1],marker='o')
-data_eng[data_eng['PREVAILING_WAGE']<150000].groupby(['YEAR'])['PREVAILING_WAGE'].median().plot(ax=ax[2],marker='o')
-for i,j in zip([0,1,2],['Salary for Data Scientists','Salary for Data Analysts','Salary for Data Engineers']):
-    ax[i].set_title(j)
-for i in [0,1,2]:
-    ax[i].set_xlim([2010,2017])
-plt.show()
-
-
-# The median wage we saw was around **65k$ **. Thus **Data Scientists and Data Engineers** enjoy good salary benefits, however it is not true for **Data Analysts**. The salary for **Data Scientists** has dropped in the past few years, but still above median wage. The wage for **Data Engineers** has increased tremendously over the years.
-
-# In[20]:
-
-
-f,ax=plt.subplots(figsize=(18,8))
-plt.boxplot([data_scientists[data_scientists['PREVAILING_WAGE']<200000].PREVAILING_WAGE,data_analyst[data_analyst['PREVAILING_WAGE']<200000].PREVAILING_WAGE,data_eng[data_eng['PREVAILING_WAGE']<200000].PREVAILING_WAGE])
-ax.set_xticklabels(['Data Scientists','Data Analysts','Data Engineer'])
-ax.set_title('Salary Distribution')
-plt.show()
-
-
-# ### Highest Paying Employeers
-
-# In[21]:
-
-
-plt.figure(figsize=(10,8))
-ax=data_scientists.groupby('EMPLOYER_NAME')['PREVAILING_WAGE'].median().sort_values(ascending=False)[:10].plot.barh(width=0.9,color='#ffd700')
-for i, v in enumerate(data_scientists.groupby('EMPLOYER_NAME')['PREVAILING_WAGE'].median().sort_values(ascending=False)[:10].values): 
-    ax.text(.8, i, v,fontsize=12,color='r',weight='bold')
-plt.title('Highest Paying Employeers for Data Scientists in $')
-fig=plt.gca()
-fig.invert_yaxis()
-plt.show()
-plt.show()
-
-
-# In[23]:
-
-
-sal_state=data_scientists.groupby(['lat','lon','State'])['PREVAILING_WAGE'].median().sort_values(ascending=False).reset_index()
-appli=df.groupby(['lat','lon'])['Unnamed: 0'].count().reset_index()
-locate=sal_state[['lat','lon']]
-sal=sal_state['PREVAILING_WAGE']
-state=sal_state['State']
-def color_producer(elevation):
-    if elevation < 75000:
-        return 'red'
-    elif 75000 <= elevation < 100000:
-        return 'orange'
-    else:
-        return 'green'
-map1 = folium.Map(location=[39.50, -98.35],tiles='CartoDB dark_matter',zoom_start=3.5)
-for point in sal_state.index:
-    folium.CircleMarker(list(locate.loc[point]),popup='<b>Average Salary in $: </b>'+str(sal.loc[point])+"<br><b> State: "+str(state.loc[point]),radius=sal.loc[point]*0.0001,color=color_producer(sal.loc[point]),fill_color=color_producer(sal.loc[point]),fill=True).add_to(map1)
-map1
-
-
-# **California** has the highest median salary for Data Scientists. The salary goes as low as 60k$. The salary range can be a result of many factors, like the experience of the candidate, organisational strength,etc. Also one thing to note is the Data Scientists positions are highly concentrated about the east and the west coast.
-
-# ## Denied Cases By States
-
-# In[24]:
-
-
-def2=df[(df['CASE_STATUS']=='DENIED')&(df.State.isin(df[df['CASE_STATUS']=='DENIED'].State.value_counts()[:10].index))].groupby(['YEAR','State'])['Unnamed: 0'].count().reset_index()
-fig=plt.figure(figsize=(20,8))
-def animate(Year):
-    ax = plt.axes()
-    ax.clear()
-    plt.scatter('State','Unnamed: 0',data=def2[def2['YEAR']==Year],s=def2['Unnamed: 0'])
-    plt.title('Year: '+str(Year),size=30)
-    plt.xlabel('CERTIFIED')
-    plt.xlabel('DENIED')
-    plt.ylim([0,6500])
-ani = animation.FuncAnimation(fig,animate,list(def2.YEAR.unique()), interval = 1500)    
-ani.save('animation.gif', writer='imagemagick', fps=1)
-plt.close(1)
-filename = 'animation.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
-
-
-# The gif shows the states with highest number of Denied Cases over the years. The trend for California looks to be the best, as we see that the Denied cases hve dropped down from **5000+ cases in 2011**, to something near **2000 cases in the years (2013-2016)**. Similarly the denied cases have drastically gone down for New-York.
+# Some managers have entries only in one of the two datasets. But as we will see later, these managers have only very few entries.
 # 
-# ##  Inspiration 3: Which industry has the most number of Data Scientist positions?
+# Indeed, a minority of managers are responsible for most of the entries of both dataset
 
-# In[22]:
-
-
-plt.figure(figsize=(10,8))
-data_coun=data_scientists['EMPLOYER_NAME'].value_counts()[:10]
-ax=sns.barplot(y=data_coun.index,x=data_coun.values,palette=sns.color_palette('inferno',10))
-for i, v in enumerate(data_coun.values): 
-    ax.text(.5, i, v,fontsize=15,color='white',weight='bold')
-plt.title('Companies Hiring Data Scientists')
-plt.show()
+# In[ ]:
 
 
-# Since we don not have any column denoting the type of industry, we check the company hiring the highest number of data scientists. Seeing the Top 10 companies, we can say that majorly the **Tech Industry** has been hiring Data Scientists.
-
-# ## Inspiration 4: Which part of the US has the most Hardware Engineer jobs?
-
-# In[25]:
+print(df_managers.sort_values(by = 'train_count', ascending = False).head(10))
 
 
-hardware=df.dropna(subset=['JOB_TITLE'])
-hardware=hardware[hardware['JOB_TITLE'].str.contains('HARDWARE ENGINEER')]
-hardware=hardware.groupby(['lat','lon','State'])['Unnamed: 0'].count().reset_index()
-locate=hardware[['lat','lon']]
-count=hardware['Unnamed: 0']
-state=hardware['State']
-def color_producer(count):
-    if count < 10:
-        return 'red'
-    elif 10 <= count < 100:
-        return 'orange'
-    else:
-        return 'green'
-map1 = folium.Map(location=[39.50, -98.35],tiles='CartoDB dark_matter',zoom_start=3.5)
-for point in hardware.index:
-    folium.CircleMarker(list(locate.loc[point].values),popup='<b>Number of Applications: </b>'+str(count.loc[point])+"<br><b> State: "+str(state.loc[point]),radius=count.loc[point]*0.01,color=color_producer(count.loc[point]),fill_color=color_producer(count.loc[point]),fill=True).add_to(map1)
-map1
+# This is more clear if one looks at the plots for the cumulative distributions.
+
+# In[ ]:
 
 
-# Unlike the Software jobs that are spread out in the eastern and the western coast, ** Hardware Engineering** jobs are mainly focused on the west coast, specially **California**.
+fig, axes = plt.subplots(1,2, figsize = (12,5))
+temp = df_managers['train_count'].dropna().sort_values(ascending = False).reset_index(drop = True)
+axes[0].plot(temp.index+1, temp.cumsum()/temp.sum())
+axes[0].set_title('cumulative train_count')
+
+temp = df_managers['test_count'].dropna().sort_values(ascending = False).reset_index(drop = True)
+axes[1].plot(temp.index+1, temp.cumsum()/temp.sum())
+axes[1].set_title('cumulative test_count')
+
+
+# The Pareto principle, i.e. the 80/20 rule, seems to apply here. As 20% of the managers are roughly responsible for roughly 80% of the entries.
+
+# In[ ]:
+
+
+ix20 = int(len(df_managers['train_count'].dropna())*0.2)
+print("TRAIN: 20% of managers ({0}) responsible for {1:2.2f}% of entries".format(ix20,df_managers['train_count'].sort_values(ascending = False).cumsum().iloc[ix20]/df_managers['train_count'].sum()*100))
+
+ix20 = int(len(df_managers['test_count'].dropna())*0.2)
+print("TEST: 20% of managers ({0}) responsible for {1:2.2f}% of entries".format(ix20, df_managers['test_count'].sort_values(ascending = False).cumsum().iloc[ix20]/df_managers['test_count'].sum()*100))
+
+
+# As mentioned before, fortunately, these top contributors are the same for both datasets. The managers featuring in only one of the two datasets usually have very few entries.
+
+# In[ ]:
+
+
+man_not_in_test = set(man_train_list) - set(man_test_list)
+man_not_in_train = set(man_test_list) - set(man_train_list)
+
+print("{} managers are featured in train.json but not in test.json".format(len(man_not_in_test)))
+print("{} managers are featured in test.json but not in train.json".format(len(man_not_in_train)))
+
+
+# In[ ]:
+
+
+print(df_managers.loc[list(man_not_in_test)]['train_count'].describe())
+print(df_managers.loc[list(man_not_in_train)]['test_count'].describe())
+
+
+# Besides, it looks like there is a strong correlation between the number of entries of the contributors in both datasets.
+
+# In[ ]:
+
+
+df_managers.sort_values(by = 'train_count', ascending = False).head(1000).corr()
+
+
+# In[ ]:
+
+
+df_managers.sort_values(by = 'train_count', ascending = False).head(100).plot.scatter(x = 'train_count', y = 'test_count')
+
+
+# Now let's focus on the training dataset and on the "interest_level" of its top 100 contributors.
+# These folks account for a whopping 35% of the entries. The 1st alone for over 5% of them! That's quite a lot. 
 # 
-# I would stop my analysis here, but there is still lot many things that can be done with this dataset. Suggestions and Feedback are always appreciated.
+# According to the discussion above, similar figures are expected for the test dataset.
+
+# In[ ]:
+
+
+temp = df_managers['train_count'].sort_values(ascending = False).head(100)
+temp = pd.concat([temp,temp.cumsum()/df_managers['train_count'].sum()*100], axis = 1).reset_index()
+temp.columns = ['manager_id','count','percentage']
+print(temp)
+
+
+# Let's isolate the entries relative to these 100 managers with the "interest_level" column as well. We create dummies from this latter column as they are easier to work with.
+
+# In[ ]:
+
+
+man_list = df_managers['train_count'].sort_values(ascending = False).head(100).index
+ixes = train_df.manager_id.isin(man_list)
+df100 = train_df[ixes][['manager_id','interest_level']]
+interest_dummies = pd.get_dummies(df100.interest_level)
+df100 = pd.concat([df100,interest_dummies[['low','medium','high']]], axis = 1).drop('interest_level', axis = 1)
+
+print("The top100 contributors account for {} entries\n".format(len(df100)))
+
+print(df100.head(10))
+
+
+# Before continuing, let's give them some fake identities based on the most common first and last names in the US.
+
+# In[ ]:
+
+
+import itertools
+
+# 50 most common surnames in the 90s (http://surnames.behindthename.com/top/lists/united-states/1990)
+last_names = ['Smith', 'Johnson', 'Williams', 'Jones', 'Brown', 'Davis', 'Miller', 'Wilson', 'Moore', 
+ 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White', 'Harris', 'Martin', 'Thompson', 'Garcia', 
+ 'Martinez', 'Robinson', 'Clark', 'Rodriguez', 'Lewis', 'Lee', 'Walker', 'Hall', 'Allen', 'Young',
+ 'Hernandez', 'King', 'Wright', 'Lopez', 'Hill', 'Scott', 'Green', 'Adams', 'Baker', 'Gonzalez', 'Nelson', 
+ 'Carter', 'Mitchell', 'Perez', 'Roberts', 'Turner', 'Phillips', 'Campbell', 'Parker', 'Evans', 'Edwards', 'Collins']
+
+# 10 most common first names for females and males (names.mongabay.com) 
+first_names = ['Mary',  'Patricia',  'Linda',  'Barbara',  'Elizabeth',  
+               'Jennifer',  'Maria',  'Susan',  'Margaret',  'Dorothy',
+               'James', 'John', 'Robert', 'Michael', 'William', 'David',
+               'Richard', 'Charles', 'Joseph', 'Thomas']
+
+names = [first + ' ' + last for first,last in (itertools.product(first_names, last_names))]
+
+# shuffle them
+np.random.seed(12345)
+np.random.shuffle(names)
+
+dictionary = dict(zip(man_list, names))
+df100.loc[df100.manager_id.isin(dictionary), 'manager_id' ] = df100['manager_id'].map(dictionary)
+print(df100.head())
+
+
+# In[ ]:
+
+
+# see if the name coincides
+print(names[:10])
+print(df100.groupby('manager_id').count().sort_values(by = 'low', ascending = False).head(10))
+
+
+# Splendid... we have their names now, so let's proceed and compute their average performances in terms of "interest level" so we can spot who's a pro and who's not. 
+
+# In[ ]:
+
+
+gby = pd.concat([df100.groupby('manager_id').mean(),df100.groupby('manager_id').count()], axis = 1).iloc[:,:-2]
+gby.columns = ['low','medium','high','count']
+gby.sort_values(by = 'count', ascending = False).head(10)
+
+
+# Their performances seem very different, even for people with similar number of entries.
 # 
-# ### Thank You
+# Indeed they are..
+
+# In[ ]:
+
+
+gby.sort_values(by = 'count', ascending = False).drop('count', axis = 1).plot(kind = 'bar', stacked = True, figsize = (15,5))
+plt.figure()
+gby.sort_values(by = 'count', ascending = False)['count'].plot(kind = 'bar', figsize = (15,5))
+
+
+# I think this high diversity should be accounted for when building our predictive model! 
+# 
+# It would be interesting to rank the managers based on their intereset levels. For instance, we could compute their "skill" by assigning 0 points for "lows", 1 for "mediums" and 2 for "highs". Since they have different number of entries, let's quickly do so by multiplying the average results.
+
+# In[ ]:
+
+
+gby['skill'] = gby['medium']*1 + gby['high']*2 
+
+print("Top performers")
+print(gby.sort_values(by = 'skill', ascending = False).reset_index().head())
+print("\nWorst performers")
+print(gby.sort_values(by = 'skill', ascending = False).reset_index().tail())
+
+
+# Dorothy Turner and Dorothy Lopez are rocking it! Poor Dorothy Martinez instead should consider moving to another industry... 402 entries, all of them uninspiring (btw I did not pick the random seed to have all the Dorothies here...).
+# 
+# I won't go deeper to try to explain why these performances are so different. It seems though like most of the managers do a poor job (I am sure it ain't their fault, is just that the properties they handle are not that cool after all...).
+# 
+# Cheers!
+# 
+# p.s.: I did a similar analysis on "building_id" here --> https://www.kaggle.com/den3b81/two-sigma-connect-rental-listing-inquiries/some-insights-on-building-id
+
+# In[ ]:
+
+
+gby.skill.plot(kind = 'hist')
+print(gby.mean())
+

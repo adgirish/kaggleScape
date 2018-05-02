@@ -1,233 +1,304 @@
 
 # coding: utf-8
 
+# # INTRODUCTION
+# 1. Read datas
+# 1. Poverty rate of each state
+# 1. Most common 15 Name or Surname of killed people
+# 1. High school graduation rate of the population that is older than 25 in states
+# 1. Percentage of state's population according to races that are black,white,native american, asian and hispanic
+# 1. High school graduation rate vs Poverty rate of each state
+# 1. Kill properties
+#     * Manner of death
+#     * Kill weapon
+#     * Age of killed people
+#     * Race of killed people
+#     * Most dangerous cities
+#     * Most dangerous states
+#     * Having mental ilness or not for killed people
+#     * Threat types
+#     * Flee types
+#     * Having body cameras or not for police
+# 1. Race rates according to states in kill data 
+# 1. Kill numbers from states in kill data
+# 1. Plotly Visualization Tutorial: https://www.kaggle.com/kanncaa1/plotly-tutorial-for-beginners/editnb
+#     
+# 
+
 # In[ ]:
 
 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import pandas as pd
+import seaborn as sns
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import Counter
+get_ipython().run_line_magic('matplotlib', 'inline')
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# ## Doing this type of analysis is against the competition rules
-# 
-# It has been pointed out by the competition admin that incorporating external data about distances between cities is against the rules.
-# 
-# So please don't use this in any way for building your models!
-# 
-# 
-# 
-# ## The locations puzzle
-# 
-# Expedia presented us with a dataset where countries and cities are hidden behind integer codes. Is it possible to find out which city is which?
-# 
-# Let's grab our pandas and find out :).
-# 
-# Read in a few lines to get a list of columns.
+# Any results you write to the current directory are saved as output.
+
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv', nrows=10)
-train.columns
+# Read datas
+median_house_hold_in_come = pd.read_csv('../input/MedianHouseholdIncome2015.csv', encoding="windows-1252")
+percentage_people_below_poverty_level = pd.read_csv('../input/PercentagePeopleBelowPovertyLevel.csv', encoding="windows-1252")
+percent_over_25_completed_highSchool = pd.read_csv('../input/PercentOver25CompletedHighSchool.csv', encoding="windows-1252")
+share_race_city = pd.read_csv('../input/ShareRaceByCity.csv', encoding="windows-1252")
+kill = pd.read_csv('../input/PoliceKillingsUS.csv', encoding="windows-1252")
 
-
-# Columns related to user location are:
-# 
-# - `user_location_country`
-# - `user_location_region`
-# - `user_location_city`
-# 
-# Columns related to hotel location are:
-# 
-# - `hotel_country`
-# - `hotel_market`
-# - `srch_destination_id`
-# 
-# Finally, the `orig_destination_distance` column shows us the distance in miles between the user and their chosen hotel.
-# 
-# We should note that hotel countries and user location countries are encoded differently, meaning that the same country will have different numbers in these two columns. I will not go into `srch_destination_id`s yet because they might represent different locations within the same city so this division is probably too fine. On the other hand the `hotel_market`s correspond to nonoverlapping regions all over the globe, and large cities are covered by their own `hotel_market`s so this is a nice match to `user_location_city` column.
-# 
-# Now let's read in a million rows using only columns relating to this task. Drop rows where distance is undefined.
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv', usecols = ['posa_continent', 
-       'user_location_country',
-       'user_location_region', 'user_location_city',
-       'orig_destination_distance','hotel_continent', 
-       'hotel_country', 'hotel_market'], nrows=1000000).dropna()
+# Poverty rate of each state
+percentage_people_below_poverty_level.poverty_rate.replace(['-'],0.0,inplace = True)
+percentage_people_below_poverty_level.poverty_rate = percentage_people_below_poverty_level.poverty_rate.astype(float)
+area_list = list(percentage_people_below_poverty_level['Geographic Area'].unique())
+area_poverty_ratio = []
+for i in area_list:
+    x = percentage_people_below_poverty_level[percentage_people_below_poverty_level['Geographic Area']==i]
+    area_poverty_rate = sum(x.poverty_rate)/len(x)
+    area_poverty_ratio.append(area_poverty_rate)
+data = pd.DataFrame({'area_list': area_list,'area_poverty_ratio':area_poverty_ratio})
+new_index = (data['area_poverty_ratio'].sort_values(ascending=False)).index.values
+sorted_data = data.reindex(new_index)
+plt.figure(figsize=(15,10))
+ax= sns.barplot(x=sorted_data['area_list'], y=sorted_data['area_poverty_ratio'])
+plt.xticks(rotation= 90)
+plt.xlabel('States')
+plt.ylabel('Poverty Rate')
+plt.title('Poverty Rate Given States')
 
-
-# ## A mapping of user and hotel countries
-# 
-# If a user books a hotel in their own city then we should see a very short distance in the corresponding dataset row. So we can look at which user and hotel countries have the lowest minimum distances between them and deduce that these pairs probably refer to the same actual country.
-# 
-# Let's group rows by user country and hotel country and look at the distances.
 
 # In[ ]:
 
 
-distaggs = (train.groupby(['user_location_country','hotel_country'])
-            ['orig_destination_distance']
-            .agg(['min','mean','max','count']))
-distaggs.sort_values(by='min').head(20)
+# Most common 15 Name or Surname of killed people
+separate = kill.name[kill.name != 'TK TK'].str.split() 
+a,b = zip(*separate)                    
+name_list = a+b                         
+name_count = Counter(name_list)         
+most_common_names = name_count.most_common(15)  
+x,y = zip(*most_common_names)
+x,y = list(x),list(y)
+plt.figure(figsize=(15,10))
+ax= sns.barplot(x=x, y=y,palette = sns.cubehelix_palette(len(x)))
+plt.xlabel('Name or Surname of killed people')
+plt.ylabel('Frequency')
+plt.title('Most common 15 Name or Surname of killed people')
 
-
-# So we see a huge number of rows belonging to user country 66 and hotel country 50. It's probably the USA. Then there are some more pairs with low distances.
-# 
-# First repeated row is user country 205 and hotel country 50 again. And the minimum distance is 3 miles here - larger than 0.0056 we saw in the first rows. So user country 205 must be some neighbor country, Canada or Mexico.
-# 
-# Then there's the repeat appearance of user country 66 with travels to hotel countries 8 and 198 - those are probably again Canada and Mexico. 
-# 
-# By the end of the table shown minimum distances go up to almost 45 miles, so this criterion does not work so obviously any more - the pairs might be just neighboring countries, and not necessarily the same one.
-# 
-# ## user_location_country 66
-# 
-# How many regions does this country have?
 
 # In[ ]:
 
 
-c66 = train[train.user_location_country==66]
-c66.user_location_region.unique().shape
+# High school graduation rate of the population that is older than 25 in states
+percent_over_25_completed_highSchool.percent_completed_hs.replace(['-'],0.0,inplace = True)
+percent_over_25_completed_highSchool.percent_completed_hs = percent_over_25_completed_highSchool.percent_completed_hs.astype(float)
+area_list = list(percent_over_25_completed_highSchool['Geographic Area'].unique())
+area_highschool = []
+for i in area_list:
+    x = percent_over_25_completed_highSchool[percent_over_25_completed_highSchool['Geographic Area']==i]
+    area_highschool_rate = sum(x.percent_completed_hs)/len(x)
+    area_highschool.append(area_highschool_rate)
 
+data = pd.DataFrame({'area_list': area_list,'area_highschool_ratio':area_highschool})
+new_index = (data['area_highschool_ratio'].sort_values(ascending=True)).index.values
+sorted_data2 = data.reindex(new_index)
+plt.figure(figsize=(15,10))
+ax= sns.barplot(x=sorted_data2['area_list'], y=sorted_data2['area_highschool_ratio'])
+plt.xticks(rotation= 90)
+plt.xlabel('States')
+plt.ylabel('High School Graduate Rate')
+plt.title("Percentage of Given State's Population Above 25 that Has Graduated High School")
 
-# 51 looks fitting for the USA.
-# 
-# Let's look at trips within this country.
-# 
-# The USA have Hawaii which is a popular tourist location and also very far away from other regions. I'll group the data by user_location_region and hotel_market and take a look at maximum distances.
 
 # In[ ]:
 
 
-c66in = c66[c66.hotel_country==50]
-(c66in.groupby(['user_location_region','hotel_market'])['orig_destination_distance']
-      .agg(['min','mean','max','count'])
-      .sort_values(by='max',ascending=False).head(20))
+# Percentage of state's population according to races that are black,white,native american, asian and hispanic
+share_race_city.replace(['-'],0.0,inplace = True)
+share_race_city.replace(['(X)'],0.0,inplace = True)
+share_race_city.loc[:,['share_white','share_black','share_native_american','share_asian','share_hispanic']] = share_race_city.loc[:,['share_white','share_black','share_native_american','share_asian','share_hispanic']].astype(float)
+area_list = list(share_race_city['Geographic area'].unique())
+share_white = []
+share_black = []
+share_native_american = []
+share_asian = []
+share_hispanic = []
+for i in area_list:
+    x = share_race_city[share_race_city['Geographic area']==i]
+    share_white.append(sum(x.share_white)/len(x))
+    share_black.append(sum(x.share_black) / len(x))
+    share_native_american.append(sum(x.share_native_american) / len(x))
+    share_asian.append(sum(x.share_asian) / len(x))
+    share_hispanic.append(sum(x.share_hispanic) / len(x))
 
+f,ax = plt.subplots(figsize = (9,15))
+sns.barplot(x=share_white,y=area_list,color='green',alpha = 0.5,label='White' )
+sns.barplot(x=share_black,y=area_list,color='blue',alpha = 0.7,label='African American')
+sns.barplot(x=share_native_american,y=area_list,color='cyan',alpha = 0.6,label='Native American')
+sns.barplot(x=share_asian,y=area_list,color='yellow',alpha = 0.6,label='Asian')
+sns.barplot(x=share_hispanic,y=area_list,color='red',alpha = 0.6,label='Hispanic')
 
-# Looks like we have a lot of hotel_market values 212, 214 and a couple of 213 for good measure. These could be our paradise islands.
-# 
-# Let's look at distances from hotel_market 212 to different user cities in the USA sorting by popularity.
+ax.legend(loc='lower right',frameon = True)     # legendlarin gorunurlugu
+ax.set(xlabel='Percentage of Races', ylabel='States',title = "Percentage of State's Population According to Races ")
+
 
 # In[ ]:
 
 
-hawaii = (c66in[c66in.hotel_market == 212]
-          .groupby(['user_location_region','user_location_city'])
-          ['orig_destination_distance']
-          .agg(['min','mean','max','count'])
-          .sort_values(by='count',ascending=False))
-hawaii.head(10)
+# high school graduation rate vs Poverty rate of each state
+sorted_data['area_poverty_ratio'] = sorted_data['area_poverty_ratio']/max( sorted_data['area_poverty_ratio'])
+sorted_data2['area_highschool_ratio'] = sorted_data2['area_highschool_ratio']/max( sorted_data2['area_highschool_ratio'])
+data = pd.concat([sorted_data,sorted_data2['area_highschool_ratio']],axis=1)
+data.sort_values('area_poverty_ratio',inplace=True)
+f,ax1 = plt.subplots(figsize =(20,10))
+sns.pointplot(x='area_list',y='area_poverty_ratio',data=data,color='lime',alpha=0.8)
+sns.pointplot(x='area_list',y='area_highschool_ratio',data=data,color='red',alpha=0.8)
+plt.text(40,0.6,'high school graduate ratio',color='red',fontsize = 17,style = 'italic')
+plt.text(40,0.55,'poverty ratio',color='lime',fontsize = 18,style = 'italic')
+plt.xlabel('States',fontsize = 15,color='blue')
+plt.ylabel('Values',fontsize = 15,color='blue')
+plt.title('High School Graduate  VS  Poverty Rate',fontsize = 20,color='blue')
+plt.grid()
 
-
-# Looks like we caught some very local trips in row 4. So region 246 is probably Hawaii.
-# 
-# The site http://www.distancefromto.net/ tells me that distances from Honolulu to other cities are:
-# 
-# - San Francisco - 2397.40 miles (the second line probably)
-# - Los Angeles - 2562.87 miles (could be the first line)
-# - New York - 4965.20 miles (could be the third)
-# 
-# So region 174 must be California and 348 New York with 48862 being New York city.
-# 
-# Let's look at trips from New York city.
 
 # In[ ]:
 
 
-fromny = (c66in[(c66in.user_location_region == 348) & 
-                (c66in.user_location_city == 48862)]
-          .groupby(['hotel_market'])
-          ['orig_destination_distance']
-          .agg(['min','mean','max','count'])
-          .sort_values(by='count',ascending=False))
-fromny.head(10)
+# kill properties
+# Manner of death
+sns.countplot(kill.gender)
+sns.countplot(kill.manner_of_death)
+plt.title('Manner of death',color = 'blue',fontsize=15)
 
-
-# We can see that New York city itself is probably hotel_market 675.
-# 
-# Distances from New York:
-# 
-# - to Miami - 1093.57 miles -> hotel_market 701
-# - to Las Vegas - 2230.03 miles -> hotel_market 628
-# - to Los Angeles - 2448.30 miles -> hotel_market 365
-# - to San Francisco - 2568.57 miles -> hotel_market 1230
-# - to Chicago - 711.83 miles -> Chicago is hotel_market 637
-# - to Washington - 203.78 miles -> Washington might be hotel_market 191 (?)
-# - to Philadelphia - 80.63 miles -> hotel_market 623 (?)
-# 
-# We already know Los Angeles as a user_location_city. Let's do a check by confirming that trips from that city id to hotel market 365 have small distances.
 
 # In[ ]:
 
 
-(c66in[(c66in.hotel_market==365) & 
-       (c66in.user_location_region==174) & 
-       (c66in.user_location_city==24103)]
- ['orig_destination_distance'].describe())
+# kill weapon
+armed = kill.armed.value_counts()
+plt.figure(figsize=(10,7))
+sns.barplot(x=armed[:7].index,y=armed[:7].values)
+plt.ylabel('Number of Weapon')
+plt.xlabel('Weapon Types')
+plt.title('Kill weapon',color = 'blue',fontsize=15)
 
-
-# This looks about right!
-# 
-# ## Going international
-# 
-# Let's check international trips to and from New York.
 
 # In[ ]:
 
 
-tony = (train[(train.hotel_market == 675) & (train.user_location_country != 66)]
-        .groupby(['user_location_country','user_location_region', 'user_location_city'])
-        ['orig_destination_distance']
-        .agg(['min','mean','max','count'])
-        .sort_values(by='count',ascending=False))
-tony.head(10)
+# age of killed people
+above25 =['above25' if i >= 25 else 'below25' for i in kill.age]
+df = pd.DataFrame({'age':above25})
+sns.countplot(x=df.age)
+plt.ylabel('Number of Killed People')
+plt.title('Age of killed people',color = 'blue',fontsize=15)
 
-
-# People are flying to New York a lot from country 205. 
-# 
-# Most popular city is 342 miles away so that must be Toronto (distance from NY 342.42 miles). So user_location_country 205 must be Canada. It is also hotel_country 198 as seen from the very first table. We can figure out other canadian cities and regions by their distances from NY.
-# 
-# Next is user_location_country 1 with mean distance 4283 miles. That would probably be somewhere in Europe. Some poking around the map brings up Rome at 4286.00 miles from NY. Then there should be another italian city at 4019 miles. Milan comes up with 4020.99 miles. So maybe user_location_country 1 is Italy.
-# 
-# Next user_location_country is 215, looks like this is Mexico, with distance to Mexico city being 2089.76 miles. Then Mexico is also hotel_country 8.
-# 
-# How about the trips from New York?
 
 # In[ ]:
 
 
-fromny = (train[(train.hotel_country != 50) & 
-                (train.user_location_country == 66) &
-                (train.user_location_region == 348) &
-                (train.user_location_city == 48862)]
-        .groupby(['hotel_country','hotel_market'])
-        ['orig_destination_distance']
-        .agg(['min','mean','max','count'])
-        .sort_values(by='count',ascending=False))
-fromny.head(10)
+# Race of killed people
+sns.countplot(data=kill, x='race')
+plt.title('Race of killed people',color = 'blue',fontsize=15)
 
 
-# First row - with hotel_market 110 - is some place in Mexico - there's a city called Cancún at 1548.30 miles from NY.
-# 
-# Second line looks like London (3465.05 miles), so hotel_country 70 UK, hotel_market 19 London.
-# 
-# Lines 3-5 judging by the distance should be somewhere in the Caribbean.
-# 
-# The next line might be Paris (3631.16 miles), so hotel_country 204 France, hotel_market 27 Paris.
-# 
-# ## Results
-# 
-# It looks like it's completely possible to deanonymize the countries and cities in this dataset. At least the popular ones. The more countries and cities we identify the easier the subsequent task becomes. We could sort of triangulate the locations yet uncovered using distances to already known locations.
-# 
-# Ways to use this information:
-# 
-# - classify trips as home or abroad
-# - classify destinations as sea-side, ski resorts, historical cities and so on.
-# - what else?
-# 
-# Here is a list of countries and cities matched so far. 
-# 
-# *removed to not tempt anyone*
+# In[ ]:
+
+
+# Most dangerous cities
+city = kill.city.value_counts()
+plt.figure(figsize=(10,7))
+sns.barplot(x=city[:12].index,y=city[:12].values)
+plt.xticks(rotation=45)
+plt.title('Most dangerous cities',color = 'blue',fontsize=15)
+
+
+# In[ ]:
+
+
+# most dangerous states
+state = kill.state.value_counts()
+plt.figure(figsize=(10,7))
+sns.barplot(x=state[:20].index,y=state[:20].values)
+plt.title('Most dangerous state',color = 'blue',fontsize=15)
+
+
+# In[ ]:
+
+
+# Having mental ilness or not for killed people
+sns.countplot(kill.signs_of_mental_illness)
+plt.xlabel('Mental illness')
+plt.ylabel('Number of Mental illness')
+plt.title('Having mental illness or not',color = 'blue', fontsize = 15)
+
+
+# In[ ]:
+
+
+# Threat types
+sns.countplot(kill.threat_level)
+plt.xlabel('Threat Types')
+plt.title('Threat types',color = 'blue', fontsize = 15)
+
+
+# In[ ]:
+
+
+# Flee types
+sns.countplot(kill.flee)
+plt.xlabel('Flee Types')
+plt.title('Flee types',color = 'blue', fontsize = 15)
+
+
+# In[ ]:
+
+
+# Having body cameras or not for police
+sns.countplot(kill.body_camera)
+plt.xlabel('Having Body Cameras')
+plt.title('Having body cameras or not on Police',color = 'blue',fontsize = 15)
+
+
+# In[ ]:
+
+
+
+# Race rates according to states in kill data 
+kill.race.dropna(inplace = True)
+labels = kill.race.value_counts().index
+colors = ['grey','blue','red','yellow','green','brown']
+explode = [0,0,0,0,0,0]
+sizes = kill.race.value_counts().values
+plt.figure(figsize = (10,10))
+plt.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%')
+plt.title('Killed People According to Races',color = 'blue',fontsize = 15)
+
+
+# In[ ]:
+
+
+# Kill numbers from states in kill data
+sta = kill.state.value_counts().index[:10]
+sns.barplot(x=sta,y = kill.state.value_counts().values[:10])
+plt.title('Kill Numbers from States',color = 'blue',fontsize=15)
+
+
+# # CONCLUSION
+# **If you have any question, I will be happy to hear it!!!**
+# Thanks

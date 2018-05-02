@@ -1,72 +1,139 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the series [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning). At the end of this step, you will be able to use your first sophisticated machine learning model, the Random Forest.*
+# <table>
+#     <tr>
+#         <td>
+#         <center>
+#         <font size="+1">If you haven't used BigQuery datasets on Kaggle previously, check out the <a href = "https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/">Scavenger Hunt Handbook</a> kernel to get started.</font>
+#         </center>
+#         </td>
+#     </tr>
+# </table>
+
+# # SELECT, FROM & WHERE
 # 
-# # Introduction
+# Today, we're going to learn how to use SELECT, FROM and WHERE to get data from a specific column based on the value of another column. For the purposes of this explanation, we'll be using this imaginary database, `pet_records` which has just one table in it, called `pets`, which looks like this:
 # 
-# Decision trees leave you with a difficult decision. A deep tree with lots of leaves will overfit because each prediction is coming from historical data from only the few houses at its leaf. But a shallow tree with few leaves will perform poorly because it fails to capture as many distinctions in the raw data.
+# ![](https://i.imgur.com/Ef4Puo3.png)
 # 
-# Even today's most sophisticated modeling techniques face this tension between underfitting and overfitting. But, many models have clever ideas that can lead to better performance. We'll look at the **random forest** as an example.
+# ### SELECT ... FROM
+# ___
 # 
-# The random forest uses many trees, and it makes a prediction by averaging the predictions of each component tree. It generally has much better predictive accuracy than a single decision tree and it works well with default parameters. If you keep modeling, you can learn more models with even better performance, but many of those are sensitive to getting the right parameters. 
+# The most basic SQL query is to select a single column from a specific table. To do this, you need to tell SELECT which column to select and then specify what table that column is from using from. 
 # 
-# # Example
+# > **Do you need to capitalize SELECT and FROM?** No, SQL doesn't care about capitalization. However, it's customary to capitalize your SQL commands and it makes your queries a bit easier to read.
 # 
-# You've already seen the code to load the data a few times. At the end of data-loading, we have the following variables:
-# - train_X
-# - val_X
-# - train_y
-# - val_y
+# So, if we wanted to select the "Name" column from the pets table of the pet_records database (if that database were accessible as a BigQuery dataset on Kaggle , which it is not, because I made it up), we would do this:
+# 
+#     SELECT Name
+#     FROM `bigquery-public-data.pet_records.pets`
+# 
+# Which would return the highlighted data from this figure.
+# 
+# ![](https://i.imgur.com/8FdVyFP.png)
+# 
+# ### WHERE ...
+# ___
+# 
+# When you're working with BigQuery datasets, you're almost always going to want to return only certain rows, usually based on the value of a different column. You can do this using the WHERE clause, which will only return the rows where the WHERE clause evaluates to true.
+# 
+# Let's look at an example:
+# 
+#     SELECT Name
+#     FROM `bigquery-public-data.pet_records.pets`
+#     WHERE Animal = "Cat"
+# 
+# This query will only return the entries from the "Name" column that are in rows where the "Animal" column has the text "Cat" in it. Those are the cells highlighted in blue in this figure:
+# 
+# ![](https://i.imgur.com/Va52Qdl.png)
+# 
+
+# ## Example: What are all the U.S. cities in the OpenAQ dataset?
+# ___
+# 
+# Now that you've got the basics down, let's work through an example with a real dataset. Today we're going to be working with the OpenAQ dataset, which has information on air quality around the world. (The data in it should be current: it's updated weekly.)
+# 
+# To help get you situated, I'm going to run through a complete query first. Then it will be your turn to get started running your queries!
+# 
+# First, I'm going to set up everything we need to run queries and take a quick peek at what tables are in our database.
 
 # In[ ]:
 
 
-import pandas as pd
-    
-# Load data
-melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
-melbourne_data = pd.read_csv(melbourne_file_path) 
-# Filter rows with missing values
-melbourne_data = melbourne_data.dropna(axis=0)
-# Choose target and predictors
-y = melbourne_data.Price
-melbourne_predictors = ['Rooms', 'Bathroom', 'Landsize', 'BuildingArea', 
-                        'YearBuilt', 'Lattitude', 'Longtitude']
-X = melbourne_data[melbourne_predictors]
+# import package with helper functions 
+import bq_helper
 
-from sklearn.model_selection import train_test_split
+# create a helper object for this dataset
+open_aq = bq_helper.BigQueryHelper(active_project="bigquery-public-data",
+                                   dataset_name="openaq")
 
-# split data into training and validation data, for both predictors and target
-# The split is based on a random number generator. Supplying a numeric value to
-# the random_state argument guarantees we get the same split every time we
-# run this script.
-train_X, val_X, train_y, val_y = train_test_split(X, y,random_state = 0)
+# print all the tables in this dataset (there's only one!)
+open_aq.list_tables()
 
 
-# We build a RandomForest similarly to how we built a decision tree in scikit-learn.
+# I'm going to take a peek at the first couple of rows to help me see what sort of data is in this dataset.
 
 # In[ ]:
 
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
-
-forest_model = RandomForestRegressor()
-forest_model.fit(train_X, train_y)
-melb_preds = forest_model.predict(val_X)
-print(mean_absolute_error(val_y, melb_preds))
+# print the first couple rows of the "global_air_quality" dataset
+open_aq.head("global_air_quality")
 
 
-# # Conclusion 
-# There is likely room for further improvement, but this is a big improvement over the best decision tree error of 250,000. There are parameters which allow you to change the performance of the Random Forest much as we changed the maximum depth of the single decision tree. But one of the best features of Random Forest models is that they generally work reasonably even without this tuning.
+# Great, everything looks good! Now that I'm set up, I'm going to put together a query. I want to select all the values from the "city" column for the rows there the "country" column is "us" (for "United States"). 
 # 
-# You'll soon learn the XGBoost model, which provides better performance when tuned well with the right parameters (but which requires some skill to get the right model parameters).
+# > **What's up with the triple quotation marks (""")?** These tell Python that everything inside them is a single string, even though we have line breaks in it. The line breaks aren't necessary, but they do make it much easier to read your query.
+
+# In[ ]:
+
+
+# query to select all the items from the "city" column where the
+# "country" column is "us"
+query = """SELECT city
+            FROM `bigquery-public-data.openaq.global_air_quality`
+            WHERE country = 'US'
+        """
+
+
+# > **Important:**  Note that the argument we pass to FROM is *not* in single or double quotation marks (' or "). It is in backticks (\`). If you use quotation marks instead of backticks, you'll get this error when you try to run the query: `Syntax error: Unexpected string literal` 
 # 
-# # Your Turn
-# Run the RandomForestRegressor on your data. You should see a big improvement over your best Decision Tree models. 
+# Now I can use this query to get information from our open_aq dataset. I'm using the `BigQueryHelper.query_to_pandas_safe()` method here because it won't run a query if it's larger than 1 gigabyte, which helps me avoid accidentally running a very large query. See the [Scavenger Hunt Handbook ](https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/)for more details. 
+
+# In[ ]:
+
+
+# the query_to_pandas_safe will only return a result if it's less
+# than one gigabyte (by default)
+us_cities = open_aq.query_to_pandas_safe(query)
+
+
+# Now I've got a dataframe called us_cities, which I can use like I would any other dataframe:
+
+# In[ ]:
+
+
+# What five cities have the most measurements taken there?
+us_cities.city.value_counts().head()
+
+
+# # Scavenger hunt
+# ___
 # 
-# # Continue 
-# You will see more big improvements in your models as soon as you start the  Intermediate track in*Learn Machine Learning* . But you now have a model that's a good starting point to compete in a machine learning competition!
+# Now it's your turn! Here's the questions I would like you to get the data to answer:
 # 
-# Follow **[these steps](https://www.kaggle.com/dansbecker/submitting-from-a-kernel/)** to make submissions for your current model. Then you can watch your progress in subsequent steps as you climb up the leaderboard with your continually improving models.
+# * Which countries use a unit other than ppm to measure any type of pollution? (Hint: to get rows where the value *isn't* something, use "!=")
+# * Which pollutants have a value of exactly 0?
+# 
+# In order to answer these questions, you can fork this notebook by hitting the blue "Fork Notebook" at the very top of this page (you may have to scroll up).  "Forking" something is making a copy of it that you can edit on your own without changing the original.
+
+# In[ ]:
+
+
+# Your code goes here :)
+
+
+
+# Please feel free to ask any questions you have in this notebook or in the [Q&A forums](https://www.kaggle.com/questions-and-answers)! 
+# 
+# Also, if you want to share or get comments on your kernel, remember you need to make it public first! You can change the visibility of your kernel under the "Settings" tab, on the right half of your screen.

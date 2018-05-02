@@ -1,361 +1,157 @@
 
 # coding: utf-8
 
-# # Sentimental analysis 
-
-# ##### Importing the textblob for checking the sentiments of the comments.v
-
-# ##### Importig the modulesv
-
-# In[ ]:
-
-
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import json
-from wordcloud import WordCloud, STOPWORDS
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from textblob import TextBlob
-
-
-# In[ ]:
-
-
-videos = pd.read_csv('../input/USvideos.csv',encoding='utf8',error_bad_lines = False);#opening the file USvideos
-comm = pd.read_csv('../input/UScomments.csv',encoding='utf8',error_bad_lines=False);#opening the file UScomments
-
-
-# ##### Making the BOB classifier and using it to test the sentiments of the sentence
-
-# In[ ]:
-
-
-pol=[] # list which will contain the polarity of the comments
-for i in comm.comment_text.values:
-    try:
-        analysis =TextBlob(i)
-        pol.append(analysis.sentiment.polarity)
-        
-    except:
-        pol.append(0)
-
-
-# ##### Converting the continuous variable to categorical one!
-
-# In[ ]:
-
-
-comm['pol']=pol
-
-comm['pol'][comm.pol==0]= 0
-
-comm['pol'][comm.pol > 0]= 1
-comm['pol'][comm.pol < 0]= -1
-
-
-# ### Lets perform EDA for the Positve sentences
+# # Shake-up or Shake-down?
 # 
+# Everybody is talking about shake-up at this competition ([here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43144), [here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43315) ,[here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43547), [here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43336)). Here is my 2 cents. Let's try to estimate shake-up numericaly somehow. This notebook based on [nice exploration](https://www.kaggle.com/vpaslay/is-your-small-gini-significant) of how many samples should be guessed additionally to get an improvement of 0.001 of gini score and a [discussion](https://www.kaggle.com/vpaslay/is-your-small-gini-significant#244525) below it. Another [interesting kernel](https://www.kaggle.com/alexfir/expected-gini-standard-error) on this topic estimated the standard error of simple model depending on test size.
+# 
+# The main question I want to explore here is:
+# - How much can be the **difference between public and private test score**?
+# 
+# We will use simple and naive method to estimate aforementioned difference depending on the public score. We do not have labels for test dataset, but we have train labels, so let's assume that our train set can represent test set. We will use OOF predictions of train set, split them randomly with a same proportion as public and private leaderboard split (private is **70%** of all test). (OOF predictions were taken from [notebook v 38](https://www.kaggle.com/aharless/xgboost-cv-lb-284), feature "New kernel with this data" didn't work as I expected and I couldn't read the data =( so downloaded and uploaded the validation predictions).
+# 
+# ## Assumptions
+# It should be noticed that here we assume several things:
+# - Train and test datasets have similar class balances;
+# - Difference of sample sizes of train and test can be ignored;
+# - Generaly: OOF predictions of train set can represent test set.
+
+# ## Load data
+# 
+# Let's load OOF predictions and train target (with ID field) and define gini calculating function.
 
 # In[ ]:
 
 
-df_positive = comm[comm.pol==1]
-df_positive.head()
+import numpy as np 
+import pandas as pd 
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+plt.style.use('seaborn-poster')
 
+# load the data
+oof_preds = pd.read_csv('../input/xgb-valid-preds-public/xgb_valid.csv')
+y = pd.read_csv('../input/porto-seguro-safe-driver-prediction/train.csv', 
+                usecols = ['id', 'target'])
 
-# In[ ]:
-
-
-k= (' '.join(df_positive['comment_text']))
-
-wordcloud = WordCloud(width = 1000, height = 500).generate(k)
-plt.figure(figsize=(15,5))
-plt.imshow(wordcloud)
-plt.axis('off')
-
-
-# ### Its time to go for negative sentences
-
-# In[ ]:
-
-
-df_negative = comm[comm.pol==-1]
-k= (' '.join(df_negative['comment_text']))
-wordcloud = WordCloud(width = 1000, height = 500).generate(k)
-plt.figure(figsize=(15,5))
-plt.imshow(wordcloud)
-plt.axis('off')
-
-
-# # OOPS !
-
-# # lets count the number of data with each type
-
-# In[ ]:
-
-
-comm['pol'].replace({1:'positive',0:'Neutral',-1:'negative'}).value_counts().plot(kind='bar',figsize=(7,4));
-plt.title('Number of types of commets');
-plt.xlabel('Comment_type');
-plt.ylabel('number');
-
-
-# ## Lets generate the dataframe which has unique_id and the info about its comment
-
-# In[ ]:
-
-
-id=[]
-pos_comm=[]
-neg_comm=[]
-neutral_comm =[]
-for i in set(comm.video_id):
-    id.append(i)
-    try:
-        pos_comm.append(comm[comm.video_id==i].pol.value_counts()[1])
-    except:
-        pos_comm.append(0)
-    try:    
-        neg_comm.append(comm[comm.video_id==i].pol.value_counts()[-1])
-    except:
-        neg_comm.append(0)
-    try:    
-        neutral_comm.append(comm[comm.video_id==i].pol.value_counts()[0])
-    except:
-        neutral_comm.append(0)
-
-
-# ## WOW! this is the most handful thing for analysis. Lets see its EDA in EDA section
-
-# In[ ]:
-
-
-df_unique = pd.DataFrame(id)
-df_unique.columns=['id']
-df_unique['pos_comm'] =pos_comm
-df_unique['neg_comm'] = neg_comm
-df_unique['neutral_comm'] = neutral_comm
-df_unique['total_comments']=df_unique['pos_comm']+df_unique['neg_comm']+df_unique['neutral_comm']
-df_unique.head(6)
-
-
-# #### Storing this file for the EDA in another file
-
-# In[ ]:
-
-
-df_unique.to_csv('unique.csv',index=False,)
-
-
-# # Exploratory Data Analysis :
-#                                                                           
-
-# In[ ]:
-
-
-videos.head()
+print('Shape of OOF preds: \t', oof_preds.shape)
+print('Shape of train target:\t', y.shape)
 
 
 # In[ ]:
 
 
-comm.head()
+# gini calculation from https://www.kaggle.com/tezdhar/faster-gini-calculation
+def ginic(actual, pred):
+    actual = np.asarray(actual) #In case, someone passes Series or list
+    n = len(actual)
+    a_s = actual[np.argsort(pred)]
+    a_c = a_s.cumsum()
+    giniSum = a_c.sum() / a_s.sum() - (n + 1) / 2.0
+    return giniSum / n
+ 
+def gini_normalizedc(a, p):
+    if p.ndim == 2:#Required for sklearn wrapper
+        p = p[:,1] #If proba array contains proba for both 0 and 1 classes, just pick class 1
+    return ginic(a, p) / ginic(a, a)
 
 
-# # The data set is from 13.09 to 26.09. Total 14 days(2 week) Dataset
-
-# In[ ]:
-
-
-videos.date.value_counts()
-
-
-# ## Surprisingly the videos_ id is not unique. lets see why
-
-# In[ ]:
-
-
-print(videos.video_id.value_counts()[:12]) # these videos have become 7 times the most trending videos of these 2 weeks.
-most_trending = videos.video_id.value_counts()[:12].index
-
-
-# In[ ]:
-
-
-videos[videos.video_id=='mlxdnyfkWKQ']
-
-
-# ## For first 2 minute i was like how its possible???..  Yes we are analysing the videos that were trending, So yes it is possible to have multiple ids
-
-# Lets analyse which video was most trending of this time.
+# ## Single split
+# 
+# Here we make one split of OOF predictions using *train_test_split* from *sklearn* (with fixed seed). As mentioned above proportion of test size is 70% from all test - so we will use he same share. 
 
 # In[ ]:
 
 
-for i in most_trending:
-    info =videos[videos.video_id== i][['title','channel_title','views','likes','dislikes','comment_total']].tail(1)# get the last row of the dataframe(total like,views,dislikes)
-    print(info)
-    print('****************************************************************************************')
+PROPORTION_PRIVATE = 0.70
+y_preds_public, y_preds_private, y_public, y_private = train_test_split(oof_preds.target.values, 
+                                                                        y.target.values, 
+                                                                        test_size=PROPORTION_PRIVATE, 
+                                                                        random_state=42)
+
+print('Proportion of private:\t',PROPORTION_PRIVATE)
+print('Public score:\t', round(gini_normalizedc(y_public, y_preds_public), 6))
+print('Private score:\t', round(gini_normalizedc(y_private, y_preds_private), 6))
 
 
-# ## Explanation- Ofcourse it should be decreasing because the trending videos
-# Looks like there is a clear and steady decline. If you are trending today, then you have good  chance of trending tomorrow, but such probability will fall off steadily as you look further out in the future.
+# So, we splited OOF predictions somehow and got 0.275 gini score on small part (public) and 0.290 on big part (private). That was a lucky split=) Let's do it many times to collect statistics over scores.
 
-# # tags
-
-# In[ ]:
-
-
-# slpitting the tags
-tags = videos['tags'].map(lambda k: k.lower().split('|')).values 
-
-# joining and making a complete list
-k= (' '.join(videos['tags']))  
-wordcloud = WordCloud(width = 1000, height = 500).generate((' '.join(k.lower().split('|'))))# word cloud
-
-
-plt.figure(figsize=(15,5))
-plt.imshow(wordcloud)
-plt.axis('off')
-
-
-# # Tags like Makeup,iphone,tutorial,beauty are the most common among all
-
-# # Now its time to see which of the channel among all is best
+# ## 10k splits
+# 
+# Here we will do the public-private split 10 000 times with different random seeds and collect gini scores from every split. (take some time - about 20 min)
 
 # In[ ]:
 
 
-videos.columns
+get_ipython().run_cell_magic('time', '', 'gini_public = []\ngini_private = []\n# do the split 10k times\nfor rs in range(10000):\n    y_preds_public, y_preds_private, y_public, y_private = train_test_split(oof_preds.target.values, \n                                                                            y.target.values, \n                                                                            test_size=PROPORTION_PRIVATE, \n                                                                            random_state=rs)\n    gini_public.append(gini_normalizedc(y_public, y_preds_public))\n    gini_private.append(gini_normalizedc(y_private, y_preds_private))\n\n# save results to numpy arrays\ngini_public_arr = np.array(gini_public)\ngini_private_arr = np.array(gini_private)')
 
 
-# In[ ]:
-
-
-df1 =pd.DataFrame(videos.channel_title.value_counts())
-df1.columns=['times channel got trenidng']# how many times the channel got trending'
-df1.head(6)
-
+# Let's plot a histogram of public-private difference of scores:
 
 # In[ ]:
 
 
-df_channel =pd.DataFrame(videos.groupby(by=['channel_title'])['views'].mean()).sort_values(by='views',ascending=False)
-df_channel.head(10).plot(kind='bar');
-plt.title('Most viewed channels');
+# 10000 random_states
+plt.figure(figsize=(10,6))
+plt.hist(gini_public_arr - gini_private_arr, bins=50)
+plt.title('(Public - Private) scores')
+plt.xlabel('Gini score difference')
+plt.show()
 
 
-# ## Inference -The Zayn is mostly viewed channel among all !
-
-# In[ ]:
-
-
-df_channel =pd.DataFrame(videos.groupby(by=['channel_title'])['likes'].mean()).sort_values(by='likes',ascending=False)
-df_channel.head(10).plot(kind='bar');
-plt.title('Most liked channels');
-
-
-# #### Inference -Zayn vevo also leads for the mostly liked vidoes
+# Looks much the same as in [aforementioned kernel](https://www.kaggle.com/vpaslay/is-your-small-gini-significant): we have deviation mostly between -0.02 and 0.02, it's realy huge range that leads to depression=(.
+# 
+# But wait! Here we use the OOF predictions of model which score on leaderboard **we know** (it's 0.284). So let's naively assume that this score represent our public-private split score on train and find in our array of public ginis (computed above) those splits, which score 0.284. Let's plot the public-private difference only for them:
 
 # In[ ]:
 
 
-videos['likes_per_view']=videos['likes']/videos['views']
-df_channel =pd.DataFrame(videos.groupby(by=['channel_title'])['likes_per_view'].mean()).sort_values(by='likes_per_view',ascending=False)
-df_channel.head(10).plot(kind='bar');
-plt.title('Most liked channels');
+#find indexies where public score was .284
+my_indexies = np.where((gini_public_arr >= 0.284) &(gini_public_arr < 0.285))[0]
+
+plt.figure(figsize=(10,6))
+plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
+plt.title('(Public - Private) scores, where public = .284')
+plt.xlabel('Gini score difference')
+plt.show()
 
 
-# ## Videos which are disliked among all
-# CBS Subday morning seems to be pretty boring channel
-
-# In[ ]:
-
-
-videos['dislikes_per_view']=videos['dislikes']/videos['views']
-df_channel =pd.DataFrame(videos.groupby(by=['channel_title'])['dislikes_per_view'].mean()).sort_values(by='dislikes_per_view',ascending=False)
-df_channel.head(10).plot(kind='bar');
-plt.title('Most disliked channels');
-
-
-# # Now i am going import a Unique file created in sentimental analysis section
+# Hm... absolutely different picture: we have not so wide, uniform range between -0.003 and -0.0016, and most importantly that private score is a higher than public (all differences < 0).
+# 
+# For comparison let's look at differences in splits, which scores 0.286 on public part:
 
 # In[ ]:
 
 
-unique = pd.read_csv('unique.csv',)
+#find indexies where public score was .286
+my_indexies = np.where((gini_public_arr >= 0.286) &(gini_public_arr < 0.287))[0]
+
+plt.figure(figsize=(10,6))
+plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
+plt.title('(Public - Private) scores, where public = .286')
+plt.xlabel('Gini score difference')
+plt.show()
 
 
-# In[ ]:
-
-
-unique.sort_values(by='pos_comm',ascending=False).head(5)
-
-
-# In[ ]:
-
-
-videos[videos.video_id == 'eERPlIdPJtI'].title[225]
-
-
-# ### Inference- Mostly 'Weight Update: 6 weeks Post Surgery! 93 pounds!' have very large number of positive reviews
+# On the plot above again we have uniform distribution in range between -0.0020 and 0.0012. Lets compare it with range of public between 0.284 and 0.287 (not including 0.287)
 
 # In[ ]:
 
 
-sns.barplot(data=unique.sort_values(by='pos_comm',ascending=False).head(10),x='id',y='pos_comm')
-plt.xticks(rotation=45);
-plt.figure(figsize=(5,4));
+#find indexies where public score was .284-.287
+my_indexies = np.where((gini_public_arr >= 0.284) &(gini_public_arr < 0.287))[0]
+
+plt.figure(figsize=(10,6))
+plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
+plt.title('(Public - Private) scores, where public between .284 and .287')
+plt.xlabel('Gini score difference')
+plt.show()
 
 
-# In[ ]:
-
-
-sns.barplot(data=unique.sort_values(by='neg_comm',ascending=False).head(10),x='id',y='neg_comm')
-plt.xticks(rotation=45);
-plt.figure(figsize=(5,4));
-
-
-# In[ ]:
-
-
-sns.barplot(data=unique.sort_values(by='total_comments',ascending=False).head(10),x='id',y='total_comments')
-plt.xticks(rotation=45);
-plt.figure(figsize=(5,4));
-
-
-# #### Lets find out the relation among continuous variables
-
-# As quite obvious the number of likes have very strong relation with views
-
-# In[ ]:
-
-
-sns.regplot(data=videos,x='views',y='likes');
-plt.title("Regression plot for likes & views");
-
-
-# Number of dislikes are related but the relation is not as much strong.
-
-# In[ ]:
-
-
-sns.regplot(data=videos,x='views',y='dislikes');
-plt.title("Regression plot for dislikes & views");
-
-
-# ### Correlation matrix is the evidence of above analysis!
-
-# In[ ]:
-
-
-df_corr = videos[['views','likes','dislikes']]
-
-sns.heatmap(df_corr.corr(),annot=True)
-
-
-# <--------------------------------------END------------------------------------------->
-# ###### If you like my work,
-# ###### Your upvotes will be appreciated!
+# ## Summary
+# 
+# So if we take into consideration **all assumptions mentioned above** and assume that our model (which OOF we used here) quiet stable and scores 0.284 on public we can expect private score between 0.285 and 0.287 (from -0.001 to -0.003), which is literally speaking "shake UP", not "shake DOWN" of scores. 
+# 
+# So that is quite interesting conclusion and what needed to be mentioned that this method is truely naive (and maybe, misleading) and used several assumptions, which can be violated in real train-test setting.
+# 
+# Hope this notebook will help you guys. If you have any comments or remarks feel free to write them below.

@@ -1,322 +1,267 @@
 
 # coding: utf-8
 
-# # More To Come. Stay Tuned. !!
-# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
-# 
-# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. **If you like it or it helps you , you can upvote and/or leave a comment :).**|
-# 
-
-# In[1]:
+# In[ ]:
 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import IPython.display as ipd  # To play sound in the notebook
-from tqdm import tqdm_notebook
-import wave
-from scipy.io import wavfile
-SAMPLE_RATE = 44100
-
-import seaborn as sns # for making plots with seaborn
-color = sns.color_palette()
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.offline as offline
-offline.init_notebook_mode()
-import plotly.tools as tls
-# Math
-import numpy as np
-from scipy.fftpack import fft
-from scipy import signal
-from scipy.io import wavfile
-import librosa
-
-
-# In[2]:
-
-
-import os
-print(os.listdir("../input"))
-
-
-# In[3]:
-
-
-INPUT_LIB = '../input/'
-audio_train_files = os.listdir('../input/audio_train')
-audio_test_files = os.listdir('../input/audio_test')
-train = pd.read_csv('../input/train.csv')
-submission = pd.read_csv("../input/sample_submission.csv", index_col='fname')
-train_audio_path = '../input/audio_train/'
-filename = '/001ca53d.wav' # Hi-hat
-sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
-#sample_rate = 16000
-
-
-# In[4]:
-
-
-print(samples)
-
-
-# In[5]:
-
-
-print("Size of training data",train.shape)
-
-
-# In[6]:
-
-
-train.head()
-
-
-# In[7]:
-
-
-submission.head()
-
-
-# In[8]:
-
-
-def clean_filename(fname, string):   
-    file_name = fname.split('/')[1]
-    if file_name[:2] == '__':        
-        file_name = string + file_name
-    return file_name
-
-def load_wav_file(name, path):
-    _, b = wavfile.read(path + name)
-    assert _ == SAMPLE_RATE
-    return b
-
-
-# In[9]:
-
-
-train_data = pd.DataFrame({'file_name' : train['fname'],
-                         'target' : train['label']})   
-train_data['time_series'] = train_data['file_name'].apply(load_wav_file, 
-                                                      path=INPUT_LIB + 'audio_train/')    
-train_data['nframes'] = train_data['time_series'].apply(len)  
-
-
-# In[10]:
-
-
-train_data.head()
-
-
-# In[11]:
-
-
-print("Size of training data after some preprocessing : ",train_data.shape)
-
-
-# In[12]:
-
-
-# missing data in training data set
-total = train_data.isnull().sum().sort_values(ascending = False)
-percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
-missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
-missing_train_data.head()
-
-
-# There is no missing data in training dataset
-
-# # Manually verified Audio
-
-# In[17]:
-
-
-temp = train['manually_verified'].value_counts()
-labels = temp.index
-sizes = (temp / temp.sum())*100
-trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
-layout = go.Layout(title='Manually varification of labels(0 - No, 1 - Yes)')
-data = [trace]
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# * Approximately 40 % labels are manually varified.
-
-# In[18]:
-
-
-plt.figure(figsize=(12,8))
-sns.distplot(train_data.nframes.values, bins=50, kde=False)
-plt.xlabel('nframes', fontsize=12)
-plt.title("Histogram of #frames")
-plt.show()
-
-
-# In[19]:
-
-
-plt.figure(figsize=(17,8))
-boxplot = sns.boxplot(x="target", y="nframes", data=train_data)
-boxplot.set(xlabel='', ylabel='')
-plt.title('Distribution of audio frames, per label', fontsize=17)
-plt.xticks(rotation=80, fontsize=17)
-plt.yticks(fontsize=17)
-plt.xlabel('Label name')
-plt.ylabel('nframes')
-plt.show()
-
-
-# In[20]:
-
-
-print("Total number of labels in training data : ",len(train_data['target'].value_counts()))
-print("Labels are : ", train_data['target'].unique())
-plt.figure(figsize=(15,8))
-audio_type = train_data['target'].value_counts().head(30)
-sns.barplot(audio_type.values, audio_type.index)
-for i, v in enumerate(audio_type.values):
-    plt.text(0.8,i,v,color='k',fontsize=12)
-plt.xticks(rotation='vertical')
-plt.xlabel('Frequency')
-plt.ylabel('Label Name')
-plt.title("Top 30 labels with their frequencies in training data")
-plt.show()
-
-
-# ### Total number of labels are 41
-
-# In[ ]:
-
-
-temp = train_data.sort_values(by='target')
-temp.head()
-
-
-# ## Now look at  some labels waveform :
-#   1. Acoustic_guitar
-#   2. Applause
-#   3. Bark
-
-# ## 1. Acoustic_guitar
-
-# In[ ]:
-
-
-print("Acoustic_guitar : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i])
-    ax[i//4, i%4].set_title(temp['file_name'][i][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
-fig.savefig("AudioWaveform", dpi=900)     
-
-
-# ## 2. Applause
-
-# In[ ]:
-
-
-print("Applause : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i+300])
-    ax[i//4, i%4].set_title(temp['file_name'][i+300][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
-
-
-# ## 3. Bark
-
-# In[ ]:
-
-
-print("Bark : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i+600])
-    ax[i//4, i%4].set_title(temp['file_name'][i+600][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
+
+from keras.models import Sequential
+from keras.layers import Dense, LSTM
+from subprocess import check_output
 
 
 # In[ ]:
 
 
-from wordcloud import WordCloud
-wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(train_data.target))
-plt.figure(figsize=(15,8))
-plt.imshow(wordcloud)
-plt.title("Wordcloud for Labels", fontsize=35)
-plt.axis("off")
-plt.show() 
-#fig.savefig("LabelsWordCloud", dpi=900)
-
-
-# # Spectrogram
-
-# In[ ]:
-
-
-def log_specgram(audio, sample_rate, window_size=20,
-                 step_size=10, eps=1e-10):
-    nperseg = int(round(window_size * sample_rate / 1e3))
-    noverlap = int(round(step_size * sample_rate / 1e3))
-    freqs, times, spec = signal.spectrogram(audio,
-                                    fs=sample_rate,
-                                    window='hann',
-                                    nperseg=nperseg,
-                                    noverlap=noverlap,
-                                    detrend=False)
-    return freqs, times, np.log(spec.T.astype(np.float32) + eps)
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+data['hr'].drop('hpg_store_id',  axis=1, inplace=True)
+data['ar'] = data['ar'].append(data['hr'])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes'].drop('id', axis=1, inplace=True)
+print ('Data loaded')
 
 
 # In[ ]:
 
 
-freqs, times, spectrogram = log_specgram(samples, sample_rate)
+# Create single data set with all relevant base data:
+data['tra']['visit_datetime'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['visit_date']     = data['tra']['visit_datetime'].dt.date
+data['ar']['res_visit_datetime'] = pd.to_datetime(data['ar']['visit_datetime'])
+data['ar']['reserve_datetime']   = pd.to_datetime(data['ar']['reserve_datetime'])
+data['ar']['visit_date']         = data['ar']['res_visit_datetime'].dt.date
+data['ar']['reserve_diff'] = data['ar'].apply(lambda r: (r['res_visit_datetime']
+                                                         - r['reserve_datetime']).days, 
+                                        axis=1)
+data['ar'].drop('visit_datetime',  axis=1, inplace=True)
+data['ar'].drop('reserve_datetime',  axis=1, inplace=True)
+data['ar'].drop('res_visit_datetime',  axis=1, inplace=True)
+avg_reserv = data['ar'].groupby(['air_store_id','visit_date'], 
+                                as_index=False).mean().reset_index()
+data['ar'] = data['ar'].groupby(['air_store_id','visit_date'], 
+                                as_index=False).sum().reset_index()
+data['ar'] = data['ar'].drop(['reserve_diff'],axis=1)
+data['ar'] = data['ar'].drop(['index'],axis=1)
+data['ar']['reserve_diff'] = avg_reserv['reserve_diff']                            
+    
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
 
-fig = plt.figure(figsize=(18, 8))
-ax2 = fig.add_subplot(211)
-ax2.imshow(spectrogram.T, aspect='auto', origin='lower', 
-           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
-ax2.set_yticks(freqs[::40])
-ax2.set_xticks(times[::40])
-ax2.set_title('Spectrogram of Hi-hat ' + filename)
-ax2.set_ylabel('Freqs in Hz')
-ax2.set_xlabel('Seconds')
+data['tes']['visit_datetime'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['visit_date'] = data['tes']['visit_datetime'].dt.date
 
+prep_df = pd.merge(data['tra'], data['ar'],  how='left', on=['air_store_id', 'visit_date'])
+prep_df = pd.merge(prep_df,     data['as'],  how='inner', on='air_store_id')
+prep_df = pd.merge(prep_df,     data['hol'], how='left',  on='visit_date')
 
-# # Specgtrogram of "Hi-Hat" in 3d
+predict_data = pd.merge(data['tes'],  data['ar'],   how='left', on=['air_store_id', 'visit_date'])
+predict_data = pd.merge(predict_data, data['as'],   how='inner', on='air_store_id')
+predict_data = pd.merge(predict_data, data['hol'],  how='left', on='visit_date')
 
-# If we use spectrogram as an input features for NN, we have to remember to normalize features.
+#print(len(prep_df[prep_df.air_store_id == "air_35512c42db0868da"]))
+#print(len(data['tra'][data['tra'].air_store_id == "air_35512c42db0868da"]))
+
 
 # In[ ]:
 
 
-mean = np.mean(spectrogram, axis=0)
-std = np.std(spectrogram, axis=0)
-spectrogram = (spectrogram - mean) / std
+# Encode fields:
+prep_df['month'] = prep_df['visit_datetime'].dt.month
+prep_df['day']   = prep_df['visit_datetime'].dt.day
+prep_df.drop('visit_datetime',      axis=1, inplace=True)   
+predict_data['month'] = predict_data['visit_datetime'].dt.month
+predict_data['day']   = predict_data['visit_datetime'].dt.day
+predict_data.drop('visit_datetime', axis=1, inplace=True)
+
+# Encode labels of categorical columns:
+cat_features = [col for col in ['air_genre_name', 'air_area_name', 'day_of_week']]
+for column in cat_features:
+    temp_prep = pd.get_dummies(pd.Series(prep_df[column]))
+    prep_df = pd.concat([prep_df,temp_prep],axis=1)
+    prep_df = prep_df.drop([column],axis=1)
+    temp_predict = pd.get_dummies(pd.Series(predict_data[column]))
+    predict_data = pd.concat([predict_data,temp_predict],axis=1)
+    predict_data = predict_data.drop([column],axis=1)
+    for missing_col in temp_prep:     # Make sure the columns of train and test are identical
+        if missing_col not in predict_data.columns:
+            predict_data[missing_col] = 0
+    
+prep_df['visitors'] = np.log1p(prep_df['visitors'])
+prep_df.fillna(0, inplace=True)
+predict_data.fillna(0, inplace=True)
+print('Done')
 
 
 # In[ ]:
 
 
-data = [go.Surface(z=spectrogram.T)]
-layout = go.Layout(
-    title='Specgtrogram of "Hi-Hat" in 3d',
-    scene = dict(
-    yaxis = dict(title='Frequencies', range=freqs),
-    xaxis = dict(title='Time', range=times),
-    zaxis = dict(title='Log amplitude'),
-    ),
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
+air_ids = [air for air in prep_df['air_store_id'].unique()]
+mult_series = dict()
+scaler = MinMaxScaler(feature_range=(0, 1))
+
+store_key = prep_df[['air_store_id', 'visit_date']]
+store_key_predict = predict_data[['air_store_id', 'visit_date']]
+prep_df.drop(['air_store_id', 'visit_date'], axis=1, inplace=True)  
+predict_data.drop(['air_store_id', 'visit_date'], axis=1, inplace=True) 
+cols = prep_df.columns
+cols_predict = predict_data.columns
+scaler.fit(prep_df)
+scaled_prep_df      = pd.DataFrame(scaler.transform(prep_df), columns=cols)
+scaled_predict_data = pd.DataFrame(scaler.transform(predict_data), columns=cols_predict)
+scaled_prep_df['air_store_id'] = store_key['air_store_id']
+scaled_prep_df['visit_date']   = store_key['visit_date']
+scaled_predict_data['air_store_id'] = store_key_predict['air_store_id']
+scaled_predict_data['visit_date']   = store_key_predict['visit_date']
+scaled_predict_data['visitors'] = 0
+
+for air_id in air_ids:
+    tmp = pd.DataFrame(scaled_prep_df[scaled_prep_df['air_store_id'] == air_id]).sort_values('visit_date')
+    tmp.drop('air_store_id', axis=1, inplace=True)  
+    tmp.set_index('visit_date', inplace=True)
+    mult_series[str(air_id)] = tmp.astype('float32')
+
+mult_series['air_ee3a01f0c71a769f'].head(10)  # Print data for sample restaurant
+#list(mult_series.keys())
+# Target:  y = prep_df['visitors'].values
 
 
-# # More To Come. Stayed Tuned !!
+# In[ ]:
+
+
+# From https://machinelearningmastery.com/convert-time-series-supervised-learning-problem-python/
+def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
+    """
+    Frame a time series as a supervised learning dataset.
+    Arguments:
+        data: Sequence of observations as a list or NumPy array.
+        n_in: Number of lag observations as input (X).
+        n_out: Number of observations as output (y).
+        dropnan: Boolean whether or not to drop rows with NaN values.
+    Returns:
+        Pandas DataFrame of series framed for supervised learning.
+    """
+    n_vars = 1 if type(data) is list else data.shape[1]
+    df = pd.DataFrame(data)
+    cols, names = list(), list()
+    # Input sequence (t-n, ... t-1)
+    for i in range(n_in, 0, -1):
+        cols.append(df.shift(i))
+        names += [('var%d(t-%d)' % (j+1, i)) for j in range(n_vars)]
+    # Forecast sequence (t, t+1, ... t+n)
+    for i in range(0, n_out):
+        cols.append(df.shift(-i))
+        if i == 0:
+            names += [('var%d(t)' % (j+1)) for j in range(n_vars)]
+        else:
+            names += [('var%d(t+%d)' % (j+1, i)) for j in range(n_vars)]
+    # Put it all together
+    agg = pd.concat(cols, axis=1)
+    agg.columns = names
+    # Drop rows with NaN values
+    if dropnan:
+        agg.dropna(inplace=True)
+    return agg
+
+# Submissions are evaluated using RMSLE:
+def RMSLE(y, pred):
+    return mean_squared_error(y, pred)**0.5
+
+
+# In[ ]:
+
+
+# Convert data series for supervised learning:
+tmp = pd.DataFrame(series_to_supervised(mult_series['air_ee3a01f0c71a769f'], 1, 1))
+tmp.drop(tmp.columns[[i for i in range(133,264)]], axis=1, inplace=True)
+super_data = tmp
+for air_id in air_ids:
+    tmp = series_to_supervised(mult_series[str(air_id)], 1, 1)
+    # Drop columns that should not be predicted (column #103 is number of visitors:
+    tmp.drop(tmp.columns[[i for i in range(133,264)]], axis=1, inplace=True)
+    super_data = super_data.append(tmp)
+super_data.head(10)
+
+
+# In[ ]:
+
+
+# Prepare LSTM training, split up records into training and test data:
+train_size = int(len(super_data) * 0.7)
+test_size = len(super_data) - train_size
+
+train = super_data[:train_size].values
+test  = super_data[train_size:].values
+
+# Split into input and outputs
+train_X, train_y = train[:,:-1], train[:,-1]
+test_X, test_y = test[:, :-1], test[:, -1]
+
+# LSTM requires 3D data sets: [samples, timesteps, features]
+train_X = train_X.reshape((train_X.shape[0], 1, train_X.shape[1]))
+test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))
+print(train_X.shape, train_y.shape, test_X.shape, test_y.shape)
+
+
+# In[ ]:
+
+
+# Train model:
+multi_model = Sequential()
+btc_size = 50
+#multi_model.add(LSTM(4, input_shape=(train_X.shape[1], train_X.shape[2])))
+multi_model.add(LSTM(4, batch_input_shape=(btc_size, train_X.shape[1], train_X.shape[2]), 
+                     stateful=True))
+multi_model.add(Dense(1))
+multi_model.compile(loss='mse', optimizer='adam')
+for i in range(int(train_X.shape[0] / btc_size)):
+    this_X = train_X[(i * btc_size):((i + 1) * btc_size)][:][:]
+    this_y = train_y[(i * btc_size):((i + 1) * btc_size)]
+    multi_history = multi_model.fit(this_X, this_y, epochs=10, 
+                                batch_size=btc_size, 
+                                verbose=0, shuffle=False)
+    multi_model.reset_states()
+  
+
+
+# In[ ]:
+
+
+# Make predictions:
+y_pred = [test_X.shape[0]]
+for i in range(int(test_X.shape[0] / btc_size)):
+    this_X = test_X[(i * btc_size):((i + 1) * btc_size)][:][:]
+    this_pred = multi_model.predict(this_X, batch_size=btc_size)    
+    y_pred[(i * btc_size):((i + 1) * btc_size)] = this_pred
+
+test_X_nn = test_X.reshape((test_X.shape[0], test_X.shape[2]))
+# Invert scaling for forecast
+inv_y_pred = np.concatenate((y_pred, test_X_nn[:, 1:]), axis=1)
+inv_y_pred = scaler.inverse_transform(inv_y_pred)
+inv_y_pred = inv_y_pred[:,0]
+# Invert scaling for actual
+test_y_nn = test_y.reshape((len(test_y), 1))
+inv_y = np.concatenate((test_y_nn, test_X_nn[:, 1:]), axis=1)
+inv_y = scaler.inverse_transform(inv_y)
+inv_y = inv_y[:,0]
+
+print(inv_y_pred[:10])
+print(inv_y[:10])
+rmsle = RMSLE(inv_y, inv_y_pred)
+print('Test RMSLE: %.3f' % rmsle)
+

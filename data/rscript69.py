@@ -1,210 +1,278 @@
-import numpy as np
+from haversine import haversine
+import seaborn as sns
 import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import StratifiedKFold
-import random
-from math import exp
-import xgboost as xgb
+import numpy as np
+import sqlite3
+import math
+import time
 
-random.seed(321)
-np.random.seed(321)
+#%matplotlib inline
+import matplotlib.pyplot as plt
 
-X_train = pd.read_json("../input/train.json")
-X_test = pd.read_json("../input/test.json")
+# Otimization functions
+north_pole = (90,0)
+weight_limit = 1000.0
 
-interest_level_map = {'low': 0, 'medium': 1, 'high': 2}
-X_train['interest_level'] = X_train['interest_level'].apply(lambda x: interest_level_map[x])
-X_test['interest_level'] = -1
+def bb_sort(ll):
+    s_limit = 100
+    optimal = False
+    ll = [[0,north_pole,10]] + ll[:] + [[0,north_pole,10]] 
+    while not optimal:
+        optimal = True
+        for i in range(1,len(ll) - 2):
+            lcopy = ll[:]
+            lcopy[i], lcopy[i+1] = ll[i+1][:], ll[i][:]
+            if path_opt_test(ll[1:-1])[0] > path_opt_test(lcopy[1:-1])[0]:
+                #print("Sort Swap")
+                ll = lcopy[:]
+                optimal = False
+                s_limit -= 1
+                if s_limit < 0:
+                    optimal = True
+                    break
+    return ll[1:-1]
 
-#add features
-feature_transform = CountVectorizer(stop_words='english', max_features=150)
-X_train['features'] = X_train["features"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
-X_test['features'] = X_test["features"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
-feature_transform.fit(list(X_train['features']) + list(X_test['features']))
+def prev_path_opt(curr,prev):
+    curr = [[0,north_pole,10]] + curr[:] + [[0,north_pole,10]]
+    prev = [[0,north_pole,10]] + prev[:] + [[0,north_pole,10]]
+    for curr_ in range(1,len(curr) - 2):
+        for prev_ in range(1,len(prev) - 2):
+            lcopy_curr = curr[:]
+            lcopy_prev = prev[:]
+            lcopy_curr[curr_], lcopy_prev[prev_] = lcopy_prev[prev_][:], lcopy_curr[curr_][:]
+            if ((path_opt_test(lcopy_curr[1:-1])[0] + path_opt_test(lcopy_prev[1:-1])[0]) < (path_opt_test(curr[1:-1])[0] + path_opt_test(prev[1:-1])[0])) and path_opt_test(lcopy_curr[1:-1])[2] <=1000 and path_opt_test(lcopy_prev[1:-1])[2] <= 1000:
+                #print("Trip Swap")
+                curr = lcopy_curr[:]
+                prev = lcopy_prev[:]
+    return [curr[1:-1], prev[1:-1]]
 
-train_size = len(X_train)
-low_count = len(X_train[X_train['interest_level'] == 0])
-medium_count = len(X_train[X_train['interest_level'] == 1])
-high_count = len(X_train[X_train['interest_level'] == 2])
+def prev_path_opt_s1(curr,prev):
+    curr = [[0,north_pole,10]] + curr[:] + [[0,north_pole,10]]
+    prev = [[0,north_pole,10]] + prev[:] + [[0,north_pole,10]]
+    for curr_ in range(1,len(curr) - 1):
+        for prev_ in range(1,len(prev) - 1):
+            lcopy_curr = curr[:]
+            lcopy_prev = prev[:]
+            if len(lcopy_prev)-1 <= prev_:
+                break
+            lcopy_curr = lcopy_curr[:curr_+1][:] + [lcopy_prev[prev_]] + lcopy_curr[curr_+1:][:]
+            lcopy_prev.pop(prev_)
+            if ((path_opt_test(lcopy_curr[1:-1])[0] + path_opt_test(lcopy_prev[1:-1])[0]) <= (path_opt_test(curr[1:-1])[0] + path_opt_test(prev[1:-1])[0])) and path_opt_test(lcopy_curr[1:-1])[2] <=1000 and path_opt_test(lcopy_prev[1:-1])[2] <= 1000:
+                #print("Trip Swap - Give to current")
+                curr = lcopy_curr[:]
+                prev = lcopy_prev[:]
+    return [curr[1:-1], prev[1:-1]]
 
-def find_objects_with_only_one_record(feature_name):
-    temp = pd.concat([X_train[feature_name].reset_index(), 
-                      X_test[feature_name].reset_index()])
-    temp = temp.groupby(feature_name, as_index = False).count()
-    return temp[temp['index'] == 1]
+def split_trips(curr):
+    prev = []
+    curr = [[0,north_pole,10]] + curr[:] + [[0,north_pole,10]]
+    for curr_ in range(1,len(curr) - 1):
+        lcopy_curr = curr[:]
+        if len(lcopy_curr)-1 <=curr_:
+            break
+        lcopy_prev = [[0,north_pole,10]] + [lcopy_curr[curr_]] + [[0,north_pole,10]]
+        lcopy_curr.pop(curr_)
+        if ((path_opt_test(lcopy_curr[1:-1])[0] + path_opt_test(lcopy_prev[1:-1])[0]) < (path_opt_test(curr[1:-1])[0])):
+            #print("Trip Split")
+            curr = lcopy_curr[:]
+            prev = lcopy_prev[:]
+    return [curr[1:-1], prev[1:-1]]
 
-managers_with_one_lot = find_objects_with_only_one_record('manager_id')
-buildings_with_one_lot = find_objects_with_only_one_record('building_id')
-addresses_with_one_lot = find_objects_with_only_one_record('display_address')
+def path_opt_test(llo):
+    f_ = 0.0
+    d_ = 0.0
+    we_ = 0.0
+    l_ = north_pole
+    for i in range(len(llo)):
+        d_ += haversine(l_, llo[i][1])
+        we_ += llo[i][2]
+        f_ += d_ * llo[i][2]
+        l_ = llo[i][1]
+    d_ += haversine(l_, north_pole)
+    f_ += d_ * 10
+    return [f_,d_,we_]
 
-lambda_val = None
-k=5.0
-f=1.0
-r_k=0.01 
-g = 1.0
 
-def categorical_average(variable, y, pred_0, feature_name):
-    def calculate_average(sub1, sub2):
-        s = pd.DataFrame(data = {
-                                 variable: sub1.groupby(variable, as_index = False).count()[variable],                              
-                                 'sumy': sub1.groupby(variable, as_index = False).sum()['y'],
-                                 'avgY': sub1.groupby(variable, as_index = False).mean()['y'],
-                                 'cnt': sub1.groupby(variable, as_index = False).count()['y']
-                                 })
-                                 
-        tmp = sub2.merge(s.reset_index(), how='left', left_on=variable, right_on=variable) 
-        del tmp['index']                       
-        tmp.loc[pd.isnull(tmp['cnt']), 'cnt'] = 0.0
-        tmp.loc[pd.isnull(tmp['cnt']), 'sumy'] = 0.0
+# Slicing
+gifts = pd.read_csv("../input/gifts.csv").fillna(" ")[:2000] # Lets take only the first 2,000
+gifts['TripId']=0
+gifts['i']=0
+gifts['j']=0
 
-        def compute_beta(row):
-            cnt = row['cnt'] if row['cnt'] < 200 else float('inf')
-            return 1.0 / (g + exp((cnt - k) / f))
-            
-        if lambda_val is not None:
-            tmp['beta'] = lambda_val
+for n in [1.26]: # Slicing Tuning Parameter
+    i_ = 0
+    j_ = 0
+    for i in range(90,-90,int(-180/n)):
+        i_ += 1
+        j_ = 0
+        for j in range(180,-180,int(-360/n)):
+            j_ += 1
+            gifts.loc[(gifts['Latitude']>(i-180/n))&(gifts['Latitude']<i)&(gifts['Longitude']>(j-360/n))&(gifts['Longitude']<(j)),"i"]=i_
+            gifts.loc[(gifts['Latitude']>(i-180/n))&(gifts['Latitude']<i)&(gifts['Longitude']>(j-360/n))&(gifts['Longitude']<(j)),"j"]=j_
+    for limit_ in [67]:  # Slicing Tuning Parameter
+        trips=gifts[gifts['TripId']==0]
+        trips=trips.sort_values(['i','j','Longitude','Latitude'])
+        trips=trips[0:limit_]
+        t_ = 0
+        while len(trips.GiftId)>0:
+            g = []
+            t_ += 1
+            w_ = 0.0
+            for i in range(len(trips.GiftId)):
+                    if (w_ + float(trips.iloc[i,3]))<= weight_limit:
+                        w_ += float(trips.iloc[i,3])
+                        g.append(trips.iloc[i,0])
+            gifts.loc[gifts['GiftId'].isin(g),'TripId']=t_
+            trips=gifts[gifts['TripId']==0]
+            trips=trips.sort_values(['i','j','Longitude','Latitude'])
+            trips=trips[0:limit_]
+        ou_ = open("submission_opt" + str(limit_) + " " + str(n) + ".csv","w")
+        ou_.write("TripId,GiftId\n")
+        bm = 0.0
+        for s_ in range(1,t_+1):
+            trip=gifts[gifts['TripId']==s_]
+            trip=trip.sort_values(['Latitude','Longitude'],ascending=[0,1])
+            a = []
+            for x_ in range(len(trip.GiftId)):
+                a.append([trip.iloc[x_,0],(trip.iloc[x_,1],trip.iloc[x_,2]),trip.iloc[x_,3]])
+
+            print("TripId",s_, path_opt_test(a)[0])
+            bm += path_opt_test(a)[0]
+            for y_ in range(len(a)):
+                ou_.write(str(s_)+","+str(a[y_][0])+"\n")
+                
+        ou_.close()
+
+        benchmark = 144525525772.40200
+        if bm < benchmark:
+            print(n, limit_, "Improvement", bm, bm - benchmark, benchmark)
         else:
-            tmp['beta'] = tmp.apply(compute_beta, axis = 1)
-            
-        tmp['adj_avg'] = tmp.apply(lambda row: (1.0 - row['beta']) * row['avgY'] + row['beta'] * row['pred_0'],
-                                   axis = 1)
-                                   
-        tmp.loc[pd.isnull(tmp['avgY']), 'avgY'] = tmp.loc[pd.isnull(tmp['avgY']), 'pred_0']
-        tmp.loc[pd.isnull(tmp['adj_avg']), 'adj_avg'] = tmp.loc[pd.isnull(tmp['adj_avg']), 'pred_0']
-        tmp['random'] = np.random.uniform(size = len(tmp))
-        tmp['adj_avg'] = tmp.apply(lambda row: row['adj_avg'] *(1 + (row['random'] - 0.5) * r_k),
-                                   axis = 1)
-    
-        return tmp['adj_avg'].ravel()
-     
-    #cv for training set 
-    k_fold = StratifiedKFold(5)
-    X_train[feature_name] = -999 
-    for (train_index, cv_index) in k_fold.split(np.zeros(len(X_train)),
-                                                X_train['interest_level'].ravel()):
-        sub = pd.DataFrame(data = {variable: X_train[variable],
-                                   'y': X_train[y],
-                                   'pred_0': X_train[pred_0]})
-            
-        sub1 = sub.iloc[train_index]        
-        sub2 = sub.iloc[cv_index]
-        
-        X_train.loc[cv_index, feature_name] = calculate_average(sub1, sub2)
-    
-    #for test set
-    sub1 = pd.DataFrame(data = {variable: X_train[variable],
-                                'y': X_train[y],
-                                'pred_0': X_train[pred_0]})
-    sub2 = pd.DataFrame(data = {variable: X_test[variable],
-                                'y': X_test[y],
-                                'pred_0': X_test[pred_0]})
-    X_test.loc[:, feature_name] = calculate_average(sub1, sub2)                               
+            print(n, limit_, "Try again", bm, bm - benchmark, benchmark)
 
-def transform_data(X):
-    #add features    
-    feat_sparse = feature_transform.transform(X["features"])
-    vocabulary = feature_transform.vocabulary_
-    del X['features']
-    X1 = pd.DataFrame([ pd.Series(feat_sparse[i].toarray().ravel()) for i in np.arange(feat_sparse.shape[0]) ])
-    X1.columns = list(sorted(vocabulary.keys()))
-    X = pd.concat([X.reset_index(), X1.reset_index()], axis = 1)
-    del X['index']
-    
-    X["num_photos"] = X["photos"].apply(len)
-    X['created'] = pd.to_datetime(X["created"])
-    X["num_description_words"] = X["description"].apply(lambda x: len(x.split(" ")))
-    X['price_per_bed'] = X['price'] / X['bedrooms']    
-    X['price_per_bath'] = X['price'] / X['bathrooms']
-    X['price_per_room'] = X['price'] / (X['bathrooms'] + X['bedrooms'] )
-    
-    X['low'] = 0
-    X.loc[X['interest_level'] == 0, 'low'] = 1
-    X['medium'] = 0
-    X.loc[X['interest_level'] == 1, 'medium'] = 1
-    X['high'] = 0
-    X.loc[X['interest_level'] == 2, 'high'] = 1
-    
-    X['display_address'] = X['display_address'].apply(lambda x: x.lower().strip())
-    X['street_address'] = X['street_address'].apply(lambda x: x.lower().strip())
-    
-    X['pred0_low'] = low_count * 1.0 / train_size
-    X['pred0_medium'] = medium_count * 1.0 / train_size
-    X['pred0_high'] = high_count * 1.0 / train_size
-    
-    X.loc[X['manager_id'].isin(managers_with_one_lot['manager_id'].ravel()), 
-          'manager_id'] = "-1"
-    X.loc[X['building_id'].isin(buildings_with_one_lot['building_id'].ravel()), 
-          'building_id'] = "-1"
-    X.loc[X['display_address'].isin(addresses_with_one_lot['display_address'].ravel()), 
-          'display_address'] = "-1"
-          
-    return X
+#Lets take a look at the output
+## Credit to beluga
 
-def normalize_high_cordiality_data():
-    high_cardinality = ["building_id", "manager_id"]
-    for c in high_cardinality:
-        categorical_average(c, "medium", "pred0_medium", c + "_mean_medium")
-        categorical_average(c, "high", "pred0_high", c + "_mean_high")
+Submission = pd.read_csv('submission_opt67 1.26.csv') 
+gifts = pd.read_csv("../input/gifts.csv").fillna(" ")[:2000]
+print(Submission.head())
+Submission = pd.merge(Submission, gifts, how='left', on=['GiftId'])
+plt.rcParams['font.size'] = 12
+plt.rcParams['figure.figsize'] = [16, 12]
+fig = plt.figure()
+plt.scatter(Submission['Longitude'], Submission['Latitude'], c=Submission['TripId'],  alpha=0.8, s=8, linewidths=0)
+for t in Submission.TripId.unique():
+    trip = Submission[Submission['TripId'] == t]
+    plt.plot(trip['Longitude'], trip['Latitude'], 'k.-', alpha=0.1)
+plt.colorbar()
+plt.grid()
+plt.title('Trips')
+plt.tight_layout()
+fig.savefig('Trips1.png', dpi=300)
 
-def transform_categorical_data():
-    categorical = ['building_id', 'manager_id', 
-                   'display_address', 'street_address']
-                   
-    for f in categorical:
-        encoder = LabelEncoder()
-        encoder.fit(list(X_train[f]) + list(X_test[f])) 
-        X_train[f] = encoder.transform(X_train[f].ravel())
-        X_test[f] = encoder.transform(X_test[f].ravel())
-                  
+fig = plt.figure()
+plt.scatter(Submission['Longitude'].values, Submission['Latitude'].values, c='k', alpha=0.1, s=1, linewidths=0)
+for t in Submission.TripId.unique():
+    previous_location = north_pole
+    trip = Submission[Submission['TripId'] == t]
+    i = 0
+    for _, gift in trip.iterrows():
+        plt.plot([previous_location[1], gift['Longitude']], [previous_location[0], gift['Latitude']],
+                 color=plt.cm.copper_r(i/90.), alpha=0.1)
+        previous_location = tuple(gift[['Latitude', 'Longitude']])
+        i += 1
+    plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0)
 
-def remove_columns(X):
-    columns = ["photos", "pred0_high", "pred0_low", "pred0_medium",
-               "description", "low", "medium", "high",
-               "interest_level", "created"]
-    for c in columns:
-        del X[c]
+plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0, label='TripEnds')
+plt.legend(loc='upper right')
+plt.grid()
+plt.title('TripOrder')
+plt.tight_layout()
+fig.savefig('TripsinOrder1.png', dpi=300)
 
-print("Starting transformations")        
-X_train = transform_data(X_train)    
-X_test = transform_data(X_test) 
-y = X_train['interest_level'].ravel()
 
-print("Normalizing high cordiality data...")
-normalize_high_cordiality_data()
-transform_categorical_data()
 
-remove_columns(X_train)
-remove_columns(X_test)
+# Now Lets Optimize (Feeling Greedy)
 
-print("Start fitting...")
+ou_ = open("submission_v1.csv","w")
+ou_.write("TripId,GiftId\n")
+Submission = Submission[:2000] # Lets only work with a few Trips
+bm = 0.0
+d = {}
+previous_trip = []
+Submission['colFromIndex'] = Submission.index
+Submission = Submission.sort_index(by=['TripId', 'colFromIndex'], ascending=[True, True])
+uniq_trips = Submission.TripId.unique()
 
-param = {}
-param['objective'] = 'multi:softprob'
-param['eta'] = 0.02
-param['max_depth'] = 4
-param['silent'] = 1
-param['num_class'] = 3
-param['eval_metric'] = "mlogloss"
-param['min_child_weight'] = 1
-param['subsample'] = 0.7
-param['colsample_bytree'] = 0.7
-param['seed'] = 321
-param['nthread'] = 8
-num_rounds = 2000
+for s_ in range(len(uniq_trips)):
+    trip = Submission[(Submission['TripId']==(uniq_trips[s_]))].copy()
+    trip = trip.reset_index()
 
-xgtrain = xgb.DMatrix(X_train, label=y)
-clf = xgb.train(param, xgtrain, num_rounds)
+    b = []
+    for x_ in range(len(trip.GiftId)):
+        b.append([trip.GiftId[x_],(trip.Latitude[x_],trip.Longitude[x_]),trip.Weight[x_]])
+    d[str(s_+1)] = [path_opt_test(b)[0],b[:]]
 
-print("Fitted")
+for s_ in range(len(uniq_trips)):
+    key = str(s_+1)
+    if d[key][0] >= 1:
+        for i in range(-2,2,1):
+            r_ = int(key)+i
+            if r_ <= 0:
+                r_ = len(uniq_trips) + i
+            if r_ > len(uniq_trips):
+                r_ = i
+            if r_ != int(key):
+                #print(r_,key,i)
+                previous_trip=d[str(r_)][1][:]
+                b = d[key][1][:]
+                previous_trip, b = prev_path_opt(previous_trip, b)
+                previous_trip, b = prev_path_opt_s1(previous_trip, b)
+                #previous_trip, b = split_trips(b) - Need to increment trip Ids by one to keep sequence for further optimization
+                previous_trip = bb_sort(previous_trip)
+                b = bb_sort(b)
+                d[str(r_)][1]=previous_trip[:]
+                d[key][1]=b[:]
+for key in d:
+    b = d[key][1][:]
+    for x_ in range(len(b)):
+        ou_.write(str(key)+","+str(b[x_][0])+"\n")
+ou_.close()
 
-def prepare_submission(model):
-    xgtest = xgb.DMatrix(X_test)
-    preds = model.predict(xgtest)    
-    sub = pd.DataFrame(data = {'listing_id': X_test['listing_id'].ravel()})
-    sub['low'] = preds[:, 0]
-    sub['medium'] = preds[:, 1]
-    sub['high'] = preds[:, 2]
-    sub.to_csv("submission.csv", index = False, header = True)
+# Lets see those optimized paths again
+Submission = pd.read_csv('submission_v1.csv') 
+gifts = pd.read_csv("../input/gifts.csv").fillna(" ")[:2000]
+print(Submission.head())
+Submission = pd.merge(Submission, gifts, how='left', on=['GiftId'])
+plt.rcParams['font.size'] = 12
+plt.rcParams['figure.figsize'] = [16, 12]
+fig = plt.figure()
+plt.scatter(Submission['Longitude'], Submission['Latitude'], c=Submission['TripId'],  alpha=0.8, s=8, linewidths=0)
+for t in Submission.TripId.unique():
+    trip = Submission[Submission['TripId'] == t]
+    plt.plot(trip['Longitude'], trip['Latitude'], 'k.-', alpha=0.1)
+plt.colorbar()
+plt.grid()
+plt.title('Trips')
+plt.tight_layout()
+fig.savefig('Trips2.png', dpi=300)
 
-prepare_submission(clf)
+fig = plt.figure()
+plt.scatter(Submission['Longitude'].values, Submission['Latitude'].values, c='k', alpha=0.1, s=1, linewidths=0)
+for t in Submission.TripId.unique():
+    previous_location = north_pole
+    trip = Submission[Submission['TripId'] == t]
+    i = 0
+    for _, gift in trip.iterrows():
+        plt.plot([previous_location[1], gift['Longitude']], [previous_location[0], gift['Latitude']],
+                 color=plt.cm.copper_r(i/90.), alpha=0.1)
+        previous_location = tuple(gift[['Latitude', 'Longitude']])
+        i += 1
+    plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0)
+
+plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0, label='TripEnds')
+plt.legend(loc='upper right')
+plt.grid()
+plt.title('TripOrder')
+plt.tight_layout()
+fig.savefig('TripsinOrder2.png', dpi=300)
+

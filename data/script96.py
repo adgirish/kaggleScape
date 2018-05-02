@@ -1,34 +1,12 @@
 
 # coding: utf-8
 
-# [<img src='https://lh3.googleusercontent.com/-tNe1vwwd_w4/VZ_m9E44C7I/AAAAAAAAABM/5yqhpSyYcCUzwHi-ti13MwovCb_AUD_zgCJkCGAYYCw/w256-h86-n-no/Submarineering.png'>](https://twitter.com/submarineering?lang=en)
+# # Computing Feature Imporatance From Scratch
 # 
+# Developing an initial machine learning algorithm that "works" can be easy, but developing a *good* machine learning algorithm may be difficult. One very helpful strategy is learning how to quantify the importance of a feature. By learning which features are most helpful in making decisions, we can improve our model or simply gain insight into our data. In this notebook, we will learn how to build feature importance from scratch using Random Forest. 
 
-# **The main purpose of this Notebook is to apply image processing technics in order to provide some additional engineering features to help on the improvement of the classifier accuracy. ** 
-# 
-# I highly recommend to read and see some examples about image processing : 
-# 
-# http://scikit-image.org/
-# 
-# And my Notebook '**Submarineering.Size matters**' :
-# 
-# https://www.kaggle.com/submarineering/submarineering-size-matters
-# 
-# What can you learn? 
-# 
-# -An easy way to compare graphically the influency of differents attributes.
-# 
-# -Undertanding  that the cleaning of data is fundamental for the classifier, as the learning process is automatic, unnecessary data will confuse to the algorithm. 
-# 
-# -Doesn't  matter which classifier or different algorithm you are going to use. This is always important.
-# 
-# -In this case I am focusing on the isolation of the object. 
-# 
-# -The info provides by the water is irrelevant.
-# 
-# -**As a bonus, at the end, I explain how to generate useful features as result of the morphological analysis. ** 
-# 
-# 
+# ## 1. Building a Random Forest Model with All Features
+# First, we will build an initial random forest model. This will work as our benchmark and we will use this to find out which features are contributing to the algorithm. The basic idea is that after we build a model, we will randomly shuffle on feature and caclulate the deviation from the model. If the new data (with one column shuffled) fits much better/worse than the old data, this feature is considered **important**.
 
 # In[ ]:
 
@@ -39,15 +17,15 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter
-from skimage import img_as_float
-from skimage.morphology import reconstruction
+from sklearn.ensemble import RandomForestRegressor
+from sklearn import metrics 
+from IPython.display import display
+
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-train = pd.read_json('../input/train.json')
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+
+train = pd.read_table('../input/train.tsv', engine='c')
+test = pd.read_table('../input/test.tsv', engine='c')
 
 # Any results you write to the current directory are saved as output.
 
@@ -55,158 +33,126 @@ print(check_output(["ls", "../input"]).decode("utf8"))
 # In[ ]:
 
 
-# load the training dataset.
-train = pd.read_json('../input/train.json')
+train['missing'] = train.brand_name.isnull()
 
 
 # In[ ]:
 
 
-# Isolation function.
-def iso(arr):
-    image = img_as_float(np.reshape(np.array(arr), [75,75]))
-    image = gaussian_filter(image,2)
-    seed = np.copy(image)
-    seed[1:-1, 1:-1] = image.min()
-    mask = image 
-    dilated = reconstruction(seed, mask, method='dilation')
-    return image-dilated
+train.brand_name[train['brand_name'].isnull()] = 'None'
 
 
 # In[ ]:
 
 
-# Plotting to compare
-arr = train.band_1[12]
-dilated = iso(arr)
-fig, (ax0, ax1) = plt.subplots(nrows=1,
-                                    ncols=2,
-                                    figsize=(16, 5),
-                                    sharex=True,
-                                    sharey=True)
-
-ax0.imshow(np.reshape(np.array(arr), [75,75]))
-ax0.set_title('original image')
-ax0.axis('off')
-ax0.set_adjustable('box-forced')
-
-ax1.imshow(dilated, cmap='gray')
-ax1.set_title('dilated')
-ax1.axis('off')
-ax1.set_adjustable('box-forced')
+train.dtypes
 
 
 # In[ ]:
 
 
-# Plotting to compare
-arr = train.band_1[8]
-dilated = iso(arr)
-fig, (ax0, ax1) = plt.subplots(nrows=1,
-                                    ncols=2,
-                                    figsize=(16, 5),
-                                    sharex=True,
-                                    sharey=True)
-
-ax0.imshow(np.reshape(np.array(arr), [75,75]))
-ax0.set_title('original image')
-ax0.axis('off')
-ax0.set_adjustable('box-forced')
-
-ax1.imshow(dilated, cmap='gray')
-ax1.set_title('dilated')
-ax1.axis('off')
-ax1.set_adjustable('box-forced')
+train['name'] = pd.Series(train.name, dtype="category").cat.codes
+train['category_name'] = pd.Series(train.category_name, dtype="category").cat.codes
+train['brand_name'] = pd.Series(train.brand_name, dtype="category").cat.codes
+train['item_description'] = pd.Series(train.item_description, dtype="category").cat.codes
+train['missing'] = pd.Series(train.missing, dtype="category").cat.codes
 
 
 # In[ ]:
 
 
-# Feature engineering iso1 and iso2.
-train['iso1'] = train.iloc[:, 0].apply(iso)
-train['iso2'] = train.iloc[:, 1].apply(iso)
+train.dtypes
+
+
+# Split Training data into test and validation. Also separate dependent variable (price).
+
+# In[ ]:
+
+
+training = train.sample(frac=0.8,random_state=200)
+validation = train.drop(training.index)
 
 
 # In[ ]:
 
 
-# Indexes for ships or icebergs.
-index_ship=np.where(train['is_iceberg']==0)
-index_ice=np.where(train['is_iceberg']==1)
+xtrain = training.drop('price', axis=1)
+ytrain = training.price
+
+xvalid = validation.drop('price', axis=1)
+yvalid = validation.price
 
 
 # In[ ]:
 
 
-# For ploting
-def plots(band,index,title):
-    plt.figure(figsize=(12,10))
-    for i in range(12):
-        plt.subplot(3,4,i+1)
-        plt.xticks(())
-        plt.yticks(())
-        plt.xlabel((title))
-        plt.imshow(np.reshape(train[band][index[0][i]], (75,75)),cmap='gist_heat')
-    plt.show()  
+rf = RandomForestRegressor(n_jobs=-1, n_estimators=10)
+rf.fit(xtrain, ytrain)
 
 
 # In[ ]:
 
 
-plots('band_1',index_ship,'band1 ship')
+from sklearn import metrics
+rf_score = rf.score(xtrain, ytrain)
+rf_score
+
+
+# ## 2. Computing Feature Importance
+
+# We can first use a built-in object feature_importances. However, building our own feature importance algorithm will help us understand how these are computed.
+
+# In[ ]:
+
+
+feature_names = xtrain.columns
 
 
 # In[ ]:
 
 
-plots('band_1',index_ice,'band1 iceberg')
+feature_imp = pd.DataFrame({'cols':feature_names, 'imp':rf.feature_importances_}).sort_values('imp', ascending=False)
+feature_imp
 
 
 # In[ ]:
 
 
-plots('iso1',index_ship,'iso1 ship')
+feature_imp.plot('cols', 'imp', figsize=(10,6), legend=False);
 
 
 # In[ ]:
 
 
-plots('iso1',index_ice,'iso1 iceberg')
+xtrain_name = xtrain.copy()
 
 
 # In[ ]:
 
 
-# Additional features from the morphological analysis and how is working on discrimination.
-train[train.is_iceberg==1]['iso1'].apply(np.max).plot(alpha=0.4)
-train[train.is_iceberg==0]['iso1'].apply(np.max).plot(alpha=0.4)
+xtrain_name['name'] = np.random.permutation(xtrain_name.name)
 
 
 # In[ ]:
 
 
-# Additional features from the morphological analysis and how is working on discrimination.
-train[train.is_iceberg==1]['iso2'].apply(np.max).plot(alpha=0.4)
-train[train.is_iceberg==0]['iso2'].apply(np.max).plot(alpha=0.4)
+rf.score(xtrain_name, ytrain)
 
 
-# **NOTE :** It looks like images with incidence angles having less than or equal to 4 decimal are the naturally captured images, and those with greater precision are machine generated, as 'brassmonkey' describes very well. 
-# In the data description of the competition is also refered as : 
-# "Please note that we have included machine-generated images in the test set to prevent hand labeling. They are excluded in scoring."
-# This is an important point to be in mind. 
-# 
+# In[ ]:
 
-# **Conclusion.** As described in my Notebook **'Submarineering.Size matters**', that I highly recommed :
-# 
-# https://www.kaggle.com/submarineering/submarineering-size-matters
-# 
-# the size can be used from multiple points of view.  Also the shape of the object to detect can give us a rich information about his class. Additional features can be obtain from these morphological properties.
-# 
-# These features could be improved :
-# 
-# -The size can be categorized in order to help on the accuracy of the Classifier.
-# 
-# -Taking the max of the dilated images also help to discretize between classes.
-# 
-# I hope these lines be useful for your. **Please vote up**.
-# 
+
+xtrain_item_description = xtrain.copy()
+xtrain_item_description['item_description'] = np.random.permutation(xtrain_item_description.item_description)
+rf.score(xtrain_item_description, ytrain)
+
+
+# In[ ]:
+
+
+xtrain_missing = xtrain.copy()
+xtrain_missing['missing'] = np.random.permutation(xtrain_missing.missing)
+rf.score(xtrain_missing, ytrain)
+
+
+# We can see that the impact of the column/variable is directly shown through this algorithm. The more important feature it is, the more impact it has on the fitted score. For example, the feature name appeared to be the most imporatant feature in the built-in object and it clearly had the most impact in the fitted score when we randomly shuffled the name column. You can repeat this with all other variables to look for feature importance. It is important to note that we are using the **same random forest model** built on the orginial data (without any shuffling) to compute the fitted score. (we are **not** creating a new model with columns shuffled each time).

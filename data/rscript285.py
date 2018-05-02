@@ -1,59 +1,29 @@
-# Shuffle gift IDs while preserving gift types.
+# the code is taken from
+# http://matplotlib.org/xkcd/examples/showcase/xkcd.html
 
-# update1: Fix an error on python3
-# update2: Add seed option
-
+from matplotlib import pyplot as plt
 import numpy as np
-import sys
-import warnings
-import argparse
 
-def load_submission(filename):
-    with open(filename) as f:
-        lines = f.read().split("\n")[1:]
-        if lines[-1] == "":
-            lines = lines[:-1]
-    bags = []
-    ids = {}
-    for line in lines:
-        gifts = line.split(" ")
-        bag = []
-        for gift in gifts:
-            name_id = gift.split("_")
-            if name_id[0] not in ids:
-                ids[name_id[0]] = [name_id[1]]
-            else:
-                ids[name_id[0]].append(name_id[1])
-            bag.append(name_id[0])
-        bags.append(bag)
-    return bags, ids
+plt.xkcd()
 
-def save_submission(filename, bags, ids):
-    id_ind = {}
-    id_seq = {}
-    for t, i in ids.items():
-        id_ind[t] = np.random.permutation(len(i))
-        id_seq[t] = 0
+fig = plt.figure()
+ax = fig.add_subplot(1, 1, 1)
+ax.spines['right'].set_color('none')
+ax.spines['top'].set_color('none')
+plt.xticks([])
+plt.yticks([])
+ax.set_ylim([-30, 10])
 
-    with open(filename, "w") as f:
-        f.write("Gifts\n")
-        for bag in bags:
-            line = []
-            for gift in bag:
-                line.append(gift + "_" + ids[gift][id_ind[gift][id_seq[gift]]])
-                id_seq[gift] += 1
-            f.write(" ".join(line) + "\n")
+data = np.ones(100)
+data[70:] -= np.arange(30)
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--input", required=True)
-parser.add_argument("-o", "--output", required=True)
-parser.add_argument("-s", "--seed", action="store", nargs="?", type=int)
-opt = parser.parse_args()
-assert(opt.input != opt.output)
-if opt.seed is None:
-    opt.seed = np.random.randint(0, 0xffffffff)
-    warnings.warn("set seed = {}, you can reproduce shuffling with `--seed {}` option".format(opt.seed, opt.seed))
-np.random.seed(opt.seed)
+plt.annotate(
+    'THE DAY I REALIZED\nKAGGLE IS FUN',
+    xy=(70, 1), arrowprops=dict(arrowstyle='->'), xytext=(15, -10))
 
-bags, ids = load_submission(opt.input)
-save_submission(opt.output, bags, ids)
+plt.plot(data)
+
+plt.xlabel('time')
+plt.ylabel('my overall health')
+
+plt.savefig('fig.png') # added

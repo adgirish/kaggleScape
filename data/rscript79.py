@@ -1,373 +1,401 @@
-from itertools import chain
-from threading import Lock
-import logging
-from os import listdir, path, environ
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-import h5py
-import numpy as np
+
+#The idea behind this script is to use the geometry files given in the data. It is based around the idea that for
+#individual element we will have variation on different axis i.e. X, Y and Z. And these variations are given multiple
+# number of times in a single geometry file, probably telling us about variations on different front. I have used
+# PCA to reduce that into teo features per axis(X, Y, Z).
+
+# PS: I have no background in chemistry so I can't back it up by solid theoretical proofs.
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import lightgbm as lgb
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
 import pandas as pd
-import joblib
-from skimage.io import imread
-from skimage.transform import rescale, rotate
+import numpy as np
+import re
+from sklearn.decomposition import PCA
 
-from sklearn.model_selection import KFold
-from keras.applications.vgg16 import VGG16
-from keras.models import Model, load_model
-from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
-from keras.layers.advanced_activations import LeakyReLU
-from keras.optimizers import Adam
-from keras.layers import Dense, Dropout, GlobalAveragePooling2D
-from keras import backend as K
-from imgaug import augmenters as iaa
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-logging.getLogger('tensorflow').setLevel(logging.WARNING)
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    datefmt='%H:%M:%S', )
-logger = logging.getLogger(__name__)
-
-MAIN_DIR = '/home/arseny/kaggle_data/'
-
-USE_TIFF = False
-
-TRAIN_LABELS = MAIN_DIR + 'train_v2.csv'
-TRAIN_DIR = 'train-tif-v2/' if USE_TIFF else 'train-jpg/'
-TEST_DIR = 'test-tif-v2/' if USE_TIFF else 'test-jpg/'
-# please copy all test images in one directory
-
-TRAIN_DIR = MAIN_DIR + TRAIN_DIR
-TEST_DIR = MAIN_DIR + TEST_DIR
-
-DTYPE = np.float16
-
-NEW_SIZE = 224
-SCALE_COEFF = NEW_SIZE / 256
-N_FOLDS = 3
+def get_xyz_data(filename):
+    pos_data = []
+    lat_data = []
+    with open(filename) as f:
+        for line in f.readlines():
+            x = line.split()
+            if x[0] == 'atom':
+                pos_data.append([np.array(x[1:4], dtype=np.float),x[4]])
+            elif x[0] == 'lattice_vector':
+                lat_data.append(np.array(x[1:4], dtype=np.float))
+    return pos_data, np.array(lat_data)
+    
 
 
-def form_double_batch(X, y1, y2, batch_size):
-    idx = np.random.randint(0, X.shape[0], int(batch_size))
-    return X[idx], y1[idx], y2[idx]
+ga_cols = []
+al_cols = []
+o_cols = []
+in_cols = []
+
+import warnings
+warnings.filterwarnings("ignore")
+
+for i in range(6):
+    ga_cols.append("Ga_"+str(i))
+
+for i in range(6):
+    al_cols.append("Al_"+str(i))
+
+for i in range(6):
+    o_cols.append("O_"+str(i))
+
+for i in range(6):
+    in_cols.append("In_"+str(i))
 
 
-def rotate_determined(img):
-    img1 = img
-    img2 = rotate(img, 90, preserve_range=True)
-    img3 = rotate(img, 180, preserve_range=True)
-    img4 = rotate(img, 270, preserve_range=True)
-    arr = np.array([img1, img2, img3, img4]).astype(np.float16)
-    return arr
 
+ga_df= pd.DataFrame(columns=ga_cols)
+al_df = pd.DataFrame(columns=al_cols)
+o_df = pd.DataFrame(columns= o_cols)
+in_df = pd.DataFrame(columns=in_cols)
 
-def get_rotate_angle():
-    return np.random.choice([0, 90, 180, 270])
-
-
-class threadsafe_iter:
-    """Takes an iterator/generator and makes it thread-safe by
-    serializing call to the `next` method of given iterator/generator.
-    """
-
-    def __init__(self, it):
-        self.it = it
-        self.lock = Lock()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        with self.lock:
-            return next(self.it)
-
-
-def threadsafe_generator(f):
-    """A decorator that takes a generator function and makes it thread-safe.
-    """
-
-    def g(*a, **kw):
-        return threadsafe_iter(f(*a, **kw))
-
-    return g
-
-
-@threadsafe_generator
-def double_batch_generator(X, y1, y2, batch_size):
-    seq = iaa.Sequential([iaa.Sometimes(.8, iaa.Affine(rotate=get_rotate_angle(),
-                                                       mode='reflect')),
-                          iaa.Fliplr(p=.25)
-                          ],
-                         random_order=False)
-
-    while True:
-        x_batch, y1_batch, y2_batch = form_double_batch(X, y1, y2, batch_size)
-        new_x_batch = seq.augment_images(x_batch)
-        new_x_batch = np.array(new_x_batch).astype('float16')
-        yield new_x_batch, {'labels': y1_batch, 'weather': y2_batch}
-
-
-def process_image(fname):
-    img = rescale(imread(fname), SCALE_COEFF, preserve_range=True, mode='reflect')
-    return img.astype(DTYPE)
-
-
-class Dataset:
-    def __init__(self, batch_size=64, fold=2):
-        self.df = pd.read_csv(TRAIN_LABELS)
-        self.train_folds, self.test_folds = self.get_folds()
-        self.fold = fold
-        self.batch_size = batch_size
-        self.labels, self.reverse_labels, self.weather, self.reverse_weather = self.get_labels()
-
-    @staticmethod
-    def get_folds():
-        train_files = np.array(listdir(TRAIN_DIR))
-        folder = KFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
-        trains, tests = zip(*folder.split(train_files))
-        return trains, tests
-
-    def get_labels(self):
-        labels = self.df.tags.values
-        weather = {'partly_cloudy', 'clear', 'cloudy', 'haze'}
-        labels = list(set(chain(*[x.split(' ') for x in labels])) - weather)
-        weather = list(weather)
-
-        weather.sort()
-        labels.sort()
-        labels = {name: i for i, name in enumerate(labels)}
-        reverse_labels = {i: name for i, name in enumerate(labels)}
-        weather = {name: i for i, name in enumerate(weather)}
-        reverse_weather = {i: name for i, name in enumerate(weather)}
-
-        return labels, reverse_labels, weather, reverse_weather
-
-    def cache_train(self):
-        logger.info('Creating cache file for train')
-        file = h5py.File('train.h5', 'w')
-        train_files = listdir(TRAIN_DIR)
-
-        x_data = file.create_dataset('train_x', shape=(len(train_files), 224, 224, 3), dtype=DTYPE)
-        y_weather = file.create_dataset('train_weather', shape=(len(train_files), 4), dtype=DTYPE)
-        y_labels = file.create_dataset('train_labels', shape=(len(train_files), 13), dtype=DTYPE)
-        x_data_cropped = file.create_dataset('train_x_cropped', shape=(len(train_files) * 4, 224, 224, 3), dtype=DTYPE)
-        names = file.create_dataset('train_names', shape=(len(train_files) * 4,), dtype=h5py.special_dtype(vlen=str))
-
-        for i, (x, y_l, y_w, fname) in enumerate(self.get_images()):
-            x_data[i, :, :, :] = x
-            y_weather[i, :] = y_w
-            y_labels[i, :] = y_l
-
-            for j, img_cropped in enumerate(rotate_determined(x)):
-                x_data_cropped[4 * i + j, :, :, :] = img_cropped
-                names[4 * i + j] = fname
-
-        file.close()
-
-    def cache_test(self):
-        logger.info('Creating cache file for test')
-        file = h5py.File('test.h5', 'w')
-        test_files = listdir(TEST_DIR)
-
-        x_data = file.create_dataset('test_x', shape=(len(test_files) * 4, 224, 224, 3), dtype=DTYPE)
-        x_names = file.create_dataset('test_names', shape=(len(test_files) * 4,), dtype=h5py.special_dtype(vlen=str))
-
-        images = [(f, process_image(path.join(TEST_DIR, f))) for f in listdir(TEST_DIR)]
-
-        for i, (f, img) in enumerate(images):
-            for j, img_cropped in enumerate(rotate_determined(img)):
-                x_data[4 * i + j, :, :, :] = img_cropped
-                x_names[4 * i + j] = f
-        file.close()
-
-    def update_fold(self):
-        if self.fold + 1 < len(self.train_folds):
-            self.fold += 1
-            logger.info('Switching to fold {}'.format(self.fold))
-            return self.fold
-
-        logger.info('It was a final fold')
-        return
-
-    def get_train(self, fold):
+for i in train.id.values:
+    fn = "../input/train/{}/geometry.xyz".format(i)
+    train_xyz, train_lat = get_xyz_data(fn)
+    
+    ga_list = []
+    al_list = []
+    o_list = []
+    in_list = []
+    
+    for li in train_xyz:
         try:
-            file = h5py.File('train.h5', 'r')
-        except OSError:
-            self.cache_train()
-            file = h5py.File('train.h5', 'r')
-
-        x_data = file['train_x_cropped']
-        x_names = file['train_names']
-        idx = self.test_folds[fold]
-        idx = np.hstack([np.array([4 * x, 4 * x + 1, 4 * x + 2, 4 * x + 3]) for x in idx]).tolist()
-        return x_data[idx], x_names[idx]
-
-    def get_test(self):
+            if li[1] == "Ga":
+                ga_list.append(li[0])
+        except:
+            pass
         try:
-            file = h5py.File('test.h5', 'r')
-        except OSError:
-            self.cache_test()
-            file = h5py.File('test.h5', 'r')
-
-        x_data = file['test_x']
-        x_names = file['test_names']
-
-        return x_data, x_names
-
-    def make_double_generator(self, use_train=True, batch_size=None):
+            if li[1] == "Al":
+                al_list.append(li[0])
+        except:
+            pass
         try:
-            file = h5py.File('train.h5', 'r')
-        except OSError:
-            self.cache_train()
-            file = h5py.File('train.h5', 'r')
+            if li[1] == "In":
+                in_list.append(li[0])
+        except:
+            pass
+        try:
+            if li[1] == "O":
+                o_list.append(li[0])
+        except:
+            pass
+    
+#     ga_list = [item for sublist in ga_list for item in sublist]
+#     al_list = [item for sublist in al_list for item in sublist]
+#     o_list = [item for sublist in o_list for item in sublist]
+   
+    
+    try:
+        model = PCA(n_components=2)
+        ga_list = np.array(ga_list)
+        temp_ga = model.fit_transform(ga_list.transpose())
+        temp_ga = [item for sublist in temp_ga for item in sublist]
+       
+    except:
+        temp_ga = [0,0,0,0,0,0]
+#         print i
+    try:
+        model = PCA(n_components=2)
+        al_list = np.array(al_list)
+        temp_al = model.fit_transform(al_list.transpose())
+        temp_al = [item for sublist in temp_al for item in sublist]
+#         print i
+    except:
+        temp_al = [0,0,0,0,0,0]
+#         print i
+    try:
+        model = PCA(n_components=2)
+        o_list = np.array(o_list)
+        temp_o = model.fit_transform(o_list.transpose())
+        temp_o = [item for sublist in temp_o for item in sublist]
+#         print i
+    except:
+        temp_o = [0,0,0,0,0,0]
+#         print i
+    
+    try:
+        model = PCA(n_components=2)
+        in_list = np.array(in_list)
+        temp_in = model.fit_transform(in_list.transpose())
+        temp_in = [item for sublist in temp_in for item in sublist]
+#         print i
+    except:
+        temp_in = [0,0,0,0,0,0]
+#         print i
 
-        idx = self.train_folds[self.fold] if use_train else self.test_folds[self.fold]
-        x_data = file['train_x']
-        y_data_labels = file['train_labels']
-        y_data_weather = file['train_weather']
-        x_data, y_data_labels, y_data_weather = map(lambda x: x[idx.tolist()][:],
-                                                    (x_data, y_data_labels, y_data_weather))
+    temp_ga = pd.DataFrame(temp_ga).transpose()
+    temp_ga.columns = ga_cols
+    temp_ga.index = np.array([i])
 
-        return double_batch_generator(x_data, y_data_labels, y_data_weather,
-                                      batch_size if batch_size else self.batch_size)
+    temp_al = pd.DataFrame(temp_al).transpose()
+    temp_al.columns = al_cols
+    temp_al.index = np.array([i])
 
-    def encode_target(self, tags):
-        target_labels = np.zeros(len(self.labels))
-        target_weather = np.zeros(len(self.weather))
-        for tag in tags.split(' '):
-            if tag in self.labels:
-                target_labels[self.labels[tag]] = 1
-            else:
-                target_weather[self.weather[tag]] = 1
-        return target_labels, target_weather
+    temp_o = pd.DataFrame(temp_o).transpose()
+    temp_o.columns = o_cols
+    temp_o.index = np.array([i])
+    
+    temp_in = pd.DataFrame(temp_in).transpose()
+    temp_in.columns = in_cols
+    temp_in.index = np.array([i])
+    
+    
 
-    def get_images(self):
-        pd.read_csv(TRAIN_LABELS)
-        images_dir = TRAIN_DIR
+    ga_df = pd.concat([ga_df,temp_ga])
+    al_df = pd.concat([al_df,temp_al])
+    o_df = pd.concat([o_df,temp_o])    
+    in_df = pd.concat([in_df,temp_in])
+    
+ga_df["id"] = ga_df.index
+al_df["id"] = al_df.index
+o_df["id"] = o_df.index
+in_df["id"] = in_df.index
 
-        ext = 'tif' if USE_TIFF else 'jpg'
-        for i, row in self.df.iterrows():
-            fname = '{}{}.{}'.format(images_dir, row.image_name, ext)
-            x = process_image(fname)
-            y_label, y_weather = map(lambda y: y.astype(np.int8), self.encode_target(row.tags))
+train = pd.merge(train,ga_df,on = ["id"],how = "left")
+train = pd.merge(train,al_df,on = ["id"],how = "left")
+train = pd.merge(train,o_df,on = ["id"],how = "left")
+train = pd.merge(train,in_df,on = ["id"],how = "left")
+    
+ga_df= pd.DataFrame(columns=ga_cols)
+al_df = pd.DataFrame(columns=al_cols)
+o_df = pd.DataFrame(columns= o_cols)
+in_df = pd.DataFrame(columns=in_cols)    
 
-            if not i % 1000:
-                logger.info('{} images loaded'.format(i))
+for i in test.id.values:
+    fn = "../input/test/{}/geometry.xyz".format(i)
+    train_xyz, train_lat = get_xyz_data(fn)
+    
+    ga_list = []
+    al_list = []
+    o_list = []
+    in_list = []
+    
+    for li in train_xyz:
+        try:
+            if li[1] == "Ga":
+                ga_list.append(li[0])
+        except:
+            pass
+        try:
+            if li[1] == "Al":
+                al_list.append(li[0])
+        except:
+            pass
+        try:
+            if li[1] == "In":
+                in_list.append(li[0])
+        except:
+            pass
+        try:
+            if li[1] == "O":
+                o_list.append(li[0])
+        except:
+            pass
+    
+#     ga_list = [item for sublist in ga_list for item in sublist]
+#     al_list = [item for sublist in al_list for item in sublist]
+#     o_list = [item for sublist in o_list for item in sublist]
+   
+    
+    try:
+        model = PCA(n_components=2)
+        ga_list = np.array(ga_list)
+        temp_ga = model.fit_transform(ga_list.transpose())
+        temp_ga = [item for sublist in temp_ga for item in sublist]
+       
+    except:
+        temp_ga = [0,0,0,0,0,0]
+#         print i
+    try:
+        model = PCA(n_components=2)
+        al_list = np.array(al_list)
+        temp_al = model.fit_transform(al_list.transpose())
+        temp_al = [item for sublist in temp_al for item in sublist]
+#         print i
+    except:
+        temp_al = [0,0,0,0,0,0]
+#         print i
+    try:
+        model = PCA(n_components=2)
+        o_list = np.array(o_list)
+        temp_o = model.fit_transform(o_list.transpose())
+        temp_o = [item for sublist in temp_o for item in sublist]
+#         print i
+    except:
+        temp_o = [0,0,0,0,0,0]
+#         print i
+    
+    try:
+        model = PCA(n_components=2)
+        in_list = np.array(in_list)
+        temp_in = model.fit_transform(in_list.transpose())
+        temp_in = [item for sublist in temp_in for item in sublist]
+#         print i
+    except:
+        temp_in = [0,0,0,0,0,0]
+#         print i
 
-            yield x, y_label, y_weather, row.image_name
+    temp_ga = pd.DataFrame(temp_ga).transpose()
+    temp_ga.columns = ga_cols
+    temp_ga.index = np.array([i])
 
+    temp_al = pd.DataFrame(temp_al).transpose()
+    temp_al.columns = al_cols
+    temp_al.index = np.array([i])
 
-class Master:
-    def __init__(self, batch_size=64, fold=0):
-        self.batch_size = batch_size
-        self.dataset = Dataset(batch_size=batch_size, fold=fold)
-        self.fold = fold
+    temp_o = pd.DataFrame(temp_o).transpose()
+    temp_o.columns = o_cols
+    temp_o.index = np.array([i])
+    
+    temp_in = pd.DataFrame(temp_in).transpose()
+    temp_in.columns = in_cols
+    temp_in.index = np.array([i])
+    
+    
 
-    def get_callbacks(self, name):
-        model_checkpoint = ModelCheckpoint('networks/{}_current_{}.h5'.format(name, self.fold),
-                                           monitor='val_loss',
-                                           save_best_only=True, verbose=0)
-        es = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto')
-        reducer = ReduceLROnPlateau(min_lr=1e-6, verbose=1, factor=0.1, patience=4)
-        return [model_checkpoint, es, reducer]
+    ga_df = pd.concat([ga_df,temp_ga])
+    al_df = pd.concat([al_df,temp_al])
+    o_df = pd.concat([o_df,temp_o])    
+    in_df = pd.concat([in_df,temp_in])
+    
 
-    def get_vgg(self, shape):
-        vgg = VGG16(include_top=False, weights='imagenet', input_shape=shape)
-        vgg.layers = vgg.layers[:15]
-        gap = GlobalAveragePooling2D()(vgg.output)
-        drop = Dropout(0.3)(gap)
-        dense = Dense(1024)(drop)
-        dense = LeakyReLU(alpha=.01)(dense)
-        drop2 = Dropout(0.3)(dense)
-        dense2 = Dense(128)(drop2)
-        dense2 = LeakyReLU(alpha=.01)(dense2)
-        out_labels = Dense(13, activation='sigmoid', name='labels')(dense2)
-        out_weather = Dense(4, activation='softmax', name='weather')(dense2)
+ga_df["id"] = ga_df.index
+al_df["id"] = al_df.index
+o_df["id"] = o_df.index
+in_df["id"] = in_df.index
 
-        model = Model(inputs=vgg.input, outputs=[out_labels, out_weather])
-        model.compile(optimizer=Adam(clipvalue=3),
-                      loss={'labels': 'binary_crossentropy', 'weather': 'categorical_crossentropy'},
-                      )
-        return model
-
-    def fit(self):
-        base_size = NEW_SIZE if NEW_SIZE else 256
-        shape = (base_size, base_size, 4) if USE_TIFF else (base_size, base_size, 3)
-
-        model = self.get_vgg(shape)
-
-        logger.info('Fitting started')
-
-        model.fit_generator(self.dataset.make_double_generator(use_train=True),
-                            epochs=500,
-                            steps_per_epoch=500,
-                            validation_data=self.dataset.make_double_generator(use_train=True),
-                            workers=4,
-                            validation_steps=100,
-                            callbacks=self.get_callbacks('united')
-                            )
-
-        new_fold = self.dataset.update_fold()
-        if new_fold:
-            self.fold = new_fold
-            K.clear_session()
-            self.fit()
-
-    def _wrap_prediction(self, name, pred_l, pred_w):
-        pred = {self.dataset.reverse_labels[i]: pred_l[i] for i in range(pred_l.shape[0])}
-        pred.update({self.dataset.reverse_weather[i]: pred_w[i] for i in range(pred_w.shape[0])})
-        pred['image_name'] = name.split('.')[0]
-        return pred
-
-    def wrap_predicitions(self, names, labels, weather):
-        return joblib.Parallel(n_jobs=8, backend='threading')(
-            joblib.delayed(self._wrap_prediction)(name, pred_l, pred_w)
-            for name, pred_l, pred_w in zip(names, labels, weather))
-
-    def make_predictions(self):
-        test_data, test_names = self.dataset.get_test()
-
-        test_result = []
-        train_result = []
-
-        for fold in range(N_FOLDS):
-            logger.info('Prediction started for fold {}'.format(fold))
-            model = load_model('networks/united_current_{}.h5'.format(fold))
-
-            labels_test, weather_test = model.predict(test_data, batch_size=96)
-
-            train_data, train_names = self.dataset.get_train(fold)
-            labels_train, weather_train = model.predict(train_data, batch_size=96)
-
-            labels_test, weather_test, labels_train, weather_train = map(lambda x: x.astype('float16'),
-                                                                         (labels_test, weather_test,
-                                                                          labels_train, weather_train))
-
-            logger.info('Data transformation started for fold {}'.format(fold))
-
-            test_result += list(self.wrap_predicitions(test_names, labels_test, weather_test))
-            train_result += list(self.wrap_predicitions(train_names, labels_train, weather_train))
-
-            K.clear_session()
-
-        train_result, test_result = map(lambda x: pd.DataFrame(x).groupby(['image_name']).agg(np.mean).reset_index(),
-                                        (train_result, test_result))
-
-        train_result.to_csv('train_probs.csv', index=False)
-        test_result.to_csv('test_probs.csv', index=False)
-
-        final = []
-        threshold = .2
-        for _, row in test_result.iterrows():
-            row = row.to_dict()
-            name = row.pop('image_name')
-            tags = [k for k, v in row.items() if v > threshold]
-            final.append({'image_name': name,
-                          'tags': ' '.join(tags)})
-        pd.DataFrame(final).to_csv('result.csv.gz', index=False, compression='gzip')
+test = pd.merge(test,ga_df,on = ["id"],how = "left")
+test = pd.merge(test,al_df,on = ["id"],how = "left")
+test = pd.merge(test,o_df,on = ["id"],how = "left")
+test = pd.merge(test,in_df,on = ["id"],how = "left")
 
 
-if __name__ == '__main__':
-    master = Master(batch_size=64, fold=0)
-    master.fit()
-    master.make_predictions()
+
+X_train = train.head(2200)
+
+X_val = train.tail(200)
+
+y_train_1 = X_train['formation_energy_ev_natom']
+y_train_2 = X_train["bandgap_energy_ev"]
+
+y_val_1 = X_val['formation_energy_ev_natom']
+y_val_2 = X_val["bandgap_energy_ev"]
+
+
+X_train = X_train.drop(["formation_energy_ev_natom","bandgap_energy_ev"],axis =1)
+X_val = X_val.drop(["formation_energy_ev_natom","bandgap_energy_ev"],axis =1)
+
+
+X_train.In_0 = X_train.In_0.astype("float")
+X_train.In_1 = X_train.In_1.astype("float")
+X_train.In_2 = X_train.In_2.astype("float")
+X_train.In_3 = X_train.In_3.astype("float")
+X_train.In_4 = X_train.In_4.astype("float")
+X_train.In_5 = X_train.In_5.astype("float")
+
+X_val.In_0 = X_val.In_0.astype("float")
+X_val.In_1 = X_val.In_1.astype("float")
+X_val.In_2 = X_val.In_2.astype("float")
+X_val.In_3 = X_val.In_3.astype("float")
+X_val.In_4 = X_val.In_4.astype("float")
+X_val.In_5 = X_val.In_5.astype("float")
+
+
+test.In_0 = test.In_0.astype("float")
+test.In_1 = test.In_1.astype("float")
+test.In_2 = test.In_2.astype("float")
+test.In_3 = test.In_3.astype("float")
+test.In_4 = test.In_4.astype("float")
+test.In_5 = test.In_5.astype("float")
+
+
+params = {
+    'num_leaves': 7,
+    'objective': 'regression',
+    'min_data_in_leaf': 18,
+    'learning_rate': 0.05,
+    'feature_fraction': 0.93,
+    'bagging_fraction': 0.93,
+    'bagging_freq': 1,
+    'metric': 'l2',
+    'num_threads': 1
+}
+
+MAX_ROUNDS = 1500
+val_pred = []
+test_pred_1 = []
+cate_vars = []
+
+dtrain = lgb.Dataset(X_train.drop("id",axis = 1), label=y_train_1,categorical_feature=cate_vars)
+
+dval = lgb.Dataset(X_val.drop("id",axis = 1), label=y_val_1, reference=dtrain,categorical_feature=cate_vars)
+
+bst = lgb.train(params, dtrain, num_boost_round=MAX_ROUNDS,valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100)
+
+print("\n".join(("%s: %.2f" % x) for x in sorted(zip(X_train.columns, bst.feature_importance("gain")),key=lambda x: x[1], reverse=True)))
+
+val_pred.append(bst.predict(X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+
+test_pred_1.append(bst.predict(test.drop("id",axis =1), num_iteration=bst.best_iteration or MAX_ROUNDS))
+
+
+
+params = {
+    'num_leaves': 8,
+    'objective': 'regression',
+    'min_data_in_leaf': 18,
+    'learning_rate': 0.05,
+    'feature_fraction': 0.93,
+    'bagging_fraction': 0.93,
+    'bagging_freq': 1,
+    'metric': 'l2',
+    'num_threads': 1
+}
+
+MAX_ROUNDS = 1500
+val_pred = []
+test_pred_2 = []
+cate_vars = []
+
+dtrain = lgb.Dataset(X_train.drop("id",axis = 1), label=y_train_2,categorical_feature=cate_vars)
+
+dval = lgb.Dataset(X_val.drop("id",axis = 1), label=y_val_2, reference=dtrain,categorical_feature=cate_vars)
+
+bst = lgb.train(params, dtrain, num_boost_round=MAX_ROUNDS,valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100)
+
+print("\n".join(("%s: %.2f" % x) for x in sorted(zip(X_train.columns, bst.feature_importance("gain")),key=lambda x: x[1], reverse=True)))
+
+val_pred.append(bst.predict(X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+
+test_pred_2.append(bst.predict(test.drop("id",axis =1), num_iteration=bst.best_iteration or MAX_ROUNDS))
+
+
+sample = pd.read_csv("../input/sample_submission.csv")
+
+sample["formation_energy_ev_natom"] = test_pred_1[0]
+sample["bandgap_energy_ev"] = test_pred_2[0]
+
+sample.to_csv("sub.csv",index = False)

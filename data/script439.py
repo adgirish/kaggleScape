@@ -1,176 +1,397 @@
 
 # coding: utf-8
 
-# ## Enriching NCAATourneyDetailedResults.csv with Advanced Stats
-# 
-# #### If the opponents of a team score only 75.2 points on average, it could be more about the pace at which the team played instead of their skill on the defensive end. 
-# 
-# ### The given Box score numbers are an incomplete standard of a team's performance. 
-# 
-# **Advanced Metrics ** in basketball provide a deeper understanding of a team's performance.
-# 
-# **Possession** is used to normalize basketball statistics - offensive/defensive efficiency and other metrics are all based on how the possession is calculated. Team performance should be measured on a per-possession basis.  
-# 
-# > Possession =0.96*[(Field Goal Attempts)+(Turnovers)+0.44*(Free Throw Attempts)-(Off.Rebounds)]
-# 
-# 
-# ##### (Notice: Possession values are not calculated by using Play-By-Play data, as it seems like they do not necessarily add up to the final stats of the game and an estimation will do just fine)
-# 
-# For more information [click here](https://www.nbastuffer.com/analytics101/possession/)
-# 
-# ### Now let's add some new features that can acutally be used for predictive modelling and ranking a team.
-# 
-
 # In[ ]:
 
 
-import numpy as np 
-import pandas as pd 
+import numpy as np
+import pandas as pd
+
 import matplotlib.pyplot as plt
-from math import pi
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-df = pd.read_csv('../input/NCAATourneyDetailedResults.csv')
+import seaborn as sns
 
-#Points Winning/Losing Team
-df['WPts'] = df.apply(lambda row: 2*row.WFGM + row.WFGM3 + row.WFTM, axis=1)
-df['LPts'] = df.apply(lambda row: 2*row.LFGM + row.LFGM3 + row.LFTM, axis=1)
-
-#Calculate Winning/losing Team Possesion Feature
-wPos = df.apply(lambda row: 0.96*(row.WFGA + row.WTO + 0.44*row.WFTA - row.WOR), axis=1)
-lPos = df.apply(lambda row: 0.96*(row.LFGA + row.LTO + 0.44*row.LFTA - row.LOR), axis=1)
-#two teams use almost the same number of possessions in a game
-#(plus/minus one or two - depending on how quarters end)
-#so let's just take the average
-df['Pos'] = (wPos+lPos)/2
-
-
-# ### Advanced Metrics
 
 # In[ ]:
 
 
-#Offensive efficiency (OffRtg) = 100 x (Points / Possessions)
-df['WOffRtg'] = df.apply(lambda row: 100 * (row.WPts / row.Pos), axis=1)
-df['LOffRtg'] = df.apply(lambda row: 100 * (row.LPts / row.Pos), axis=1)
-#Defensive efficiency (DefRtg) = 100 x (Opponent points / Opponent possessions)
-df['WDefRtg'] = df.LOffRtg
-df['LDefRtg'] = df.WOffRtg
-#Net Rating = Off.Rtg - Def.Rtg
-df['WNetRtg'] = df.apply(lambda row:(row.WOffRtg - row.WDefRtg), axis=1)
-df['LNetRtg'] = df.apply(lambda row:(row.LOffRtg - row.LDefRtg), axis=1)
-                         
-#Assist Ratio : Percentage of team possessions that end in assists
-df['WAstR'] = df.apply(lambda row: 100 * row.WAst / (row.WFGA + 0.44*row.WFTA + row.WAst + row.WTO), axis=1)
-df['LAstR'] = df.apply(lambda row: 100 * row.LAst / (row.LFGA + 0.44*row.LFTA + row.LAst + row.LTO), axis=1)
-#Turnover Ratio: Number of turnovers of a team per 100 possessions used.
-#(TO * 100) / (FGA + (FTA * 0.44) + AST + TO)
-df['WTOR'] = df.apply(lambda row: 100 * row.WTO / (row.WFGA + 0.44*row.WFTA + row.WAst + row.WTO), axis=1)
-df['LTOR'] = df.apply(lambda row: 100 * row.LTO / (row.LFGA + 0.44*row.LFTA + row.LAst + row.LTO), axis=1)
-                    
-#The Shooting Percentage : Measure of Shooting Efficiency (FGA/FGA3, FTA)
-df['WTSP'] = df.apply(lambda row: 100 * row.WPts / (2 * (row.WFGA + 0.44 * row.WFTA)), axis=1)
-df['LTSP'] = df.apply(lambda row: 100 * row.LPts / (2 * (row.LFGA + 0.44 * row.LFTA)), axis=1)
-#eFG% : Effective Field Goal Percentage adjusting for the fact that 3pt shots are more valuable 
-df['WeFGP'] = df.apply(lambda row:(row.WFGM + 0.5 * row.WFGM3) / row.WFGA, axis=1)      
-df['LeFGP'] = df.apply(lambda row:(row.LFGM + 0.5 * row.LFGM3) / row.LFGA, axis=1)   
-#FTA Rate : How good a team is at drawing fouls.
-df['WFTAR'] = df.apply(lambda row: row.WFTA / row.WFGA, axis=1)
-df['LFTAR'] = df.apply(lambda row: row.LFTA / row.LFGA, axis=1)
-                         
-#OREB% : Percentage of team offensive rebounds
-df['WORP'] = df.apply(lambda row: row.WOR / (row.WOR + row.LDR), axis=1)
-df['LORP'] = df.apply(lambda row: row.LOR / (row.LOR + row.WDR), axis=1)
-#DREB% : Percentage of team defensive rebounds
-df['WDRP'] = df.apply(lambda row: row.WDR / (row.WDR + row.LOR), axis=1)
-df['LDRP'] = df.apply(lambda row: row.LDR / (row.LDR + row.WOR), axis=1)                                      
-#REB% : Percentage of team total rebounds
-df['WRP'] = df.apply(lambda row: (row.WDR + row.WOR) / (row.WDR + row.WOR + row.LDR + row.LOR), axis=1)
-df['LRP'] = df.apply(lambda row: (row.LDR + row.LOR) / (row.WDR + row.WOR + row.LDR + row.LOR), axis=1) 
+df = pd.read_csv('../input/HR_comma_sep.csv')
 
 
-# #### PIE : Measure of a team's performance
+# In[ ]:
+
+
+df.info()
+
+
+# In[ ]:
+
+
+df.head()
+
+
+# In[ ]:
+
+
+df['sales'].unique()
+
+
+# In[ ]:
+
+
+df['promotion_last_5years'].unique()
+
+
+# In[ ]:
+
+
+df['salary'].unique()
+
+
+# In[ ]:
+
+
+df.mean()
+
+
+# ### tell me the daily working hour
+
+# In[ ]:
+
+
+df.mean()['average_montly_hours']/30
+
+
+# ## tell me the # of people who has left
+
+# In[ ]:
+
+
+print('# of people left = {}'.format(df[df['left']==1].size))
+print('# of people stayed = {}'.format(df[df['left']==0].size))
+print('protion of people who left in 5 years = {}%'.format(int(df[df['left']==1].size/df.size*100)))
+
+
+# ### 1, Corelation Matrix overall
+
+# In[ ]:
+
+
+corrmat = df.corr()
+f, ax = plt.subplots(figsize=(4, 4))
+# Draw the heatmap using seaborn
+sns.heatmap(corrmat, vmax=.8, square=True)
+plt.show()
+
+
+# ### As expected:
 # 
-# > *A high PIE % is highly correlated to winning. In fact, a team’s PIE rating and a team’s winning percentage correlate at an R square of .908 which indicates a "strong" correlation*
+# * 1, The score of evaluation and satisfaction_level are highly correlated,  and the less left
+# * 2, The more number_project in hands, the more average_montly_hours, and this result in a higher score of evaluation but makes employees less satisfied. 
+# And they spend more time in company, btw.
+# * 3, Being promoted(aka. level up) makes poeple happier, doing more job and being less likely to run away
+
+# ### 2, Corelation Matrix by salaries
+
+# In[ ]:
+
+
+corrmat_low = df[df['salary'] == 'low'].corr()
+corrmat_medium = df[df['salary'] == 'medium'].corr()
+corrmat_high = df[df['salary'] == 'high'].corr()
+
+sns.heatmap(corrmat_low, vmax=.8, square=True,annot=True,fmt='.2f')
+
+
+# In[ ]:
+
+
+sns.heatmap(corrmat_medium, vmax=.8, square=True,annot=True,fmt='.2f')
+
+
+# In[ ]:
+
+
+sns.heatmap(corrmat_high, vmax=.8, square=True,annot=True,fmt='.2f')
+
+
+# ### Even though I print out the correlation digits, it's still hard to sell how salary affect people's mentality
+
+# In[ ]:
+
+
+df_low = df[df['salary'] == 'low']
+df_medium = df[df['salary'] == 'medium']
+df_high = df[df['salary'] == 'high']
+
+print('# of low salary employees= ',df_low.shape[0])
+print('# of medium salary employees= ',df_medium.shape[0])
+print('# of high salary employees= ',df_high.shape[0])
+
+
+# In[ ]:
+
+
+fmt = '{:<22}{:<25}{}'
+
+print(fmt.format('', 'mean', 'std'))
+for i, (mean, std) in enumerate(zip(df_low.mean(), df_low.std())):
+    print(fmt.format(df_low.columns[i], mean, std))
+print('\n')
+for i, (mean, std) in enumerate(zip(df_medium.mean(), df_medium.std())):
+    print(fmt.format(df_low.columns[i], mean, std))
+print('\n')
+for i, (mean, std) in enumerate(zip(df_high.mean(), df_high.std())):
+    print(fmt.format(df_low.columns[i], mean, std))
+
+
+# ### Now it's apparent that:
 # 
-# from the official site of the [NBA](https://stats.nba.com/help/glossary/)
+# * high salary employees spend more time in company but less monthly working hours than the others.
+# * high salary employees have been promoted more and have felt more satisfied.
+# * high salary employees tend to choose stay rather than left.
+# * high salary employees make a little bit more work accidents than the others.
+
+# ### Sales by Salary all feature plot
 
 # In[ ]:
 
 
-wtmp = df.apply(lambda row: row.WPts + row.WFGM + row.WFTM - row.WFGA - row.WFTA + row.WDR + 0.5*row.WOR + row.WAst +row.WStl + 0.5*row.WBlk - row.WPF - row.WTO, axis=1)
-ltmp = df.apply(lambda row: row.LPts + row.LFGM + row.LFTM - row.LFGA - row.LFTA + row.LDR + 0.5*row.LOR + row.LAst +row.LStl + 0.5*row.LBlk - row.LPF - row.LTO, axis=1) 
-df['WPIE'] = wtmp/(wtmp + ltmp)
-df['LPIE'] = ltmp/(wtmp + ltmp)
+sns.factorplot("sales", col="salary", col_wrap=4, data=df, kind="count", size=10, aspect=.8)
 
 
-# In[ ]:
-
-
-#categories need to be normalized for a sensible plot
-categories= ['FTAR','ORP','DRP','PIE','eFGP']
-
-#get stats by TeamID
-#TODO: filter by season
-def get_stats(teamid, categories):
-    
-    wstats = []
-    wteam = df.loc[(df['WTeamID'] == teamid)]
-    for i in categories:
-        wstats.append(wteam['W'+i].sum())
-    
-    lstats = []
-    lteam = df.loc[(df['LTeamID'] == teamid)]
-    for i in categories:
-        lstats.append(lteam['L'+i].sum())
-
-    return [(i+j)/(len(wteam.index)+len(lteam.index))
-            for i,j in zip(wstats,lstats)]
-
-#plotting advanced stats for given team
-def plot_team(stats, categories):
-
-    stats += stats[:1]
-
-    angles = [n / float(len(categories)) * 2 * pi for n in range(len(categories))]
-    angles += angles[:1]
-
-    ax = plt.subplot(111, polar=True)
-
-    plt.xticks(angles[:-1], categories, color='grey', size=10)
-
-    ax.set_rlabel_position(0)
-    plt.yticks([i*0.1 for i in range(10)], [], color="black", size=8)
-    plt.ylim(0,1)
-    
-    ax.plot(angles, stats, linewidth=2, linestyle='solid')
-    ax.fill(angles, stats, 'b', alpha=0.2)
-
-
-# #### Evaluations of random NCAA teams (TODO: filtered by year)
-# ##### Note: to plot different metrics, values need to be normalized first.
+# ### Satisfaction_level by Sales
 
 # In[ ]:
 
 
-plot_team(get_stats(1241,categories),categories)
+df.groupby('sales').mean()['satisfaction_level'].plot(kind='bar',color='r')
+
+
+# ### Accountants are the most unhappy employees:(
+# ### And I've plenty of accounting friends. Gotta let them know:)
+
+# ### 1, Predict 'left == 1' by the other features
+
+# In[ ]:
+
+
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
+import xgboost as xgb
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import StratifiedKFold
+from sklearn.feature_selection import SelectFromModel
+from sklearn.linear_model import LogisticRegression
+from sklearn import svm
 
 
 # In[ ]:
 
 
-plot_team(get_stats(1421,categories),categories)
+df_copy = pd.get_dummies(df)
+df_copy.head()
 
 
 # In[ ]:
 
 
-#let's call it dimensionality reduction
-# --> build your predictive model on advanced stats only
-#df.drop(['WFGM', 'WFGA', 'WFGM3', 'WFGA3', 'WFTM', 'WFTA', 'WOR', 'WDR', 'WAst', 'WTO', 'WStl', 'WBlk', 'WPF'], axis=1, inplace=True)
-#df.drop(['LFGM', 'LFGA', 'LFGM3', 'LFGA3', 'LFTM', 'LFTA', 'LOR', 'LDR', 'LAst', 'LTO', 'LStl', 'LBlk', 'LPF'], axis=1, inplace=True)
+df1 = df_copy
+y = df1['left'].values
+df1 = df1.drop(['left'],axis=1)
+X = df1.values
 
-#TODO: Compute Avanced Stats for entire Season for each Team
-#df['WPIE'].groupby([df['Season'], df['WTeamID']]).describe()
 
-df.to_csv('NCAATourneyDetailedResultsEnriched', index=False)
+# In[ ]:
+
+
+Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.50)
+
+
+# In[ ]:
+
+
+log_reg = LogisticRegression()
+log_reg.fit(Xtrain, ytrain)
+y_val_l = log_reg.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# In[ ]:
+
+
+sdg = SGDClassifier()
+sdg.fit(Xtrain, ytrain)
+y_val_l = sdg.predict(Xtest)
+print("Validation accuracy: ", sum(y_val_l
+                                   == ytest)/len(ytest))
+
+
+# In[ ]:
+
+
+radm = RandomForestClassifier()
+radm.fit(Xtrain, ytrain)
+y_val_l = radm.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# In[ ]:
+
+
+clf = radm
+
+
+# ### RadomForest scores so high! It actually make sense because (we make up mind to quit a job by a serial decision making. (aka following a decision tree(?) in our mind))
+
+# In[ ]:
+
+
+indices = np.argsort(radm.feature_importances_)[::-1]
+
+# Print the feature ranking
+print('Feature ranking:')
+
+for f in range(df1.shape[1]):
+    print('%d. feature %d %s (%f)' % (f+1 , indices[f], df1.columns[indices[f]],
+                                      radm.feature_importances_[indices[f]]))
+
+
+# ### The above shows what are the primary factors for employees to quit the job.
+# 
+# * 1, satisfaction_level
+# * 2, time_spend_company
+# * 3, number_project
+# * 4, last_evaluation
+# * 5, work_accident
+# ### All make sense~
+
+# ## 2, Predict Salary by the other features
+
+# In[ ]:
+
+
+df_copy = df
+y = LabelEncoder().fit(df['salary']).transform(df['salary'])
+df2 = df_copy.drop(['salary'],axis=1)
+X = pd.get_dummies(df2).values
+
+
+# In[ ]:
+
+
+Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.2)
+
+
+# In[ ]:
+
+
+radm = RandomForestClassifier()
+radm.fit(Xtrain, ytrain)
+y_val_l = radm.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# In[ ]:
+
+
+log_reg = LogisticRegression()
+log_reg.fit(Xtrain, ytrain)
+y_val_l = log_reg.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# ### Not so great. It's hard to determine salary just by the data provided.
+
+# ## 3, Predict Sales by the other features
+
+# In[ ]:
+
+
+df_copy = df
+y = LabelEncoder().fit(df['sales']).transform(df['sales'])
+df2 = df_copy.drop(['sales'],axis=1)
+X = pd.get_dummies(df2).values
+
+
+# In[ ]:
+
+
+Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.2)
+
+
+# In[ ]:
+
+
+radm = RandomForestClassifier()
+radm.fit(Xtrain, ytrain)
+y_val_l = radm.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# In[ ]:
+
+
+log_reg = LogisticRegression()
+log_reg.fit(Xtrain, ytrain)
+y_val_l = log_reg.predict_proba(Xtest)
+print("Validation accuracy: ", sum(pd.DataFrame(y_val_l).idxmax(axis=1).values
+                                   == ytest)/len(ytest))
+
+
+# ### Even poorer. It makes sense because our data doesn't provide any information on what do employees do.
+
+# ## 4, Predict who will leave soon
+
+# In[ ]:
+
+
+stay = df[df['left'] == 0]
+stay_copy = pd.get_dummies(stay)
+
+
+# In[ ]:
+
+
+df1 = stay_copy
+y = df1['left'].values
+df1 = df1.drop(['left'],axis=1)
+X = df1.values
+
+
+# In[ ]:
+
+
+pred = clf.predict_proba(X)
+
+
+# ### tell me the # of employees will definitely leave
+
+# In[ ]:
+
+
+sum(pred[:,1]==1)
+
+
+# In[ ]:
+
+
+stay['will leave the job'] = pred[:,1]
+
+
+# ### show who will likely to leave with probability greater than or equal to 50%
+
+# In[ ]:
+
+
+stay[stay['will leave the job']>=0.5]
 

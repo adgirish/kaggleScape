@@ -1,541 +1,218 @@
 
 # coding: utf-8
 
-# # Identifying authors - Who wrote that?
-# Started on 30 Oct 2017
-# 
-# This notebook is inspired by:
-# * Machine Learning: Classification - Coursera course by University of Washington,
-# https://www.coursera.org/learn/ml-classification
-# * Machine Learning with Text in scikit-learn - Kevin Markham's tutorial at Pycon 2016, 
-# https://m.youtube.com/watch?t=185s&v=ZiKMIuYidY0
-# * Kernel by bshivanni - "Predict the author of the story", 
-# https://www.kaggle.com/bsivavenu/predict-the-author-of-the-story
-# * Kernel by SRK - "Simple Engg Feature Notebook - Spooky Author",
-# https://www.kaggle.com/sudalairajkumar/simple-feature-engg-notebook-spooky-author
-
-# Comments:
-# 
-# * In this kernel, I did a weighted averaging of the 'proba' of the 2 models to see the performance.
-# * I added character counts as features to the sparse matrix to see if prediction performance will improve.
-# 
+# # A 1D convolutional net in Keras
+# Very little preprocessing was needed. Batch normalization made a huge difference, and made it possible to achieve perfect classification within the Kaggle kernel.
 
 # In[ ]:
 
 
+#We import libraries for linear algebra, graphs, and evaluation of results
 import numpy as np
-import pandas as pd
-from matplotlib import pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# ## Read "train.csv" and "test.csv into pandas
-
-# In[ ]:
-
-
-train_df = pd.read_csv('../input/train.csv')
-test_df = pd.read_csv('../input/test.csv')
-
-
-# ## Examine the train data
-
-# In[ ]:
-
-
-# check the class distribution for the author label in train_df?
-train_df['author'].value_counts()
-
-
-# #### The class distribution looks balanced.
-
-# In[ ]:
-
-
-# compute the character length for the rows and record these
-train_df['text_length'] = train_df['text'].str.len()
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_curve, roc_auc_score
+from scipy.ndimage.filters import uniform_filter1d
 
 
 # In[ ]:
 
 
-# look at the histogram plot for text length
-train_df.hist()
+#Keras is a high level neural networks library, based on either tensorflow or theano
+from keras.models import Sequential, Model
+from keras.layers import Conv1D, MaxPool1D, Dense, Dropout, Flatten, BatchNormalization, Input, concatenate, Activation
+from keras.optimizers import Adam
+
+
+# ## Load the data
+
+# As the data format is so simple, we do not need pandas.
+
+# In[ ]:
+
+
+INPUT_LIB = '../input/'
+raw_data = np.loadtxt(INPUT_LIB + 'exoTrain.csv', skiprows=1, delimiter=',')
+x_train = raw_data[:, 1:]
+y_train = raw_data[:, 0, np.newaxis] - 1.
+raw_data = np.loadtxt(INPUT_LIB + 'exoTest.csv', skiprows=1, delimiter=',')
+x_test = raw_data[:, 1:]
+y_test = raw_data[:, 0, np.newaxis] - 1.
+del raw_data
+
+
+# Scale each observation to zero mean and unit variance.
+
+# In[ ]:
+
+
+x_train = ((x_train - np.mean(x_train, axis=1).reshape(-1,1)) / 
+           np.std(x_train, axis=1).reshape(-1,1))
+x_test = ((x_test - np.mean(x_test, axis=1).reshape(-1,1)) / 
+          np.std(x_test, axis=1).reshape(-1,1))
+
+
+# This is our only preprocessing step: We add an input corresponding to the running average over
+# 200 time steps. This helps the net ignore high frequency noise and instead look at non-local
+# information. Look at the graphs below to see what it does.
+
+# In[ ]:
+
+
+x_train = np.stack([x_train, uniform_filter1d(x_train, axis=1, size=200)], axis=2)
+x_test = np.stack([x_test, uniform_filter1d(x_test, axis=1, size=200)], axis=2)
+
+
+# ## Train the model
+
+# With the Sequential API for Keras, we only need to add the layers one at a time. Each 1D convolutional layers corresponds to a local filter, and then a pooling layer reduces the data length by approximately a factor 4. At the end, there are two dense layers, just as we would in a typical image classifier. Batch normalization layers speed up convergence. 
+
+# In[ ]:
+
+
+model = Sequential()
+model.add(Conv1D(filters=8, kernel_size=11, activation='relu', input_shape=x_train.shape[1:]))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=16, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=32, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=64, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(Flatten())
+model.add(Dropout(0.5))
+model.add(Dense(64, activation='relu'))
+model.add(Dropout(0.25))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))
+
+
+# The data here is extremely unbalanced, with only a few positive examples. To correct for this, I use the positive examples a lot more often, so that the net sees 50% of each over each bats. Also, I generate new examples by rotation them randomly in time. This is called augmentation and is similar to when we rotate/shift examples in image classification.
+
+# In[ ]:
+
+
+def batch_generator(x_train, y_train, batch_size=32):
+    """
+    Gives equal number of positive and negative samples, and rotates them randomly in time
+    """
+    half_batch = batch_size // 2
+    x_batch = np.empty((batch_size, x_train.shape[1], x_train.shape[2]), dtype='float32')
+    y_batch = np.empty((batch_size, y_train.shape[1]), dtype='float32')
+    
+    yes_idx = np.where(y_train[:,0] == 1.)[0]
+    non_idx = np.where(y_train[:,0] == 0.)[0]
+    
+    while True:
+        np.random.shuffle(yes_idx)
+        np.random.shuffle(non_idx)
+    
+        x_batch[:half_batch] = x_train[yes_idx[:half_batch]]
+        x_batch[half_batch:] = x_train[non_idx[half_batch:batch_size]]
+        y_batch[:half_batch] = y_train[yes_idx[:half_batch]]
+        y_batch[half_batch:] = y_train[non_idx[half_batch:batch_size]]
+    
+        for i in range(batch_size):
+            sz = np.random.randint(x_batch.shape[1])
+            x_batch[i] = np.roll(x_batch[i], sz, axis = 0)
+     
+        yield x_batch, y_batch
+
+
+# The hyperparameters here are chosen to finish training within the Kernel, rather than to get optimal results. On a GPU, I might have chosen a smaller learning rate, and perhaps SGD instead of Adam. As it turned out, results were brilliant anyway.
+
+# In[ ]:
+
+
+#Start with a slightly lower learning rate, to ensure convergence
+model.compile(optimizer=Adam(1e-5), loss = 'binary_crossentropy', metrics=['accuracy'])
+hist = model.fit_generator(batch_generator(x_train, y_train, 32), 
+                           validation_data=(x_test, y_test), 
+                           verbose=0, epochs=5,
+                           steps_per_epoch=x_train.shape[1]//32)
+
+
+# In[ ]:
+
+
+#Then speed things up a little
+model.compile(optimizer=Adam(4e-5), loss = 'binary_crossentropy', metrics=['accuracy'])
+hist = model.fit_generator(batch_generator(x_train, y_train, 32), 
+                           validation_data=(x_test, y_test), 
+                           verbose=2, epochs=40,
+                           steps_per_epoch=x_train.shape[1]//32)
+
+
+# #Evaluate the model
+
+# First we look at convergence
+
+# In[ ]:
+
+
+plt.plot(hist.history['loss'], color='b')
+plt.plot(hist.history['val_loss'], color='r')
+plt.show()
+plt.plot(hist.history['acc'], color='b')
+plt.plot(hist.history['val_acc'], color='r')
 plt.show()
 
 
-# #### Most of the text length are 500 characters and less. Let's look at the summary statistics of the text lengths by author.
+# We then use our trained net to classify the test set.
 
 # In[ ]:
 
 
-EAP = train_df[train_df['author'] =='EAP']['text_length']
-EAP.describe()
+non_idx = np.where(y_test[:,0] == 0.)[0]
+yes_idx = np.where(y_test[:,0] == 1.)[0]
+y_hat = model.predict(x_test)[:,0]
 
 
 # In[ ]:
 
 
-EAP.hist()
+plt.plot([y_hat[i] for i in yes_idx], 'bo')
+plt.show()
+plt.plot([y_hat[i] for i in non_idx], 'ro')
 plt.show()
 
 
-# In[ ]:
+# These graphs show that the five positive examples all get 0.95-1.00 score. Also, almost all negative examples get score close to zero, except a few in the 0.9-1.0 range. This is encouraging.
 
-
-MWS = train_df[train_df['author'] == 'MWS']['text_length']
-MWS.describe()
-
+# We now choose an optimal cutoff score for classification. Sklearn can help us with this.
 
 # In[ ]:
 
 
-MWS.hist()
+y_true = (y_test[:, 0] + 0.5).astype("int")
+fpr, tpr, thresholds = roc_curve(y_true, y_hat)
+plt.plot(thresholds, 1.-fpr)
+plt.plot(thresholds, tpr)
 plt.show()
-
-
-# In[ ]:
-
-
-HPL = train_df[train_df['author'] == 'HPL']['text_length']
-HPL.describe()
-
-
-# In[ ]:
-
-
-HPL.hist()
+crossover_index = np.min(np.where(1.-fpr <= tpr))
+crossover_cutoff = thresholds[crossover_index]
+crossover_specificity = 1.-fpr[crossover_index]
+print("Crossover at {0:.2f} with specificity {1:.2f}".format(crossover_cutoff, crossover_specificity))
+plt.plot(fpr, tpr)
 plt.show()
+print("ROC area under curve is {0:.2f}".format(roc_auc_score(y_true, y_hat)))
 
 
-# ## Similarly examine the text length & distribution in test data
-
-# In[ ]:
-
-
-# examine the text characters length in test_df and record these
-test_df['text_length'] = test_df['text'].str.len()
-
+# Let's take a look at the misclassified data (if any):
 
 # In[ ]:
 
 
-test_df.hist()
-plt.show()
-
-
-# #### The proportion of text which are long in the test data is very similar to that in the train data.
-
-# ## Some preprocessing of the target variable to facilitate modelling
-
-# In[ ]:
-
-
-# convert author labels into numerical variables
-train_df['author_num'] = train_df.author.map({'EAP':0, 'HPL':1, 'MWS':2})
-# Check conversion for first 5 rows
-train_df.head()
-
-
-# #### Let's limit all text length to 700 characters for both train and test (for less outliers in data).
-
-# In[ ]:
-
-
-train_df = train_df.rename(columns={'text':'original_text'})
-train_df['text'] = train_df['original_text'].str[:700]
-train_df['text_length'] = train_df['text'].str.len()
-
-
-# In[ ]:
-
-
-test_df = test_df.rename(columns={'text':'original_text'})
-test_df['text'] = test_df['original_text'].str[:700]
-test_df['text_length'] = test_df['text'].str.len()
-
-
-# ## Define X and y from train data for use in tokenization by Vectorizers
-
-# In[ ]:
-
-
-X = train_df['text']
-y = train_df['author_num']
-
-
-# ## Split train data into a training and a test set
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=123)
-print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
-
-
-# In[ ]:
-
-
-# examine the class distribution in y_train and y_test
-print(y_train.value_counts(),'\n', y_test.value_counts())
-
-
-# ## Vectorize the data using Vectorizer
-
-# In[ ]:
-
-
-# import and instantiate CountVectorizer
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-# vect = CountVectorizer()
-# vect = CountVectorizer(lowercase=False, token_pattern=r'(?u)\b\w+\b')
-vect = CountVectorizer(lowercase=False, token_pattern=r'(?u)\b\w+\b|\,|\.|\;|\:')
-# vect = CountVectorizer(lowercase=False, token_pattern=r'(?u)\b\w+\b|\,|\.|\?|\;|\:|\!|\'')
-vect
-
-
-# In[ ]:
-
-
-# learn the vocabulary in the training data, then use it to create a document-term matrix
-X_train_dtm = vect.fit_transform(X_train)
-# examine the document-term matrix created from X_train
-X_train_dtm
-
-
-# In[ ]:
-
-
-# transform the test data using the earlier fitted vocabulary, into a document-term matrix
-X_test_dtm = vect.transform(X_test)
-# examine the document-term matrix from X_test
-X_test_dtm
-
-
-# ### Add character counts as a features to the sparse matrix using function `add_feature`
-
-# In[ ]:
-
-
-def add_feature(X, feature_to_add):
-    '''
-    Returns sparse feature matrix with added feature.
-    feature_to_add can also be a list of features.
-    '''
-    from scipy.sparse import csr_matrix, hstack
-    return hstack([X, csr_matrix(feature_to_add).T], 'csr')
-
-
-# In[ ]:
-
-
-from string import punctuation
-X_train_chars = X_train.str.len()
-X_train_punc = X_train.apply(lambda x: len([c for c in str(x) if c in punctuation]))
-X_test_chars = X_test.str.len()
-X_test_punc = X_test.apply(lambda x: len([c for c in str(x) if c in punctuation]))
-X_train_dtm = add_feature(X_train_dtm, [X_train_chars, X_train_punc])
-X_test_dtm = add_feature(X_test_dtm, [X_test_chars, X_test_punc])
-
-
-# In[ ]:
-
-
-X_train_dtm
-
-
-# In[ ]:
-
-
-X_test_dtm
-
-
-# ## Build and evaluate an author classification model using Multinomial Naive Bayes
-
-# In[ ]:
-
-
-# import and instantiate the Multinomial Naive Bayes model
-from sklearn.naive_bayes import MultinomialNB
-nb = MultinomialNB()
-nb
-
-
-# In[ ]:
-
-
-# tune hyperparameter alpha = [0.01, 0.1, 1, 10, 100]
-from sklearn.model_selection import GridSearchCV
-grid_values = {'alpha':[0.01, 0.1, 1.0, 10.0, 100.0]}
-grid_nb = GridSearchCV(nb, param_grid=grid_values, scoring='neg_log_loss')
-grid_nb.fit(X_train_dtm, y_train)
-grid_nb.best_params_
-
-
-# In[ ]:
-
-
-# set with recommended hyperparameters
-nb = MultinomialNB(alpha=1.0)
-# train the model using X_train_dtm & y_train
-nb.fit(X_train_dtm, y_train)
-
-
-# In[ ]:
-
-
-# make author (class) predictions for X_test_dtm
-y_pred_test = nb.predict(X_test_dtm)
-
-
-# In[ ]:
-
-
-# compute the accuracy of the predictions with y_test
-from sklearn import metrics
-metrics.accuracy_score(y_test, y_pred_test)
-
-
-# In[ ]:
-
-
-# compute the accuracy of training data predictions
-y_pred_train = nb.predict(X_train_dtm)
-metrics.accuracy_score(y_train, y_pred_train)
-
-
-# In[ ]:
-
-
-# look at the confusion matrix for y_test
-metrics.confusion_matrix(y_test, y_pred_test)
-
-
-# In[ ]:
-
-
-# calculate predicted probabilities for X_test_dtm
-y_pred_prob = nb.predict_proba(X_test_dtm)
-y_pred_prob[:10]
-
-
-# In[ ]:
-
-
-# compute the log loss number
-metrics.log_loss(y_test, y_pred_prob)
-
-
-# ## Build and evaluate an author classification model using Logistic Regression
-
-# In[ ]:
-
-
-# import and instantiate the Logistic Regression model
-from sklearn.linear_model import LogisticRegression
-logreg = LogisticRegression(random_state=8)
-logreg
-
-
-# In[ ]:
-
-
-# tune hyperparameter
-grid_values = {'C':[0.01, 0.1, 1.0, 3.0, 5.0]}
-grid_logreg = GridSearchCV(logreg, param_grid=grid_values, scoring='neg_log_loss')
-grid_logreg.fit(X_train_dtm, y_train)
-grid_logreg.best_params_
-
-
-# In[ ]:
-
-
-# set with recommended parameter
-logreg = LogisticRegression(C=1.0, random_state=8)
-# train the model using X_train_dtm & y_train
-logreg.fit(X_train_dtm, y_train)
-
-
-# In[ ]:
-
-
-# make class predictions for X_test_dtm
-y_pred_test = logreg.predict(X_test_dtm)
-
-
-# In[ ]:
-
-
-# compute the accuracy of the predictions
-metrics.accuracy_score(y_test, y_pred_test)
-
-
-# In[ ]:
-
-
-# compute the accuracy of predictions with the training data
-y_pred_train = logreg.predict(X_train_dtm)
-metrics.accuracy_score(y_train, y_pred_train)
-
-
-# In[ ]:
-
-
-# look at the confusion matrix for y_test
-metrics.confusion_matrix(y_test, y_pred_test)
-
-
-# In[ ]:
-
-
-# compute the predicted probabilities for X_test_dtm
-y_pred_prob = logreg.predict_proba(X_test_dtm)
-y_pred_prob[:10]
-
-
-# In[ ]:
-
-
-# compute the log loss number
-metrics.log_loss(y_test, y_pred_prob)
-
-
-# ## Train the Logistic Regression model with the entire dataset from "train.csv"
-
-# In[ ]:
-
-
-# Learn the vocabulary in the entire training data, and create the document-term matrix
-X_dtm = vect.fit_transform(X)
-# Examine the document-term matrix created from X_train
-X_dtm
-
-
-# In[ ]:
-
-
-# Add character counts features
-X_chars = X.str.len()
-X_punc = X.apply(lambda x: len([c for c in str(x) if c in punctuation]))
-X_dtm = add_feature(X_dtm, [X_chars, X_punc])
-X_dtm
-
-
-# In[ ]:
-
-
-# Train the Logistic Regression model using X_dtm & y
-logreg.fit(X_dtm, y)
-
-
-# In[ ]:
-
-
-# Compute the accuracy of training data predictions
-y_pred_train = logreg.predict(X_dtm)
-metrics.accuracy_score(y, y_pred_train)
-
-
-# ## Make predictions on the test data and compute the probabilities for submission
-
-# In[ ]:
-
-
-test = test_df['text']
-# transform the test data using the earlier fitted vocabulary, into a document-term matrix
-test_dtm = vect.transform(test)
-# examine the document-term matrix from X_test
-test_dtm
-
-
-# In[ ]:
-
-
-# Add character counts features
-test_chars = test.str.len()
-test_punc = test.str.count(r'\W')
-test_dtm = add_feature(test_dtm, [test_chars, test_punc])
-test_dtm
-
-
-# In[ ]:
-
-
-# make author (class) predictions for test_dtm
-LR_y_pred = logreg.predict(test_dtm)
-print(LR_y_pred)
-
-
-# In[ ]:
-
-
-# calculate predicted probabilities for test_dtm
-LR_y_pred_prob = logreg.predict_proba(test_dtm)
-LR_y_pred_prob[:10]
-
-
-# ## Train the Naive Bayes model with the entire dataset "train.csv"
-
-# In[ ]:
-
-
-nb.fit(X_dtm, y)
-
-
-# In[ ]:
-
-
-# compute the accuracy of training data predictions
-y_pred_train = nb.predict(X_dtm)
-metrics.accuracy_score(y, y_pred_train)
-
-
-# ## Make predictions on test data
-
-# In[ ]:
-
-
-# make author (class) predictions for test_dtm
-NB_y_pred = nb.predict(test_dtm)
-print(NB_y_pred)
-
-
-# In[ ]:
-
-
-# calculate predicted probablilities for test_dtm
-NB_y_pred_prob = nb.predict_proba(test_dtm)
-NB_y_pred_prob[:10]
-
-
-# ## Create submission file
-# #### Here I am combining the probabilities from the two models, using parameter alpha. 
-
-# In[ ]:
-
-
-alpha = 0.6
-y_pred_prob = ((1-alpha)*LR_y_pred_prob + alpha*NB_y_pred_prob)
-y_pred_prob[:10]
-
-
-# In[ ]:
-
-
-result = pd.DataFrame(y_pred_prob, columns=['EAP','HPL','MWS'])
-result.insert(0, 'id', test_df['id'])
-result.head()
-
-
-# In[ ]:
-
-
-# Generate submission file in csv format
-result.to_csv('rhodium_submission_16.csv', index=False, float_format='%.20f')
-
-
-# ### Thank you for reading this.
-# ### Comments and tips are most welcomed.
-# ### Please upvote if you find it useful. Cheers!
+false_positives = np.where(y_hat * (1. - y_test) > 0.5)[0]
+for i in non_idx:
+    if y_hat[i] > crossover_cutoff:
+        print(i)
+        plt.plot(x_test[i])
+        plt.show()
+
+
+# It seems NASA missed one planet. I take this opportunity to claim it, and hereby name it Kaggle alpha :)

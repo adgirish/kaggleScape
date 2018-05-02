@@ -1,646 +1,293 @@
 
 # coding: utf-8
 
-# # It can be easy to hurt people when one get anonymous on social media or forums. 
-# **Jigsaw**, formerly Google Ideas, tries to protect people's against harassment on the internet. They aim at doing this with the use of technologies. That's why they launch this Kaggle competition. They want us to find the best algorithm to detect and classify toxic comments.
+# # Pistol Round Analysis
 # 
-# The** goal **of this Notebook is :
-# * to draw insight from the dataset provided by Jigsaw 
-# * and then benchmarking the most commonly used algorithm for Natural Language Processing
+# Hello! I am the creator of this data-set and just wanted to provide a sample analysis for anyone interested in looking at CS.  I look at mainly the pistol round here but many of the techniques can be applied to all types of rounds.  There are many ways to analyze this dataset so I hope you can go off and answer interesting questions for yourself :)
 # 
-# I have chosen this competition because I am interested in Natural Language Processing for its application to Social analytics and  Finance. I am amazed by what deep learning can do in computer vision. I want to test it on texts by myself. 
+# In this notebook, I will analyze pistol round outcomes and damages done on average to improve player decision making on pistol rounds.  The analysis I provide in this notebook is very minimal, I'm only here to show code, however, you can find [the full analysis that I put on reddit with more in-depth talk about the numbers](https://www.reddit.com/r/GlobalOffensive/comments/72fkl7/mm_analytics_some_pistol_round_statistics_and/). 
 # 
-# These are the algorithm I will benchmark :
-# * **Naive Bayes**
-# * **SVM**
-# * **Tree Based Method**
-# * **Long Short Term Memory Neural Networks.**
+# The following questions will be answered in this notebook:
 # 
-# My goal is not really to win the competition but I want to gain a better intuition about these algorithm.
-# 
-# ### This is my first kernel, any constructive comments or critics is welcomed =)
-# 
-# Let's go !
-# 
-# ![ ](http://www.elpoderdelasideas.com/wp-content/uploads/google-jigsaw-2016.png)
+# 1. What are the most common pistol round buys?
+# - What is the ADR by each pistol on pistol rounds?
+# - What sites do bomb get planted the most on pistol rounds?
+# - After bomb gets planted at A/B Site, for all XvX situation, what is the win Probability for Ts?
+# - In a 1v1, 1v2, 2v1, 2v2, should players play out of site/in-site or one-in one-out to deal the most damage while receiving the least?
 
 # In[ ]:
 
 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import BernoulliNB
-from sklearn.linear_model import LogisticRegression
-from sklearn import linear_model
-from sklearn.metrics import log_loss
-
-
-#NLP tools
-import re
-import string
-import nltk
-from nltk.corpus import stopwords
-from wordcloud import WordCloud
-stopwords = nltk.corpus.stopwords.words('english')
-
-
-#Plot and image tools
-from PIL import Image
-from matplotlib import pyplot as plt
-from matplotlib import gridspec
+import pandas as pd
+import numpy as np
 import seaborn as sns
-sns.set_style("dark")
-
-train_data_path='../input/jigsaw-toxic-comment-classification-challenge/train.csv'
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-#Loading the Data
-train = pd.read_csv(train_data_path)
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-
-
-# # We have got 6 categories of undesirable comments :
-# 1. Toxic
-# 2. Severe Toxic
-# 3. Obscene
-# 4. Threat
-# 5. Insult
-# 6 Identity hate
-
-# In[ ]:
-
-
-#a quick look at our training dataset
-train.head()
+import matplotlib.pyplot as plt
+import warnings
+from scipy.misc import imread
+import matplotlib.patches as mpatches
+from matplotlib.collections import PatchCollection
+import matplotlib.colors as colors
+warnings.filterwarnings('ignore')
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-# the size of our training dataset
-train.shape
+df = pd.read_csv('../input/mm_master_demos.csv', index_col=0)
+map_bounds = pd.read_csv('../input/map_data.csv', index_col=0)
+df.head()
 
 
-# ### We create a new cell for "clean" comments. Comments that correspond to none of the 6 categories.
-
-# In[ ]:
-
-
-rowsums=train.iloc[:,2:].sum(axis=1)
-train['clean']=(rowsums==0)
-train['clean'].sum()
-
-
-# In[ ]:
-
-
-colors_list = ["brownish green", "pine green", "ugly purple",
-               "blood", "deep blue", "brown", "azure"]
-
-palette= sns.xkcd_palette(colors_list)
-
-x=train.iloc[:,2:].sum()
-
-plt.figure(figsize=(9,6))
-ax= sns.barplot(x.index, x.values,palette=palette)
-plt.title("Class")
-plt.ylabel('Occurrences', fontsize=12)
-plt.xlabel('Type ')
-rects = ax.patches
-labels = x.values
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 10, label, 
-            ha='center', va='bottom')
-
-plt.show()
-
-
-# [](http://)####  We have more than 86k clean comments... We have a very unbalanced dataset. Even non-clean comments are not equally reparted. This is an issue not to forget when we will train our learning algorithms. This also means that if we predict 'clean' for each comment, our result will not be so bad in term of accuracy.
-
-# In[ ]:
-
-
-# Just a list that contains all the text data. For me not to load the whole dataset everytime
-comment_text_list = train.apply(lambda row : nltk.word_tokenize( row['comment_text']),axis=1)
-
-
-# ### I thought about aggressive comments in french forums. And I remarked that we could detect some aggressive comments without even read them. Comments with many capital letters and many punctuation symbols like "?????" or "!!!!!!" are very likely to be toxic. Let's tag them 
-
-# In[ ]:
-
-
-#An odd comment contains a high rate of punctuation symbols or capital letters
-rate_punctuation=0.7
-rate_capital=0.7
-def odd_comment(comment):
-    punctuation_count=0
-    capital_letter_count=0
-    total_letter_count=0
-    for token in comment:
-        if token in list(string.punctuation):
-            punctuation_count+=1
-        capital_letter_count+=sum(1 for c in token if c.isupper())
-        total_letter_count+=len(token)
-    return((punctuation_count/len(comment))>=rate_punctuation or 
-           (capital_letter_count/total_letter_count)>rate_capital)
-
-odd=comment_text_list.apply(odd_comment)
-
-
-# ### I was right :) More than 65% of my so called odd comments are not clean. It seems to be an interesting feature to add to the dataset. I will train a model for these specific odd comments that cannot be treated the same way as the normal ones. I will have to try other capital and punctuation rates though.
-
-# In[ ]:
-
-
-odd_ones=odd[odd==True]
-#list(ponctuation_polluted.index)
-odd_comments=train.loc[list(odd_ones.index)]
-odd_comments[odd_comments.clean==False].count()/len(odd_comments)
-
-
-# In[ ]:
-
-
-colors_list = ["brownish green", "pine green", "ugly purple",
-               "blood", "deep blue", "brown", "azure"]
-
-palette= sns.xkcd_palette(colors_list)
-
-x=odd_comments.iloc[:,2:].sum()
-
-
-plt.figure(figsize=(9,6))
-ax= sns.barplot(x.index, x.values, alpha=0.8, palette=palette)
-plt.title("# per class")
-plt.ylabel('# of Occurrences', fontsize=12)
-plt.xlabel('Type ', fontsize=12)
-
-rects = ax.patches
-labels = x.values
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 5, label, ha='center', va='bottom')
-
-plt.show()
-
-
-# In[ ]:
-
-
-# quick check for empty comments
-empty_com=train[train.comment_text==""]
-empty_com
-
-
-# In[ ]:
-
-
-#quick check for duplicated comments
-duplicate=train.comment_text.duplicated()
-duplicate[duplicate==True]
-
-
-# In[ ]:
-
-
-#Just storing each categories of non clean comments in specific arrays
-toxic=train[train.toxic==1]['comment_text'].values
-severe_toxic=train[train.severe_toxic==1]['comment_text'].values
-obscene=train[train.obscene==1]['comment_text'].values
-threat=train[train.threat==1]['comment_text'].values
-insult=train[train.insult==1]['comment_text'].values
-identity_hate=train[train.identity_hate==1]['comment_text'].values
-
-
-# Wordclouds are a quick way to see which words are dominant in a text. We can even draw specific forms of cloud. Let's see which word are the most represented in toxic labeled comments
-
-# In[ ]:
-
-
-mask=np.array(Image.open('../input/imagetc/twitter.png'))
-mask=mask[:,:,1]
-from wordcloud import WordCloud, STOPWORDS
-# The wordcloud of Toxic Comments
-plt.figure(figsize=(16,13))
-wc = WordCloud(background_color="black", max_words=500,mask=mask 
-             , stopwords=stopwords, max_font_size= 60)
-wc.generate(" ".join(toxic))
-plt.title("Twitter Wordlcloud Toxic Comments", fontsize=30)
-# plt.imshow(wc.recolor( colormap= 'Pastel1_r' , random_state=17), alpha=0.98)
-plt.imshow(wc.recolor( colormap= 'Set1' , random_state=1), alpha=0.98)
-plt.axis('off')
-plt.savefig('twitter_wc.png')
-
-
-# ### Till now we have worked with raw text. Let's do some text processing now
-# ### We are gonna Lemmatize every word we have.
-# Lemmatization uses context and part of speech to determine the inflected form of the word and applies different normalization rules for each part of speech to get the root word (lemma). 
-# For instance : Lemmatization(drank)=drink
+# ### Data Prep
 # 
-# ### We also replace some apostrophe words like "won't" ==> will not, "can't"==> cannot..
-# ### Let's begin with the toxic category
+# Let's first only isolate for active duty maps as they are the maps that most competitive players really care about.  I also want to first convert the in-game coordinates to overhead map coordinates.
 
 # In[ ]:
 
 
-
-
-replacement_patterns = [
- (r'won\'t', 'will not'),
- (r'can\'t', 'cannot'),
- (r'i\'m', 'i am'),
- (r'ain\'t', 'is not'),
- (r'(\w+)\'ll', '\g<1> will'),
- (r'(\w+)n\'t', '\g<1> not'),
- (r'(\w+)\'ve', '\g<1> have'),
- (r'(\w+)\'s', '\g<1> is'),
- (r'(\w+)\'re', '\g<1> are'),
- (r'(\w+)\'d', '\g<1> would')
-]
-class RegexpReplacer(object):
-    def __init__(self, patterns=replacement_patterns):
-         self.patterns = [(re.compile(regex), repl) for (regex, repl) in
-         patterns]
-     
-    def replace(self, text):
-        s = text
-        for (pattern, repl) in self.patterns:
-             s = re.sub(pattern, repl, s)
-        return s
+active_duty_maps = ['de_cache', 'de_cbble', 'de_dust2', 'de_inferno', 'de_mirage', 'de_overpass', 'de_train']
+df = df[df['map'].isin(active_duty_maps)]
+df = df.reset_index(drop=True)
+md = map_bounds.loc[df['map']]
+md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = (df.set_index('map')[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']])
+md['att_pos_x'] = (md['ResX']*(md['att_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
+md['att_pos_y'] = (md['ResY']*(md['att_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
+md['vic_pos_x'] = (md['ResX']*(md['vic_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
+md['vic_pos_y'] = (md['ResY']*(md['vic_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
+df[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']].values
 
 
 # In[ ]:
 
 
-from nltk.stem import WordNetLemmatizer
-lemmer = WordNetLemmatizer()
-stopwords = nltk.corpus.stopwords.words('english')
-from nltk.tokenize import TweetTokenizer
-#from replacers import RegexpReplacer
-replacer = RegexpReplacer()
-tokenizer=TweetTokenizer()
-
-def comment_process(category):
-    category_processed=[]
-    for i in range(category.shape[0]):
-        comment_list=tokenizer.tokenize(replacer.replace(category[i]))
-        comment_list_cleaned= [word for word in comment_list if ( word.lower() not in stopwords 
-                              and word.lower() not in list(string.punctuation) )]
-        comment_list_lemmed=[lemmer.lemmatize(word, 'v') for word in comment_list_cleaned]
-        category_processed.extend(list(comment_list_lemmed))
-    return category_processed
+print("Total Number of Rounds: %i" % df.groupby(['file', 'round'])['tick'].first().count())
 
 
-# In[ ]:
-
-
-toxic1=comment_process(toxic)
-
-
-# In[ ]:
-
-
-fd=nltk.FreqDist(word for word in toxic1)
-
-x=[fd.most_common(150)[i][0] for i in range(99)]
-y=[fd.most_common(150)[i][1] for i in range(99)]
-#palette=sns.color_palette("PuBuGn_d",100)
-palette= sns.light_palette("crimson",100,reverse=True)
-plt.figure(figsize=(45,15))
-ax= sns.barplot(x, y, alpha=0.8,palette=palette)
-plt.title("Occurences per word in Toxic comments 1")
-plt.ylabel('Occurrences', fontsize=30)
-plt.xlabel(' Word ', fontsize=30)
-#adding the text labels
-rects = ax.patches
-labels = y
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 5, label, ha='center', va='bottom')
-    plt.xticks(rotation=60, fontsize=18)
-#plt.savefig('Toxic_Word_count1.png')    
-plt.show()
-
-
-
-
-#  You can open that plot in a new window to see it bigger ;)
-# ### We see that some words have lots of occurences whereas we  did not even see them on the first wordcloud. Using the word cloud library on unprocessed data may be misleading. Let's do draw the same barplot without lemmatization and stemming
-
-# In[ ]:
-
-
-toxic2=[]
-for i in range(toxic.shape[0]):
-    comment_list=nltk.word_tokenize(toxic[i])
-    comment_list_cleaned= [word for word in comment_list if ( word.lower() not in stopwords 
-                          and word.lower() not in list(string.punctuation) )]
-    toxic2.extend(list(set(comment_list_cleaned)))
-
-
-# In[ ]:
-
-
-fd2=nltk.FreqDist(word for word in toxic2)
-x=[fd2.most_common(100)[i][0] for i in range(99)]
-y=[fd2.most_common(100)[i][1] for i in range(99)]
-palette= sns.light_palette("crimson",100,reverse=True)
-plt.figure(figsize=(45,15))
-ax= sns.barplot(x, y, alpha=0.8,palette=palette)
-plt.title("Occurence per word in Toxic comments")
-plt.ylabel('Occurrences', fontsize=30)
-plt.xlabel(' Word ', fontsize=30)
-
-rects = ax.patches
-labels = y
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 5, label, ha='center', va='bottom')
-    plt.xticks(rotation=60, fontsize=18)
-#plt.savefig('Toxic_Word_count2.png')    
-plt.show()
-#Check the bigger picture in imagetc files 
-
-
-# ### Without Lemmatization, the roots of words can be separated in different bars. So we won't use this processed data
-
-# In[ ]:
-
-
-def wordcloud_plot(category, name) : 
-    plt.figure(figsize=(20,15))
-    wc = WordCloud(background_color="black", max_words=500,mask=mask, min_font_size=6 
-                 , stopwords=stopwords, max_font_size= 60)
-    wc.generate(" ".join(category))
-    plt.title("Twitter Wordlcloud " + name +  " Comments", fontsize=30)
-    # plt.imshow(wc.recolor( colormap= 'Pastel1_r' , random_state=17), alpha=0.98)
-    plt.imshow(wc.recolor( colormap= 'Set1' , random_state=21), alpha=0.98)
-    plt.axis('off')
-    plt.savefig(name+'_wc.png')
-    return(True)
-
-wordcloud_plot(toxic1,'Toxic')
-
-
-# ### This final Word Cloud is very different to the first one. And this one is more coherent compared to the barplot. Now we are going to draw the wordclouds for each categories.
-
-# In[ ]:
-
-
-severe_toxic1=comment_process(severe_toxic)
-obscene1=comment_process(obscene)
-threat1=comment_process(threat)
-insult1=comment_process(insult)
-identity_hate1=comment_process(identity_hate)
-
-
-# In[ ]:
-
-
-wordcloud_plot(severe_toxic1,'Severe_toxic')
-
-
-# In[ ]:
-
-
-wordcloud_plot(obscene1,'Obscene')
-
-
-# In[ ]:
-
-
-wordcloud_plot(threat1,'Threat')
-
-
-# In[ ]:
-
-
-wordcloud_plot(insult1,'Insult')
-
-
-# In[ ]:
-
-
-wordcloud_plot(identity_hate1,'Identity_Hate')
-
-
-# ### From all those plots we conclude that :
-# Some categories share the same vocabulary in term of richness and word frequency, like Insult and Toxic categories. And some others, like Identity Hate category, use specific words more frequently. I let you check that for yourself. 
-# We could try to find the words that are specific to each category to create a new feature but the TF-IDF trick will do that for us.
-
-# ### Let's Tackle the problem of length
+# ### Pistol Round Buys
 # 
+# Let's first start by taking only pistol rounds and count the number of rounds
 
 # In[ ]:
 
 
-toxic3=train[train.clean==False]['comment_text']
-toxic3
-toxic_count_word=toxic3.apply(lambda x: len(str(x).split()))
-print(toxic_count_word.describe(),'\n \n',toxic_count_word.quantile(q=0.9))
+avail_pistols = ['USP', 'Glock', 'P2000', 'P250', 'Tec9', 'FiveSeven', 'Deagle', 'DualBarettas', 'CZ']
+
+df_pistol = df[(df['round'].isin([1,16])) & (df['wp'].isin(avail_pistols))]
+print("Total Number of Pistol Rounds: %i" % df_pistol.groupby(['file', 'round'])['tick'].first().count())
 
 
-# In[ ]:
-
-
-clean3=train[train.clean==True]['comment_text']
-clean_count_word=clean3.apply(lambda x: len(str(x).split()))
-print(clean_count_word.describe(), clean_count_word.quantile(q=0.9))
-
-
-# It seems like we will not use the number of word in comments as a features. The variance for clean and non clean comment is too big and their distribution overlap each other. :(
+# Let's first start by looking at pistol round buys.  We infer this from the damage dealt by pistols each round.  There is a bias here where if you did 0 damage with that pistol you had, then it doesn't get counted.  The potential bias is that aim punch will make most weapons get undercounted but I don't think it's a large issue.
 
 # In[ ]:
 
 
-x=rowsums.value_counts()
-
-#plot
-plt.figure(figsize=(8,4))
-ax = sns.barplot(x.index, x.values, alpha=0.8)
-plt.title("Multiple tags per comment")
-plt.ylabel('# of Occurrences', fontsize=12)
-plt.xlabel('# of tags ', fontsize=12)
-
-#adding the text labels
-rects = ax.patches
-labels = x.values
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 5, label, ha='center', va='bottom')
-
-plt.show()
+pistol_buys = df_pistol.groupby(['file', 'round', 'att_side', 'wp'])['hp_dmg'].first()
+(pistol_buys.groupby(['wp']).count()/pistol_buys.groupby(['wp']).count().sum())*100.
 
 
-# One could think that the comments with more label may be longer. But it's not even the case...
-
-# Another Kaggler, Jagan, proposed to identify spam comments by their percentage of unique word. Great idea !
-
-# In[ ]:
-
-
-#Credit Jagan
-
-train['count_unique_word']=train["comment_text"].apply(lambda x: len(set(str(x).split())))
-train['count_word']=train["comment_text"].apply(lambda x: len(str(x).split()))
-train['word_unique_percent']=train['count_unique_word']*100/train['count_word']
-spammers=train[train['word_unique_percent']<30]
-
-plt.figure(figsize=(16,12))
-plt.suptitle("What's so unique ?",fontsize=20)
-#gridspec.GridSpec(2,1)
-
-
-plt.subplot2grid((2,1),(0,0))
-plt.title("Percentage of unique words of total words in comment")
-#sns.boxplot(x='clean', y='word_unique_percent', data=train_feats)
-ax=sns.kdeplot(train[train.clean == 0].word_unique_percent, label="Bad",shade=True,color='r')
-ax=sns.kdeplot(train[train.clean == 1].word_unique_percent, label="Clean")
-plt.legend()
-plt.ylabel('Number of occurances', fontsize=12)
-plt.xlabel('Percent unique words', fontsize=12)
-
-x=spammers.iloc[:,2:9].sum()
-plt.subplot2grid((2,1),(1,0),colspan=2)
-plt.title("Count of comments with low(<30%) unique words",fontsize=15)
-ax=sns.barplot(x=x.index, y=x.values,color='crimson')
-
-#adding the text labels
-rects = ax.patches
-labels = x.values
-for rect, label in zip(rects, labels):
-    height = rect.get_height()
-    ax.text(rect.get_x() + rect.get_width()/2, height + 5, label, ha='center', va='bottom')
-
-plt.xlabel('Threat class', fontsize=12)
-plt.ylabel('# of comments', fontsize=12)
-plt.show()
-
-
-# # And as espected, spams are more toxic
-# We will train another specific model for spams.
-
-# ### Bag of Words and TF-IDF
-# As I wrote earlier, TF-IDF is a trick that detects the most discriminatory words. A sentence with many discriminatory word is likely to be more important. TF-IDF calculate a score of each and every word and then look for an average score normalized by the words that are important
-# This [Article](http://datameetsmedia.com/bag-of-words-tf-idf-explained/) gives a good explanation of Bag of Words and the TF-IDF trick
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-tf = TfidfVectorizer( strip_accents='unicode',analyzer='word',ngram_range=(1,1),
-            use_idf=True,smooth_idf=True,sublinear_tf=True,
-            stop_words = 'english')
-"""tf = TfidfVectorizer(min_df=100,  max_features=100000, 
-            strip_accents='unicode', analyzer='word',ngram_range=(1,1),
-            use_idf=1,smooth_idf=1,sublinear_tf=1)"""
-
-
-# In[ ]:
-
-
-def category_to_tfidf(category):
-    tvec_weights = tf.fit_transform(category)
-    weights = np.asarray(tvec_weights.mean(axis=0)).ravel().tolist()
-    weights_df = pd.DataFrame({'term': tf.get_feature_names(), 'weight': weights})
-    return(weights_df.sort_values(by='weight', ascending=False).head(10))
-
-
-
-# In[ ]:
-
-
-toxic_idf=category_to_tfidf(toxic1)
-severe_toxic_idf=category_to_tfidf(severe_toxic1)
-threat_idf=category_to_tfidf(threat1)
-insult_idf=category_to_tfidf(insult1)
-obscene_idf=category_to_tfidf(obscene1)
-identity_hate_idf=category_to_tfidf(identity_hate1)
-toxic_idf
-
-
-# In[ ]:
-
-
-color_list = ["xkcd:brownish green", "xkcd:pine green", "xkcd:ugly purple",
-               "xkcd:blood", "xkcd:deep blue", "xkcd:brown"]
-plt.figure(figsize=(20,22))
-plt.suptitle("TF-IDF ranking ",fontsize=20)
-gridspec.GridSpec(3,2)
-plt.subplot2grid((3,2),(0,0))
-sns.barplot(toxic_idf.term,
-            toxic_idf.weight,color=color_list[0])
-plt.title("Toxic",fontsize=15)
-plt.xlabel('Term', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-plt.subplot2grid((3,2),(0,1))
-sns.barplot(severe_toxic_idf.term,
-            severe_toxic_idf.weight,color=color_list[1])
-plt.title(" Severe toxic",fontsize=15)
-plt.xlabel('Term', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-
-plt.subplot2grid((3,2),(1,0))
-sns.barplot(obscene_idf.term,
-            obscene_idf.weight,color=color_list[2])
-plt.title("Obscene",fontsize=15)
-plt.xlabel('Term', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-
-plt.subplot2grid((3,2),(1,1))
-sns.barplot(threat_idf.term,
-            threat_idf.weight,color=color_list[3])
-plt.title("Threat",fontsize=15)
-plt.xlabel('Word', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-
-plt.subplot2grid((3,2),(2,0))
-sns.barplot(insult_idf.term,
-            insult_idf.weight,color=color_list[4])
-plt.title("Insult",fontsize=15)
-plt.xlabel('Term', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-
-plt.subplot2grid((3,2),(2,1))
-sns.barplot(identity_hate_idf.term,
-            identity_hate_idf.weight,color=color_list[5])
-plt.title("Identity hate",fontsize=15)
-plt.xlabel('Term', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-
-
-plt.show()
-
-
-# ### I think this TF-IDF ranking is perfectible. We still have words like " Wikipedia" or "like"  that do not give much informtion about the specificity of each category.
-
-# # This is the end of my first EDA. Let's summarize what we have learned from that :
-# * The dataset is unbalanced with far more clean comments than toxic ones
-# *  There are odd comments and spams that need to be traited separately.
-# * We have made a good use of wordcloud to see some words that are specific to each category
-# * We have used the TF-IDF quite succesfuly but it seems to be perfectible
+# Looks like Glock/USP trumps over most pistols.
 # 
-# ### Now let's  test some algorithms on this data.
+# ---
 # 
-# You can read the rest of this notebook but I will write another one for the prediction part. 
-# You can find it [there](https://www.kaggle.com/gakngm/some-predictions-for-toxic-comments/)
+# ### Heatmaps of Frequency of Pistol Damage
 # 
-# # Enjoy =)
+# Next we can look at what are the most frequent spots when attacking as a T.  To keep it short, I will just do it on dust2 but changing `smap` will work on any map within `active_duty_maps`
+
+# In[ ]:
+
+
+smap = 'de_dust2'
+
+bg = imread('../input/'+smap+'.png')
+fig, (ax1, ax2) = plt.subplots(1,2,figsize=(18,16))
+ax1.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax2.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax1.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+ax2.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+plt.xlim(0,1024)
+plt.ylim(0,1024)
+
+plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'Terrorist')]
+sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='YlOrBr', bw=15, ax=ax1)
+ax1.set_title('Terrorists Attacking')
+
+plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'CounterTerrorist')]
+sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='Blues', bw=15, ax=ax2)
+ax2.set_title('Counter-Terrorists Attacking')
+
+
 # 
+# ---
+# 
+# ### ADR by Pistols
+# 
+# Next let's take a look at the average damage per round dealt by a player given their pistol.  Note that if they had picked up a pistol during the round, it does get counted separately.  However, given that most pistol kills are headshots, it shouldn't skew the statistic that much (especially for USPS).
+
+# In[ ]:
+
+
+df_pistol.groupby(['file', 'round', 'wp', 'att_id'])['hp_dmg'].sum().groupby('wp').agg(['count', 'mean']).sort_values(by='mean')
+
+
+# __Deagle has a massive advantage in damage__
+# 
+# ---
+# 
+# ### Bomb Site Plants
+# 
+# Let's now look at the Number of bomb plants by site.  This statistic tells us the T's preferences for deciding which site to take during the round.  Although the possibility of rotates are always there, it gives us a good idea of what to expect.
+
+# In[ ]:
+
+
+df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'map', 'round', 'bomb_site'])['tick']         .first().groupby(['map', 'bomb_site']).count().unstack('bomb_site')
+
+
+# ---
+# 
+# ### Post-plant Win Probabilities by Advantages
+# 
+# This one could be further disseminated but we want to be able to look at the win probabilities post plant given the context of how many Ts and CTs are alive at that time.  First, we can look at overall statistic:
+
+# In[ ]:
+
+
+bomb_prob_overall = df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'winner_side'])['tick'].first().groupby(['map', 'bomb_site', 'winner_side']).count()
+bomb_prob_overall_pct = bomb_prob_overall.groupby(level=[0,1]).apply(lambda x: 100 * x / float(x.sum()))
+bomb_prob_overall_pct.unstack('map')
+
+
+# Next we can first find for each round the post-plant situation (if it was planted at all) and calculate advantages.  I've given two options (XvX) or more generally by differences (e.g 5 Ts - 3 CTs = 2).
+
+# In[ ]:
+
+
+df_pistol['XvX'] = np.nan
+for k,g in df_pistol.groupby(['file', 'round']):
+    if((g['is_bomb_planted'] == True).any() == False):
+        continue
+    else:
+        post_plant_survivors = 5-np.floor((g[~g['is_bomb_planted']].groupby('vic_side')['hp_dmg'].sum()/100.))
+       # df_pistol.loc[g.index, 'XvX'] = "%iv%i" % (post_plant_survivors.get('Terrorist', 5), post_plant_survivors.get('CounterTerrorist', 5) )
+        df_pistol.loc[g.index, 'XvX'] = post_plant_survivors.get('Terrorist', 5) - post_plant_survivors.get('CounterTerrorist', 5)
+
+
+# Now we can calculate the Win probabilities by advantages, note that I isolate for just Terrorist because having CT columns (which is redundant), muddles the table.
+
+# In[ ]:
+
+
+bomb_prob = df_pistol[~df_pistol['XvX'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'XvX', 'winner_side'])['tick'].first().groupby(['XvX', 'map', 'bomb_site', 'winner_side']).count()
+bomb_prob_pct = bomb_prob.groupby(level=[0,1,2]).apply(lambda x: 100 * x / float(x.sum()))
+bomb_prob_pct.xs('Terrorist', level=3).unstack(['XvX', 'bomb_site']).fillna(0)
+
+
+# ---
+# 
+# ### In/Out-of-site ADR
+# 
+# I've always wondered if it's better to play post-plants in-site our out-of-site during a one-man up/down or equal situation. In-site has the advantage of peeking when the CTs are clearing outer-site spots but the con of being in a spot where you are forced to duel the CTs. Outer-site has pro of baiting shots and playing time but having to peek into the CT when he is defusing. Let's isolate for only 1v1, 2v1, 1v2, 2v2 situations and look at average ADR differential when you play inner site or outer site.
+# 
+# Before we do that though, we have to define what is considered Inner/Outer site.  Using some basic rectangles, I can draw sites on the map and then define them via simple top-left, bottom-right coordinates.
+
+# In[ ]:
+
+
+callouts = {
+    'de_cache': {
+        'B inner': [[310,782,413,865]],
+        'A inner': [[278,165,388,320]]
+    },
+    'de_cbble': {
+        'B inner': [[625,626,720,688]],
+        'A inner': [[134,746,225,861]]
+    },
+    'de_train': {
+        'B inner': [[405,754,607,812]],
+        'A inner': [[582,462,713,539]]
+    },
+    'de_dust2': {
+        'B inner': [[162,99,256,199]],
+        'A inner': [[786,182,846,239]]
+    },
+    'de_mirage': {
+        'B inner': [[188,245,286,345]],
+        'A inner': [[498,737,610,835]]
+    },
+    'de_inferno': {
+        'B inner': [[410,115,548,320]],
+        'A inner': [[783,638,877,765]]
+    },
+    'de_overpass': {
+        'B inner': [[686,294,745,359]],
+        'A inner': [[452,174,560,272]]
+    },
+}
+
+def find_callout(x,y,m,buffer=10): 
+    callout = 'N/A'
+    for c,coord in callouts[m].items():
+        for box in coord:
+            if ((box[2]+buffer >= x >= box[0]-buffer) & 
+                (buffer+(1024-box[1]) >= y >= (1024-box[3])-buffer)):
+                    callout = c
+    return callout
+
+
+# Let's see an example of this on dust2
+
+# In[ ]:
+
+
+smap = 'de_dust2'
+
+def calc_plot_coord(l):
+    tx,ty,bx,by = l
+    by = 1024-by; ty=1024-ty;
+    w = bx-tx; h= ty-by;
+    return (tx,by,w,h)
+
+bg = imread('../input/'+smap+'.png')
+fig, ax = plt.subplots(figsize=(10,10))
+ax.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+plt.xlim(0,1024)
+plt.ylim(0,1024)
+patches = []
+for k,coords in callouts[smap].items():
+    for c in coords:
+        x,y,w,h = calc_plot_coord(c)
+        patches.append(mpatches.Rectangle((x,y),w,h))
+        plt.text(x+w/2.3,y+h/2.3, s=k, size= 8, color='w')
+colors = np.linspace(0, 1, len(patches))
+collection = PatchCollection(patches, cmap=plt.cm.hsv, alpha=0.4)
+collection.set_array(np.array(colors))
+ax.add_collection(collection)
+
+
+# Now let's convert the coordinates of T attackers or victims to callouts (either N/A: outer site or Inner A/Inner B)
+
+# In[ ]:
+
+
+bomb_dist = df_pistol[(df_pistol['XvX'].isin([-1, 0, 1]))
+                     &(~df_pistol['bomb_site'].isnull())
+                     &((df_pistol['vic_side'] == 'Terrorist') | (df_pistol['att_side'] == 'Terrorist'))]
+
+bomb_dist['att_callout'] = bomb_dist.apply(lambda x: find_callout(x['att_pos_x'], x['att_pos_y'], x['map'], buffer=5), axis=1)
+bomb_dist['vic_callout'] = bomb_dist.apply(lambda x: find_callout(x['vic_pos_x'], x['vic_pos_y'], x['map'], buffer=5), axis=1)
+
+
+# Now we can calculate ADR by site
+
+# In[ ]:
+
+
+bomb_dist_total_dmg_att = bomb_dist.groupby(['file', 'map', 'round', 'att_callout', 'att_id'])['hp_dmg'].sum()
+bomb_dist_total_dmg_vic = bomb_dist.groupby(['file', 'map', 'round', 'vic_callout', 'vic_id'])['hp_dmg'].sum()
+dmg_dealt = bomb_dist_total_dmg_att.groupby(['map', 'att_callout']).agg(['count', 'mean'])
+dmg_rec = bomb_dist_total_dmg_vic.groupby(['map', 'vic_callout']).agg(['count', 'mean'])
+dmg_diff = dmg_dealt['mean'] - dmg_rec['mean']
+dmg_diff.unstack('att_callout')
+

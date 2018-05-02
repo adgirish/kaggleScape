@@ -1,76 +1,119 @@
 import numpy as np
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from xgboost.sklearn import XGBClassifier
+from sklearn.metrics import accuracy_score, mean_absolute_error
 
-np.random.seed(0)
-
-#Loading data
-df_train = pd.read_csv('../input/train_users.csv')
-df_test = pd.read_csv('../input/test_users.csv')
-labels = df_train['country_destination'].values
-df_train = df_train.drop(['country_destination'], axis=1)
-id_test = df_test['id']
-piv_train = df_train.shape[0]
-
-#Creating a DataFrame with train+test data
-df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
-#Removing id and date_first_booking
-df_all = df_all.drop(['id', 'date_first_booking'], axis=1)
-#Filling nan
-df_all = df_all.fillna(-1)
-
-#####Feature engineering#######
-#date_account_created
-dac = np.vstack(df_all.date_account_created.astype(str).apply(lambda x: list(map(int, x.split('-')))).values)
-df_all['dac_year'] = dac[:,0]
-df_all['dac_month'] = dac[:,1]
-df_all['dac_day'] = dac[:,2]
-df_all = df_all.drop(['date_account_created'], axis=1)
-
-#timestamp_first_active
-tfa = np.vstack(df_all.timestamp_first_active.astype(str).apply(lambda x: list(map(int, [x[:4],x[4:6],x[6:8],x[8:10],x[10:12],x[12:14]]))).values)
-df_all['tfa_year'] = tfa[:,0]
-df_all['tfa_month'] = tfa[:,1]
-df_all['tfa_day'] = tfa[:,2]
-df_all = df_all.drop(['timestamp_first_active'], axis=1)
-
-#Age
-av = df_all.age.values
-df_all['age'] = np.where(np.logical_or(av<14, av>100), -1, av)
-
-#One-hot-encoding features
-ohe_feats = ['gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser']
-for f in ohe_feats:
-    df_all_dummy = pd.get_dummies(df_all[f], prefix=f)
-    df_all = df_all.drop([f], axis=1)
-    df_all = pd.concat((df_all, df_all_dummy), axis=1)
-
-#Splitting train and test
-vals = df_all.values
-X = vals[:piv_train]
-le = LabelEncoder()
-y = le.fit_transform(labels)   
-X_test = vals[piv_train:]
-
-#Classifier
-xgb = XGBClassifier(max_depth=6, learning_rate=0.3, n_estimators=25,
-                    objective='multi:softprob', subsample=0.5, colsample_bytree=0.5, seed=0)                  
-xgb.fit(X, y)
-y_pred = xgb.predict_proba(X_test)  
-
-#Taking the 5 classes with highest probabilities
-ids = []  #list of ids
-cts = []  #list of countries
-for i in range(len(id_test)):
-    idx = id_test[i]
-    ids += [idx] * 5
-    cts += le.inverse_transform(np.argsort(y_pred[i])[::-1])[:5].tolist()
-
-#Generate submission
-sub = pd.DataFrame(np.column_stack((ids, cts)), columns=['id', 'country'])
-sub.to_csv('sub.csv',index=False)
+# The following 3 functions have been taken from Ben Hamner's github repository
+# https://github.com/benhamner/Metrics
+def confusion_matrix(rater_a, rater_b, min_rating=None, max_rating=None):
+    """
+    Returns the confusion matrix between rater's ratings
+    """
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(rater_a + rater_b)
+    if max_rating is None:
+        max_rating = max(rater_a + rater_b)
+    num_ratings = int(max_rating - min_rating + 1)
+    conf_mat = [[0 for i in range(num_ratings)]
+                for j in range(num_ratings)]
+    for a, b in zip(rater_a, rater_b):
+        conf_mat[a - min_rating][b - min_rating] += 1
+    return conf_mat
 
 
-  
+def histogram(ratings, min_rating=None, max_rating=None):
+    """
+    Returns the counts of each type of rating that a rater made
+    """
+    if min_rating is None:
+        min_rating = min(ratings)
+    if max_rating is None:
+        max_rating = max(ratings)
+    num_ratings = int(max_rating - min_rating + 1)
+    hist_ratings = [0 for x in range(num_ratings)]
+    for r in ratings:
+        hist_ratings[r - min_rating] += 1
+    return hist_ratings
+
+
+def quadratic_weighted_kappa(y, y_pred):
+    """
+    Calculates the quadratic weighted kappa
+    axquadratic_weighted_kappa calculates the quadratic weighted kappa
+    value, which is a measure of inter-rater agreement between two raters
+    that provide discrete numeric ratings.  Potential values range from -1
+    (representing complete disagreement) to 1 (representing complete
+    agreement).  A kappa value of 0 is expected if all agreement is due to
+    chance.
+    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
+    each correspond to a list of integer ratings.  These lists must have the
+    same length.
+    The ratings should be integers, and it is assumed that they contain
+    the complete range of possible ratings.
+    quadratic_weighted_kappa(X, min_rating, max_rating), where min_rating
+    is the minimum possible rating, and max_rating is the maximum possible
+    rating
+    """
+    rater_a = y
+    rater_b = y_pred
+    min_rating=None
+    max_rating=None
+    rater_a = np.array(rater_a, dtype=int)
+    rater_b = np.array(rater_b, dtype=int)
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(min(rater_a), min(rater_b))
+    if max_rating is None:
+        max_rating = max(max(rater_a), max(rater_b))
+    conf_mat = confusion_matrix(rater_a, rater_b,
+                                min_rating, max_rating)
+    num_ratings = len(conf_mat)
+    num_scored_items = float(len(rater_a))
+
+    hist_rater_a = histogram(rater_a, min_rating, max_rating)
+    hist_rater_b = histogram(rater_b, min_rating, max_rating)
+
+    numerator = 0.0
+    denominator = 0.0
+
+    for i in range(num_ratings):
+        for j in range(num_ratings):
+            expected_count = (hist_rater_a[i] * hist_rater_b[j]
+                              / num_scored_items)
+            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
+            numerator += d * conf_mat[i][j] / num_scored_items
+            denominator += d * expected_count / num_scored_items
+
+    return (1.0 - numerator / denominator)
     
+Y_real = np.array([1,2,3,1,4,4,4,4,4,4])  
+Y_pred = np.array([4,2,3,1,4,4,4,4,4,4])
+
+print("ONE EXTREME ERROR")
+print("Ground truth:\t%s"%Y_real)
+print("Predicted   :\t%s"%Y_pred)
+print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
+print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
+print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
+print()
+
+Y_real = np.array([1,2,3,1,4,4,4,4,4,4])
+Y_pred = np.array([1,2,3,1,4,3,3,3,3,2])
+
+print("FIVE SMALL ERRORS")
+print("Ground truth:\t%s"%Y_real)
+print("Predicted   :\t%s"%Y_pred)
+print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
+print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
+print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
+print()
+
+Y_real = np.array([1,1,3,1,4,4,4,4,4,4])
+Y_pred = np.array([1,1,3,1,4,3,3,3,3,2])
+
+print("KAPPA CHANGES WHEN DISTRIBUTION CHANGES")
+print("Ground truth:\t%s"%Y_real)
+print("Predicted   :\t%s"%Y_pred)
+print("MAE         :\t%s"%mean_absolute_error(Y_real,Y_pred))
+print("Accuracy    :\t%s"%accuracy_score(Y_real,Y_pred))
+print("Kappa       :\t%s"%quadratic_weighted_kappa(Y_real,Y_pred))
+

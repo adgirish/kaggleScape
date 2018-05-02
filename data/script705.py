@@ -1,198 +1,167 @@
 
 # coding: utf-8
 
-# ## Import library
-
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import gc
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold
-from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.metrics import log_loss,confusion_matrix,classification_report,roc_curve,auc
-
-import string
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from scipy import sparse
-get_ipython().run_line_magic('matplotlib', 'inline')
-seed = 42
-import os
-os.environ['OMP_NUM_THREADS'] = '4'
-
-
-# ## Read data set
-
-# In[ ]:
-
-
-#path = 'file/'
-path = '../input/'
-train = pd.read_csv(path+'train.csv')
-test = pd.read_csv(path+'test.csv')
-print('Number of rows and columns in the train data set:',train.shape)
-print('Number of rows and columns in the test data set:',test.shape)
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import timeit
+import warnings
+warnings.filterwarnings("ignore")
+pd.options.mode.chained_assignment = None  # default='warn'
 
 
 # In[ ]:
 
 
-train.head()
+target_cols = ['ind_ahor_fin_ult1','ind_aval_fin_ult1','ind_cco_fin_ult1',
+               'ind_cder_fin_ult1','ind_cno_fin_ult1','ind_ctju_fin_ult1',
+               'ind_ctma_fin_ult1','ind_ctop_fin_ult1','ind_ctpp_fin_ult1',
+               'ind_deco_fin_ult1','ind_deme_fin_ult1','ind_dela_fin_ult1',
+               'ind_ecue_fin_ult1','ind_fond_fin_ult1','ind_hip_fin_ult1',
+               'ind_plan_fin_ult1','ind_pres_fin_ult1','ind_reca_fin_ult1',
+               'ind_tjcr_fin_ult1','ind_valo_fin_ult1','ind_viv_fin_ult1',
+               'ind_nomina_ult1','ind_nom_pens_ult1','ind_recibo_ult1']
+
+canal_dict = {'KAI': 35,'KBG': 17,'KGU': 149,'KDE': 47,'KAJ': 41,'KCG': 59,
+ 'KHM': 12,'KAL': 74,'KFH': 140,'KCT': 112,'KBJ': 133,'KBL': 88,'KHQ': 157,'KFB': 146,'KFV': 48,'KFC': 4,
+ 'KCK': 52,'KAN': 110,'KES': 68,'KCB': 78,'KBS': 118,'KDP': 103,'KDD': 113,'KBX': 116,'KCM': 82,
+ 'KAE': 30,'KAB': 28,'KFG': 27,'KDA': 63,'KBV': 100,'KBD': 109,'KBW': 114,'KGN': 11,
+ 'KCP': 129,'KAK': 51,'KAR': 32,'KHK': 10,'KDS': 124,'KEY': 93,'KFU': 36,'KBY': 111,
+ 'KEK': 145,'KCX': 120,'KDQ': 80,'K00': 50,'KCC': 29,'KCN': 81,'KDZ': 99,'KDR': 56,
+ 'KBE': 119,'KFN': 42,'KEC': 66,'KDM': 130,'KBP': 121,'KAU': 142,'KDU': 79,
+ 'KCH': 84,'KHF': 19,'KCR': 153,'KBH': 90,'KEA': 89,'KEM': 155,'KGY': 44,'KBM': 135,
+ 'KEW': 98,'KDB': 117,'KHD': 2,'RED': 8,'KBN': 122,'KDY': 61,'KDI': 150,'KEU': 72,
+ 'KCA': 73,'KAH': 31,'KAO': 94,'KAZ': 7,'004': 83,'KEJ': 95,'KBQ': 62,'KEZ': 108,
+ 'KCI': 65,'KGW': 147,'KFJ': 33,'KCF': 105,'KFT': 92,'KED': 143,'KAT': 5,'KDL': 158,
+ 'KFA': 3,'KCO': 104,'KEO': 96,'KBZ': 67,'KHA': 22,'KDX': 69,'KDO': 60,'KAF': 23,'KAW': 76,
+ 'KAG': 26,'KAM': 107,'KEL': 125,'KEH': 15,'KAQ': 37,'KFD': 25,'KEQ': 138,'KEN': 137,
+ 'KFS': 38,'KBB': 131,'KCE': 86,'KAP': 46,'KAC': 57,'KBO': 64,'KHR': 161,'KFF': 45,
+ 'KEE': 152,'KHL': 0,'007': 71,'KDG': 126,'025': 159,'KGX': 24,'KEI': 97,'KBF': 102,
+ 'KEG': 136,'KFP': 40,'KDF': 127,'KCJ': 156,'KFR': 144,'KDW': 132,-1: 6,'KAD': 16,
+ 'KBU': 55,'KCU': 115,'KAA': 39,'KEF': 128,'KAY': 54,'KGC': 18,'KAV': 139,'KDN': 151,
+ 'KCV': 106,'KCL': 53,'013': 49,'KDV': 91,'KFE': 148,'KCQ': 154,'KDH': 14,'KHN': 21,
+ 'KDT': 58,'KBR': 101,'KEB': 123,'KAS': 70,'KCD': 85,'KFL': 34,'KCS': 77,'KHO': 13,
+ 'KEV': 87,'KHE': 1,'KHC': 9,'KFK': 20,'KDC': 75,'KFM': 141,'KHP': 160,'KHS': 162,
+ 'KFI': 134,'KGV': 43}
+
+
+pais_dict = {'LV': 102,'CA': 2,'GB': 9,'EC': 19,'BY': 64,'ML': 104,'MT': 118,
+ 'LU': 59,'GR': 39,'NI': 33,'BZ': 113,'QA': 58,'DE': 10,'AU': 63,'IN': 31,
+ 'GN': 98,'KE': 65,'HN': 22,'JM': 116,'SV': 53,'TH': 79,'IE': 5,'TN': 85,
+ 'PH': 91,'ET': 54,'AR': 13,'KR': 87,'GA': 45,'FR': 8,'SG': 66,'LB': 81,
+ 'MA': 38,'NZ': 93,'SK': 69,'CN': 28,'GI': 96,'PY': 51,'SA': 56,'PL': 30,
+ 'PE': 20,'GE': 78,'HR': 67,'CD': 112,'MM': 94,'MR': 48,'NG': 83,'HU': 106,
+ 'AO': 71,'NL': 7,'GM': 110,'DJ': 115,'ZA': 75,'OM': 100,'LT': 103,'MZ': 27,
+ 'VE': 14,'EE': 52,'CF': 109,'CL': 4,'SL': 97,'DO': 11,'PT': 26,'ES': 0,
+ 'CZ': 36,'AD': 35,'RO': 41,'TW': 29,'BA': 61,'IS': 107,'AT': 6,'ZW': 114,
+ 'TR': 70,'CO': 21,'PK': 84,'SE': 24,'AL': 25,'CU': 72,'UY': 77,'EG': 74,'CR': 32,
+ 'GQ': 73,'MK': 105,'KW': 92,'GT': 44,'CM': 55,'SN': 47,'KZ': 111,'DK': 76,
+ 'LY': 108,'AE': 37,'PA': 60,'UA': 49,'GW': 99,'TG': 86,'MX': 16,'KH': 95,
+ 'FI': 23,'NO': 46,'IT': 18,'GH': 88, 'JP': 82,'RU': 43,'PR': 40,'RS': 89,
+ 'DZ': 80,'MD': 68,-1: 1,'BG': 50,'CI': 57,'IL': 42,'VN': 90,'CH': 3,'US': 15,'HK': 34,
+ 'CG': 101,'BO': 62,'BR': 17,'BE': 12,'BM': 117}
+
+emp_dict = {'N':0,-1:-1,'A':1,'B':2,'F':3,'S':4}
+indfall_dict = {'N':0,-1:-1,'S':1}
+sexo_dict = {'V':0,'H':1,-1:-1}
+tiprel_dict = {'A':0,-1:-1,'I':1,'P':2,'N':3,'R':4}
+indresi_dict = {'N':0,-1:-1,'S':1}
+indext_dict = {'N':0,-1:-1,'S':1}
+conyuemp_dict = {'N':0,-1:-1,'S':1}
+segmento_dict = {-1:-1,'01 - TOP':1,'02 - PARTICULARES':2,'03 - UNIVERSITARIO':3}
 
 
 # In[ ]:
 
 
-test.head()
+tic=timeit.default_timer()
+def resize_data(DF,is_DF=True):
+    DF.replace(' NA', -2, inplace=True)
+    DF.replace('         NA', -2, inplace=True)
+    DF.fillna(-1, inplace=True)
+
+    DF['ncodpers'] = DF['ncodpers'].astype(np.int32)
+    DF['renta'] = DF['renta'].astype(np.float32)
+    DF['indrel'] = DF['indrel'].map(lambda x: 2 if x == 99 else x).astype(np.int8)
+
+    DF['ind_empleado'] = DF['ind_empleado'].map(lambda x: emp_dict[x]).astype(np.int8)
+
+    DF['sexo'] = DF['sexo'].map(lambda x: sexo_dict[x]).astype(np.int8)
+    DF['age'] = DF['age'].astype(np.int16)
+    DF['ind_nuevo'] = DF['ind_nuevo'].astype(np.int8)
+    DF['antiguedad'] = DF['antiguedad'].map(lambda x: -1 if x == '     NA' else x).astype(int)
+    DF['antiguedad'] = DF['antiguedad'].map(lambda x: -2 if x == -999999 else x).astype(np.int16)
+    DF['indrel_1mes'] = DF['indrel_1mes'].map(lambda x: -2 if x == 'P' else x).astype(np.float16)
+    DF['indrel_1mes'] = DF['indrel_1mes'].astype(np.int8)
+
+    DF['tiprel_1mes'] = DF['tiprel_1mes'].map(lambda x: tiprel_dict[x]).astype(np.int8)
+
+    DF['indresi'] = DF['indresi'].map(lambda x: indresi_dict[x]).astype(np.int8)
+
+    DF['indext'] = DF['indext'].map(lambda x: indext_dict[x]).astype(np.int8)
+
+    DF['conyuemp'] = DF['conyuemp'].map(lambda x: conyuemp_dict[x]).astype(np.int8)
+
+    DF['canal_entrada'] = DF['canal_entrada'].map(lambda x: canal_dict[x]).astype(np.int16)
 
 
-# ## Target varaible distribution
+    DF['indfall'] = DF['indfall'].map(lambda x: indfall_dict[x]).astype(np.int8)
 
-# In[ ]:
+    DF['pais_residencia'] = DF['pais_residencia'].map(lambda x: pais_dict[x]).astype(np.int8)
 
+    DF['tipodom'] = DF['tipodom'].astype(np.int8)
 
-fig,ax = plt.subplots(2,3,figsize=(16,10))
-ax1,ax2,ax3,ax4,ax5,ax6 = ax.flatten()
-sns.countplot(train['toxic'],palette= 'magma',ax=ax1)
-sns.countplot(train['severe_toxic'], palette= 'viridis',ax=ax2)
-sns.countplot(train['obscene'], palette= 'Set1',ax=ax3)
-sns.countplot(train['threat'], palette= 'viridis',ax = ax4)
-sns.countplot(train['insult'], palette = 'magma',ax=ax5)
-sns.countplot(train['identity_hate'], palette = 'Set1', ax = ax6)
+    DF['cod_prov'] = DF['cod_prov'].astype(np.int8)
 
+    DF.drop('nomprov',axis=1,inplace=True)
 
-# ## Missing value
+    DF['ind_actividad_cliente'] = DF['ind_actividad_cliente'].astype(np.int8)
 
-# In[ ]:
+    DF['fecha_dato_month'] = DF['fecha_dato'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['fecha_dato_year'] = DF['fecha_dato'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['month_int'] = (DF['fecha_dato_month'] + 12 * DF['fecha_dato_year']).astype(np.int8)
+    DF.drop('fecha_dato',axis=1,inplace=True)
 
+    DF['fecha_alta'] = DF['fecha_alta'].map(lambda x: '2020-00-00' if x == -1 else x)
+    DF['fecha_alta_month'] = DF['fecha_alta'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['fecha_alta_year'] = DF['fecha_alta'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['fecha_alta_day'] = DF['fecha_alta'].map(lambda x: int(x[8:10])).astype(np.int8)
+    DF['fecha_alta_month_int'] = (DF['fecha_alta_month'] + 12 * DF['fecha_alta_year']).astype(np.int8)
+    DF.drop('fecha_alta',axis=1,inplace=True)
+    DF['ult_fec_cli_1t'] = DF['ult_fec_cli_1t'].map(lambda x: '2020-00-00' if x == -1 else x)
+    DF['ult_fec_cli_1t_month'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['ult_fec_cli_1t_year'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['ult_fec_cli_1t_day'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[8:10])).astype(np.int8)
+    DF['ult_fec_cli_1t_month_int'] = (DF['ult_fec_cli_1t_month'] + 12 * DF['ult_fec_cli_1t_year']).astype(np.int8)
+    DF.drop('ult_fec_cli_1t',axis=1,inplace=True)
 
-k = pd.DataFrame()
-k['train'] = train.isnull().sum()
-k['test'] = test.isnull().sum()
-k
+    DF['segmento'] = DF['segmento'].map(lambda x: segmento_dict[x]).astype(np.int8)
 
+    for col in target_cols:
+        if is_DF:
+            DF[col] = DF[col].astype(np.int8)
 
-# In[ ]:
-
-
-test[test['comment_text'].isnull()]
-
-
-# In[ ]:
-
-
-test.fillna(' ',inplace=True)
-gc.collect()
-
-
-# ## Text preprosesing
-# 
-# [source: ](https://www.kaggle.com/him4318/easy-and-fast-lb-044) 
-# 
-# Term Frequency Inverse Document  Frequency Vectorizer 
-
-# In[ ]:
-
-
-vect_word = TfidfVectorizer(max_features=20000, lowercase=True, analyzer='word',
-                        stop_words= 'english',ngram_range=(1,3),dtype=np.float32)
-vect_char = TfidfVectorizer(max_features=40000, lowercase=True, analyzer='char',
-                        stop_words= 'english',ngram_range=(3,6),dtype=np.float32)
-
-
-# In[ ]:
-
-
-# Word ngram vector
-tr_vect = vect_word.fit_transform(train['comment_text'])
-ts_vect = vect_word.transform(test['comment_text'])
-
-# Character n gram vector
-tr_vect_char = vect_char.fit_transform(train['comment_text'])
-ts_vect_char = vect_char.transform(test['comment_text'])
-gc.collect()
-
-
-# In[ ]:
-
-
-X = sparse.hstack([tr_vect, tr_vect_char])
-x_test = sparse.hstack([ts_vect, ts_vect_char])
+    return DF
 
 
 # In[ ]:
 
 
-target_col = ['toxic', 'severe_toxic', 'obscene', 'threat','insult', 'identity_hate']
-y = train[target_col]
-del tr_vect, ts_vect, tr_vect_char, ts_vect_char
-gc.collect()
+reader = pd.read_csv('../input/train_ver2.csv', chunksize=100000, header=0)
+train = pd.concat([resize_data(chunk) for chunk in reader])
+
+reader_2 = pd.read_csv('../input/test_ver2.csv', chunksize=10000, header=0)
+test = pd.concat([resize_data(chunk,is_DF=False) for chunk in reader_2])
+
+train.info(memory_usage=True)
+test.info(memory_usage=True)
+
+toc=timeit.default_timer()
+print('Load Time',toc - tic)
 
 
-# ## Model
+#train.to_csv('train_encoded.csv', index=False)
+#test.to_csv('test_encoded.csv', index=False)
 
-# In[ ]:
-
-
-prd = np.zeros((x_test.shape[0],y.shape[1]))
-cv_score =[]
-for i,col in enumerate(target_col):
-    lr = LogisticRegression(C=2,random_state = i,class_weight = 'balanced')
-    print('Building {} model for column:{''}'.format(i,col)) 
-    lr.fit(X,y[col])
-    #cv_score.append(lr.score)
-    prd[:,i] = lr.predict_proba(x_test)[:,1]
-
-
-# ## Model Validation on train data set
-
-# In[ ]:
-
-
-col = 'identity_hate'
-print("Column:",col)
-pred =  lr.predict(X)
-print('\nConfusion matrix\n',confusion_matrix(y[col],pred))
-print(classification_report(y[col],pred))
-
-
-# ## Roc AUC curve
-
-# In[ ]:
-
-
-col = 'identity_hate'
-print("Column:",col)
-pred_pro = lr.predict_proba(X)[:,1]
-frp,trp,thres = roc_curve(y[col],pred_pro)
-auc_val =auc(frp,trp)
-plt.figure(figsize=(14,10))
-plt.plot([0,1],[0,1],color='b')
-plt.plot(frp,trp,color='r',label= 'AUC = %.2f'%auc_val)
-plt.legend(loc='lower right')
-plt.xlabel('True positive rate')
-plt.ylabel('False positive rate')
-plt.title('Reciever Operating Characteristic')
-
-
-# ## submission
-
-# In[ ]:
-
-
-prd_1 = pd.DataFrame(prd,columns=y.columns)
-submit = pd.concat([test['id'],prd_1],axis=1)
-#submit.to_csv('toxic_lr.csv.gz',compression='gzip',index=False)
-submit.to_csv('toxic_lr.csv',index=False)
-submit.head()
-
-
-# ### Thank you

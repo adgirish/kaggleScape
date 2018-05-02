@@ -1,248 +1,344 @@
 
 # coding: utf-8
 
-# This kernel is aimed to improve the solution quality of your current submission via Hungarian method. 
+# ## Trying out a linear model: 
 # 
-# This kernel is largely inspired by beluga's previous kernel on the original problem (before the competition relaunch)         
-# Improve with the Hungarian method [0.9375]      
-# https://www.kaggle.com/gaborfodor/improve-with-the-hungarian-method-0-9375    
+# Author: Alexandru Papiu ([@apapiu](https://twitter.com/apapiu), [GitHub](https://github.com/apapiu))
+#  
+# If you use parts of this notebook in your own scripts, please give some sort of credit (for example link back to this). Thanks!
 # 
-# <s>
-# For demonstration purpose, I also used the1owl's kernel - Santas ACME Optimizer Needs Optimizing, which has a relatively good score of 0.8922217472 to start improving upon.        
-# https://www.kaggle.com/the1owl/santas-acme-optimizer-needs-optimizing   
-# </s>
 # 
-# **Kernel Updates:**      
-# For demonstration purpose, I also used ZFTurbo's recent kernel - Max Flow with Min Cost v2 [0.9267], which has a great  score of 0.9264476351 to start improving upon.        
-# https://www.kaggle.com/zfturbo/max-flow-with-min-cost-v2-0-9267   
-# 
+# There have been a few [great](https://www.kaggle.com/comartel/house-prices-advanced-regression-techniques/house-price-xgboost-starter/run/348739)  [scripts](https://www.kaggle.com/zoupet/house-prices-advanced-regression-techniques/xgboost-10-kfolds-with-scikit-learn/run/357561) on [xgboost](https://www.kaggle.com/tadepalli/house-prices-advanced-regression-techniques/xgboost-with-n-trees-autostop-0-12638/run/353049) already so I'd figured I'd try something simpler: a regularized linear regression model. Surprisingly it does really well with very little feature engineering. The key point is to to log_transform the numeric variables since most of them are skewed.
 
 # In[ ]:
 
 
-import os, operator, math
 import pandas as pd
 import numpy as np
-import datetime as dt
-from tqdm import tqdm
+import seaborn as sns
+import matplotlib
+
 import matplotlib.pyplot as plt
-from scipy.optimize import linear_sum_assignment
-from collections import defaultdict, Counter
+from scipy.stats import skew
+from scipy.stats.stats import pearsonr
+
+
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina' #set 'png' here when working on notebook")
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-child_data = pd.read_csv('../input/santa-gift-matching/child_wishlist_v2.csv', 
-                         header=None).drop(0, 1).values
-gift_data = pd.read_csv('../input/santa-gift-matching/gift_goodkids_v2.csv', 
-                        header=None).drop(0, 1).values
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-n_children = 1000000
-n_gift_type = 1000 
-n_gift_quantity = 1000
-n_child_wish = 100
-triplets = 5001
-twins = 40000
-tts = triplets + twins 
-
-
-# >## Happiness calcuation
 
 # In[ ]:
 
 
-gift_happiness = (1. / (2 * n_gift_type)) * np.ones(
-    shape=(n_gift_type, n_children), dtype = np.float32)
+train.head()
 
-for g in range(n_gift_type):
-    for i, c in enumerate(gift_data[g]):
-        gift_happiness[g,c] = -2. * (n_gift_type - i)  
-
-child_happiness = (1. / (2 * n_child_wish)) * np.ones(
-    shape=(n_children, n_gift_type), dtype = np.float32)
-
-for c in range(n_children):
-    for i, g in enumerate(child_data[c]):
-        child_happiness[c,g] = -2. * (n_child_wish - i) 
-
-gift_ids = np.array([[g] * n_gift_quantity for g in range(n_gift_type)]).flatten()
-
-
-# >## Function to evaluate performance score
 
 # In[ ]:
 
 
-def lcm(a, b):
-    """Compute the lowest common multiple of a and b"""
-    # in case of large numbers, using floor division
-    return a * b // math.gcd(a, b)
-
-def avg_normalized_happiness(pred, gift, wish):
-    
-    n_children = 1000000 
-    n_gift_type = 1000 
-    n_gift_quantity = 1000 
-    n_gift_pref = 100 
-    n_child_pref = 1000
-    twins = math.ceil(0.04 * n_children / 2.) * 2   
-    triplets = math.ceil(0.005 * n_children / 3.) * 3   
-    ratio_gift_happiness = 2
-    ratio_child_happiness = 2
-
-    # check if triplets have the same gift
-    for t1 in np.arange(0, triplets, 3):
-        triplet1 = pred[t1]
-        triplet2 = pred[t1+1]
-        triplet3 = pred[t1+2]
-        assert triplet1 == triplet2 and triplet2 == triplet3
-                
-    # check if twins have the same gift
-    for t1 in np.arange(triplets, triplets+twins, 2):
-        twin1 = pred[t1]
-        twin2 = pred[t1+1]
-        assert twin1 == twin2
-
-    max_child_happiness = n_gift_pref * ratio_child_happiness
-    max_gift_happiness = n_child_pref * ratio_gift_happiness
-    total_child_happiness = 0
-    total_gift_happiness = np.zeros(n_gift_type)
-    
-    for i in range(len(pred)):
-        child_id = i
-        gift_id = pred[i]
-        
-        # check if child_id and gift_id exist
-        assert child_id < n_children
-        assert gift_id < n_gift_type
-        assert child_id >= 0 
-        assert gift_id >= 0
-        child_happiness = (n_gift_pref - np.where(wish[child_id]==gift_id)[0]
-                          ) * ratio_child_happiness
-        if not child_happiness:
-            child_happiness = -1
-
-        gift_happiness = ( n_child_pref - np.where(gift[gift_id]==child_id)[0]
-                         ) * ratio_gift_happiness
-        if not gift_happiness:
-            gift_happiness = -1
-
-        total_child_happiness += child_happiness
-        total_gift_happiness[gift_id] += gift_happiness
-        
-    denominator1 = n_children*max_child_happiness
-    denominator2 = n_gift_quantity*max_gift_happiness*n_gift_type
-    common_denom = lcm(denominator1, denominator2)
-    multiplier = common_denom / denominator1
-
-    ret = float(math.pow(total_child_happiness*multiplier,3) 
-                + math.pow(np.sum(total_gift_happiness),3)
-               ) / float(math.pow(common_denom,3))
-
-    return ret
+all_data = pd.concat((train.loc[:,'MSSubClass':'SaleCondition'],
+                      test.loc[:,'MSSubClass':'SaleCondition']))
 
 
-# > ## Load the result file from ZFTurbo's kernel - Max Flow with Min Cost v2
-# https://www.kaggle.com/zfturbo/max-flow-with-min-cost-v2-0-9267 
+# ###Data preprocessing: 
+# We're not going to do anything fancy here: 
+#  
+# - First I'll transform the skewed numeric features by taking log(feature + 1) - this will make the features more normal    
+# - Create Dummy variables for the categorical features    
+# - Replace the numeric missing values (NaN's) with the mean of their respective columns
 
 # In[ ]:
 
 
-initial_sub = '../input/max-flow-with-min-cost-v2-0-9267/subm_0.926447635166.csv'
-subm = pd.read_csv(initial_sub)
-subm['gift_rank'] = subm.groupby('GiftId').rank() - 1
-subm['gift_id'] = subm['GiftId'] * 1000 + subm['gift_rank']
-subm['gift_id'] = subm['gift_id'].astype(np.int64)
-current_gift_ids = subm['gift_id'].values
+matplotlib.rcParams['figure.figsize'] = (12.0, 6.0)
+prices = pd.DataFrame({"price":train["SalePrice"], "log(price + 1)":np.log1p(train["SalePrice"])})
+prices.hist()
 
-
-# > ## Evalute performace score for current ZFTurbo's solution
 
 # In[ ]:
 
 
-wish = pd.read_csv('../input/santa-gift-matching/child_wishlist_v2.csv', 
-                   header=None).as_matrix()[:, 1:]
-gift_init = pd.read_csv('../input/santa-gift-matching/gift_goodkids_v2.csv', 
-                        header=None).as_matrix()[:, 1:]
-gift = gift_init.copy()
-answ_org = np.zeros(len(wish), dtype=np.int32)
-answ_org[subm[['ChildId']]] = subm[['GiftId']]
-score_org = avg_normalized_happiness(answ_org, gift, wish)
-print('Predicted score: {:.8f}'.format(score_org))
+#log transform the target:
+train["SalePrice"] = np.log1p(train["SalePrice"])
 
+#log transform skewed numeric features:
+numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
 
-# >   # Define optimization block
+skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
+skewed_feats = skewed_feats[skewed_feats > 0.75]
+skewed_feats = skewed_feats.index
 
-# The optimize block only takes child happiness to optimize first, then to verify each step if there is an improvement in the overall performance.  As the objective function is in cubic form - nonlinear, adding child happiness and gift happiness may not work quite well, unless doing some approximation work (like this discussion: https://www.kaggle.com/c/santa-gift-matching/discussion/46559). 
+all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
+
 
 # In[ ]:
 
 
-def optimize_block(child_block, current_gift_ids):
-    gift_block = current_gift_ids[child_block]
-    C = np.zeros((block_size, block_size))
-    for i in range(block_size):
-        c = child_block[i]
-        for j in range(block_size):
-            g = gift_ids[gift_block[j]]
-            C[i, j] = child_happiness[c][g]
-    row_ind, col_ind = linear_sum_assignment(C)
-    return (child_block[row_ind], gift_block[col_ind])
+all_data = pd.get_dummies(all_data)
 
-
-# ># Initialize the parameters (e.g. block size, etc.)
-
-# The block size can be twisted - considering the algorithm complexity in Hungarian method. Be warned that the solving speed is not linearly aligned with the block size.  As I experimented offline, increasing the block size tends to improve the solution quality during each iteration, but it slows down the optimization process (balance the trade-offs here).
 
 # In[ ]:
 
 
-block_size = 1500
-n_blocks = int((n_children - tts) / block_size)
-children_rmd = 1000000 - 45001 - n_blocks * block_size
-print('block size: {}, num blocks: {}, children reminder: {}'.
-      format(block_size, n_blocks, children_rmd))
+#filling NA's with the mean of the column:
+all_data = all_data.fillna(all_data.mean())
 
 
-# ># Start optimizing...
+# In[ ]:
 
-# This code block consumes most of the computational time for this kernel. Given Kaggle kernel's limited capbility, a small set of runs are used.  Two parameters to twist for further performance improvement: 1. perm_len 2. block_len (perm_len and block_len control the number of shuffles and the running length, respectively, feel free to adjust them to run the program as long as you can afford).
+
+#creating matrices for sklearn:
+X_train = all_data[:train.shape[0]]
+X_test = all_data[train.shape[0]:]
+y = train.SalePrice
+
+
+# ###Models
 # 
+# Now we are going to use regularized linear regression models from the scikit learn module. I'm going to try both l_1(Lasso) and l_2(Ridge) regularization. I'll also define a function that returns the cross-validation rmse error so we can evaluate our models and pick the best tuning par
 
 # In[ ]:
 
 
-answ_iter = np.zeros(len(wish), dtype=np.int32)
-score_best = score_org
-subm_best = subm
-perm_len = 2
-block_len = 5
-for i in range(perm_len):  
-    print('Current permutation step is: %d' %(i+1))
-    child_blocks = np.split(np.random.permutation
-                            (range(tts, n_children - children_rmd)), n_blocks)
-    for child_block in tqdm(child_blocks[:block_len]):
-        start_time = dt.datetime.now()
-        cids, gids = optimize_block(child_block, current_gift_ids=current_gift_ids)
-        current_gift_ids[cids] = gids
-        end_time = dt.datetime.now()
-        print('Time spent to optimize this block in seconds: {:.2f}'.
-              format((end_time-start_time).total_seconds()))
-        ## need evaluation step for every block iteration 
-        subm['GiftId'] = gift_ids[current_gift_ids]
-        answ_iter[subm[['ChildId']]] = subm[['GiftId']]
-        score_iter = avg_normalized_happiness(answ_iter, gift, wish)
-        print('Score achieved in current iteration: {:.8f}'.format(score_iter))
-        if score_iter > score_best:
-            subm_best['GiftId'] = gift_ids[current_gift_ids]
-            score_best = score_iter
-            print('This is a performance improvement!')
-        else: print('No improvement at this iteration!')
-            
-subm_best[['ChildId', 'GiftId']].to_csv('improved_sub.csv', index=False)
-print('Best score achieved is: {:.8f}'.format(score_best))
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV
+from sklearn.model_selection import cross_val_score
+
+def rmse_cv(model):
+    rmse= np.sqrt(-cross_val_score(model, X_train, y, scoring="neg_mean_squared_error", cv = 5))
+    return(rmse)
 
 
-# ## Given the problem size and a bit slowness of the hungarian method - if you are patient, you should surely see performance improvement at the end! 
+# In[ ]:
+
+
+model_ridge = Ridge()
+
+
+# The main tuning parameter for the Ridge model is alpha - a regularization parameter that measures how flexible our model is. The higher the regularization the less prone our model will be to overfit. However it will also lose flexibility and might not capture all of the signal in the data.
+
+# In[ ]:
+
+
+alphas = [0.05, 0.1, 0.3, 1, 3, 5, 10, 15, 30, 50, 75]
+cv_ridge = [rmse_cv(Ridge(alpha = alpha)).mean() 
+            for alpha in alphas]
+
+
+# In[ ]:
+
+
+cv_ridge = pd.Series(cv_ridge, index = alphas)
+cv_ridge.plot(title = "Validation - Just Do It")
+plt.xlabel("alpha")
+plt.ylabel("rmse")
+
+
+# Note the U-ish shaped curve above. When alpha is too large the regularization is too strong and the model cannot capture all the complexities in the data. If however we let the model be too flexible (alpha small) the model begins to overfit. A value of alpha = 10 is about right based on the plot above.
+
+# In[ ]:
+
+
+cv_ridge.min()
+
+
+# So for the Ridge regression we get a rmsle of about 0.127
+# 
+# Let' try out the Lasso model. We will do a slightly different approach here and use the built in Lasso CV to figure out the best alpha for us. For some reason the alphas in Lasso CV are really the inverse or the alphas in Ridge.
+
+# In[ ]:
+
+
+model_lasso = LassoCV(alphas = [1, 0.1, 0.001, 0.0005]).fit(X_train, y)
+
+
+# In[ ]:
+
+
+rmse_cv(model_lasso).mean()
+
+
+# Nice! The lasso performs even better so we'll just use this one to predict on the test set. Another neat thing about the Lasso is that it does feature selection for you - setting coefficients of features it deems unimportant to zero. Let's take a look at the coefficients:
+
+# In[ ]:
+
+
+coef = pd.Series(model_lasso.coef_, index = X_train.columns)
+
+
+# In[ ]:
+
+
+print("Lasso picked " + str(sum(coef != 0)) + " variables and eliminated the other " +  str(sum(coef == 0)) + " variables")
+
+
+# Good job Lasso.  One thing to note here however is that the features selected are not necessarily the "correct" ones - especially since there are a lot of collinear features in this dataset. One idea to try here is run Lasso a few times on boostrapped samples and see how stable the feature selection is.
+
+# We can also take a look directly at what the most important coefficients are:
+
+# In[ ]:
+
+
+imp_coef = pd.concat([coef.sort_values().head(10),
+                     coef.sort_values().tail(10)])
+
+
+# In[ ]:
+
+
+matplotlib.rcParams['figure.figsize'] = (8.0, 10.0)
+imp_coef.plot(kind = "barh")
+plt.title("Coefficients in the Lasso Model")
+
+
+# The most important positive feature is `GrLivArea` -  the above ground area by area square feet. This definitely sense. Then a few other  location and quality features contributed positively. Some of the negative features make less sense and would be worth looking into more - it seems like they might come from unbalanced categorical variables.
+# 
+#  Also note that unlike the feature importance you'd get from a random forest these are _actual_ coefficients in your model - so you can say precisely why the predicted price is what it is. The only issue here is that we log_transformed both the target and the numeric features so the actual magnitudes are a bit hard to interpret. 
+
+# In[ ]:
+
+
+#let's look at the residuals as well:
+matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
+
+preds = pd.DataFrame({"preds":model_lasso.predict(X_train), "true":y})
+preds["residuals"] = preds["true"] - preds["preds"]
+preds.plot(x = "preds", y = "residuals",kind = "scatter")
+
+
+# The residual plot looks pretty good.To wrap it up let's predict on the test set and submit on the leaderboard:
+
+# ### Adding an xgboost model:
+
+# Let's add an xgboost model to our linear model to see if we can improve our score:
+
+# In[ ]:
+
+
+import xgboost as xgb
+
+
+# In[ ]:
+
+
+
+dtrain = xgb.DMatrix(X_train, label = y)
+dtest = xgb.DMatrix(X_test)
+
+params = {"max_depth":2, "eta":0.1}
+model = xgb.cv(params, dtrain,  num_boost_round=500, early_stopping_rounds=100)
+
+
+# In[ ]:
+
+
+model.loc[30:,["test-rmse-mean", "train-rmse-mean"]].plot()
+
+
+# In[ ]:
+
+
+model_xgb = xgb.XGBRegressor(n_estimators=360, max_depth=2, learning_rate=0.1) #the params were tuned using xgb.cv
+model_xgb.fit(X_train, y)
+
+
+# In[ ]:
+
+
+xgb_preds = np.expm1(model_xgb.predict(X_test))
+lasso_preds = np.expm1(model_lasso.predict(X_test))
+
+
+# In[ ]:
+
+
+predictions = pd.DataFrame({"xgb":xgb_preds, "lasso":lasso_preds})
+predictions.plot(x = "xgb", y = "lasso", kind = "scatter")
+
+
+# Many times it makes sense to take a weighted average of uncorrelated results - this usually imporoves the score although in this case it doesn't help that much.
+
+# In[ ]:
+
+
+preds = 0.7*lasso_preds + 0.3*xgb_preds
+
+
+# In[ ]:
+
+
+solution = pd.DataFrame({"id":test.Id, "SalePrice":preds})
+solution.to_csv("ridge_sol.csv", index = False)
+
+
+# ### Trying out keras?
+# 
+# Feedforward Neural Nets doesn't seem to work well at all...I wonder why.
+
+# In[ ]:
+
+
+from keras.layers import Dense
+from keras.models import Sequential
+from keras.regularizers import l1
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+
+# In[ ]:
+
+
+X_train = StandardScaler().fit_transform(X_train)
+
+
+# In[ ]:
+
+
+X_tr, X_val, y_tr, y_val = train_test_split(X_train, y, random_state = 3)
+
+
+# In[ ]:
+
+
+X_tr.shape
+
+
+# In[ ]:
+
+
+X_tr
+
+
+# In[ ]:
+
+
+model = Sequential()
+#model.add(Dense(256, activation="relu", input_dim = X_train.shape[1]))
+model.add(Dense(1, input_dim = X_train.shape[1], W_regularizer=l1(0.001)))
+
+model.compile(loss = "mse", optimizer = "adam")
+
+
+# In[ ]:
+
+
+model.summary()
+
+
+# In[ ]:
+
+
+hist = model.fit(X_tr, y_tr, validation_data = (X_val, y_val))
+
+
+# In[ ]:
+
+
+pd.Series(model.predict(X_val)[:,0]).hist()
+

@@ -1,241 +1,343 @@
 
 # coding: utf-8
 
-# It is my first ever kernel, and in this notebook I tried to explore the categorical variables.
+# # More To Come. Stay Tuned. !!
+# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
 # 
-# ###### Objective:
-# + Sherlocks interpretation of the data by plotting them. In essence, I tried to understand the meaning of column by plotting them. Moreover, I have created stacked barplot function, which is reusable, using seaborn and matplotlib.
-# 
-# + Most of the exploration was covered by @SRK but this could further add to his kernel.
-# 
-# 
-# *Skip to X3 and X4 for the essence of the kernel.*
+# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!.** If you like it or it helps you , you can upvote and/or leave a comment :).**
+
+# # Problem Statement
+# ------------------------------------------------
+# Analysis of Survey of 25,000 professionals and students on the state of developer skills
+
+# **Importing libraries**
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-
-import seaborn as sns # plotting the charts
-import matplotlib.pyplot as plt 
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
+import pandas as pd # package for high-performance, easy-to-use data structures and data analysis
+import numpy as np # fundamental package for scientific computing with Python
+import matplotlib
+import matplotlib.pyplot as plt # for plotting
+import seaborn as sns # for making plots with seaborn
 color = sns.color_palette()
-plt.style.use('seaborn-notebook')
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.offline as offline
+offline.init_notebook_mode()
+import plotly.tools as tls
+import squarify
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings("ignore")
 
-pd.options.display.max_columns = 1000  # displaying all the columns on the screen
-pd.options.mode.chained_assignment = None
+# Print all rows and columns
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+
+# # Retrieving the data
+
+# In[ ]:
+
+
+codebook_data = pd.read_csv("../input/HackerRank-Developer-Survey-2018-Codebook.csv")
+numeric_mapping_data = pd.read_csv("../input/HackerRank-Developer-Survey-2018-Numeric-Mapping.csv")
+country_code_mapping_data = pd.read_csv("../input/Country-Code-Mapping.csv")
+numeric_data = pd.read_csv("../input/HackerRank-Developer-Survey-2018-Numeric.csv")
+values_data = pd.read_csv("../input/HackerRank-Developer-Survey-2018-Values.csv")
 
 
 # In[ ]:
 
 
-train_df = pd.read_csv("../input/train.csv")
-test_df = pd.read_csv("../input/test.csv")
-
-print("train data shape {}".format(train_df.shape))
-print("test data shape {}".format(test_df.shape))
-
-
-# In[ ]:
+print("Shape of codebook data",codebook_data.shape)
+print("Shape of numeric_mapping data",numeric_mapping_data.shape)
+print("Shape of country_code_mapping data",country_code_mapping_data.shape)
+print("Shape of numeric data",numeric_data.shape)
+print("Shape of values data",values_data.shape)
 
 
-train_df.head()
-
-
-# ###### Observations :
-#   + Both the train and test have exactly same number of records , why? 
-#   + **Hypothesis**  :: Same car models but with different settings - since in the description of the competition, it was mentioned that there are different permutations of Mercedes-Benz car features. So, that could be possible.        
+# **Columns names of each table**
 
 # In[ ]:
 
 
-ids = pd.DataFrame({"train_ids": train_df.ID, "test_ids": test_df.ID})
-ids.head(10)
+print("Column names of codebook data\n",codebook_data.columns)
+print("Column names of numeric_mapping data\n",numeric_mapping_data.columns)
+print("Column names of country_code_mapping data\n",country_code_mapping_data.columns)
+print("Column names of numeric data\n",numeric_data.columns)
+print("Column names of values data\n",values_data.columns)
 
 
-# It looks like there were 8414 permutations of a single model or multiple models and they were split randomly into test and train dataset. Might lead to some interesting leaks if explored more.
-
-# In[ ]:
-
-
-# describing the 'y' variable
-train_df["y"].describe()
-
-
-# ## Categorical Exploration
+# **codebook_data**
 
 # In[ ]:
 
 
-# created a reusable function for plotting stacked bar charts
+codebook_data.head()
 
-def plot_stack(col, train_color="green", test_color="#0000A3", sortby="total_val", ascending=False, title="categorical X"):
-    test_x = dict(test_df[col].value_counts())
-    train_x = dict(train_df[col].value_counts())
-    test_xd = pd.DataFrame({"cols": list(test_x.keys()), "v_test": list(test_x.values())})
-    train_xd = pd.DataFrame({"cols": list(train_x.keys()), "v_train": list(train_x.values())})
 
-    
-    total_xd = pd.merge(test_xd, train_xd, how="outer", on="cols")
-    total_xd.fillna(0, inplace=True)
-    total_xd["total_val"] = total_xd["v_test"] + total_xd["v_train"]
-    
-    total_xd.sort_values(by=sortby, inplace=True, ascending=ascending)
-    
-    # plotting the graph
-    sns.set_style("darkgrid")
-    sns.set_context({"figure.figsize": (20, 9)})
-    
-    sns.barplot(x = total_xd.cols, y = total_xd.total_val, color = train_color)
-    bottom_plot = sns.barplot(x = total_xd.cols, y = total_xd.v_train, color = test_color)
-    
-    
-    # adding legends
-    topbar = plt.Rectangle((0,0),1,1,fc=train_color, edgecolor = 'none')
-    bottombar = plt.Rectangle((0,0),1,1,fc=test_color,  edgecolor = 'none')
-    l = plt.legend([bottombar, topbar], ['train', 'test'], loc=1, ncol = 2, prop={'size':16})
-    l.draw_frame(False)
-    
-    sns.despine(left=True)
-    bottom_plot.set_ylabel("frequency")
-    bottom_plot.set_xlabel("category")
-    bottom_plot.set_title(title, fontsize=15)
-    
-    for item in ([bottom_plot.xaxis.label, bottom_plot.yaxis.label] +
-             bottom_plot.get_xticklabels() + bottom_plot.get_yticklabels()):
-        item.set_fontsize(16)  
-        
-    plt.show()    
-    print("  # of categories : {}".format(len(total_xd)))
-
+# **numeric_mapping_data**
 
 # In[ ]:
 
 
-# exploring variable X0 
-plot_stack("X0", train_color="green", test_color="#0000A3", 
-           title="variable 'X0' chart")
+numeric_mapping_data.head()
 
 
-# ##### Observation:
-# + test and train data are equally distributed
-# + approching to the end, frequency falls to almost 1, hence they could be removed to decrease the # of categories during one hot encoding, as they are present in either test or in train but not in both
-# + 53 categories **_do not signify_** anything as such
+# **country_code_mapping_data**
 
 # In[ ]:
 
 
-# exploring variable X1
-plot_stack("X1", train_color="red", test_color="#1220A6", 
-           sortby="total_val", 
-           ascending=False, 
-           title="variable 'X1' chart")
+country_code_mapping_data.head()
 
 
-# ###### observations:
-# + seems like a simple normal distribution, no inference.
+# **numeric_data**
 
 # In[ ]:
 
 
-# exploring variable X2
-plot_stack("X2", train_color="yellow", test_color="purple", 
-           title="variable 'X2' chart")
+numeric_data.head()
 
 
-# ###### Observations:
-# + huge difference in the highest and the lowest peak, 
-# + we can just eliminate lot of categories same as in X0
+# **values_data**
 
 # In[ ]:
 
 
-# exploring variable X3
-plot_stack("X3", train_color="aqua", test_color="olive", 
-           sortby="cols", 
-           title="variable 'X3' chart")
+values_data.head()
 
 
-# ###### Observations:
-# + 7, hmmm a peculiar number, on my research, I have learned that mercedes-benz has a [7 gear automatic transmission](https://en.wikipedia.org/wiki/Mercedes-Benz_7G-Tronic_transmission), I feel that this variable represents that.
-# + or else it could just be as simple as day of week :)
+# # Statistical Overview
+
+# **codebook_data description for categorical features(This data contains only categorical features)**
 
 # In[ ]:
 
 
-# exploring variable X4
-plot_stack("X4", train_color="white", test_color="black", 
-           sortby="cols", 
-           ascending=False, 
-           title="variable 'X4' chart")
+codebook_data.describe()
 
 
-# ###### Observations:
-# + only d category has significant frequency
-# + so, based on the above column X4, automatic transmission has three modes n (neutral), p(parking), r(reverse), d(driving)  {[automatic transmission](https://en.wikipedia.org/wiki/Automatic_transmission)}. Since most of the tests are conducting in driving mode, d is highest compared to other categories
+# **numeric_mapping_data description for numerical features**
 
 # In[ ]:
 
 
-# exploring variable X5
-plot_stack("X5", train_color="lightgreen", test_color="blue", 
-           sortby="cols", 
-           ascending=True, 
-           title="variable 'X5' chart")
+numeric_mapping_data.describe()
 
+
+# **numeric_mapping_data description for categorical features**
 
 # In[ ]:
 
 
-# exploring variable X6
-plot_stack("X6", train_color="orange", test_color="darkblue", 
-           sortby="cols", 
-           ascending=True, 
-           title="variable 'X6' chart")
+numeric_mapping_data.describe(include=["O"])
 
 
-# ###### Observations:
-# + naive deductions suggest it is month of the year, if knows about cars please post in the comment section|.
+# **country_code_mapping_data description for numerical features**
 
 # In[ ]:
 
 
-# exploring variable X8, there exists no X7 just incase you missed
-plot_stack("X8", train_color="hotpink", test_color="magenta", 
-           sortby="cols", 
-           ascending=True, 
-           title="variable 'X8' chart")
+country_code_mapping_data.describe()
 
 
-# ## Conclusion:
-# 
-#  + I have tried to find the real world meaning of the data based on the distribution and # of categories but most of them were just normal distributions. 
-# 
-# **Coming up ......**
-# 
-#  +  [numerical variables {X9 - X385} - interaction in between the variables][1]
-# 
-#  + Performance of the sklearn algorithms and neural networks on the
-#    dataset
-# 
-# 
-#                                                             to be continued......
-# 
-# 
-#   [1]: https://www.kaggle.com/remidi/sherlocks-exploration-season-02-e01-numerical
+# **country_code_mapping_data description for categorical features**
 
-# Thank you, please upvote if you like the kernel.
-# 
-# 
-# P.S:  Since this was my first ever kernel I might have missed something and made mistake. Please do provide your feedback, criticism, corrections or appreciation in the comments. 
+# In[ ]:
+
+
+country_code_mapping_data.describe(include=["O"])
+
+
+# **numeric_data description for categorical features**
+
+# In[ ]:
+
+
+numeric_data.describe()
+
+
+# **numeric_data description for numerical features**
+
+# In[ ]:
+
+
+numeric_data.describe(include=["O"])
+
+
+# **values_data description for categorical features**
+
+# In[ ]:
+
+
+values_data.describe()
+
+
+# **values_data description for numerical features**
+
+# In[ ]:
+
+
+values_data.describe(include=["O"])
+
+
+# # Checking for missing data
+
+# **Missing data in codebook_data **
+
+# In[ ]:
+
+
+# checking missing data in codebook_data 
+total = codebook_data.isnull().sum().sort_values(ascending = False)
+percent = (codebook_data.isnull().sum()/codebook_data.isnull().count()*100).sort_values(ascending = False)
+missing_codebook_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_codebook_data
+
+
+# * 60 % data is misssing from **Notes** column
+
+# **Missing data in numeric_mapping_data**
+
+# In[ ]:
+
+
+# checking missing data in numeric_mapping_data 
+total = numeric_mapping_data.isnull().sum().sort_values(ascending = False)
+percent = (numeric_mapping_data.isnull().sum()/numeric_mapping_data.isnull().count()*100).sort_values(ascending = False)
+missing_numeric_mapping_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_numeric_mapping_data
+
+
+# no missing data
+
+# **Missing data in country_code_mapping_data **
+
+# In[ ]:
+
+
+# checking missing data in country_code_mapping_data 
+total = country_code_mapping_data.isnull().sum().sort_values(ascending = False)
+percent = (country_code_mapping_data.isnull().sum()/country_code_mapping_data.isnull().count()*100).sort_values(ascending = False)
+missing_country_code_mapping_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_country_code_mapping_data
+
+
+# no missing data
+
+# **Missing data in numeric_data**
+
+# In[ ]:
+
+
+# checking missing data in numeric_data 
+total = numeric_data.isnull().sum().sort_values(ascending = False)
+percent = (numeric_data.isnull().sum()/numeric_data.isnull().count()*100).sort_values(ascending = False)
+missing_numeric_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_numeric_data.head(25)
+
+
+# * The columns contains Above 80 % missing data should be remove from data set because these columns cant be use for analysis.
+
+# **Missing data in values_data**
+
+# In[ ]:
+
+
+# checking missing data in values_data 
+total = values_data.isnull().sum().sort_values(ascending = False)
+percent = (values_data.isnull().sum()/values_data.isnull().count()*100).sort_values(ascending = False)
+missing_values_data  = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_values_data.head(40)
+
+
+# * The columns contains Above 80 % missing data should be remove from data set because these columns cant be use for analysis.
+
+# # Data Exploration
+
+# ## Male V.S. Female
+
+# In[ ]:
+
+
+# df.drop(df.index[[1,3]])
+temp = values_data.drop(values_data.index[list(values_data[values_data["q3Gender"]=='Non-Binary'].index) + list(values_data[values_data["q3Gender"]=='#NULL!'].index)])["q3Gender"].value_counts()
+labels = temp.index
+sizes = (temp / temp.sum())*100
+trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
+layout = go.Layout(title='Male V.S. Female')
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * **16.6 % Female **and **83.4 % Male** participated in the Survey.
+
+# ## Age to begin coding
+
+# In[ ]:
+
+
+#Distribution of Age to begin coding
+temp = values_data['q1AgeBeginCoding'].value_counts()
+plt.figure(figsize=(15,8))
+sns.barplot(temp.index, temp.values, alpha=0.9, color=color[0])
+plt.xticks(rotation='vertical', fontsize=20)
+plt.xlabel('Age to begin coding', fontsize=12)
+plt.ylabel('count', fontsize=12)
+plt.title("Count of Ages to begin coding", fontsize=16)
+plt.show()
+
+
+# * **Most of the people** started doing coding as when they were **16 - 20 years old **  followed by **11 - 15 years old**.
+
+# ## People Ages who partcipated in Survey
+
+# In[ ]:
+
+
+#Distribution of Age 
+temp = values_data['q2Age'].value_counts()
+plt.figure(figsize=(15,8))
+sns.barplot(temp.index, temp.values, alpha=0.9, color=color[0])
+plt.xticks(rotation='vertical', fontsize=20)
+plt.xlabel('People Age', fontsize=12)
+plt.ylabel('count', fontsize=12)
+plt.title("Count of People Ages who partcipated in Survey", fontsize=16)
+plt.show()
+
+
+# * **Mosty Peoples** who participated in survey were **18 - 34 years old **.
+
+# ## Top Countries Participated in Survey
+
+# In[ ]:
+
+
+#Distribution of countries
+temp = values_data['CountryNumeric'].value_counts().head(20)
+plt.figure(figsize=(15,8))
+sns.barplot(temp.index, temp.values, alpha=0.9, color=color[0])
+plt.xticks(rotation='vertical', fontsize=20)
+plt.xlabel('Country Name', fontsize=12)
+plt.ylabel('count', fontsize=12)
+plt.title("Number of people from different countries participated in survey", fontsize=16)
+plt.show()
+
+
+# ## Distribution of countries
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+count = values_data['CountryNumeric'].value_counts()
+squarify.plot(sizes=count.values,label=count.index, value=count.values)
+plt.title('Distribution of sectors')
+
+
+# * From **Ghana** **more number of peoples partcipated **in the survey than others followed by **India**.

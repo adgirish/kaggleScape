@@ -1,201 +1,315 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# Parameters
+XGB_WEIGHT = 0.6500
+BASELINE_WEIGHT = 0.0056
+
+BASELINE_PRED = 0.0115
+
+# version 61
+#   Drop fireplacecnt and fireplaceflag, following Jayaraman:
+#     https://www.kaggle.com/valadi/xgb-w-o-outliers-lgb-with-outliers-combo-tune5
+
+# version 60
+#   Try BASELINE_PRED=0.0115, since that's the actual baseline from
+#     https://www.kaggle.com/aharless/oleg-s-original-better-baseline
+
+# version 59
+#   Looks like 0.0056 is the optimum BASELINE_WEIGHT
+
+# versions 57, 58
+#   Playing with BASELINE_WEIGHT parameter:
+#     3 values will determine quadratic approximation of optimum
+
+# version 55
+#   OK, it doesn't get the same result, but I also get a different result
+#     if I fork the earlier version and run it again.
+#   So something weird is going on (maybe software upgrade??)
+#   I'm just going to submit this version and make it my new benchmark.
+
+# version 53
+#   Re-parameterize ensemble (should get same result).
+
+# version 51
+#   Quadratic approximation based on last 3 submissions gives 0.3533
+#     as optimal lgb_weight.  To be slightly conservative,
+#     I'm rounding down to 0.35
+
+# version 50
+#   Quadratic approximation based on last 3 submissions gives 0.3073 
+#     as optimal lgb_weight
+
+# version 49
+#   My latest quadratic approximation is concave, so I'm just taking
+#     a shot in the dark with lgb_weight=.3
+
+# version 45
+#   Increase lgb_weight to 0.25 based on new quadratic approximation.
+#   Based on scores for versions 41, 43, and 44, the optimum is 0.261
+#     if I've done the calculations right.
+#   I'm being conservative and only going 2/3 of the way there.
+#   (FWIW my best guess is that even this will get a worse score,
+#    but you gotta pay some attention to the math.)
+
+# version 44
+#   Increase lgb_weight to 0.23, per Nikunj's suggestion, even though
+#     my quadratic approximation said I was already at the optimum
+
+# verison 43
+#   Higher lgb_weight, so I can do a quadratic approximation of the optimum
+
+# version 42
+#   The answer to the ultimate question of life, the universe, and everything
+#     comes down to a slightly higher lgb_weight
+
+# version 41
+#   Trying Nikunj's suggestion of imputing missing values.
+
+# version 39
+#   Trying higher lgb_weight again but with old learning rate.
+#   The new one did better with LGB only but makes the combination worse.
+
+# version 38
+#   OK back to baseline 0.2 weight
+
+# version 37
+#   Looks like increasing lgb_weight was better
+
+# version 34
+#   OK, try reducing lgb_weight instead
+
+# version 32
+#   Increase lgb_weight because LGB performance has imporved more than XGB
+#   Increase learning rate for LGB: 0029 is compromise;  CV prefers 0033
+#     (and reallly would prefer more boosting rounds with old value instead
+#      but constaints on running time are getting hard)
+
+# Version 27:
+#   Control LightGBM's loquacity
+
+# Version 26:
+# Getting rid of the LightGBM validation, since this script doesn't use the result.
+# Now use all training data to fit model.
+# I have a separate script for validation:
+#    https://www.kaggle.com/aharless/lightgbm-outliers-remaining-cv
 
 
-train = pd.read_csv("../input/train_1.csv")
-train = train.fillna(0.)
-
-
-# I'm gong to share a solution that I found interesting with you.
-# The idea is to compute the median of the series in different window sizes at the end of the series,
-# and the window sizes are increasing exponentially with the base of golden ratio.
-# Then a median of these medians is taken as the estimate for the next 60 days.
-# This code's result has the score of around 44.9 on public leaderboard, but I could get upto 44.7 by playing with it.
-
-# r = 1.61803398875
-# Windows = np.round(r**np.arange(1,9) * 7)
-Windows = [11, 18, 30, 48, 78, 126, 203, 329]
-
-
-n = train.shape[1] - 1 #  550
-Visits = np.zeros(train.shape[0])
-for i, row in train.iterrows():
-    M = []
-    start = row[1:].nonzero()[0]
-    if len(start) == 0:
-        continue
-    if n - start[0] < Windows[0]:
-        Visits[i] = row.iloc[start[0]+1:].median()
-        continue
-    for W in Windows:
-        if W > n-start[0]:
-            break
-        M.append(row.iloc[-W:].median())
-    Visits[i] = np.median(M)
-
-Visits[np.where(Visits < 1)] = 0.
-train['Visits'] = Visits
-
-
-test1 = pd.read_csv("../input/key_1.csv")
-test1['Page'] = test1.Page.apply(lambda x: x[:-11])
-
-test1 = test1.merge(train[['Page','Visits']], on='Page', how='left')
-#test1[['Id','Visits']].to_csv('sub.csv', index=False)
-
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-#This script is a fork of clustifier's job
-#https://www.kaggle.com/clustifier/weekend-weekdays
-#my attempt was to go a bit further by identifying the main non-working days by countries
-
-import pandas as pd
 import numpy as np
-import re
-import gc; gc.enable()
-from sklearn.feature_extraction import text
-from sklearn import naive_bayes
+import pandas as pd
+import xgboost as xgb
+from sklearn.preprocessing import LabelEncoder
+import lightgbm as lgb
+import gc
 
-train = pd.read_csv("../input/train_1.csv")
-#determine idiom with URL
-train['origine']=train['Page'].apply(lambda x:re.split(".wikipedia.org", x)[0][-2:])
-'''
-This is what you get with a value counts on train.origine
-en    24108
-ja    20431
-de    18547
-fr    17802
-zh    17229
-ru    15022
-es    14069
-ts    13556
-er     4299
-'''
-#we have english, japanese, deutch, french, chinese (taiwanese ?), russian, spanish
-#ts and er are undetermined; in the next lines, I try to replace them by learning from special chars
-#Note : this step wasn't tuned, and can't be perfect because other idioms are available in those Pages (such as portuguese for example)
 
-#let's make a train, target, and test to predict language on ts and er pages
-orig_train=train.loc[~train.origine.isin(['ts', 'er']), 'Page']
-orig_target=train.loc[~train.origine.isin(['ts', 'er']), 'origine']
-orig_test=train.loc[train.origine.isin(['ts', 'er']), 'Page']
-#keep only interesting chars
-orig_train2=orig_train.apply(lambda x:x.split(".wikipedia")[0][:-3]).apply(lambda x:re.sub("[a-zA-Z0-9():\-_ \'\.\/]", "", x))
-orig_test2=orig_test.apply(lambda x:x.split(".wikipedia")[0][:-3]).apply(lambda x:re.sub("[a-zA-Z0-9():\-_ \'\.\/]", "", x))
-#run TFIDF on those specific chars
-tfidf=text.TfidfVectorizer(input='content', encoding='utf-8', decode_error='strict', strip_accents=None, 
-                     lowercase=True, preprocessor=None, tokenizer=None, 
-                     analyzer='char', #stop_words=[chr(x) for x in range(97,123)]+[chr(x) for x in range(65,91)]+['_','.',':'], 
-                     token_pattern='(?u)\\b\\w\\w+\\b', ngram_range=(1, 1), max_df=1.0, min_df=1, max_features=None, vocabulary=None, binary=True, norm='l2', 
-                     use_idf=True, smooth_idf=True, sublinear_tf=False)
-orig_train2=tfidf.fit_transform(orig_train2)
-#apply a simple naive bayes on the text features
-model=naive_bayes.BernoulliNB()
-model.fit(orig_train2, orig_target)
-result=model.predict(tfidf.transform(orig_test2))
-result=pd.DataFrame(result, index=orig_test)
-result.columns=['origine']
-#result will be used later to replace 'ts' and 'er' values
-#we need to remove train.origine so that the train can be flattened with melt
-del train['origine']
+##### READ IN RAW DATA
 
-#let's flatten the train as did clustifier and initialize a "ferie" columns instead of a weekend column
-train = pd.melt(train[list(train.columns[-49:])+['Page']], id_vars='Page', var_name='date', value_name='Visits')
-train['date'] = train['date'].astype('datetime64[ns]')
-train['ferie'] = ((train.date.dt.dayofweek) >=5).astype(float)
-train['origine']=train['Page'].apply(lambda x:re.split(".wikipedia.org", x)[0][-2:])
+print( "\nReading data from disk ...")
+prop = pd.read_csv('../input/properties_2016.csv')
+train = pd.read_csv("../input/train_2016_v2.csv")
 
-#let's join with result to replace 'ts' and 'er'
-join=train.loc[train.origine.isin(["ts","er"]), ['Page']]
-join['origine']=0 #init
-join.index=join["Page"]
-join.origine=result
-train.loc[train.origine.isin(["ts","er"]), ['origine']]=join.origine.values #replace
 
-#official non working days by country (manual search with google)
-#I made a lot of shortcuts considering that only Us and Uk used english idiom, 
-#only Spain for spanich, only France for french, etc
-train_us=['2015-07-04','2015-11-26','2015-12-25']+\
-['2016-07-04','2016-11-24','2016-12-26']
-test_us=[]
-train_uk=['2015-12-25','2015-12-28'] +\
-['2016-01-01','2016-03-28','2016-05-02','2016-05-30','2016-12-26','2016-12-27']
-test_uk=['2017-01-01']
-train_de=['2015-10-03', '2015-12-25', '2015-12-26']+\
-['2016-01-01', '2016-03-25', '2016-03-26', '2016-03-27', '2016-01-01', '2016-05-05', '2016-05-15', '2016-05-16', '2016-10-03', '2016-12-25', '2016-12-26']
-test_de=['2017-01-01']
-train_fr=['2015-07-14', '2015-08-15', '2015-11-01', '2015-11-11', '2015-12-25']+\
-['2016-01-01','2016-03-28', '2016-05-01', '2016-05-05', '2016-05-08', '2016-05-16', '2016-07-14', '2016-08-15', '2016-11-01','2016-11-11', '2016-12-25']
-test_fr=['2017-01-01']
-train_ru=['2015-11-04']+\
-['2016-01-01', '2016-01-02', '2016-01-03', '2016-01-04', '2016-01-05', '2016-01-06', '2016-01-07', '2016-02-23', '2016-03-08', '2016-05-01', '2016-05-09', '2016-06-12', '2016-11-04']
-test_ru=['2017-01-01', '2017-01-02', '2017-01-03', '2017-01-04', '2017-01-05', '2017-01-06', '2017-01-07', '2017-02-23']
-train_es=['2015-08-15', '2015-10-12', '2015-11-01', '2015-12-06', '2015-12-08', '2015-12-25']+\
-['2016-01-01', '2016-01-06', '2016-03-25', '2016-05-01', '2016-08-15', '2016-10-12', '2016-11-01', '2016-12-06', '2016-12-08', '2016-12-25']
-test_es=['2017-01-01', '2017-01-06']
-train_ja=['2015-07-20','2015-09-21', '2015-10-12', '2015-11-03', '2015-11-23', '2015-12-23']+\
-['2016-01-01', '2016-01-11', '2016-02-11', '2016-03-20', '2016-04-29', '2016-05-03', '2016-05-04', '2016-05-05', '2016-07-18', '2016-08-11', '2016-09-22', '2016-10-10', '2016-11-03', '2016-11-23', '2016-12-23']
-test_ja=['2017-01-01', '2017-01-09', '2017-02-11']
-train_zh=['2015-09-27', '2015-10-01', '2015-10-02','2015-10-03','2015-10-04','2015-10-05','2015-10-06','2015-10-07']+\
-['2016-01-01', '2016-01-02', '2016-01-03', '2016-02-08', '2016-02-09', '2016-02-10', '2016-02-11', '2016-02-12', '2016-04-04', '2016-05-01', '2016-05-02', '2016-06-09', '2016-06-10', '2016-09-15', '2016-09-16', '2016-10-03', '2016-10-04','2016-10-05','2016-10-06','2016-10-07']
-test_zh=['2017-01-02', '2017-02-27', '2017-02-28', '2017-03-01']
-#in China some saturday and sundays are worked
-train_o_zh=['2015-10-10','2016-02-06', '2016-02-14', '2016-06-12', '2016-09-18', '2016-10-08', '2016-10-09']
-test_o_zh=['2017-01-22', '2017-02-04']
 
-#let's replace values in 'ferie' columns
-train.loc[(train.origine=='en')&(train.date.isin(train_us+train_uk)), 'ferie']=1
-train.loc[(train.origine=='de')&(train.date.isin(train_de)), 'ferie']=1
-train.loc[(train.origine=='fr')&(train.date.isin(train_fr)), 'ferie']=1
-train.loc[(train.origine=='ru')&(train.date.isin(train_ru)), 'ferie']=1
-train.loc[(train.origine=='es')&(train.date.isin(train_es)), 'ferie']=1
-train.loc[(train.origine=='ja')&(train.date.isin(train_ja)), 'ferie']=1
-train.loc[(train.origine=='zh')&(train.date.isin(train_zh)), 'ferie']=1
-train.loc[(train.origine=='zh')&(train.date.isin(train_o_zh)), 'ferie']=0
+##### PROCESS DATA FOR LIGHTGBM
 
-#same with test
-test = pd.read_csv("../input/key_1.csv")
-test['date'] = test.Page.apply(lambda a: a[-10:])
-test['Page'] = test.Page.apply(lambda a: a[:-11])
-test['date'] = test['date'].astype('datetime64[ns]')
-test['ferie'] = ((test.date.dt.dayofweek) >=5).astype(float)
-test['origine']=test['Page'].apply(lambda x:re.split(".wikipedia.org", x)[0][-2:])
+print( "\nProcessing data for LightGBM ..." )
+for c, dtype in zip(prop.columns, prop.dtypes):	
+    if dtype == np.float64:		
+        prop[c] = prop[c].astype(np.float32)
 
-#joint with result
-join=test.loc[test.origine.isin(["ts","er"]), ['Page']]
-join['origine']=0
-join.index=join["Page"]
-join.origine=result
-test.loc[test.origine.isin(["ts","er"]), ['origine']]=join.origine.values
+df_train = train.merge(prop, how='left', on='parcelid')
+df_train.fillna(df_train.median(),inplace = True)
 
-test.loc[(test.origine=='en')&(test.date.isin(test_us+test_uk)), 'ferie']=1
-test.loc[(test.origine=='de')&(test.date.isin(test_de)), 'ferie']=1
-test.loc[(test.origine=='fr')&(test.date.isin(test_fr)), 'ferie']=1
-test.loc[(test.origine=='ru')&(test.date.isin(test_ru)), 'ferie']=1
-test.loc[(test.origine=='es')&(test.date.isin(test_es)), 'ferie']=1
-test.loc[(test.origine=='ja')&(test.date.isin(test_ja)), 'ferie']=1
-test.loc[(test.origine=='zh')&(test.date.isin(test_zh)), 'ferie']=1
-test.loc[(test.origine=='zh')&(test.date.isin(test_o_zh)), 'ferie']=0
+x_train = df_train.drop(['parcelid', 'logerror', 'transactiondate', 'propertyzoningdesc', 
+                         'propertycountylandusecode', 'fireplacecnt', 'fireplaceflag'], axis=1)
+y_train = df_train['logerror'].values
+print(x_train.shape, y_train.shape)
 
-train_page_per_dow = train.groupby(['Page','ferie']).median().reset_index()
-test = test.merge(train_page_per_dow, how='left')
 
-test.loc[test.Visits.isnull(), 'Visits'] = 0
-test['Visits']=((test['Visits']*10).astype('int')/10 + test1['Visits'])/2
-test[['Id','Visits']].to_csv('mad49_guess_idiom.csv', index=False)
+train_columns = x_train.columns
+
+for c in x_train.dtypes[x_train.dtypes == object].index.values:
+    x_train[c] = (x_train[c] == True)
+
+del df_train; gc.collect()
+
+x_train = x_train.values.astype(np.float32, copy=False)
+d_train = lgb.Dataset(x_train, label=y_train)
+
+
+
+##### RUN LIGHTGBM
+
+params = {}
+params['max_bin'] = 10
+params['learning_rate'] = 0.0021 # shrinkage_rate
+params['boosting_type'] = 'gbdt'
+params['objective'] = 'regression'
+params['metric'] = 'l1'          # or 'mae'
+params['sub_feature'] = 0.5      # feature_fraction -- OK, back to .5, but maybe later increase this
+params['bagging_fraction'] = 0.85 # sub_row
+params['bagging_freq'] = 40
+params['num_leaves'] = 512        # num_leaf
+params['min_data'] = 500         # min_data_in_leaf
+params['min_hessian'] = 0.05     # min_sum_hessian_in_leaf
+params['verbose'] = 0
+
+print("\nFitting LightGBM model ...")
+clf = lgb.train(params, d_train, 430)
+
+del d_train; gc.collect()
+del x_train; gc.collect()
+
+print("\nPrepare for LightGBM prediction ...")
+print("   Read sample file ...")
+sample = pd.read_csv('../input/sample_submission.csv')
+print("   ...")
+sample['parcelid'] = sample['ParcelId']
+print("   Merge with property data ...")
+df_test = sample.merge(prop, on='parcelid', how='left')
+print("   ...")
+del sample, prop; gc.collect()
+print("   ...")
+x_test = df_test[train_columns]
+print("   ...")
+del df_test; gc.collect()
+print("   Preparing x_test...")
+for c in x_test.dtypes[x_test.dtypes == object].index.values:
+    x_test[c] = (x_test[c] == True)
+print("   ...")
+x_test = x_test.values.astype(np.float32, copy=False)
+
+print("\nStart LightGBM prediction ...")
+# num_threads > 1 will predict very slow in kernal
+clf.reset_parameter({"num_threads":1})
+p_test = clf.predict(x_test)
+
+del x_test; gc.collect()
+
+print( "\nUnadjusted LightGBM predictions:" )
+print( pd.DataFrame(p_test).head() )
+
+
+
+##### RE-READ PROPERTIES FILE
+##### (I tried keeping a copy, but the program crashed.)
+
+print( "\nRe-reading properties file ...")
+properties = pd.read_csv('../input/properties_2016.csv')
+
+
+
+##### PROCESS DATA FOR XGBOOST
+
+print( "\nProcessing data for XGBoost ...")
+for c in properties.columns:
+    properties[c]=properties[c].fillna(-1)
+    if properties[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(properties[c].values))
+        properties[c] = lbl.transform(list(properties[c].values))
+
+train_df = train.merge(properties, how='left', on='parcelid')
+x_train = train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
+x_test = properties.drop(['parcelid'], axis=1)
+# shape        
+print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
+
+# drop out ouliers
+train_df=train_df[ train_df.logerror > -0.4 ]
+train_df=train_df[ train_df.logerror < 0.418 ]
+x_train=train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
+y_train = train_df["logerror"].values.astype(np.float32)
+y_mean = np.mean(y_train)
+
+print('After removing outliers:')     
+print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
+
+
+
+##### RUN XGBOOST
+
+print("\nSetting up data for XGBoost ...")
+# xgboost params
+xgb_params = {
+    'eta': 0.037,
+    'max_depth': 5,
+    'subsample': 0.80,
+    'objective': 'reg:linear',
+    'eval_metric': 'mae',
+    'lambda': 0.8,   
+    'alpha': 0.4, 
+    'base_score': y_mean,
+    'silent': 1
+}
+# Enough with the ridiculously overfit parameters.
+# I'm going back to my version 20 instead of copying Jayaraman.
+# I want a num_boost_rounds that's chosen by my CV,
+# not one that's chosen by overfitting the public leaderboard.
+# (There may be underlying differences between the train and test data
+#  that will affect some parameters, but they shouldn't affect that.)
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+# cross-validation
+#print( "Running XGBoost CV ..." )
+#cv_result = xgb.cv(xgb_params, 
+#                   dtrain, 
+#                   nfold=5,
+#                   num_boost_round=350,
+#                   early_stopping_rounds=50,
+#                   verbose_eval=10, 
+#                   show_stdv=False
+#                  )
+#num_boost_rounds = len(cv_result)
+
+# num_boost_rounds = 150
+num_boost_rounds = 242
+print("\nXGBoost tuned with CV in:")
+print("   https://www.kaggle.com/aharless/xgboost-without-outliers-tweak ")
+print("num_boost_rounds="+str(num_boost_rounds))
+
+# train model
+print( "\nTraining XGBoost ...")
+model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
+
+print( "\nPredicting with XGBoost ...")
+xgb_pred = model.predict(dtest)
+
+print( "\nXGBoost predictions:" )
+print( pd.DataFrame(xgb_pred).head() )
+
+
+
+##### COMBINE PREDICTIONS
+
+print( "\nCombining XGBoost, LightGBM, and baseline predicitons ..." )
+lgb_weight = 1 - XGB_WEIGHT - BASELINE_WEIGHT
+pred = XGB_WEIGHT*xgb_pred + BASELINE_WEIGHT*BASELINE_PRED + lgb_weight*p_test
+
+print( "\nCombined predictions:" )
+print( pd.DataFrame(pred).head() )
+
+
+
+##### WRITE THE RESULTS
+
+print( "\nPreparing results for write ..." )
+y_pred=[]
+
+for i,predict in enumerate(pred):
+    y_pred.append(str(round(predict,4)))
+y_pred=np.array(y_pred)
+
+output = pd.DataFrame({'ParcelId': properties['parcelid'].astype(np.int32),
+        '201610': y_pred, '201611': y_pred, '201612': y_pred,
+        '201710': y_pred, '201711': y_pred, '201712': y_pred})
+# set col 'ParceID' to first col
+cols = output.columns.tolist()
+cols = cols[-1:] + cols[:-1]
+output = output[cols]
+from datetime import datetime
+
+print( "\nWriting results to disk ..." )
+output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
+
+print( "\nFinished ..." )

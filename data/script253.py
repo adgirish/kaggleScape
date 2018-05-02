@@ -1,176 +1,106 @@
 
 # coding: utf-8
 
-# # <center> Relevent Member Data from Churn Competition </center>
+# ## Fast run length encoding, tested on the provided training mask data.
 
-# I feel this kernal was inevitable, so I decided to help everyone out by creating the dataset of relevant information from the Churn Competition. I have not read anywhere that we could not use this data for this competition, but use this data at your own risk. 
-
-# In[ ]:
+# In[1]:
 
 
-# Imports
+import time
 
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sbn
-get_ipython().run_line_magic('matplotlib', 'inline')
+import pandas as pd
+from scipy import ndimage
 
-churn_data_path = '../input/kkbox-churn-prediction-challenge/'
-recommend_data_path = '../input/kkbox-music-recommendation-challenge/'
+from matplotlib import pyplot as plt
 
+PROJECT_PATH = '..'
+INPUT_PATH = PROJECT_PATH + '/input'
 
-# Grabbing the list of members in the Music Recommendation challenge for creating the subset of relevent user_logs data.
+TRAIN_MASKS_CSV_PATH = INPUT_PATH + '/train_masks.csv'
+TRAIN_MASKS_PATH = INPUT_PATH + '/train_masks'
 
-# In[ ]:
 
+# In[2]:
 
-df_members = pd.read_csv(recommend_data_path + 'members.csv')
-members = pd.DataFrame(df_members['msno'])
 
+def read_train_masks():
+    global train_masks
+    train_masks = pd.read_csv(TRAIN_MASKS_CSV_PATH)
+    print(train_masks.head())
 
-# Due to memory constraints, the user_log file must be read in by chunks and handled chunk by chunk. Created a dataframe of all the data related to the members in the Music Recommendation competition.
 
-# In[ ]:
+read_train_masks()
 
 
-user_data = pd.DataFrame()
-for chunk in pd.read_csv(churn_data_path + 'user_logs.csv', chunksize=500000):
-    merged = members.merge(chunk, on='msno', how='inner')
-    user_data = pd.concat([user_data, merged])
+# In[3]:
 
 
-# Almost all of the members in the Music Recommendation challenge now now have additional information:
+def read_mask_image(car_code, angle_code):
+    mask_img_path = TRAIN_MASKS_PATH + '/' + car_code + '_' + angle_code + '_mask.gif';
+    mask_img = ndimage.imread(mask_img_path, mode = 'L')
+    mask_img[mask_img <= 127] = 0
+    mask_img[mask_img > 127] = 1
+    return mask_img
 
-# In[ ]:
 
+def show_mask_image(car_code, angle_code):
+    mask_img = read_mask_image(car_code, angle_code)
+    plt.imshow(mask_img, cmap = 'Greys_r')
+    plt.show()
 
-# Almost all members have additional information now
-print (str(len(members['msno'].unique())) + " unique members in Music Recommendation Challenge")
-print (str(len(user_data['msno'].unique())) + " users now have additional information")
 
+show_mask_image('00087a6bd4dc', '04')
 
-# If you are curious, this reduced the size of the user_logs file from ~ 30GB down to about 500MB! <br>
-# I'll output the data here into a csv file in case you disagree with the upcoming pre-processing.
 
-# In[ ]:
+# In[4]:
 
 
-user_data.to_csv('user_logs2.csv', index=False)
+def rle_encode(mask_image):
+    pixels = mask_image.flatten()
+    # We avoid issues with '1' at the start or end (at the corners of 
+    # the original image) by setting those pixels to '0' explicitly.
+    # We do not expect these to be non-zero for an accurate mask, 
+    # so this should not harm the score.
+    pixels[0] = 0
+    pixels[-1] = 0
+    runs = np.where(pixels[1:] != pixels[:-1])[0] + 2
+    runs[1::2] = runs[1::2] - runs[:-1:2]
+    return runs
 
 
-# A preview of the relevant members in the user_logs file:
+def rle_to_string(runs):
+    return ' '.join(str(x) for x in runs)
 
-# In[ ]:
 
+def test_rle_encode():
+    test_mask = np.asarray([[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0]])
+    assert rle_to_string(rle_encode(test_mask)) == '7 2 11 2'
+    num_masks = len(train_masks['img'])
+    print('Verfiying RLE encoding on', num_masks, 'masks ...')
+    time_read = 0.0 # seconds
+    time_rle = 0.0 # seconds
+    time_stringify = 0.0 # seconds
+    for mask_idx in range(num_masks):
+        img_file_name = train_masks.loc[mask_idx, 'img']
+        car_code, angle_code = img_file_name.split('.')[0].split('_')
+        t0 = time.clock()
+        mask_image = read_mask_image(car_code, angle_code)
+        time_read += time.clock() - t0
+        t0 = time.clock()
+        rle_truth_str = train_masks.loc[mask_idx, 'rle_mask']
+        rle = rle_encode(mask_image)
+        time_rle += time.clock() - t0
+        t0 = time.clock()
+        rle_str = rle_to_string(rle)
+        time_stringify += time.clock() - t0
+        assert rle_str == rle_truth_str
+        if mask_idx and (mask_idx % 500) == 0:
+            print('  ..', mask_idx, 'tested ..')
+    print('Time spent reading mask images:', time_read, 's, =>',             1000*(time_read/num_masks), 'ms per mask.')
+    print('Time spent RLE encoding masks:', time_rle, 's, =>',             1000*(time_rle/num_masks), 'ms per mask.')
+    print('Time spent stringifying RLEs:', time_stringify, 's, =>',             1000*(time_stringify/num_masks), 'ms per mask.')
 
-print (user_data.head())
 
+test_rle_encode()
 
-# There are some strange outliers in the total_secs column ( values < 0 ). <br>
-# Since its only a fraction of the data, I'll just remove those rows.
-
-# In[ ]:
-
-
-for col in user_data.columns[1:]:
-    outlier_count = user_data['msno'][user_data[col] < 0].count()
-    print (str(outlier_count) + " outliers in column " + col)
-user_data = user_data[user_data['total_secs'] >= 0]
-print (user_data['msno'][user_data['total_secs'] < 0].count())
-
-
-# I think the most logical thing to do next is to group the data by member id and then sum the columns corresponding to each member. In addition, the number of days a user listened to songs might be useful (the frequency count of each member), so this was added as well. The date column becomes useless if we do this, so it will be removed first.
-
-# In[ ]:
-
-
-del user_data['date']
-
-print (str(np.shape(user_data)) + " -- Size of data large due to repeated msno")
-counts = user_data.groupby('msno')['total_secs'].count().reset_index()
-counts.columns = ['msno', 'days_listened']
-sums = user_data.groupby('msno').sum().reset_index()
-user_data = sums.merge(counts, how='inner', on='msno')
-
-print (str(np.shape(user_data)) + " -- New size of data matches unique member count")
-print (user_data.head())
-
-
-# To get an idea of the effect of each new feature on the target, I have plotted the probabilty of a user repeating a song vs the new features:
-
-# In[ ]:
-
-
-df_train = pd.read_csv(recommend_data_path + 'train.csv')
-train = df_train.merge(user_data, how='left', on='msno')
-
-def repeat_chance_plot(groups, col, plot=False):
-    x_axis = [] # Sort by type
-    repeat = [] # % of time repeated
-    for name, group in groups:
-        count0 = float(group[group.target == 0][col].count())
-        count1 = float(group[group.target == 1][col].count())
-        percentage = count1/(count0 + count1)
-        x_axis = np.append(x_axis, name)
-        repeat = np.append(repeat, percentage)
-    plt.figure()
-    plt.title(col)
-    sbn.barplot(x_axis, repeat)
-
-for col in user_data.columns[1:]:
-    tmp = pd.DataFrame(pd.qcut(train[col], 15, labels=False))
-    tmp['target'] = train['target']
-    groups = tmp.groupby(col)
-    repeat_chance_plot(groups, col)
-
-
-# Logically, it would seem like these columns would be pretty heavily correlated since they all relate to how many songs a user has listened to over a set amount of time. To see if this is true, a correlation heatmap proves pretty useful:
-
-# In[ ]:
-
-
-corrmat = user_data[user_data.columns[1:]].corr()
-f, ax = plt.subplots(figsize=(12, 9))
-sbn.heatmap(corrmat, vmax=1, cbar=True, annot=True, square=True);
-plt.show()
-
-
-# From this map, almost everything seems to be pretty correlated. However a couple column pairs jump out; (num_75, num_50) and (num_unq, num_100) are the most heavily correlated and so I will remove one from each pair.
-
-# In[ ]:
-
-
-del user_data['num_75']
-del user_data['num_unq']
-
-
-# Lastly, I will look at the distribution of data in each column. From having done so already, I know that the distributions are heavily skewed so I will log transform the data in attempt to create normally distributed data and plot them both for you to see. In addition, I have normalized the data (std of 1, mean of 0) using the sklearn StandardScaler.
-
-# In[ ]:
-
-
-from sklearn.preprocessing import StandardScaler
-
-cols = user_data.columns[1:]
-log_user_data = user_data.copy()
-log_user_data[cols] = np.log1p(user_data[cols])
-ss = StandardScaler()
-log_user_data[cols] = ss.fit_transform(log_user_data[cols])
-
-for col in cols:
-    plt.figure(figsize=(15,7))
-    plt.subplot(1,2,1)
-    sbn.distplot(user_data[col].dropna())
-    plt.subplot(1,2,2)
-    sbn.distplot(log_user_data[col].dropna())
-    plt.figure()
-
-
-# In[ ]:
-
-
-log_user_data.to_csv('user_logs_final.csv', index=False)
-
-
-# I am new to the Machine Learning world and  would greatly appreciate any comments you may have.

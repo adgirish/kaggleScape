@@ -1,288 +1,297 @@
 
 # coding: utf-8
 
-# ## Manifold Learning And Autoencoders
-# 
-# Author: Alexandru Papiu
-
-# The MNIST competition is slowly coming to an end so I figured I'd try something slightly different - let's try to see if we can get some intuition about the geometry and topology of the MNIST dataset.
-
-# ### Loading required packages and data:
+# # Overview
+# The kernel goes through
+# 1. the preprocessing steps to load the data
+# 1. a quick visualization of the color-space
+# 1. training a simple CNN
+# 1. applying the model to the test data
+# 1. creating the RLE test data
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import numpy as np
-import pandas as pd
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from glob import glob
+import os
+from skimage.io import imread
 import matplotlib.pyplot as plt
-
-from sklearn import metrics
-from sklearn.neighbors import NearestNeighbors
-
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Convolution2D, MaxPooling2D, Flatten, Input
-from keras.optimizers import adam
-from keras.utils.np_utils import to_categorical
-
-get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
-
-
-# In[ ]:
-
-
-train = pd.read_csv("../input/train.csv")
-
-X_train = train.iloc[:,1:].values
-X_train = X_train.reshape(X_train.shape[0], 28, 28) #reshape to rectangular
-X_train = X_train/255 #pixel values are 0 - 255 - this makes puts them in the range 0 - 1
-
-y_train = train["label"].values
-
-
-# In[ ]:
-
-
-#define a function that allows us to see the digits:
-def show(img):
-    plt.imshow(img, cmap = "gray", interpolation = "none")
-
-
-# Let's pick one image to be our default image - just so we have a reference point. We'll call this the **"eight" image** - simply because, well it's an eight:
-
-# In[ ]:
-
-
-img = X_train[10]
-show(img)
-
-
-# In[ ]:
-
-
-pd.DataFrame(img)
-
-
-# Ok so our digits are in a space in which every pixel is a variable or a feature. Since there are 28*28 = 784 pixels per image we can thing of the images as sitting in $\mathbb{R}^{784}$ - a real 784 dimensional vector space.
-# 
-# This space is very high dimensional and most dimensionality reduction techniques try to exploit the assumption that not all of these dimension are needed to distinguish between the digits (or more generally extract features or achieve some learning task).
-# 
-# Where does this intuition come from? To see this let's generate a point uniformly at random in the unit 784 dimensional hypercube and see what it looks like. We pick points in the hypercube simply because we normalized the pixel intensities. 
-# 
-# Maybe a 784-hypercube sounds intimidating but it has a very easy mathematical definition: it's the set composed of all  vectors in $\mathbb{R}^{784}$ that have all coordinates less than or equal to one: $$\{x \in \mathbb{R}^{784} | |x_i| < 1\} = [0,1]^{784}$$
-
-# In[ ]:
-
-
-#generating a random 28 by 28 image:
-rand_img = np.random.randint(0, 255, (28, 28))
-rand_img = rand_img/255.0
-
-show(rand_img)
-
-
-# Doesn't look like anything to me!
-# 
-# We can try to sample at random many times but unless we get extremely lucky all we'll get is static and nothing resembling an actual digit. This is good empirical evidence that the meaningful images - in this case images of digits, are clustered in smaller dimensional subsets in the original 784 dimensional pixel space. This is what is called the **manifold hypothesis**. And the promise is that if we better understand the structure of the manifold we will have an easier time building machine learning systems.
-
-# Before we try to see how to figure out the manifold structure let's take a closer look at out space. For example what happens if we start at the point of a digit and start traveling in a random direction? Will we get any meaningful images?
-
-# In[ ]:
-
-
-rand_direction = np.random.rand(28, 28) 
-
-
-# ### Moving in a random direction away from a digit in the 784 dimensional image space:
-
-# In[ ]:
-
-
-for i in range(16):
-    plt.subplot(4,4,i+1)
-    show(img + i/4*rand_direction)    
-    plt.xticks([])
-    plt.yticks([])
-
-
-# We can see that as we move away from the digit, the images we encounter become less and less distinguishable. At first we can still see the eight shape but before we know it we're back in static land.
-# 
-# Perhaps a good analogy here is that of a solar system: the surface of our planets are the manifolds we're interested in, one for each digit. Now say you're on the surface of the earth which is a 2-manifold and you start moving in a random direction (let's assume gravity doesn't exist and you can go through solid objects). If you don't understand the structure of earth you'll quickly find yourself in space or inside the earth. But if you instead move within the local earth (say spherical) coordinates you will stay on the surface and get to see all the cool stuff. 
-# 
-# There are however some differences: first of all we're in a much higher dimensional space and we're not sure how many dimensions we need to capture the structure of the digit subspaces. Secondly these subspaces could be really crazy looking - think for example two donuts entangled in some weird way. You could in fact get from one manifold to another without going into static space as all.
-
-# ### Our digits' best friends aka Nearest Neighbors:
-# 
-# Another thing to do to understand better the structure of the image space is to look at what images are closest to the "eight" image using some metric. In this case I'll use the sklearn knn wrap with l_2 distance as the metric on the flattened images. 
-
-# In[ ]:
-
-
-X_flat = X_train.reshape(X_train.shape[0], X_train.shape[1]*X_train.shape[2])
-
-knn = NearestNeighbors(5000)
-
-knn.fit(X_flat[:5000])
-
-
-# In[ ]:
-
-
-distances, neighbors = knn.kneighbors(img.flatten().reshape(1, -1))
-neighbors = neighbors[0]
-distances = distances[0]
-
-
-# ### Histogram of L_2 distances from the "eight" digit:
-
-# In[ ]:
-
-
-plt.hist(distances[1:])
-
-
-# The distances of the first 5000 images from the "eight" image is roughly normally distributed - in fact it's much more well behaved than I expected. At first I though I'd see multiple modes and a higher variance given that we have different classes. 
-
-# ### 32 Nearest Neighbors for our "eight" image:
-
-# In[ ]:
-
-
-for digit_num, num in enumerate(neighbors[:36]):
-    plt.subplot(6,6,digit_num+1)
-    grid_data = X_train[num]  # reshape from 1d to 2d pixel array
-    show(grid_data)
-    plt.xticks([])
-    plt.yticks([])
-
-
-# Interesting stuff - most of the neighbors are also eight but not all - we see some five and some nines as well. However all in all it looks like KNN would be a decent way to attack this problem - maybe with 5 or 10 neighbors.
-
-# ### Learning the manifold with an autoencoder:
-# 
-# Ok so how do we figure out what (combinations of) dimensions in the image space are important? One option would be to hand engineer features - for examples the mean of all pixels is probably a good feature to have. Other worthwhile features would be the slant, and the vertical or horizontal symmetry. 
-# 
-# But we want do to machine learning not hand-craft features because we're lazy and machines tend to better capture important features in messy datasets. There are many ways to try to reduce the dimensionality - hereI am going to use an autoencoder. I like autoencoders because they have a nice intuitive appeal and you can train them relatively fast. 
-# 
-# An **autoencoder ** is a feed- forward neural network who tries to learn a lower dimensional representation of our data. It does that by decreasing the number of layers in the middle of the network and then increasing it back to the dimension of the original image. 
-# 
-# Since the autoencoder is forced to reconstruct the images from a smaller representation it discards any variation that it doesn't find useful. Here is a great description form the [Deep Learning](http://www.deeplearningbook.org/contents/autoencoders.html) book:
-# 
-# "The important principle is that the autoencoder can aﬀord to represent only the variations that are needed to reconstruct training examples. If the data generating distribution concentrates near a low-dimensional manifold, this yields representations that implicitly capture a local coordinate system for this manifold: only the variations tangent to the manifold around x need to correspond to changes in h=f(x)."
-
-# Let's build an autoencoder in keras - It will have 3 hidden layers with 64, 2, and 64 units respectively. Our model will compress the image to a 2-dimensional vector and then try to reconstruct it . Note that we don't use the target y at all, instead we use X_flat for both the input and the target i.e. we're doing unsupervised learning.
-
-# In[ ]:
-
-
-input_img = Input(shape=(784,))
-encoded = Dense(64, activation='relu')(input_img)
-
-encoded = Dense(2)(encoded) #keep it linear here.
-
-decoded = Dense(64, activation='relu')(encoded)
-decoded = Dense(784, activation = 'sigmoid')(decoded)
-
-autoencoder = Model(input=input_img, output=decoded)
-
-
-# In[ ]:
-
-
-autoencoder.compile(optimizer = "adam", loss = "mse")
-autoencoder.fit(X_flat, X_flat, batch_size = 128,
-                nb_epoch = 10, verbose = 3)
-
-
-# In[ ]:
-
-
-encoder = Model(input = input_img, output = encoded)
-
-#building the decoder:
-encoded_input = Input(shape=(2,))
-encoded_layer_1 = autoencoder.layers[-2]
-encoded_layer_2 = autoencoder.layers[-1]
-
-
-decoder = encoded_layer_1(encoded_input)
-decoder = encoded_layer_2(decoder)
-decoder = Model(input=encoded_input, output=decoder)
-
-
-# ### 2D - representation learned by the autoencoder:
-
-# In[ ]:
-
-
 import seaborn as sns
-
-X_proj = encoder.predict(X_flat[:10000])
-X_proj.shape
-
-proj = pd.DataFrame(X_proj)
-proj.columns = ["comp_1", "comp_2"]
-proj["labels"] = y_train[:10000]
-sns.lmplot("comp_1", "comp_2",hue = "labels", data = proj, fit_reg=False)
+get_ipython().run_line_magic('matplotlib', 'inline')
+dsb_data_dir = os.path.join('..', 'input')
+stage_label = 'stage1'
 
 
-# We can see the autoencoder does a decent job of separating certain classes like 1, 0 and 4. It does better than PCA but is not as good as TSNE. The autoencoder learns a better representation that simpler methods like PCA because it can detect nonlinearities in the data due to its relu activations. In fact if we used linear activation functions and only one hidden layer we would have recovered the PCA case.
-# 
-# 
-# Can we recover the images from their 2-dimensional represetation?
+# # Read in the labels
+# Load the RLE-encoded output for the training set
 
 # In[ ]:
 
 
-
-#how well does the autoencoder decode:w1
-plt.subplot(2,2,1)
-show(X_train[160])
-plt.subplot(2,2,2)
-show(autoencoder.predict(np.expand_dims(X_train[160].flatten(), 0)).reshape(28, 28))
-plt.subplot(2,2,3)
-show(X_train[150])
-plt.subplot(2,2,4)
-show(autoencoder.predict(np.expand_dims(X_train[150].flatten(), 0)).reshape(28, 28))
+train_labels = pd.read_csv(os.path.join(dsb_data_dir,'{}_train_labels.csv'.format(stage_label)))
+train_labels['EncodedPixels'] = train_labels['EncodedPixels'].map(lambda ep: [int(x) for x in ep.split(' ')])
+train_labels.sample(3)
 
 
-# Not really - the encoding decoding process is quite lossy - but that makes sense since we're converting a 784 dimensional vector into 2 dimensions.
-
-# ### Generating new digits by moving in the latent 2D - space:
-
-# Now the hope is that the new 2-D representation of the data is a good coordinate system for the subspace of the data that is actually meaningful i.e. the digits. One (hand-wavy) way to check this is to see what happens if we sample points in the 2-D representation space and move in various directions - do we get some meaningful change in the decoded image of the path or just noise as we did in the original space?
+# # Load in all Images
+# Here we load in the images and process the paths so we have the appropriate information for each image
 
 # In[ ]:
 
 
-#moving along the x axis:
-for i in range(64):
-    plt.subplot(8,8,i+1)
-    pt = np.array([[i/3,0]])
-    show(decoder.predict(pt).reshape((28, 28)))
-    plt.xticks([])
-    plt.yticks([])
+all_images = glob(os.path.join(dsb_data_dir, 'stage1_*', '*', '*', '*'))
+img_df = pd.DataFrame({'path': all_images})
+img_id = lambda in_path: in_path.split('/')[-3]
+img_type = lambda in_path: in_path.split('/')[-2]
+img_group = lambda in_path: in_path.split('/')[-4].split('_')[1]
+img_stage = lambda in_path: in_path.split('/')[-4].split('_')[0]
+img_df['ImageId'] = img_df['path'].map(img_id)
+img_df['ImageType'] = img_df['path'].map(img_type)
+img_df['TrainingSplit'] = img_df['path'].map(img_group)
+img_df['Stage'] = img_df['path'].map(img_stage)
+img_df.sample(2)
 
 
-# Pretty neat! We see that moving in a given direction in the 2D representation corresponds to staying on the digits manifolds in the original space. We never end up in static space. Sure not all the images are exactly digits but they are all digit-like. You can also clearly see the transition from one class to another.
-# 
-# Note that the way we're generating images here doesn't have very good statistical properties since we have to look at the 2-d plot first. Using a variational autoencoder makes the generative process more rigorous but we'll settle for this.
+# # Create Training Data
+# Here we make training data and load all the images into the dataframe. We take a simplification here of grouping all the regions together (rather than keeping them distinct).
 
 # In[ ]:
 
 
-#moving along the y axis:
-for i in range(64):
-    plt.subplot(8,8,i+1)
-    pt = np.array([[10,i/3]])
-    show(decoder.predict(pt).reshape((28, 28)))
-    plt.xticks([])
-    plt.yticks([])
+get_ipython().run_cell_magic('time', '', 'train_df = img_df.query(\'TrainingSplit=="train"\')\ntrain_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in train_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'masks\'] = n_rows.query(\'ImageType == "masks"\')[\'path\'].values.tolist()\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    train_rows += [c_row]\ntrain_img_df = pd.DataFrame(train_rows)    \nIMG_CHANNELS = 3\ndef read_and_stack(in_img_list):\n    return np.sum(np.stack([imread(c_img) for c_img in in_img_list], 0), 0)/255.0\ntrain_img_df[\'images\'] = train_img_df[\'images\'].map(read_and_stack).map(lambda x: x[:,:,:IMG_CHANNELS])\ntrain_img_df[\'masks\'] = train_img_df[\'masks\'].map(read_and_stack).map(lambda x: x.astype(int))\ntrain_img_df.sample(1)')
 
 
-# ### References:
-# 
-# -  [Autoencoder in Keras](https://blog.keras.io/building-autoencoders-in-keras.html) by Francois Chollet
-# 
-# - [Deep Learning Book Ch 14](http://www.deeplearningbook.org/contents/autoencoders.html) by Ian Goodfellow and Yoshua Bengio and Aaron Courville.
+# # Show a few images
+# Here we show a few images of the cells where we see there is a mixture of brightfield and fluorescence which will probably make using a single segmentation algorithm difficult
+
+# In[ ]:
+
+
+n_img = 6
+fig, m_axs = plt.subplots(2, n_img, figsize = (12, 4))
+for (_, c_row), (c_im, c_lab) in zip(train_img_df.sample(n_img).iterrows(), 
+                                     m_axs.T):
+    c_im.imshow(c_row['images'])
+    c_im.axis('off')
+    c_im.set_title('Microscope')
+    
+    c_lab.imshow(c_row['masks'])
+    c_lab.axis('off')
+    c_lab.set_title('Labeled')
+
+
+# # Look at the intensity distribution
+# Here we look briefly at the distribution of intensity and see a few groups forming, they should probably be handled separately. 
+
+# In[ ]:
+
+
+train_img_df['Red'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,0]))
+train_img_df['Green'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,1]))
+train_img_df['Blue'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,2]))
+train_img_df['Gray'] = train_img_df['images'].map(lambda x: np.mean(x))
+train_img_df['Red-Blue'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,0]-x[:,:,2]))
+sns.pairplot(train_img_df[['Gray', 'Red', 'Green', 'Blue', 'Red-Blue']])
+
+
+# # Check Dimensions 
+# Here we show the dimensions of the data to see the variety in the input images
+
+# In[ ]:
+
+
+train_img_df['images'].map(lambda x: x.shape).value_counts()
+
+
+# ## Making a simple CNN
+# Here we make a very simple CNN just to get a quick idea of how well it works. For this we use a batch normalization to normalize the inputs. We cheat a bit with the padding to keep problems simple.
+
+# In[ ]:
+
+
+from keras.models import Sequential
+from keras.layers import BatchNormalization, Conv2D, UpSampling2D, Lambda
+simple_cnn = Sequential()
+simple_cnn.add(BatchNormalization(input_shape = (None, None, IMG_CHANNELS), 
+                                  name = 'NormalizeInput'))
+simple_cnn.add(Conv2D(8, kernel_size = (3,3), padding = 'same'))
+simple_cnn.add(Conv2D(8, kernel_size = (3,3), padding = 'same'))
+# use dilations to get a slightly larger field of view
+simple_cnn.add(Conv2D(16, kernel_size = (3,3), dilation_rate = 2, padding = 'same'))
+simple_cnn.add(Conv2D(16, kernel_size = (3,3), dilation_rate = 2, padding = 'same'))
+simple_cnn.add(Conv2D(32, kernel_size = (3,3), dilation_rate = 3, padding = 'same'))
+
+# the final processing
+simple_cnn.add(Conv2D(16, kernel_size = (1,1), padding = 'same'))
+simple_cnn.add(Conv2D(1, kernel_size = (1,1), padding = 'same', activation = 'sigmoid'))
+simple_cnn.summary()
+
+
+# # Loss
+# Since we are being evaulated with intersection over union we can use the inverse of the DICE score as the loss function to optimize
+
+# In[ ]:
+
+
+from keras import backend as K
+smooth = 1.
+def dice_coef(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+def dice_coef_loss(y_true, y_pred):
+    return -dice_coef(y_true, y_pred)
+simple_cnn.compile(optimizer = 'adam', 
+                   loss = dice_coef_loss, 
+                   metrics = [dice_coef, 'acc', 'mse'])
+
+
+# # Simple Training
+# Here we run a simple training, with each image being it's own batch (not a very good idea), but it keeps the code simple
+
+# In[ ]:
+
+
+def simple_gen():
+    while True:
+        for _, c_row in train_img_df.iterrows():
+            yield np.expand_dims(c_row['images'],0), np.expand_dims(np.expand_dims(c_row['masks'],-1),0)
+
+simple_cnn.fit_generator(simple_gen(), 
+                         steps_per_epoch=train_img_df.shape[0],
+                        epochs = 3)
+
+
+# # Apply Model to Test
+# Here we apply the model to the test data
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'test_df = img_df.query(\'TrainingSplit=="test"\')\ntest_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in test_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    test_rows += [c_row]\ntest_img_df = pd.DataFrame(test_rows)    \n\ntest_img_df[\'images\'] = test_img_df[\'images\'].map(read_and_stack).map(lambda x: x[:,:,:IMG_CHANNELS])\nprint(test_img_df.shape[0], \'images to process\')\ntest_img_df.sample(1)')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', "test_img_df['masks'] = test_img_df['images'].map(lambda x: simple_cnn.predict(np.expand_dims(x, 0))[0, :, :, 0])")
+
+
+# ## Show a few predictions
+
+# In[ ]:
+
+
+n_img = 3
+from skimage.morphology import closing, opening, disk
+def clean_img(x):
+    return opening(closing(x, disk(1)), disk(3))
+fig, m_axs = plt.subplots(3, n_img, figsize = (12, 6))
+for (_, d_row), (c_im, c_lab, c_clean) in zip(test_img_df.sample(n_img).iterrows(), 
+                                     m_axs):
+    c_im.imshow(d_row['images'])
+    c_im.axis('off')
+    c_im.set_title('Microscope')
+    
+    c_lab.imshow(d_row['masks'])
+    c_lab.axis('off')
+    c_lab.set_title('Predicted')
+    
+    c_clean.imshow(clean_img(d_row['masks']))
+    c_clean.axis('off')
+    c_clean.set_title('Clean')
+
+
+# # Check RLE
+# Check that our approach for RLE encoding (stolen from [here](https://www.kaggle.com/rakhlin/fast-run-length-encoding-python)) works
+
+# In[ ]:
+
+
+from skimage.morphology import label # label regions
+def rle_encoding(x):
+    '''
+    x: numpy array of shape (height, width), 1 - mask, 0 - background
+    Returns run length as list
+    '''
+    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
+    run_lengths = []
+    prev = -2
+    for b in dots:
+        if (b>prev+1): run_lengths.extend((b+1, 0))
+        run_lengths[-1] += 1
+        prev = b
+    return run_lengths
+
+def prob_to_rles(x, cut_off = 0.5):
+    lab_img = label(x>cut_off)
+    if lab_img.max()<1:
+        lab_img[0,0] = 1 # ensure at least one prediction per image
+    for i in range(1, lab_img.max()+1):
+        yield rle_encoding(lab_img==i)
+
+
+# ## Calculate the RLEs for a Train Image
+
+# In[ ]:
+
+
+_, train_rle_row = next(train_img_df.tail(5).iterrows()) 
+train_row_rles = list(prob_to_rles(train_rle_row['masks']))
+
+
+# ## Take the RLEs from the CSV
+
+# In[ ]:
+
+
+tl_rles = train_labels.query('ImageId=="{ImageId}"'.format(**train_rle_row))['EncodedPixels']
+
+
+# ## Check
+# Since we made some simplifications, we don't expect everything to be perfect, but pretty close
+
+# In[ ]:
+
+
+match, mismatch = 0, 0
+for img_rle, train_rle in zip(sorted(train_row_rles, key = lambda x: x[0]), 
+                             sorted(tl_rles, key = lambda x: x[0])):
+    for i_x, i_y in zip(img_rle, train_rle):
+        if i_x == i_y:
+            match += 1
+        else:
+            mismatch += 1
+print('Matches: %d, Mismatches: %d, Accuracy: %2.1f%%' % (match, mismatch, 100.0*match/(match+mismatch)))
+
+
+# # Calculate RLE for all the masks
+# Here we generate the RLE for all the masks and output the the results to a table. We use a few morphological operations to clean up the images before submission since they can be very messy (remove single pixels, connect nearby regions, etc)
+
+# In[ ]:
+
+
+test_img_df['rles'] = test_img_df['masks'].map(clean_img).map(lambda x: list(prob_to_rles(x)))
+
+
+# In[ ]:
+
+
+out_pred_list = []
+for _, c_row in test_img_df.iterrows():
+    for c_rle in c_row['rles']:
+        out_pred_list+=[dict(ImageId=c_row['ImageId'], 
+                             EncodedPixels = ' '.join(np.array(c_rle).astype(str)))]
+out_pred_df = pd.DataFrame(out_pred_list)
+print(out_pred_df.shape[0], 'regions found for', test_img_df.shape[0], 'images')
+out_pred_df.sample(3)
+
+
+# In[ ]:
+
+
+out_pred_df[['ImageId', 'EncodedPixels']].to_csv('predictions.csv', index = False)
+

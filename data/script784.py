@@ -1,199 +1,95 @@
 
 # coding: utf-8
 
-# Just a simple XGB starter. Huge thanks to @the1owl for [the kernel](https://www.kaggle.com/the1owl/surprise-me/code) with all of the data wrangling.
+# ## Word Share Model
+# The word_match_share feature is surprisingly predictive. In this notebook, we make a quick Pandas-only model that gets 0.356 LB without machine learning. It just groups on binned word_match_share values and then averages the label.
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-from sklearn import *
-from datetime import datetime
-import xgboost as xgb
-import gc
+tr = pd.read_csv('../input/train.csv')
+te = pd.read_csv('../input/test.csv')
+from nltk.corpus import stopwords
+SCALE = 0.3627
 
 
-# In[ ]:
+# As noted in the kernel [How many 1's are in the public LB][1], the mean label on the test set is about 0.175, which is quite different from the training mean of 0.369. The constant SCALE above is an odds ratio. We use it to shift the mean label of the predictions from that of the training set to that of the test set. This is needed because the evaluation metric for this competition is log loss, which is sensitive to the mean prediction.       
+# $$SCALE = \frac{\frac{y_{te}}{1 - y_{te}}}{\frac{y_{tr}}{1 - y_{tr}}}$$    
+# Where y_te is the mean test label and y_tr is the mean training set label.
+# 
+# 
+#   [1]: https://www.kaggle.com/davidthaler/quora-question-pairs/how-many-1-s-are-in-the-public-lb
 
-
-# Data wrangling brought to you by the1owl
-# https://www.kaggle.com/the1owl/surprise-me
-
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    data[df] = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date'})
-    print(data[df].head())
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-lbl = preprocessing.LabelEncoder()
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-
-data['tra'] = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date'])
-data['tes'] = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date'])
-
-train = pd.merge(data['tra'], stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(data['tes'], stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-col = [c for c in train if c not in ['id', 'air_store_id','visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
-
+# This model uses only one feature, which is the ever-popular word_match_share feature. The version below is Pandas-centric, but is equivalent to other versions available in the kernels.
 
 # In[ ]:
 
 
-# XGB starter template borrowed from @anokas
-# https://www.kaggle.com/anokas/simple-xgboost-starter-0-0655
+def word_match_share(x):
+    '''
+    The much-loved word_match_share feature.
 
-print('Binding to float32')
-
-for c, dtype in zip(train.columns, train.dtypes):
-    if dtype == np.float64:
-        train[c] = train[c].astype(np.float32)
+    Args:
+        x: source data with question1/2
         
-for c, dtype in zip(test.columns, test.dtypes):
-    if dtype == np.float64:
-        test[c] = test[c].astype(np.float32)
+    Returns:
+        word_match_share as a pandas Series
+    '''
+    stops = set(stopwords.words('english'))
+    q1 = x.question1.fillna(' ').str.lower().str.split()
+    q2 = x.question2.fillna(' ').str.lower().str.split()
+    q1 = q1.map(lambda l : set(l) - stops)
+    q2 = q2.map(lambda l : set(l) - stops)
+    q = pd.DataFrame({'q1':q1, 'q2':q2})
+    q['len_inter'] = q.apply(lambda row : len(row['q1'] & row['q2']), axis=1)
+    q['len_tot'] = q.q1.map(len) + q.q2.map(len)
+    return (2 * q.len_inter / q.len_tot).fillna(0)
+
+
+# To make our model, all we do is group on binned values of word_match_share, and then count the number of positives and total values, scaling the positives by SCALE to adjust the mean prediction. Then we compute binned word_match_share for the test set and apply those values, with a little bit of Laplace smoothing to get rid of extreme values based on low counts.
+
+# In[ ]:
+
+
+def bin_model(tr, te, bins=100, vpos=1, vss=3):
+    '''
+    Runs a Pandas table model using the word_match_share feature.
+    
+    Args:
+        tr: pandas DataFrame with question1/2 in it
+        te: test data frame
+        bins: word shares are rounded to whole numbers after multiplying by bins.
+        v_pos: number of virtual positives for smoothing (can be non-integer)
+        vss: virtual sample size for smoothing (can be non-integer)
+        
+    Returns:
+        submission in a Pandas Data Frame.
+    '''
+    tr['word_share'] = word_match_share(tr)
+    tr['binned_share'] = (bins * tr.word_share).round()
+    pos = tr.groupby('binned_share').is_duplicate.sum()
+    cts = tr.binned_share.value_counts()
+    te['word_share'] = word_match_share(te)
+    te['binned_share'] = (bins * te.word_share).round()
+    te_pos = te.binned_share.map(pos, na_action='ignore').fillna(0)
+    te_cts = te.binned_share.map(cts, na_action='ignore').fillna(0)
+    prob = (te_pos + vpos) / (te_cts + vss)
+    odds = prob / (1 - prob)
+    scaled_odds = SCALE * odds
+    scaled_prob = scaled_odds / (1 + scaled_odds)
+    sub = te[['test_id']].copy()
+    sub['is_duplicate'] = scaled_prob
+    return sub
 
 
 # In[ ]:
 
 
-train.head()
+sub = bin_model(tr, te)
+sub.to_csv('no_ml_model.csv', index=False, float_format='%.6f')
+sub.head(10)
 
 
-# In[ ]:
-
-
-test.head()
-
-
-# In[ ]:
-
-
-x_train = train.drop(['air_store_id','visit_date','visitors'], axis=1)
-y_train = np.log1p(train['visitors'].values)
-print(x_train.shape, y_train.shape)
-
-
-# In[ ]:
-
-
-# Create training / validation split
-split = 200000
-x_train, y_train, x_valid, y_valid = x_train[:split], y_train[:split], x_train[split:], y_train[split:]
-
-print('Building DMatrix...')
-
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
-
-del x_train, x_valid; gc.collect()
-
-
-# In[ ]:
-
-
-print('Training ...')
-
-params = {}
-params['objective'] = 'reg:linear'
-params['eval_metric'] = 'rmse'
-params['eta'] = 0.04
-params['max_depth'] = 7
-params['silent'] = 1
-
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-clf = xgb.train(params, d_train, 10000, watchlist, early_stopping_rounds=100, verbose_eval=10)
-
-del d_train, d_valid
-
-
-# In[ ]:
-
-
-x_test = test.drop(['id','air_store_id','visit_date','visitors'], axis=1)
-d_test = xgb.DMatrix(x_test)
-
-del x_test; gc.collect()
-
-
-# In[ ]:
-
-
-print('Predicting on test ...')
-
-p_test = clf.predict(d_test)
-
-del d_test; gc.collect()
-
-
-# In[ ]:
-
-
-np.expm1(p_test)
-
-
-# In[ ]:
-
-
-test['visitors'] = np.expm1(p_test)
-
-test[['id','visitors']].to_csv('xgb_submission.csv', index=False, float_format='%.3f')
-
+# And that should do it... :)

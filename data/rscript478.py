@@ -1,178 +1,161 @@
+"""
+This is an upgraded version of Ceshine's and Linzhi and Andy Harless starter script, simply adding more
+average features and weekly average features on it.
+"""
+from datetime import date, timedelta
 import pandas as pd
-import time
 import numpy as np
-from sklearn.cross_validation import train_test_split
-import lightgbm as lgb
+from sklearn.metrics import mean_squared_error
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation
+from keras.layers import LSTM
+from keras import callbacks
+from keras.callbacks import ModelCheckpoint
 
-def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
-                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
-    lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': objective,
-        'metric':metrics,
-        'learning_rate': 0.01,
-        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
-        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': -1,  # -1 means no limit
-        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 255,  # Number of bucketed bin for feature values
-        'subsample': 0.6,  # Subsample ratio of the training instance.
-        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'subsample_for_bin': 200000,  # Number of samples for constructing bin
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'reg_alpha': 0,  # L1 regularization term on weights
-        'reg_lambda': 0,  # L2 regularization term on weights
-        'nthread': 8,
-        'verbose': 0,
-        'metric':metrics
-    }
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
 
-    lgb_params.update(params)
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-    print("preparing validation datasets")
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
 
-    evals_results = {}
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
 
-    bst1 = lgb.train(lgb_params, 
-                     xgtrain, 
-                     valid_sets=[xgtrain, xgvalid], 
-                     valid_names=['train','valid'], 
-                     evals_result=evals_results, 
-                     num_boost_round=num_boost_round,
-                     early_stopping_rounds=early_stopping_rounds,
-                     verbose_eval=10, 
-                     feval=feval)
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
 
-    n_estimators = bst1.best_iteration
-    print("\nModel Report")
-    print("n_estimators : ", n_estimators)
-    print(metrics+":", evals_results['valid'][metrics][n_estimators-1])
+items = items.reindex(df_2017.index.get_level_values(1))
 
-    return bst1
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
 
-path = '../input/'
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "day_1_2017": get_timespan(df_2017, t2017, 1, 1).values.ravel(),
+        "mean_3_2017": get_timespan(df_2017, t2017, 3, 3).mean(axis=1).values,
+        "mean_7_2017": get_timespan(df_2017, t2017, 7, 7).mean(axis=1).values,
+        "mean_14_2017": get_timespan(df_2017, t2017, 14, 14).mean(axis=1).values,
+        "mean_30_2017": get_timespan(df_2017, t2017, 30, 30).mean(axis=1).values,
+        "mean_60_2017": get_timespan(df_2017, t2017, 60, 60).mean(axis=1).values,
+        "mean_140_2017": get_timespan(df_2017, t2017, 140, 140).mean(axis=1).values,
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values
+    })
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    return X
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
+print("Preparing dataset...")
+t2017 = date(2017, 5, 31)
+X_l, y_l = [], []
+for i in range(6):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
 
-print('load train...')
-train_df = pd.read_csv(path+"train.csv", nrows=40000000, dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
-print('load test...')
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
+stores_items = pd.DataFrame(index=df_2017.index)
+test_ids = df_test[['id']]
 
-import gc
+items = items.reindex( stores_items.index.get_level_values(1) )
 
-len_train = len(train_df)
-train_df=train_df.append(test_df)
+X_train = X_train.as_matrix()
+X_test = X_test.as_matrix()
+X_val = X_val.as_matrix()
+X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
+X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
+X_val = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
 
-del test_df
-gc.collect()
+model = Sequential()
+model.add(LSTM(32, input_shape=(X_train.shape[1],X_train.shape[2])))
+model.add(Dropout(.1))
+model.add(Dense(32))
+model.add(Dropout(.2))
+model.add(Dense(1))
+model.compile(loss = 'mse', optimizer='adam', metrics=['mse'])
 
-print('data prep...')
-train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
-train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
+N_EPOCHS = 5
 
-gc.collect()
+val_pred = []
+test_pred = []
+# wtpath = 'weights.hdf5'  # To save best epoch. But need Keras bug to be fixed first.
+sample_weights=np.array( pd.concat([items["perishable"]] * 6) * 0.25 + 1 )
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    y = y_train[:, i]
+    xv = X_val
+    yv = y_val[:, i]
+    model.fit(X_train, y, batch_size = 512, epochs = N_EPOCHS, verbose=2,
+               sample_weight=sample_weights, validation_data=(xv,yv) ) 
+    val_pred.append(model.predict(X_val))
+    test_pred.append(model.predict(X_test))
+    
+n_public = 5 # Number of days in public test set
+weights=pd.concat([items["perishable"]]) * 0.25 + 1
+print("Unweighted validation mse: ", mean_squared_error(
+    y_val, np.array(val_pred).squeeze(axis=2).transpose()) )
+print("Full validation mse:       ", mean_squared_error(
+    y_val, np.array(val_pred).squeeze(axis=2).transpose(), sample_weight=weights) )
+print("'Public' validation mse:   ", mean_squared_error(
+    y_val[:,:n_public], np.array(val_pred).squeeze(axis=2).transpose()[:,:n_public], 
+    sample_weight=weights) )
+print("'Private' validation mse:  ", mean_squared_error(
+    y_val[:,n_public:], np.array(val_pred).squeeze(axis=2).transpose()[:,n_public:], 
+    sample_weight=weights) )
+    
+y_test = np.array(test_pred).squeeze(axis=2).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=stores_items.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
-# # of clicks for each ip-day-hour combination
-print('group by...')
-gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'qty'})
-print('merge...')
-train_df = train_df.merge(gp, on=['ip','day','hour'], how='left')
-del gp
-gc.collect()
-
-# # of clicks for each ip-app combination
-print('group by...')
-gp = train_df[['ip','app', 'channel']].groupby(by=['ip', 'app'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_count'})
-train_df = train_df.merge(gp, on=['ip','app'], how='left')
-del gp
-gc.collect()
-
-# # of clicks for each ip-app-os combination
-print('group by...')
-gp = train_df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 'os'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_os_count'})
-train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-del gp
-gc.collect()
-
-
-print("vars and data type: ")
-train_df.info()
-train_df['qty'] = train_df['qty'].astype('uint16')
-train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
-train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
-
-train_df.head(20)
-test_df = train_df[len_train:]
-val_df = train_df[(len_train-3000000):len_train]
-train_df = train_df[:(len_train-3000000)]
-
-print("train size: ", len(train_df))
-print("valid size: ", len(val_df))
-print("test size : ", len(test_df))
-
-target = 'is_attributed'
-predictors = ['app','device','os', 'channel', 'hour', 'day', 'qty', 'ip_app_count', 'ip_app_os_count']
-categorical = ['app','device','os', 'channel', 'hour']
-
-
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id'].astype('int')
-
-gc.collect()
-
-print("Training...")
-params = {
-    'learning_rate': 0.1,
-    #'is_unbalance': 'true', # replaced with scale_pos_weight argument
-    'num_leaves': 7,  # we should let it be smaller than 2^(max_depth)
-    'max_depth': 3,  # -1 means no limit
-    'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-    'max_bin': 100,  # Number of bucketed bin for feature values
-    'subsample': 0.7,  # Subsample ratio of the training instance.
-    'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-    'colsample_bytree': 0.7,  # Subsample ratio of columns when constructing each tree.
-    'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-    'scale_pos_weight':99 # because training data is extremely unbalanced 
-}
-bst = lgb_modelfit_nocv(params, 
-                        train_df, 
-                        val_df, 
-                        predictors, 
-                        target, 
-                        objective='binary', 
-                        metrics='auc',
-                        early_stopping_rounds=50, 
-                        verbose_eval=True, 
-                        num_boost_round=300, 
-                        categorical_features=categorical)
-
-del train_df
-del val_df
-gc.collect()
-
-print("Predicting...")
-sub['is_attributed'] = bst.predict(test_df[predictors])
-print("writing...")
-sub.to_csv('sub_lgb_balanced99.csv',index=False)
-print("done...")
-print(sub.info())
+submission = test_ids.join(df_preds, how="left").fillna(0)
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+submission.to_csv('lstm.csv', float_format='%.4f', index=None)

@@ -1,188 +1,268 @@
-# Based on Bojan's -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
-# Changes:
-# 1. Split category_name into sub-categories
-# 2. Parallelize LGBM to 4 cores
-# 3. Increase the number of rounds in 1st LGBM
-# 4. Another LGBM with different seed for model and training split, slightly different hyper-parametes.
-# 5. Weights on ensemble
-# 6. SGDRegressor doesn't improve the result, going with only 1 Ridge and 2 LGBM
+"""
+Author : amanbh
 
-import pyximport; pyximport.install()
-import gc
-import time
-import numpy as np
+- Set up some basic functions to load/manipulate image data
+- Visualize/Summarize cType counts, training data, and true classes
+- Plot Polygons with holes correctly by using descartes package
+
+Based on Kernel by
+    Author : Oleg Medvedev
+    Link   : https://www.kaggle.com/torrinos/dstl-satellite-imagery-feature-detection/exploration-and-plotting/run/553107
+"""
+
 import pandas as pd
+import numpy as np
 
-from joblib import Parallel, delayed
+from shapely.wkt import loads as wkt_loads
+from matplotlib.patches import Polygon, Patch
 
-from scipy.sparse import csr_matrix, hstack
+# decartes package makes plotting with holes much easier
+from descartes.patch import PolygonPatch
 
-from sklearn.linear_model import Ridge
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.linear_model import SGDRegressor
-import lightgbm as lgb
+import matplotlib.pyplot as plt
+import tifffile as tiff
 
-NUM_BRANDS = 4000
-NUM_CATEGORIES = 1000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 50000
+import pylab
+# turn interactive mode on so that plots immediately
+# See: http://stackoverflow.com/questions/2130913/no-plot-window-in-matplotlib
+# pylab.ion()
+
+inDir = '../input'
+
+# Give short names, sensible colors and zorders to object types
+CLASSES = {
+        1 : 'Bldg',
+        2 : 'Struct',
+        3 : 'Road',
+        4 : 'Track',
+        5 : 'Trees',
+        6 : 'Crops',
+        7 : 'Fast H20',
+        8 : 'Slow H20',
+        9 : 'Truck',
+        10 : 'Car',
+        }
+COLORS = {
+        1 : '0.7',
+        2 : '0.4',
+        3 : '#b35806',
+        4 : '#dfc27d',
+        5 : '#1b7837',
+        6 : '#a6dba0',
+        7 : '#74add1',
+        8 : '#4575b4',
+        9 : '#f46d43',
+        10: '#d73027',
+        }
+ZORDER = {
+        1 : 5,
+        2 : 5,
+        3 : 4,
+        4 : 1,
+        5 : 3,
+        6 : 2,
+        7 : 7,
+        8 : 8,
+        9 : 9,
+        10: 10,
+        }
+
+# read the training data from train_wkt_v4.csv
+df = pd.read_csv(inDir + '/train_wkt_v4.csv')
+print(df.head())
+
+# grid size will also be needed later..
+gs = pd.read_csv(inDir + '/grid_sizes.csv', names=['ImageId', 'Xmax', 'Ymin'], skiprows=1)
+print(gs.head())
+
+# imageIds in a DataFrame
+allImageIds = gs.ImageId.unique()
+trainImageIds = df.ImageId.unique()
 
 
-def rmsle(y, y0):
-     assert len(y) == len(y0)
-     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
+def get_image_names(imageId):
+    '''
+    Get the names of the tiff files
+    '''
+    d = {'3': '{}/three_band/{}.tif'.format(inDir, imageId),
+         'A': '{}/sixteen_band/{}_A.tif'.format(inDir, imageId),
+         'M': '{}/sixteen_band/{}_M.tif'.format(inDir, imageId),
+         'P': '{}/sixteen_band/{}_P.tif'.format(inDir, imageId),
+         }
+    return d
+
+
+def get_images(imageId, img_key = None):
+    '''
+    Load images correspoding to imageId
+
+    Parameters
+    ----------
+    imageId : str
+        imageId as used in grid_size.csv
+    img_key : {None, '3', 'A', 'M', 'P'}, optional
+        Specify this to load single image
+        None loads all images and returns in a dict
+        '3' loads image from three_band/
+        'A' loads '_A' image from sixteen_band/
+        'M' loads '_M' image from sixteen_band/
+        'P' loads '_P' image from sixteen_band/
+
+    Returns
+    -------
+    images : dict
+        A dict of image data from TIFF files as numpy array
+    '''
+    img_names = get_image_names(imageId)
+    images = dict()
+    if img_key is None:
+        for k in img_names.keys():
+            images[k] = tiff.imread(img_names[k])
+    else:
+        images[img_key] = tiff.imread(img_names[img_key])
+    return images
+
+
+def get_size(imageId):
+    """
+    Get the grid size of the image
+
+    Parameters
+    ----------
+    imageId : str
+        imageId as used in grid_size.csv
+    """
+    xmax, ymin = gs[gs.ImageId == imageId].iloc[0,1:].astype(float)
+    W, H = get_images(imageId, '3')['3'].shape[1:]
+    return (xmax, ymin, W, H)
+
+
+def is_training_image(imageId):
+    '''
+    Returns
+    -------
+    is_training_image : bool
+        True if imageId belongs to training data
+    '''
+    return any(trainImageIds == imageId)
+
+
+def plot_polygons(fig, ax, polygonsList):
+    '''
+    Plot descrates.PolygonPatch from list of polygons objs for each CLASS
+    '''
+    legend_patches = []
+    for cType in polygonsList:
+        print('{} : {} \tcount = {}'.format(cType, CLASSES[cType], len(polygonsList[cType])))
+        legend_patches.append(Patch(color=COLORS[cType],
+                                    label='{} ({})'.format(CLASSES[cType], len(polygonsList[cType]))))
+        for polygon in polygonsList[cType]:
+            mpl_poly = PolygonPatch(polygon,
+                                    color=COLORS[cType],
+                                    lw=0,
+                                    alpha=0.7,
+                                    zorder=ZORDER[cType])
+            ax.add_patch(mpl_poly)
+    # ax.relim()
+    ax.autoscale_view()
+    ax.set_title('Objects')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return legend_patches
+
+
+def plot_image(fig, ax, imageId, img_key, selected_channels=None):
+    '''
+    Plot get_images(imageId)[image_key] on axis/fig
+    Optional: select which channels of the image are used (used for sixteen_band/ images)
+    Parameters
+    ----------
+    img_key : str, {'3', 'P', 'N', 'A'}
+        See get_images for description.
+    '''
+    images = get_images(imageId, img_key)
+    img = images[img_key]
+    title_suffix = ''
+    if selected_channels is not None:
+        img = img[selected_channels]
+        title_suffix = ' (' + ','.join([ repr(i) for i in selected_channels ]) + ')'
+    if len(img.shape) == 2:
+        new_img = np.zeros((3, img.shape[0], img.shape[1]))
+        new_img[0] = img
+        new_img[1] = img
+        new_img[2] = img
+        img = new_img
     
-def split_cat(text):
-    try: return text.split("/")
-    except: return ("No Label", "No Label", "No Label")
+    tiff.imshow(img, figure=fig, subplot=ax)
+    ax.set_title(imageId + ' - ' + img_key + title_suffix)
+    ax.set_xlabel(img.shape[-2])
+    ax.set_ylabel(img.shape[-1])
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+
+def visualize_image(imageId, plot_all=True):
+    '''         
+    Plot all images and object-polygons
     
-def handle_missing_inplace(dataset):
-    dataset['general_cat'].fillna(value='missing', inplace=True)
-    dataset['subcat_1'].fillna(value='missing', inplace=True)
-    dataset['subcat_2'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
-
-
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
-    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
-    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
-
-
-def to_categorical(dataset):
-    dataset['general_cat'] = dataset['general_cat'].astype('category')
-    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
-    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
-
-
-def main():
-    start_time = time.time()
-
-    train = pd.read_table('../input/train.tsv', engine='c')
-    test = pd.read_table('../input/test.tsv', engine='c')
-    print('[{}] Finished to load data'.format(time.time() - start_time))
-    print('Train shape: ', train.shape)
-    print('Test shape: ', test.shape)
-
-    nrow_train = train.shape[0]
-    y = np.log1p(train["price"])
-    merge: pd.DataFrame = pd.concat([train, test])
-    submission: pd.DataFrame = test[['test_id']]
-
-    del train
-    del test
-    gc.collect()
+    Parameters
+    ----------
+    imageId : str
+        imageId as used in grid_size.csv
+    plot_all : bool, True by default
+        If True, plots all images (from three_band/ and sixteen_band/) as subplots.
+        Otherwise, only plots Polygons.
+    '''         
+    df_image = df[df.ImageId == imageId]
+    xmax, ymin, W, H = get_size(imageId)
     
-    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
-    zip(*merge['category_name'].apply(lambda x: split_cat(x)))
-    merge.drop('category_name', axis=1, inplace=True)
-    print('[{}] Split categories completed.'.format(time.time() - start_time))
+    if plot_all:
+        fig, axArr = plt.subplots(figsize=(10, 10), nrows=3, ncols=3)
+        ax = axArr[0][0]
+    else:
+        fig, axArr = plt.subplots(figsize=(10, 10))
+        ax = axArr
+    if is_training_image(imageId):
+        print('ImageId : {}'.format(imageId))
+        polygonsList = {}
+        for cType in CLASSES.keys():
+            polygonsList[cType] = wkt_loads(df_image[df_image.ClassType == cType].MultipolygonWKT.values[0])
+        legend_patches = plot_polygons(fig, ax, polygonsList)
+        ax.set_xlim(0, xmax)
+        ax.set_ylim(ymin, 0)
+        ax.set_xlabel(xmax)
+        ax.set_ylabel(ymin)
+    if plot_all:
+        plot_image(fig, axArr[0][1], imageId, '3')
+        plot_image(fig, axArr[0][2], imageId, 'P')
+        plot_image(fig, axArr[1][0], imageId, 'A', [0, 3, 6])
+        plot_image(fig, axArr[1][1], imageId, 'A', [1, 4, 7])
+        plot_image(fig, axArr[1][2], imageId, 'A', [2, 5, 0])
+        plot_image(fig, axArr[2][0], imageId, 'M', [0, 3, 6])
+        plot_image(fig, axArr[2][1], imageId, 'M', [1, 4, 7])
+        plot_image(fig, axArr[2][2], imageId, 'M', [2, 5, 0])
 
-    handle_missing_inplace(merge)
-    print('[{}] Handle missing completed.'.format(time.time() - start_time))
+    if is_training_image(imageId):
+        ax.legend(handles=legend_patches,
+                   # loc='upper center',
+                   bbox_to_anchor=(0.9, 1),
+                   bbox_transform=plt.gcf().transFigure,
+                   ncol=5,
+                   fontsize='x-small',
+                   title='Objects-' + imageId,
+                   # mode="expand",
+                   framealpha=0.3)
+    return (fig, axArr, ax)
 
-    cutting(merge)
-    print('[{}] Cut completed.'.format(time.time() - start_time))
+# Loop over few training images and save to files
+for imageId in trainImageIds:
+    fig, axArr, ax = visualize_image(imageId, plot_all=False)
+    plt.savefig('Objects--' + imageId + '.png')
+    plt.clf()
 
-    to_categorical(merge)
-    print('[{}] Convert categorical completed'.format(time.time() - start_time))
 
-    cv = CountVectorizer(min_df=NAME_MIN_DF)
-    X_name = cv.fit_transform(merge['name'])
-    print('[{}] Count vectorize `name` completed.'.format(time.time() - start_time))
-
-    cv = CountVectorizer()
-    X_category1 = cv.fit_transform(merge['general_cat'])
-    X_category2 = cv.fit_transform(merge['subcat_1'])
-    X_category3 = cv.fit_transform(merge['subcat_2'])
-    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
-
-    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                         ngram_range=(1, 3),
-                         stop_words='english')
-    X_description = tv.fit_transform(merge['item_description'])
-    print('[{}] TFIDF vectorize `item_description` completed.'.format(time.time() - start_time))
-
-    lb = LabelBinarizer(sparse_output=True)
-    X_brand = lb.fit_transform(merge['brand_name'])
-    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
-
-    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
-
-    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
-    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
-
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_train:]
-    
-    model = Ridge(alpha=.05, copy_X=True, fit_intercept=True, max_iter=100,
-      normalize=False, random_state=101, solver='auto', tol=0.001)
-    model.fit(X, y)
-    print('[{}] Train ridge completed'.format(time.time() - start_time))
-    predsR = model.predict(X=X_test)
-    print('[{}] Predict ridge completed'.format(time.time() - start_time))
-
-    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.15, random_state = 144) 
-    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
-    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
-    watchlist = [d_train, d_valid]
-    
-    params = {
-        'learning_rate': 0.5,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 60,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 1,
-        'bagging_fraction': 0.5,
-        'nthread': 4
-    }
-
-    params2 = {
-        'learning_rate': 1,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 140,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 2,
-        'bagging_fraction': 1,
-        'nthread': 4
-    }
-
-    model = lgb.train(params, train_set=d_train, num_boost_round=8000, valid_sets=watchlist, \
-    early_stopping_rounds=250, verbose_eval=1000) 
-    predsL = model.predict(X_test)
-    
-    print('[{}] Predict lgb 1 completed.'.format(time.time() - start_time))
-    
-    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
-    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
-    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
-    watchlist2 = [d_train2, d_valid2]
-
-    model = lgb.train(params2, train_set=d_train2, num_boost_round=8000, valid_sets=watchlist2, \
-    early_stopping_rounds=250, verbose_eval=1000) 
-    predsL2 = model.predict(X_test)
-
-    print('[{}] Predict lgb 2 completed.'.format(time.time() - start_time))
-
-    preds = predsR*0.35 + predsL*0.35 + predsL2*0.3
-
-    submission['price'] = np.expm1(preds)
-    submission.to_csv("submission_ridge_2xlgbm.csv", index=False)
-
-if __name__ == '__main__':
-    main()
+# Optionally, view images immediately:
+# pylab.show()
+# Uncomment to show plot when interactive mode is off 
+# (this function blocks till fig is closed)

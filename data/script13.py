@@ -1,151 +1,187 @@
 
 # coding: utf-8
 
-# Hello there everyone!
+# # INTRODUCTION
+# * In this kernel, I am interested with the effect of the raising hands, visiting resources and viewing announcements.
+# * Then found two of students have low level grade although they have higher values of raising hands, visiting resources and viewing announcements and start researching it **why !!!**
 # 
-# I am new to this competition but it looks like this dataset leads to overfitting problems. In addition, it seems like Mercedes is interested in reducing the dataset to a few meaningful variables. Therefore, I thought it was a good idea to try one of the best linear models I know for tackling overfitting that works also as a feature selection method: **Elastic Nets**.
 # 
-# Elastic Nets are essentially a **Lasso/Ridge** hybrid, that entails the minimization of an objective function that includes both **L1** (Lasso) and **L2** (Ridge) norms. You can find more about ElasticNets [here][1].  
+
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np #linear algebra
+import pandas as pd #data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pylab as plt
+import seaborn as sns
+sns.set(style='ticks')
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+data=pd.read_csv('../input/xAPI-Edu-Data.csv')
+
+
+# In[ ]:
+
+
+# there are no nan values or missing something in 
+print(data.info())      
+
+
+# In[ ]:
+
+
+# These are the features names
+print(data.columns)     
+
+
+# In[ ]:
+
+
+melt = pd.melt(data,id_vars='Class',value_vars=['raisedhands','VisITedResources','AnnouncementsView'])
+
+
+# * As it can be seen in swarm plot students who have higher values of raising hands, visiting resources and viewing announcements take high level values mostly.
+# * However there are some students who take low level although they have higher values of raising hands, visiting resources and viewing announcements
 # 
-# For the sake of this notebook it is important to notice that Elastic nets depends on two parameters: 
+
+# In[ ]:
+
+
+sns.swarmplot(x='variable',y='value',hue='Class' , data=melt,palette={'H':'lime','M':'grey','L':'red'})
+plt.ylabel('Values from zero to 100')
+plt.title('High, middle and low level students')
+
+
+# Well, lets look at why these have low level grade.
+
+# In[ ]:
+
+
+ave_raisedhands = sum(data['raisedhands'])/len(data['raisedhands'])
+ave_VisITedResources = sum(data['VisITedResources'])/len(data['VisITedResources'])
+ave_AnnouncementsView = sum(data['AnnouncementsView'])/len(data['AnnouncementsView'])
+unsuccess = data.loc[(data['raisedhands'] >= ave_raisedhands) & (data['VisITedResources']>=ave_VisITedResources) & (data['AnnouncementsView']>=ave_AnnouncementsView)  & (data['Class'] == 'L')]
+
+
+# In[ ]:
+
+
+# All features of these two students
+print(unsuccess)
+
+
+# * In order to find why these two are in low level although they raisedhands, VisITedResources and AnnouncementsView
+# * Lets first give numeric value to Class feature so as to compare features more precisely
 # 
-# * the **l1_ratio**, i.e. the tradeoff between the two norms (l1_ratio = 0 --> Ridge,  l1_ratio = 1 --> Lasso, 0<l1_ration<1 --> Mix of the two);
-# * **alpha**, that regulates the amount of penalty applied.
+
+# In[ ]:
+
+
+data['numeric_class'] = [1 if data.loc[i,'Class'] == 'L' else 2 if data.loc[i,'Class'] == 'M' else 3 for i in range(len(data))]
+
+
+# In[ ]:
+
+
+# Then start with gender: These two are boy so they can be low level due to it :) Girls say YEEESS but lets look
+grade_male_ave = sum(data[data.gender == 'M'].numeric_class)/float(len(data[data.gender == 'M']))
+grade_female_ave = sum(data[data.gender == 'F'].numeric_class)/float(len(data[data.gender == 'F']))
+
+
+# * Average of female is higher than average of male. Therefore two only reason taking low grade can be being male. YEAAA  girls are more intelligent than boys.
+# * Actually I am joking :) Gender comparison cannot completely explain why these two students takes low level grades.
 # 
-# It is important to know that minimizing the L1 norm will force some coefficients to shrink to zero, and that's why Elastic Nets can be used as feature selection techniques. Besides, when there's a high degree of collinearity in the data, the cross-validation procedure used to determine these two parameters will return low l1_ratio since Ridge tends to outperform Lasso in these cases.
+
+# In[ ]:
+
+
+# Now lets look at nationality
+nation = data.NationalITy.unique()
+nation_grades_ave = [sum(data[data.NationalITy == i].numeric_class)/float(len(data[data.NationalITy == i])) for i in nation]
+ax = sns.barplot(x=nation, y=nation_grades_ave)
+jordan_ave = sum(data[data.NationalITy == 'Jordan'].numeric_class)/float(len(data[data.NationalITy == 'Jordan']))
+print('Jordan average: '+str(jordan_ave))
+plt.xticks(rotation=90)
+
+
+# * As it can be seen in bar plot Jordan is seventh country with average 2.09.
+# * Not so bad. Jordan has positive impact on these two students actually.
 # 
-# Ok... let's use scikit-learn and see how these methods perfom and which features they select!
+
+# In[ ]:
+
+
+# now lets look at topic : chemistry
+lessons = data.Topic.unique()
+lessons_grade_ave=[sum(data[data.Topic == i].numeric_class)/float(len(data[data.Topic == i])) for i in lessons]
+ax = sns.barplot(x=lessons, y=lessons_grade_ave)
+plt.title('Students Success on different topics')
+chemistry_ave = sum(data[data.Topic == 'Chemistry'].numeric_class)/float(len(data[data.Topic == 'Chemistry']))
+print('Chemistry average: '+ str(chemistry_ave))
+plt.xticks(rotation=90)
+
+
+# * Chemistry is not hardest lesson. Even it can be concluded that it is one of the easiest lessons with its 2.08 average
+# * **Come on why these students take low level grades !!!**
 # 
-#   [1]: http://www.onthelambda.com/2015/08/19/kickin-it-with-elastic-net-regression/
-
-# # Initialization
 
 # In[ ]:
 
 
-# load modules
-import pandas as pd
-import numpy as np
-from sklearn import preprocessing
-from sklearn.metrics import r2_score
-
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
+# Lets look at relation with family members
+relation = data.Relation.unique()
+relation_grade_ave = [sum(data[data.Relation == i].numeric_class)/float(len(data[data.Relation == i])) for i in relation]
+ax = sns.barplot(x=relation, y=relation_grade_ave)
+plt.title('Relation with father or mother affects success of students')
 
 
-# In[ ]:
-
-
-# load data
-train_df  = pd.read_csv('../input/train.csv')
-test_df  = pd.read_csv('../input/test.csv')
-
+# * Having relation with mum has positive effect on these students
+# * Students who have relation with their mum is more successful
 
 # In[ ]:
 
 
-# get train_y, test ids and unite datasets to perform
-train_y = train_df['y']
-train_df.drop('y', axis = 1, inplace = True)
-test_ids = test_df.ID.values
-all_df = pd.concat([train_df,test_df], axis = 0)
+#Lets look at how many times the student participate on discussion groups
+discussion = data.Discussion
+discussion_ave = sum(discussion)/len(discussion)
+ax = sns.violinplot(y=discussion,split=True,inner='quart')
+ax = sns.swarmplot(y=discussion,color='black')
+ax = sns.swarmplot(y = unsuccess.Discussion, color='red')
+plt.title('Discussion group participation')
 
-# ...one hot encoding of categorical variables
-categorical =  ["X0", "X1", "X2", "X3", "X4", "X5", "X6", "X8"]
-for f in categorical:
-    dummies = pd.get_dummies(all_df[f], prefix = f, prefix_sep = '_')
-    all_df = pd.concat([all_df, dummies], axis = 1)
 
-# drop original categorical features
-all_df.drop(categorical, axis = 1, inplace = True)
-
+# * These two students are under the average of discussion.
+# * Average is 43. Therefore, participating discussion groups can be important success of these two students
 
 # In[ ]:
 
 
-# get feature dataset for test and training        
-train_X = all_df.drop(["ID"], axis=1).iloc[:len(train_df),:]
-test_X = all_df.drop(["ID"], axis=1).iloc[len(train_df):,:]
+# Now lastly lets look at
+absence_day = data.StudentAbsenceDays.unique()
+absense_day_ave = [sum(data[data.StudentAbsenceDays == i].numeric_class)/float(len(data[data.StudentAbsenceDays == i])) for i in absence_day]
+ax = sns.barplot(x=absence_day, y=absense_day_ave)
+plt.title('Absence effect on success')
 
 
-# In[ ]:
+# * Find one more reason why these have low level grade because their absence days are above seven.
 
+# # CONCLUSION
+# * Positive and negative effects on success of these two students can be seen.
+# <a href="https://imgbb.com/"><img src="https://image.ibb.co/gjHDr5/as.jpg" alt="as" border="0"></a><br /><a target='_blank' href='https://tr.imgbb.com/'>upload image</a><br />
 
-print(train_X.head())
-print(test_X.head())
-
-
-# # Model development and testing
-
-# In[ ]:
-
-
-# Let's perform a cross-validation to find the best combination of alpha and l1_ratio
-from sklearn.linear_model import ElasticNetCV, ElasticNet
-
-cv_model = ElasticNetCV(l1_ratio=[.1, .5, .7, .9, .95, .99, .995, 1], eps=0.001, n_alphas=100, fit_intercept=True, 
-                        normalize=True, precompute='auto', max_iter=2000, tol=0.0001, cv=5, 
-                        copy_X=True, verbose=0, n_jobs=-1, positive=False, random_state=None, selection='cyclic')
-
-
-# In[ ]:
-
-
-cv_model.fit(train_X, train_y)
-
-
-# In[ ]:
-
-
-print('Optimal alpha: %.8f'%cv_model.alpha_)
-print('Optimal l1_ratio: %.3f'%cv_model.l1_ratio_)
-print('Number of iterations %d'%cv_model.n_iter_)
-
-
-# **l1_ratio = 1**, that means we are just using Lasso.
-
-# In[ ]:
-
-
-# train model with best parameters from CV
-model = ElasticNet(l1_ratio=cv_model.l1_ratio_, alpha = cv_model.alpha_, max_iter=cv_model.n_iter_, fit_intercept=True, normalize = True)
-model.fit(train_X, train_y)
-
-
-# In[ ]:
-
-
-# r2 score on training dataset
-print(r2_score(train_y, model.predict(train_X)))
-
-
-# Uncomment below if you want the predictions on the test dataset (LB 0.547+)
-
-# In[ ]:
-
-
-# preds = model.predict(test_X)
-# df_sub = pd.DataFrame({'ID': test_ids, 'y': preds})
-# df_sub.to_csv('elnet_submission_dummies.csv', index=False)
-
-
-# # Feature importance
-# Let's see the importance of each feature based on the absolute value of their coefficients 
-
-# In[ ]:
-
-
-feature_importance = pd.Series(index = train_X.columns, data = np.abs(model.coef_))
-
-n_selected_features = (feature_importance>0).sum()
-print('{0:d} features, reduction of {1:2.2f}%'.format(
-    n_selected_features,(1-n_selected_features/len(feature_importance))*100))
-
-feature_importance.sort_values().tail(30).plot(kind = 'bar', figsize = (18,6))
-
-
-# ## It's nice to see how these features compares with those selected by xgboost or other nonlinear methods. Anyway, 88.26% features reduction (with respect to dataset with dummies) looks nice. Besides, the performance on the LB of this linear method seems to be close to those of more sophisticated ones. 
-# 
-# Vote this notebook if you liked it :P
-# 
-# Cheers
+# # If you have any suggest, comment or question, I will be happy to hear it.

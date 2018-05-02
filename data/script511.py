@@ -1,173 +1,144 @@
 
 # coding: utf-8
 
-# Based on the discussion here: https://www.kaggle.com/c/talkingdata-adtracking-fraud-detection/discussion/52374
-# I did some analysis on IP assignment.
+# This is fast image downloader using this trick:
+# https://www.kaggle.com/c/landmark-recognition-challenge/discussion/49703
+# And you can change target size that you prefer.
 # 
-# **It looks very much like the organizers used different patterns in assigning dummy IPs in TEST and TRAIN sets.******
-# 
-# In the Train set, there is a strong correlation to assign IPs with higher frequencies to lower numbers.  The pattern **DOES NOT hold in Test**.
-# 
-# To copy my comment from discussion:
-# 
-# " Based on train_sample.csv and my own subsamples (i haven't been able to run a test on full train set), it appears that lower number IPs are strongly associated with higher number of clicks. i.e. numbers in the range 1 through 125000 have substantially more clicks than IPs in the range 300000 and up. It's almost as if when the ip values were generated to mask real ips, the data was pre-sorted by the number of clicks per IP, in a few major chunks. (So they gathered most frequent group, and assigned numbers from 1 to 125000, than next group and another bulk of numbers, than next, etc). I see about 4 bands of frequencies.
-# 
-# However, based on a few test subsamples I ran, the pattern does not repeat in test data. The ips over test seem to be mapped truly randomly, and if anything have consistent click density.
-# 
-# Also, (and somebody please check these calculations!) there appear to be the following distribution of IPs:
-# 
-# **Overall the number of IPs (test OR train): 333168 <br>
-# Number of IPs that are in both (test AND train): 38164 <br>
-# Number of IPs that are in Train and NOT in Test: 239232<br> Number of IPs that are in Test and NOT in Train: 55772**
-# 
-# That means that way over half of IPs in test do not follow the mapping rules of train data.
-# 
-# Hense I think need to be careful in validation. The pattern of IP assignment in Train does not mimic the one in test. If you go by using IP value as a signal in train, your final test results will be off substantially."
-# 
-# ** see below for visualization based on Train subsample and full Test data**
-# 
+# Reference:
+# https://www.kaggle.com/c/landmark-recognition-challenge/discussion/48895
+# ```
+# For 256,256 this should be 22 GB
+# For 224,224 this should be 16.8 GB
+# For 139,139 this should be 6.5 GB
+# For 128,128 this should be 5.5 GB
+# For 96,96 this should be 3.1 GB
+# For 64,64 this should be 1.4 GB
+# ```
 
-# In[26]:
+# In[ ]:
 
 
+import multiprocessing
+import os
+from io import BytesIO
+from urllib import request
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import datetime
-import gc
-get_ipython().run_line_magic('matplotlib', 'inline')
+import re
+import tqdm
+from PIL import Image
 
 
-# In[27]:
+# set files and dir
+DATA_FRAME, OUT_DIR = pd.read_csv('../input/train.csv'), '../input/train'  # recognition challenge
+# DATA_FRAME, OUT_DIR = pd.read_csv('../input/index.csv'), '../input/index'  # retrieval challenge
+# DATA_FRAME, OUT_DIR = pd.read_csv('../input/test.csv'), '../input/test'  # test data
+
+# preferences
+TARGET_SIZE = 128  # image resolution to be stored
+IMG_QUALITY = 90  # JPG quality
+NUM_WORKERS = 8  # Num of CPUs
 
 
-input_path = '../input/'
+# In[ ]:
 
 
-# ### TRAIN SAMPLE
-
-# In[3]:
+DATA_FRAME.url.apply(lambda x: x.split('/')[-2]).value_counts().head()
 
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        }
+# We found that almost images have 1600x resolution.
+# Downloading such a high resolution images takes so much time, so I recommend you to download images after changing url "s1600" to "s{TARGET_SIZE}" like the below script.
 
-train = pd.read_csv(input_path+'train_sample.csv', dtype=dtypes)
-train.head()
+# In[ ]:
 
 
-# In[12]:
+def overwrite_urls(df):
+    def reso_overwrite(url_tail, reso=TARGET_SIZE):
+        pattern = 's[0-9]+'
+        search_result = re.match(pattern, url_tail)
+        if search_result is None:
+            return url_tail
+        else:
+            return 's{}'.format(reso)
+
+    def join_url(parsed_url, s_reso):
+        parsed_url[-2] = s_reso
+        return '/'.join(parsed_url)
+
+    parsed_url = df.url.apply(lambda x: x.split('/'))
+    train_url_tail = parsed_url.apply(lambda x: x[-2])
+    resos = train_url_tail.apply(lambda x: reso_overwrite(x, reso=TARGET_SIZE))
+
+    overwritten_df = pd.concat([parsed_url, resos], axis=1)
+    overwritten_df.columns = ['url', 's_reso']
+    df['url'] = overwritten_df.apply(lambda x: join_url(x['url'], x['s_reso']), axis=1)
+    return df
 
 
-#convert to date/time
-train['click_time'] = pd.to_datetime(train['click_time'])
-train['attributed_time'] = pd.to_datetime(train['attributed_time'])
-
-#extract hour as a feature
-train['click_hour']=train['click_time'].dt.hour
+def parse_data(df):
+    key_url_list = [line[:2] for line in df.values]
+    return key_url_list
 
 
-# In[28]:
+def download_image(key_url):
+    (key, url) = key_url
+    filename = os.path.join(OUT_DIR, '{}.jpg'.format(key))
+
+    if os.path.exists(filename):
+        print('Image {} already exists. Skipping download.'.format(filename))
+        return 0
+
+    try:
+        response = request.urlopen(url)
+        image_data = response.read()
+    except:
+        print('Warning: Could not download image {} from {}'.format(key, url))
+        return 1
+
+    try:
+        pil_image = Image.open(BytesIO(image_data))
+    except:
+        print('Warning: Failed to parse image {}'.format(key))
+        return 1
+
+    try:
+        pil_image_rgb = pil_image.convert('RGB')
+    except:
+        print('Warning: Failed to convert image {} to RGB'.format(key))
+        return 1
+
+    try:
+        pil_image_resize = pil_image_rgb.resize((TARGET_SIZE, TARGET_SIZE))
+    except:
+        print('Warning: Failed to resize image {}'.format(key))
+        return 1
+
+    try:
+        pil_image_resize.save(filename, format='JPEG', quality=IMG_QUALITY)
+    except:
+        print('Warning: Failed to save image {}'.format(filename))
+        return 1
+
+    return 0
 
 
-def plotStrip(x, y, hue, figsize = (14, 9)):
-    
-    fig = plt.figure(figsize = figsize)
-    colours = plt.cm.tab10(np.linspace(0, 1, 9))
-    with sns.axes_style('ticks'):
-        ax = sns.stripplot(x, y,              hue = hue, jitter = 0.4, marker = '.',              size = 4, palette = colours)
-        ax.set_xlabel('')
-        for axis in ['top','bottom','left','right']:
-            ax.spines[axis].set_linewidth(2)
+def loader(df):
+    if not os.path.exists(OUT_DIR):
+        os.mkdir(OUT_DIR)
 
-        handles, labels = ax.get_legend_handles_labels()
-        plt.legend(handles, ['col1', 'col2'], bbox_to_anchor=(1, 1),                loc=2, borderaxespad=0, fontsize = 16);
-    return ax
+    key_url_list = parse_data(df)
+    pool = multiprocessing.Pool(processes=NUM_WORKERS)
+    failures = sum(tqdm.tqdm(pool.imap_unordered(download_image, key_url_list),
+                             total=len(key_url_list)))
+    print('Total number of download failures:', failures)
+    pool.close()
+    pool.terminate()
 
 
-# In[18]:
+# In[ ]:
 
 
-X = train
-Y = X['is_attributed']
-
-
-# In[19]:
-
-
-ax = plotStrip(X.click_hour, X.ip, Y)
-ax.set_ylabel('ip', size = 16)
-ax.set_title('IP (vertical), by HOUR(horizontal), split by converted or not(color)', size = 20);
-
-
-# In[42]:
-
-
-del train
-gc.collect()
-
-
-# ### TEST SUBSAMPLE
-
-# In[44]:
-
-
-total_rows = 18790470
-sample_size = total_rows//120
-
-def get_skiprows(total_rows, sample_size):
-    inc = total_rows // sample_size
-    return [row for row in range(1, total_rows) if row % inc != 0]
-
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        }
-
-test = pd.read_csv(input_path+'test.csv',
-                 skiprows=get_skiprows(total_rows,sample_size), dtype=dtypes)
-test.head()
-
-
-# In[45]:
-
-
-#convert to date/time
-test['click_time'] = pd.to_datetime(test['click_time'])
-
-#extract hour as a feature
-test['click_hour']=test['click_time'].dt.hour
-
-
-# In[46]:
-
-
-#dummy variable for hour color bands in test
-test['band'] = np.where(test['click_hour']<=6, 0,                         np.where(test['click_hour']<=11, 1,                                 np.where(test['click_hour']<=15, 2, 3)))
-
-
-# In[47]:
-
-
-print(len(test))
-X = test
-Y = test['band']
-
-
-# In[48]:
-
-
-ax = plotStrip(X.click_hour, X.ip, Y)
-ax.set_ylabel('ip', size = 16)
-ax.set_title('IP (vertical), by HOUR(horizontal), split by hour band', size = 20);
+# now, start downloading
+if __name__ == '__main__':
+    loader(overwrite_urls(DATA_FRAME))
 

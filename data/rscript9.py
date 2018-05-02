@@ -1,240 +1,92 @@
-import numpy as np
-np.random.seed(42)
+# -*- coding: utf-8 -*-
+"""
+@author: Faron
+"""
 import pandas as pd
+import numpy as np
+import xgboost as xgb
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
+DATA_DIR = "../input"
 
-from keras.models import Model
-from keras.layers import Input, Dense, Embedding, SpatialDropout1D, concatenate
-from keras.layers import GRU, Bidirectional, GlobalAveragePooling1D, GlobalMaxPooling1D
-from keras.preprocessing import text, sequence
-from keras.callbacks import Callback
-from keras import backend as K
-import re
-import warnings
-warnings.filterwarnings('ignore')
+ID_COLUMN = 'Id'
+TARGET_COLUMN = 'Response'
 
-import os
-os.environ['OMP_NUM_THREADS'] = '4'
+SEED = 0
+CHUNKSIZE = 50000
+NROWS = 250000
+
+TRAIN_NUMERIC = "{0}/train_numeric.csv".format(DATA_DIR)
+TRAIN_DATE = "{0}/train_date.csv".format(DATA_DIR)
+
+TEST_NUMERIC = "{0}/test_numeric.csv".format(DATA_DIR)
+TEST_DATE = "{0}/test_date.csv".format(DATA_DIR)
+
+FILENAME = "etimelhoods"
+
+train = pd.read_csv(TRAIN_NUMERIC, usecols=[ID_COLUMN, TARGET_COLUMN], nrows=NROWS)
+test = pd.read_csv(TEST_NUMERIC, usecols=[ID_COLUMN], nrows=NROWS)
+
+train["StartTime"] = -1
+test["StartTime"] = -1
 
 
-EMBEDDING_FILE = '../input/glove6b200d/glove.6B.200d.txt'
+nrows = 0
+for tr, te in zip(pd.read_csv(TRAIN_DATE, chunksize=CHUNKSIZE), pd.read_csv(TEST_DATE, chunksize=CHUNKSIZE)):
+    feats = np.setdiff1d(tr.columns, [ID_COLUMN])
 
-train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+    stime_tr = tr[feats].min(axis=1).values
+    stime_te = te[feats].min(axis=1).values
+
+    train.loc[train.Id.isin(tr.Id), 'StartTime'] = stime_tr
+    test.loc[test.Id.isin(te.Id), 'StartTime'] = stime_te
+
+    nrows += CHUNKSIZE
+    if nrows >= NROWS:
+        break
 
 
-# PREPROCESSING PART
-repl = {
-    "&lt;3": " good ",
-    ":d": " good ",
-    ":dd": " good ",
-    ":p": " good ",
-    "8)": " good ",
-    ":-)": " good ",
-    ":)": " good ",
-    ";)": " good ",
-    "(-:": " good ",
-    "(:": " good ",
-    "yay!": " good ",
-    "yay": " good ",
-    "yaay": " good ",
-    "yaaay": " good ",
-    "yaaaay": " good ",
-    "yaaaaay": " good ",
-    ":/": " bad ",
-    ":&gt;": " sad ",
-    ":')": " sad ",
-    ":-(": " bad ",
-    ":(": " bad ",
-    ":s": " bad ",
-    ":-s": " bad ",
-    "&lt;3": " heart ",
-    ":d": " smile ",
-    ":p": " smile ",
-    ":dd": " smile ",
-    "8)": " smile ",
-    ":-)": " smile ",
-    ":)": " smile ",
-    ";)": " smile ",
-    "(-:": " smile ",
-    "(:": " smile ",
-    ":/": " worry ",
-    ":&gt;": " angry ",
-    ":')": " sad ",
-    ":-(": " sad ",
-    ":(": " sad ",
-    ":s": " sad ",
-    ":-s": " sad ",
-    r"\br\b": "are",
-    r"\bu\b": "you",
-    r"\bhaha\b": "ha",
-    r"\bhahaha\b": "ha",
-    r"\bdon't\b": "do not",
-    r"\bdoesn't\b": "does not",
-    r"\bdidn't\b": "did not",
-    r"\bhasn't\b": "has not",
-    r"\bhaven't\b": "have not",
-    r"\bhadn't\b": "had not",
-    r"\bwon't\b": "will not",
-    r"\bwouldn't\b": "would not",
-    r"\bcan't\b": "can not",
-    r"\bcannot\b": "can not",
-    r"\bi'm\b": "i am",
-    "m": "am",
-    "r": "are",
-    "u": "you",
-    "haha": "ha",
-    "hahaha": "ha",
-    "don't": "do not",
-    "doesn't": "does not",
-    "didn't": "did not",
-    "hasn't": "has not",
-    "haven't": "have not",
-    "hadn't": "had not",
-    "won't": "will not",
-    "wouldn't": "would not",
-    "can't": "can not",
-    "cannot": "can not",
-    "i'm": "i am",
-    "m": "am",
-    "i'll" : "i will",
-    "its" : "it is",
-    "it's" : "it is",
-    "'s" : " is",
-    "that's" : "that is",
-    "weren't" : "were not",
+ntrain = train.shape[0]
+train_test = pd.concat((train, test)).reset_index(drop=True).reset_index(drop=False)
+
+train_test['0_¯\_(ツ)_/¯_1'] = train_test[ID_COLUMN].diff().fillna(9999999).astype(int)
+train_test['0_¯\_(ツ)_/¯_2'] = train_test[ID_COLUMN].iloc[::-1].diff().fillna(9999999).astype(int)
+
+train_test = train_test.sort_values(by=['StartTime', 'Id'], ascending=True)
+
+train_test['0_¯\_(ツ)_/¯_3'] = train_test[ID_COLUMN].diff().fillna(9999999).astype(int)
+train_test['0_¯\_(ツ)_/¯_4'] = train_test[ID_COLUMN].iloc[::-1].diff().fillna(9999999).astype(int)
+
+train_test = train_test.sort_values(by=['index']).drop(['index'], axis=1)
+train = train_test.iloc[:ntrain, :]
+
+features = np.setdiff1d(list(train.columns), [TARGET_COLUMN, ID_COLUMN])
+
+y = train.Response.ravel()
+train = np.array(train[features])
+
+print('train: {0}'.format(train.shape))
+prior = np.sum(y) / (1.*len(y))
+
+xgb_params = {
+    'seed': 0,
+    'colsample_bytree': 0.7,
+    'silent': 1,
+    'subsample': 0.7,
+    'learning_rate': 0.1,
+    'objective': 'binary:logistic',
+    'max_depth': 4,
+    'num_parallel_tree': 1,
+    'min_child_weight': 2,
+    'eval_metric': 'auc',
+    'base_score': prior
 }
 
-keys = [i for i in repl.keys()]
 
-new_train_data = []
-new_test_data = []
-ltr = train["comment_text"].tolist()
-lte = test["comment_text"].tolist()
-for i in ltr:
-    arr = str(i).split()
-    xx = ""
-    for j in arr:
-        j = str(j).lower()
-        if j[:4] == 'http' or j[:3] == 'www':
-            continue
-        if j in keys:
-            # print("inn")
-            j = repl[j]
-        xx += j + " "
-    new_train_data.append(xx)
-for i in lte:
-    arr = str(i).split()
-    xx = ""
-    for j in arr:
-        j = str(j).lower()
-        if j[:4] == 'http' or j[:3] == 'www':
-            continue
-        if j in keys:
-            # print("inn")
-            j = repl[j]
-        xx += j + " "
-    new_test_data.append(xx)
-train["new_comment_text"] = new_train_data
-test["new_comment_text"] = new_test_data
-print("crap removed")
-trate = train["new_comment_text"].tolist()
-tete = test["new_comment_text"].tolist()
-for i, c in enumerate(trate):
-    trate[i] = re.sub('[^a-zA-Z ?!]+', '', str(trate[i]).lower())
-for i, c in enumerate(tete):
-    tete[i] = re.sub('[^a-zA-Z ?!]+', '', tete[i])
-train["comment_text"] = trate
-test["comment_text"] = tete
-print('only alphabets')
+dtrain = xgb.DMatrix(train, label=y)
+res = xgb.cv(xgb_params, dtrain, num_boost_round=10, nfold=4, seed=0, stratified=True,
+             early_stopping_rounds=1, verbose_eval=1, show_stdv=True)
 
+cv_mean = res.iloc[-1, 0]
+cv_std = res.iloc[-1, 1]
 
-X_train = train["comment_text"].fillna("fillna").values
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-X_test = test["comment_text"].fillna("fillna").values
-
-
-max_features = 30000
-maxlen = 100
-embed_size = 200
-
-tokenizer = text.Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(X_train) + list(X_test))
-X_train = tokenizer.texts_to_sequences(X_train)
-X_test = tokenizer.texts_to_sequences(X_test)
-x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
-x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
-
-
-def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
-embeddings_index = dict(get_coefs(*o.strip().split()) for o in open(EMBEDDING_FILE))
-
-all_embs = np.stack(embeddings_index.values())
-emb_mean, emb_std = all_embs.mean(), all_embs.std()
-
-word_index = tokenizer.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
-
-
-def get_model():
-    inp = Input(shape=(maxlen, ))
-    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
-    x = SpatialDropout1D(0.2)(x)
-    x = Bidirectional(GRU(80, return_sequences=True))(x)
-    avg_pool = GlobalAveragePooling1D()(x)
-    max_pool = GlobalMaxPooling1D()(x)
-    conc = concatenate([avg_pool, max_pool])
-    outp = Dense(6, activation="sigmoid")(conc)
-    
-    model = Model(inputs=inp, outputs=outp)
-    model.compile(loss='binary_crossentropy',
-                  optimizer='adam',
-                  metrics=['accuracy'])
-
-    return model
-
-model = get_model()
-
-
-batch_size = 32
-epochs = 2
-
-[X_tra, X_val, y_tra, y_val] = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
-RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
-
-exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
-steps = int(len(X_tra)/batch_size) * epochs
-lr_init, lr_fin = 0.001, 0.0005
-lr_decay = exp_decay(lr_init, lr_fin, steps)
-K.set_value(model.optimizer.lr, lr_init)
-K.set_value(model.optimizer.decay, lr_decay)
-
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=2)
-
-
-y_pred = model.predict(x_test, batch_size=1024)
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
+print('CV-Mean: {0}+{1}'.format(cv_mean, cv_std))

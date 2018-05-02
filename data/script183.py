@@ -1,334 +1,212 @@
 
 # coding: utf-8
 
-# ![](http://sabtrends.com/wp-content/uploads/2017/05/funding-word-money-100-dollar-bill-currency-ball.jpg)
-
-# # More To Come. Stay Tuned. !! 
-#   If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
-# 
-# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. **If you like it or it helps you , you can upvote and/or leave a comment :).**
-
-# ## This notebook explores the analysis of indian startup funding and basically gives answer of following questions :-
-# 1.  How does the funding ecosystem change with time ?(Number of funding per month)
-# 2. How much funds does startups generally get in India ?(maximum funding, minimum funding , average funding and number of fundings)
-# 3. Which industries are favored by investors for funding ? (OR) Which type of companies got more easily funding ?
-# 4. Do cities play a major role in funding ? (OR) Which city has maximum startups ?
-# 5. Who is the important investors in the Indian Ecosystem?
-# 6. What are different types of funding for startups ?
+# This notebook shows how you can use description to improve your model. We will be using description, as the only feature for now.
 
 # In[ ]:
 
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt # Visualization
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+import matplotlib.pyplot as plt
 import seaborn as sns
-color = sns.color_palette()
-import squarify
 
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
 get_ipython().run_line_magic('matplotlib', 'inline')
-pd.options.mode.chained_assignment = None
-#pd.options.display.max_columns = 999
-
-
-# ## Obtaining the data
-
-# In[ ]:
-
-
-funding_data = pd.read_csv("../input/startup_funding.csv")
-funding_data.head()
-
-
-# ### Column names of the table
-
-# In[ ]:
-
-
-funding_data.columns
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-print("Size of data(Rows, Columns)",funding_data.shape)
+train = pd.read_json("../input/train.json")
+test = pd.read_json("../input/test.json")
 
-
-# **Lets see How much data is missing**
 
 # In[ ]:
 
 
-# missing data 
-total = funding_data.isnull().sum().sort_values(ascending = False)
-percent = ((funding_data.isnull().sum()/funding_data.isnull().count())*100).sort_values(ascending = False)
-missing_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent %'])
-missing_data.head()
+# We need listing_id, description and interest_level for this notebook
+train = train[['listing_id','description','interest_level']]
+test = test[['listing_id','description']]
 
+train['flag'] = 'train'
+test['flag'] = 'test'
+full_data = pd.concat([train,test])
 
-# Deleting "**Remarks**" from table and displaying remaining data
 
 # In[ ]:
 
 
-del funding_data["Remarks"]
-funding_data.head()
+from nltk.stem import PorterStemmer
+import re
 
 
-# Now convert the string **"AmountInUSD" **into numeric
-
-# In[ ]:
-
-
-funding_data["AmountInUSD"] = funding_data["AmountInUSD"].apply(lambda x: float(str(x).replace(",","")))
-funding_data["AmountInUSD"] = pd.to_numeric(funding_data["AmountInUSD"])
-funding_data.head()
-
-
-# ## Ques 1:  How does the funding ecosystem change with time ?(Number of funding per month)
+# > Stemming is the process of reducing inflected (or sometimes derived) words to their word stem. Example: gardens to garden.
 
 # In[ ]:
 
 
-### Some more fixes in the data format. Will try to fix in the input file in next version #
-funding_data['Date'][funding_data['Date']=='12/05.2015'] = '12/05/2015'
-funding_data['Date'][funding_data['Date']=='13/04.2015'] = '13/04/2015'
-funding_data['Date'][funding_data['Date']=='15/01.2015'] = '15/01/2015'
-funding_data['Date'][funding_data['Date']=='22/01//2015'] = '22/01/2015'
-funding_data["yearmonth"] = (pd.to_datetime(funding_data['Date'],format='%d/%m/%Y').dt.year*100)+(pd.to_datetime(funding_data['Date'],format='%d/%m/%Y').dt.month)
-temp = funding_data['yearmonth'].value_counts().sort_values(ascending = False).head(10)
-print("Number of funding per month in decreasing order(Top 10)\n",temp)
-year_month = funding_data['yearmonth'].value_counts()
-plt.figure(figsize=(15,8))
-sns.barplot(year_month.index, year_month.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Year-Month of transaction', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Year-Month Distribution", fontsize=16)
-plt.show()
+# Removes symbols, numbers and stem the words to reduce dimentional space
+stemmer = PorterStemmer()
+
+def clean(x):
+    regex = re.compile('[^a-zA-Z ]')
+    # For user clarity, broken it into three steps
+    i = regex.sub(' ', x).lower()
+    i = i.split(" ") 
+    i= [stemmer.stem(l) for l in i]
+    i= " ".join([l.strip() for l in i if (len(l)>2) ]) # Keeping words that have length greater than 2
+    return i
 
 
-# As we can see that startups got more funding in **January 2016**(Total funding in January 2016 are 104). Above visualization shows how funding
-# varies from one month to another.
+# In[ ]:
 
-# ## Ques 2 : How much funds does startups generally get in India ?(maximum funding, minimum funding , average funding and number of fundings)
+
+# This takes some time to run. It would be helpful if someone can help me optimize clean() function.
+full_data['description_new'] = full_data.description.apply(lambda x: clean(x))
+
+
+# In[ ]:
+
+
+full_data[['description','description_new']].head()
+
+
+# We have removed all punctuation and numbers, as we are only interested in words for now.
+
+# ### Using CountVectorizer
+# We can use CountVectorizer or tfidfvectorizer for building a word matrix. For me countvectorizer gave better performance.
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import CountVectorizer #Can use tfidffvectorizer as well
+
+cvect_desc = CountVectorizer(stop_words='english', max_features=200)
+full_sparse = cvect_desc.fit_transform(full_data.description_new)
+ # Renaming words to avoid collisions with other feature names in the model
+col_desc = ['desc_'+ i for i in cvect_desc.get_feature_names()] 
+count_vect_df = pd.DataFrame(full_sparse.todense(), columns=col_desc)
+full_data = pd.concat([full_data.reset_index(),count_vect_df],axis=1)
+
+
+# In[ ]:
+
+
+full_data.info()
+
+
+# ### Running Cross Validation
+
+# In[ ]:
+
+
+train =(full_data[full_data.flag=='train'])
+test =(full_data[full_data.flag=='test'])
+
+
+# In[ ]:
+
+
+labels = {'high':0, 'medium':1, 'low':2}
+train['interest_level'] = train.interest_level.apply(lambda x: labels[x])
+
+
+# In[ ]:
+
+
+feat = train.drop(['interest_level','flag','listing_id','description','index','description_new'],axis=1).columns.values
+
+
+# In[ ]:
+
+
+from sklearn.ensemble import GradientBoostingClassifier  as GBM
+from sklearn.ensemble import RandomForestClassifier  as RF
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import log_loss
+
+
+# In[ ]:
+
+
+def run_mod(train_X, test_X,train_Y):
+    reg = GBM(max_features = 'auto',n_estimators=200,random_state=1)
+    reg.fit(train_X,train_Y)
+    pred = reg.predict_proba(test_X)
+    imp = reg.feature_importances_
+    return pred,imp
+
+
+# In[ ]:
+
+
+def cross_val(train,feat,split):
+    cv_scores = []
+    importances = []
+    # Cross Validation preprocessing
+    train_X = train[feat]
+    train_Y = train['interest_level']
+
+    train_X = train_X.as_matrix()
+    train_Y = train_Y.as_matrix()
+
+    test_X = test[feat]
+    test_X = test_X.as_matrix()
+
+    kf = StratifiedKFold(n_splits=split, shuffle=True, random_state=1)
+    for dev_index, val_index in kf.split(train_X,train_Y):
+            train_X_X, test_X_X = train_X[dev_index,:], train_X[val_index,:]
+            train_Y_Y, test_Y_Y = train_Y[dev_index,], train_Y[val_index,]
+            pred,imp = run_mod(train_X_X, test_X_X,train_Y_Y)
+            cv_scores.append(log_loss(test_Y_Y, pred))
+            importances.append(imp)
+    return np.mean(cv_scores),importances
+#print np.average(importances,axis=0)
+
+
+# In[ ]:
+
+
+cv_score,imp = cross_val(train,feat,3)
+
+
+# In[ ]:
+
+
+cv_score
+
+
+# In[ ]:
+
+
+# Lets chaeck the importance of words
+importances = list(np.average(imp,axis=0))
+features = cvect_desc.get_feature_names()
+df = pd.DataFrame({'words':features,'imp':importances}).sort_values(by='imp',ascending=False).head(30)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,15))
+sns.barplot(y=df.words,x=df.imp)
+# Remember, these are stemmed words
+
+
+# * Well, the score is using description and an untuned GBM. But a tuned one dies on me in this kernal (though it has score of 0.71). 
+# * It would be great if someone can post what score they get using XGB.
+# * I think it is a good start for someone just starting out with text data. Similar transformation can be done with column feature.
+# * It would be great if someone can help me optimize the clean() function.
 # 
-
-# In[ ]:
-
-
-print("Maximum funding to a Startups is : ",funding_data["AmountInUSD"].dropna().sort_values().max())
-
-
-# In[ ]:
-
-
-funding_data[funding_data.AmountInUSD == 1400000000.0]
-
-
-# In[ ]:
-
-
-funding_data[funding_data.StartupName == 'Paytm']
-
-
-# As we can see** Paytm** and **Flipkart** got maximum funding of  1400000000 USD. Now lats see least funding.
-
-# In[ ]:
-
-
-print("Minimum funding to a Startups is : ",funding_data["AmountInUSD"].dropna().sort_values().min())
-
-
-# In[ ]:
-
-
-funding_data[funding_data.AmountInUSD == 16000.0]
-
-
-# Now as we can see **Hostel Dunia, Play your sport, Yo Grad, Enabli and CBS** are least funded Startups i.e, 16000 USD
-
-# In[ ]:
-
-
-print("On Average indian startups got funding of : ",funding_data["AmountInUSD"].dropna().sort_values().mean())
-
-
-# On an Average indian startups got funding of :  12031073.099016393
-
-# In[ ]:
-
-
-print("Total startups funded : ", len(funding_data["StartupName"].unique()))
-print(funding_data["StartupName"].value_counts().head(10))
-startupname = funding_data['StartupName'].value_counts().head(20)
-plt.figure(figsize=(15,8))
-sns.barplot(startupname.index, startupname.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Startup Name', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Number of funding a startup got", fontsize=16)
-plt.show()
-
-
-# As we can see that **Swiggy** got maximum number of fundings(Total funding = 7) and total there are 2001 indian startups funded from January 2015 to August 2017. The above visulization is only for Top 20 startups.
-
-# ## Ques 3 :  Which industries are favored by investors for funding ? (OR) Which type of companies got more easily funding ?
-
-# In[ ]:
-
-
-industry = funding_data['IndustryVertical'].value_counts().head(10)
-print(industry)
-plt.figure(figsize=(15,8))
-sns.barplot(industry.index, industry.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Industry vertical of startups', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Industry vertical of startups with number of funding", fontsize=16)
-plt.show()
-
-
-# If we see Above **"Consumer Internet" **got maximum number of funding = 772 followed by technology and E-Commerce.
-
-# In[ ]:
-
-
-industry = funding_data['SubVertical'].value_counts().head(10)
-print(industry)
-plt.figure(figsize=(15,8))
-sns.barplot(industry.index, industry.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Subvertical of startups', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Subvertical of startups with number of funding", fontsize=16)
-plt.show()
-
-
-# In Subcategores, **"Online Phamacy"** got maximim number of fundings.
-
-# ## Ques 4 : Do cities play a major role in funding ? (OR) Which city has maximum startups ?
-# 
-
-# In[ ]:
-
-
-city = funding_data['CityLocation'].value_counts().head(10)
-print(city)
-plt.figure(figsize=(15,8))
-sns.barplot(city.index, city.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('city location of startups', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("city location of startups with number of funding", fontsize=16)
-plt.show()
-
-
-# **Distribution of startups across Top different cities**
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,8))
-count = funding_data['CityLocation'].value_counts()
-squarify.plot(sizes=count.values,label=count.index, value=count.values)
-plt.title('Distribution of Startups across Top cities')
-
-
-# We can see **Bangalore** attracts more number of investotrs followed by **Mumbai** and **New** **Delhi**
-
-# ## Ques 5 : Who is the important investors in the Indian Ecosystem?
-# 
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-
-names = funding_data["InvestorsName"][~pd.isnull(funding_data["InvestorsName"])]
-#print(names)
-wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(names))
-plt.figure(figsize=(15,8))
-plt.imshow(wordcloud)
-plt.title("Wordcloud for Investor Names", fontsize=35)
-plt.axis("off")
-plt.show()
-
-
-# In[ ]:
-
-
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'Undisclosed investors'] = 'Undisclosed Investors'
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'undisclosed Investors'] = 'Undisclosed Investors'
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'undisclosed investors'] = 'Undisclosed Investors'
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'Undisclosed investor'] = 'Undisclosed Investors'
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'Undisclosed Investor'] = 'Undisclosed Investors'
-funding_data['InvestorsName'][funding_data['InvestorsName'] == 'Undisclosed'] = 'Undisclosed Investors'
-
-
-# In[ ]:
-
-
-investors = funding_data['InvestorsName'].value_counts().head(10)
-print(investors)
-plt.figure(figsize=(15,8))
-sns.barplot(investors.index, investors.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Investors Names', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Investors Names with number of funding", fontsize=16)
-plt.show()
-
-
-# **Indian Angel network **and** Ratan tata** funded maximum number of startups followed by **Kalaari Caitals**.
-
-# ## Ques 6 : What are different types of funding for startups ?
-
-# In[ ]:
-
-
-investment = funding_data['InvestmentType'].value_counts()
-print(investment)
-
-
-# In[ ]:
-
-
-funding_data['InvestmentType'][funding_data['InvestmentType'] == 'SeedFunding'] = 'Seed Funding'
-funding_data['InvestmentType'][funding_data['InvestmentType'] == 'Crowd funding'] = 'Crowd Funding'
-funding_data['InvestmentType'][funding_data['InvestmentType'] == 'PrivateEquity'] = 'Private Equity'
-
-
-# In[ ]:
-
-
-investment = funding_data['InvestmentType'].value_counts()
-print(investment)
-plt.figure(figsize=(15,8))
-sns.barplot(investment.index, investment.values, alpha=0.9, color=color[0])
-plt.xticks(rotation='vertical')
-plt.xlabel('Investment Type', fontsize=12)
-plt.ylabel('Number of fundings made', fontsize=12)
-plt.title("Investment Type with number of funding", fontsize=16)
-plt.show()
-
-
-# In[ ]:
-
-
-temp = funding_data["InvestmentType"].value_counts()
-labels = temp.index
-sizes = (temp / temp.sum())*100
-trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
-layout = go.Layout(title='Types of investment funding with %')
-data = [trace]
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename="BorrowerGender")
-
-
-# We can see **Seed Funding** is in **Top** followed by Private Equity.
-
-#  # More is coming and if you find useful please upvote the Kernel.
+# Thanks!

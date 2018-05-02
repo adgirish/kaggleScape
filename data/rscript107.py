@@ -1,32 +1,87 @@
-ALPHA = 1e-2  # Regularizaiton parameter
-
-import os
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import pandas as pd
 import numpy as np
-from scipy.special import expit # sigmoid
 
-# All submission files were downloaded from different public kernels
-# See the description to see the source of each submission file
-submissions_path = "../input/kaggleportosegurosubmissions"
-all_files = os.listdir(submissions_path)
+from sklearn.cross_validation import train_test_split
+from sklearn.metrics import roc_auc_score
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.feature_selection import SelectFromModel
 
-# Read and concatenate submissions
-outs = [pd.read_csv(os.path.join(submissions_path, f), index_col=0)\
-        for f in all_files]
-concat_df = pd.concat(outs, axis=1)
-cols = list(map(lambda x: "target_" + str(x), range(len(concat_df.columns))))
-concat_df.columns = cols
+import xgboost as xgb
+import matplotlib.pyplot as plt
 
-# Apply log-odds transformation, regularize, and take standardized mean
-logits = concat_df.applymap(lambda x: np.log(x/(1-x)))
-logits *= (1 - ALPHA*logits**2)
-stdevs = logits.std()  
-w = .2/stdevs
-wa = (w*logits).sum(axis=1)/w.sum()
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-# Convert back to probabilities
-result = wa.apply(expit)
-print( result.head() )
+# clean and split data
 
-# Save result
-pd.DataFrame(result,columns=['target']).to_csv("logitmix.csv",float_format='%.6f')
+# remove constant columns (std = 0)
+remove = []
+for col in train.columns:
+    if train[col].std() == 0:
+        remove.append(col)
+
+train.drop(remove, axis=1, inplace=True)
+test.drop(remove, axis=1, inplace=True)
+
+# remove duplicated columns
+remove = []
+cols = train.columns
+for i in range(len(cols)-1):
+    v = train[cols[i]].values
+    for j in range(i+1,len(cols)):
+        if np.array_equal(v,train[cols[j]].values):
+            remove.append(cols[j])
+
+train.drop(remove, axis=1, inplace=True)
+test.drop(remove, axis=1, inplace=True)
+
+# split data into train and test
+test_id = test.ID
+test = test.drop(["ID"],axis=1)
+
+X = train.drop(["TARGET","ID"],axis=1)
+y = train.TARGET.values
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=1729)
+print(X_train.shape, X_test.shape, test.shape)
+
+## # Feature selection
+clf = ExtraTreesClassifier(random_state=1729)
+selector = clf.fit(X_train, y_train)
+
+# plot most important features
+feat_imp = pd.Series(clf.feature_importances_, index = X_train.columns.values).sort_values(ascending=False)
+feat_imp[:40].plot(kind='bar', title='Feature Importances according to ExtraTreesClassifier', figsize=(12, 8))
+plt.ylabel('Feature Importance Score')
+plt.subplots_adjust(bottom=0.3)
+plt.savefig('1.png')
+plt.show()
+
+# clf.feature_importances_ 
+fs = SelectFromModel(selector, prefit=True)
+
+X_train = fs.transform(X_train)
+X_test = fs.transform(X_test)
+test = fs.transform(test)
+
+print(X_train.shape, X_test.shape, test.shape)
+
+## # Train Model
+# classifier from xgboost
+m2_xgb = xgb.XGBClassifier(n_estimators=110, nthread=-1, max_depth = 4, \
+seed=1729)
+m2_xgb.fit(X_train, y_train, eval_metric="auc", verbose = False,
+           eval_set=[(X_test, y_test)])
+
+# calculate the auc score
+print("Roc AUC: ", roc_auc_score(y_test, m2_xgb.predict_proba(X_test)[:,1],
+              average='macro'))
+              
+## # Submission
+probs = m2_xgb.predict_proba(test)
+
+submission = pd.DataFrame({"ID":test_id, "TARGET": probs[:,1]})
+submission.to_csv("submission.csv", index=False)
+
+
+

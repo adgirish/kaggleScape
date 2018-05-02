@@ -1,132 +1,139 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+#############################################################################################################
+# Created by qqgeogor
+# https://www.kaggle.com/qqgeogor
+#############################################################################################################
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import numpy as np
+from sklearn.base import BaseEstimator
+from keras.layers import Input, Embedding, Dense,Flatten, merge,Activation
+from keras.models import Model
+from keras.regularizers import l2 as l2_reg
+from keras import initializations
+import itertools
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+def make_batches(size, batch_size):
+    nb_batch = int(np.ceil(size/float(batch_size)))
+    return [(i*batch_size, min(size, (i+1)*batch_size)) for i in range(0, nb_batch)]
 
-# Any results you write to the current directory are saved as output.
 
-from sklearn import ensemble, metrics, linear_model
-import random
+def batch_generator(X,y,batch_size=128,shuffle=True):
+    sample_size = X[0].shape[0]
+    index_array = np.arange(sample_size)
+    while 1:
+        if shuffle:
+            np.random.shuffle(index_array)
+        batches = make_batches(sample_size, batch_size)
+        for batch_index, (batch_start, batch_end) in enumerate(batches):
+            batch_ids = index_array[batch_start:batch_end]
+            X_batch = [X[i][batch_ids] for i in range(len(X))]
+            y_batch = y[batch_ids]
+            yield X_batch,y_batch
 
-#Some parameters to play with
-rnd=12
-random.seed(rnd)
-n_ft=20 #Number of features to add
-max_elts=3 #Maximum size of a group of linear features
 
-class addNearestNeighbourLinearFeatures:
-    
-    def __init__(self, n_neighbours=1, max_elts=None, verbose=True, random_state=None):
-        self.rnd=random_state
-        self.n=n_neighbours
-        self.max_elts=max_elts
-        self.verbose=verbose
-        self.neighbours=[]
-        self.clfs=[]
+def test_batch_generator(X,y,batch_size=128):
+    sample_size = X[0].shape[0]
+    index_array = np.arange(sample_size)
+    batches = make_batches(sample_size, batch_size)
+    for batch_index, (batch_start, batch_end) in enumerate(batches):
+        batch_ids = index_array[batch_start:batch_end]
+        X_batch = [X[i][batch_ids] for i in range(len(X))]
+        y_batch = y[batch_ids]
+        yield X_batch,y_batch
+
+
+def predict_batch(model,X_t,batch_size=128):
+    outcome = []
+    for X_batch,y_batch in test_batch_generator(X_t,np.zeros(X_t[0].shape[0]),batch_size=batch_size):
+        outcome.append(model.predict(X_batch,batch_size=batch_size))
+    outcome = np.concatenate(outcome).ravel()
+    return outcome
+
+
+
+def build_model(max_features,K=8,solver='adam',l2=0.0,l2_fm = 0.0):
+
+    inputs = []
+    flatten_layers=[]
+    columns = range(len(max_features))
+    for c in columns:
+        inputs_c = Input(shape=(1,), dtype='int32',name = 'input_%s'%c)
+        num_c = max_features[c]
+
+        embed_c = Embedding(
+                        num_c,
+                        K,
+                        input_length=1,
+                        name = 'embed_%s'%c,
+                        W_regularizer=l2_reg(l2_fm)
+                        )(inputs_c)
+
+        flatten_c = Flatten()(embed_c)
+
+        inputs.append(inputs_c)
+        flatten_layers.append(flatten_c)
+
+    fm_layers = []
+    for emb1,emb2 in itertools.combinations(flatten_layers, 2):
+        dot_layer = merge([emb1,emb2],mode='dot',dot_axes=1)
+        fm_layers.append(dot_layer)
+
+    for c in columns:
+        num_c = max_features[c]
+        embed_c = Embedding(
+                        num_c,
+                        1,
+                        input_length=1,
+                        name = 'linear_%s'%c,
+                        W_regularizer=l2_reg(l2)
+                        )(inputs[c])
+
+        flatten_c = Flatten()(embed_c)
+
+        fm_layers.append(flatten_c)
         
-    def fit(self,train,y):
-        if self.rnd!=None:
-            random.seed(rnd)
-        if self.max_elts==None:
-            self.max_elts=len(train.columns)
-        list_vars=list(train.columns)
-        random.shuffle(list_vars)
         
-        lastscores=np.zeros(self.n)+1e15
-
-        for elt in list_vars[:self.n]:
-            self.neighbours.append([elt])
-        list_vars=list_vars[self.n:]
-        
-        for elt in list_vars:
-            indice=0
-            scores=[]
-            for elt2 in self.neighbours:
-                if len(elt2)<self.max_elts:
-                    clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
-                    clf.fit(train[elt2+[elt]], y)
-                    scores.append(metrics.log_loss(y,clf.predict(train[elt2 + [elt]])))
-                    indice=indice+1
-                else:
-                    scores.append(lastscores[indice])
-                    indice=indice+1
-            gains=lastscores-scores
-            if gains.max()>0:
-                temp=gains.argmax()
-                lastscores[temp]=scores[temp]
-                self.neighbours[temp].append(elt)
-
-        indice=0
-        for elt in self.neighbours:
-            clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
-            clf.fit(train[elt], y)
-            self.clfs.append(clf)
-            if self.verbose:
-                print(indice, lastscores[indice], elt)
-            indice=indice+1
-                    
-    def transform(self, train):
-        indice=0
-        for elt in self.neighbours:
-            train['_'.join(pd.Series(elt).sort_values().values)]=self.clfs[indice].predict(train[elt])
-            indice=indice+1
-        return train
+    flatten = merge(fm_layers,mode='sum')
+    outputs = Activation('sigmoid',name='outputs')(flatten)
     
-    def fit_transform(self, train, y):
-        self.fit(train, y)
-        return self.transform(train)
-    
-    
-train = pd.read_csv("../input/train.csv")
-target = train['target'].values
-test = pd.read_csv("../input/test.csv")
-id_test = test['ID'].values
+    model = Model(input=inputs, output=outputs)
 
-train['v22-1']=train['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[0]))
-test['v22-1']=test['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[0]))
-train['v22-2']=train['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[1]))
-test['v22-2']=test['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[1]))
-train['v22-3']=train['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[2]))
-test['v22-3']=test['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[2]))
-train['v22-4']=train['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[3]))
-test['v22-4']=test['v22'].fillna('@@@@').apply(lambda x:'@'*(4-len(str(x)))+str(x)).apply(lambda x:ord(x[3]))
+    model.compile(
+                optimizer=solver,
+                loss= 'binary_crossentropy'
+              )
 
-drop_list=['v91','v1', 'v8', 'v10', 'v15', 'v17', 'v25', 'v29', 'v34', 'v41', 'v46', 'v54', 'v64', 'v67', 'v97', 'v105', 'v111', 'v122']
-train = train.drop(['ID','target'] + drop_list,axis=1).fillna(-999)
-test = test.drop(['ID'] + drop_list,axis=1).fillna(-999)
+    return model
 
-refcols=list(train.columns)
 
-for elt in refcols:
-    if train[elt].dtype=='O':
-        train[elt], temp = pd.factorize(train[elt])
-        test[elt]=temp.get_indexer(test[elt])
-    else:
-        train[elt]=train[elt].round(5)
-        test[elt]=test[elt].round(5)
-        
-a=addNearestNeighbourLinearFeatures(n_neighbours=n_ft, max_elts=max_elts, verbose=True, random_state=rnd)
-a.fit(train, target)
+class KerasFM(BaseEstimator):
+    def __init__(self,max_features=[],K=8,solver='adam',l2=0.0,l2_fm = 0.0):
+        self.model = build_model(max_features,K,solver,l2=l2,l2_fm = l2_fm)
 
-train = a.transform(train)
-test = a.transform(test)
+    def fit(self,X,y,batch_size=128,nb_epoch=10,shuffle=True,verbose=1,validation_data=None):
+        self.model.fit(X,y,batch_size=batch_size,nb_epoch=nb_epoch,shuffle=shuffle,verbose=verbose,validation_data=None)
 
-clf = ensemble.ExtraTreesClassifier(n_estimators=750,max_features=50,criterion= 'entropy',min_samples_split= 4,
-                        max_depth= 35, min_samples_leaf= 2, n_jobs = -1, random_state=rnd)
+    def fit_generator(self,X,y,batch_size=128,nb_epoch=10,shuffle=True,verbose=1,validation_data=None,callbacks=None):
+        tr_gen = batch_generator(X,y,batch_size=batch_size,shuffle=shuffle)
+        if validation_data:
+            X_test,y_test = validation_data
+            te_gen = batch_generator(X_test,y_test,batch_size=batch_size,shuffle=False)
+            nb_val_samples = X_test[-1].shape[0]
+        else:
+            te_gen = None
+            nb_val_samples = None
 
-clf.fit(train,target)
-pred_et=clf.predict_proba(test)
+        self.model.fit_generator(
+                tr_gen, 
+                samples_per_epoch=X[-1].shape[0], 
+                nb_epoch=nb_epoch, 
+                verbose=verbose, 
+                callbacks=callbacks, 
+                validation_data=te_gen, 
+                nb_val_samples=nb_val_samples, 
+                max_q_size=10
+                )
 
-submission=pd.read_csv('../input/sample_submission.csv')
-submission.index=submission.ID
-submission.PredictedProb=pred_et[:,1]
-submission.to_csv('./addNNLinearFt.csv', index=False)
-submission.PredictedProb.hist(bins=30)
+    def predict(self,X,batch_size=128):
+        y_preds = predict_batch(self.model,X,batch_size=batch_size)
+        return y_preds

@@ -1,185 +1,134 @@
 
 # coding: utf-8
 
-# # Global Terrorism (1970 - 2015)
+# As there are only 4200-ish samples and 350-ish features, I strongly believe this can hit the Curse of Dimensionality. I therefore think a dimensionality reduction is good for this dataset. Let's investigate some methods.
 
 # In[ ]:
 
 
+# Import the important libraries
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-from mpl_toolkits.basemap import Basemap
-import matplotlib.animation as animation
-from IPython.display import HTML
-import warnings
-warnings.filterwarnings('ignore')
-
-try:
-    t_file = pd.read_csv('../input/globalterrorismdb_0616dist.csv', encoding='ISO-8859-1')
-    print('File load: Success')
-except:
-    print('File load: Failed')
+import seaborn as sns
 
 
 # In[ ]:
 
 
-t_file = t_file[np.isfinite(t_file.latitude)]
+# Read the data
+df = pd.read_csv("../input/train.csv").set_index("ID")
+
+
+# There are some features that are constants. Let's identify them by looking at the standard deviation (check id std ==0.0) and then drop those features.
+
+# In[ ]:
+
+
+desc = df.describe().transpose()
+columns_to_drop = desc.loc[desc["std"]==0].index.values
+df.drop(columns_to_drop, axis=1, inplace=True)
+
+
+# Just to check which columns we just dropped:
+
+# In[ ]:
+
+
+print(columns_to_drop)
+
+
+# There are some categorical features in X0-X8. Let's count the cardinality and label encode those.
+
+# In[ ]:
+
+
+df08 = df[["X{}".format(x) for x in range(9) if x != 7]]
 
 
 # In[ ]:
 
 
-t_file.head()
+tot_cardinality = 0
+for c in df08.columns.values:
+    cardinality = len(df08[c].unique())
+    print(c, cardinality)
+    tot_cardinality += cardinality
+print(tot_cardinality)
+
+
+# We can do some guesses what these are. Can X3 be the day of week? Can X6 be the months of year?  Let's do the label encoding:
+# **Update**: Label encoding does not make sense. I'm updating this to One-Hot encoding.
+
+# In[ ]:
+
+
+df = pd.get_dummies(df, columns=["X{}".format(x) for x in range(9) if x != 7])
+
+
+# I've heard there is an outlier in the target variable. Let's look and remove it.
+
+# In[ ]:
+
+
+# sns.distplot(df.y)
+#(Why do I get a warning?)
+# I get a long warning on the kaggle kernel, I'm commenting this line.
 
 
 # In[ ]:
 
 
-regions = list(set(t_file.region_txt))
-colors = ['yellow', 'red', 'lightblue', 'purple', 'green', 'orange', 'brown',          'aqua', 'lightpink', 'lightsage', 'lightgray', 'navy']
+# Drop it!
+df.drop(df.loc[df["y"] > 250].index, inplace=True)
+
+
+# ## PCA - Principal component analysis.
+# For the sake of simplicity, do a 2-dimensional PCA. That makes plotting simpler.
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA
+pca2 = PCA(n_components=2)
+pca2_results = pca2.fit_transform(df.drop(["y"], axis=1))
+
+
+# .... and then we plot it as scatter with the target as a color mapping.
+
+# In[ ]:
+
+
+cmap = sns.cubehelix_palette(as_cmap=True)
+f, ax = plt.subplots(figsize=(20,15))
+points = ax.scatter(pca2_results[:,0], pca2_results[:,1], c=df.y, s=50, cmap=cmap)
+f.colorbar(points)
+plt.show()
+
+
+# Interesting.... it looks like some pattern. Why?
+
+# ## T-SNE  (t-distributed Stochastic Neighbor Embedding)
+# This is a more modern method of dimensionality reduction. I just use it, I have no idea how it actually works. We still do reduction to two dimensions. Makes plotting simple.
+
+# In[ ]:
+
+
+from sklearn.manifold import TSNE
+tsne2 = TSNE(n_components=2)
+tsne2_results = tsne2.fit_transform(df.drop(["y"], axis=1))
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(15,8))
-m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-m.drawcoastlines()
-m.drawcountries()
-m.fillcontinents(color='burlywood',lake_color='lightblue', zorder = 1)
-m.drawmapboundary(fill_color='lightblue')
-
-def pltpoints(region, color = None, label = None):
-    x, y = m(list(t_file.longitude[t_file.region_txt == region].astype("float")),            (list(t_file.latitude[t_file.region_txt == region].astype("float"))))
-    points = m.plot(x, y, "o", markersize = 4, color = color, label = label, alpha = .5)
-    return(points)
-
-for i, region in enumerate(regions):
-    pltpoints(region, color = colors[i], label = region)  
-    
-plt.title("Global Terrorism (1970 - 2015)")
-plt.legend(loc ='lower left', prop= {'size':11})
-plt.show()    
+f, ax = plt.subplots(figsize=(20,15))
+points = ax.scatter(tsne2_results[:,0], tsne2_results[:,1], c=df.y, s=50, cmap=cmap)
+f.colorbar(points)
+plt.show()
 
 
-# **From the graph above, we can see, that terrorism is widespread, but judging by where the points are located, and quite obviously, it mostly affects areas that are more densley populated.**
-
-# In[ ]:
-
-
-count_year = t_file.groupby(['iyear']).count()
-mean_year = t_file.groupby(['iyear']).mean()
-
-fig = plt.figure(figsize = (10,8))
-ax1 = fig.add_subplot(1,2,1)
-ax2 = fig.add_subplot(1,2,2)
-ax1.set(title = 'Total acts of terrorism', ylabel = 'Act Count', xlabel = 'Year')
-ax1.plot(count_year.index, count_year.eventid)
-ax2.set(title = 'Average Number of Deaths per Act', ylabel = 'Death Count', xlabel = 'Year')
-ax2.plot(mean_year.index, mean_year.nkill)
-fig.autofmt_xdate()
-
-
-# **As we can see from the above graphs, not only has the number of terroristic acts increased, but also the number of deaths per act hs been on the rise. This could possible be due to there being more densely populated areas over time.**
-
-# In[ ]:
-
-
-region_mean_kills = []
-for region in regions:
-    region_mean_kills.append(t_file.nkill[t_file.region_txt == region].mean())
-
-print('Average number of people killed per attack by Region\n')
-for i, region in enumerate(regions):
-    print('{}:{}'.format(region, round(region_mean_kills[i],2)))
-
-
-# **We can also note, that on average, every terror attack in Sub-Saharan Africa claims over 5 lives.**
+# Ha! Even more interesting! It even looks like we can make some regression out of this set! I'll try that later.
 # 
-
-# In[ ]:
-
-
-def mapmean(row):
-    for i, region in enumerate(regions):
-        return region_mean_kills[i]
-
-
-# In[ ]:
-
-
-t_file['region_mean'] = t_file.apply(mapmean, axis = 1)
-t_file['nkill-mean'] = t_file['nkill'] - t_file['region_mean']
-t_file['absnkill-mean'] = abs(t_file['nkill-mean'])
-
-
-# In[ ]:
-
-
-def get_points(year, region = regions):
-    points = t_file[['iyear', 'latitude', 'longitude', 'nkill', 'region_mean', 'nkill-mean', 'absnkill-mean']][t_file.iyear == year]
-    return(points)
-
-
-# # Lastly:
-#     
-# **Here is an animation of how terrorism has progressed from 1970 through 2015**
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(10, 10))
-fig.text(.8, .3, 'R. Troncoso', ha='right')
-fig.suptitle('Global Terrorism (1970 - 2015)')
-cmap = plt.get_cmap('coolwarm')
-
-m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-m.drawcoastlines()
-m.drawcountries()
-m.fillcontinents(color='burlywood',lake_color='lightblue', zorder = 1)
-m.drawmapboundary(fill_color='lightblue')
-
-START_YEAR = 1970
-LAST_YEAR = 2015
-
-points = get_points(START_YEAR)
-x, y= m(list(points['longitude']), list(points['latitude']))
-scat = m.scatter(x, y, s = points['absnkill-mean']*2, marker='o', alpha=0.3, zorder=10, c = points['nkill-mean'], cmap = cmap)
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-plt.close()
-
-def update(frame_number):
-    current_year = START_YEAR + (frame_number % (LAST_YEAR - START_YEAR + 1))
-    points = get_points(current_year)
-    color = list(points['nkill-mean'])
-    x, y = m(list(points['longitude']), list(points['latitude']))
-    scat.set_offsets(np.dstack((x, y)))
-    scat.set_color(cmap(points['nkill-mean']))
-    scat.set_sizes(points['absnkill-mean']*1.5)
-    year_text.set_text(str(current_year))
-    
-ani = animation.FuncAnimation(fig, update, interval=750, frames=LAST_YEAR - START_YEAR + 1)
-ani.save('animation.gif', writer='imagemagick', fps=2)
-
-
-# In[ ]:
-
-
-import io
-import base64
-
-filename = 'animation.gif'
-
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
-
-
-# **The points above represent the all terrorist attacks.**
-# 
-# **The color and size represent the number of people killed during that particular attack.**
-# 
-# **As you can see, there has been an increase in attacks, as well as the number of deaths per attack has increased, particularly in Sub-Sahararan Africa and the Middle East.**
+# Please upvote if you like this!

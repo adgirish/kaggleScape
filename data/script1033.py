@@ -1,169 +1,235 @@
 
 # coding: utf-8
 
-# # A simple personalized recommending script
+# # TED-Talks topic models
 
-# ## Fire up packages
+# ![](http://greatperformersacademy.com/images/images/Articles_images/10-best-ted-talks-ever.jpg)
 
-# In[ ]:
-
-
-import sklearn
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import pandas
-from sklearn.cross_validation import train_test_split
-import numpy
-from wordcloud import WordCloud,STOPWORDS
-
-
-# ## Load data
+# In this notebook we will study text processing using TED transcripts, passing through feature extraction to topic modeling in order to (1) have a first meet with text processing techniques and (2) analyze briefly some TED-Talks patterns.
+# 
+# In the amazing TED-Talks dataset, we have two files, one (ted_main.csv) with meta information about the talks, as # of comment, rating, related TEDs and so on; the other file has the transcripts which we'll care about in this tutorial. Even so, we'll use the ted_main.csv file to evaluate our topic modeling implementation, because it has a columns of talks' tags, useful as our "ground truth topics".
 
 # In[ ]:
 
 
-df = pandas.read_csv('../input/techcrunch_posts.csv')
-print(df.shape)
+import numpy as np 
+import pandas as pd 
+import seaborn as sns
+from time import time
 
 
-# In[ ]:
-
-
-df.head()
-
-
-# ## Pre-process data
+# ### 0.1. Transcripts loading
 
 # In[ ]:
 
 
-df['authors']=df['authors'].apply(lambda x: str(x).split(','))
-df['tags']=df['tags'].apply(lambda x:['No tag'] if str(x)=='NaN' else str(x).split(','))
-df['topics']=df['topics'].apply(lambda x: str(x).split(','))
+ted_main_df = pd.read_csv('../input/ted_main.csv', encoding='utf-8')
+transcripts_df = pd.read_csv('../input/transcripts.csv', encoding='utf-8')
+transcripts_df.head()
 
 
-# In[ ]:
-
-
-df['content']=df['content'].fillna(0)
-df=df[df['content']!=0]
-df=df.reset_index(drop=True)
-
-
-# ## Build KNN model based on the content of articles
-
-# In[ ]:
-
-
-import re
-import nltk
-from nltk.corpus import stopwords
-
-
-# In[ ]:
-
-
-def to_words(content):
-    letters_only = re.sub("[^a-zA-Z]", " ", content) 
-    words = letters_only.lower().split()                             
-    stops = set(stopwords.words("english"))                  
-    meaningful_words = [w for w in words if not w in stops] 
-    return( " ".join( meaningful_words )) 
-
-
-# **Convert the words to tfidf matrices.**
-
-# In[ ]:
-
-
-clean_content=[]
-for each in df['content']:
-    clean_content.append(to_words(each))
-
+# ## 1. Text feature extraction with TFIDF
+# 
+# First,  consider the term-frequency (TF) matrix above, that can be extracted from a list of documents and the universe of terms in such documents.
+# 
+# |        | Document 1 | Document 2 | ... | Document N |
+# |--------|------------|------------|-----|------------|
+# | Term 1 | 3          | 0          | ... | 1          |
+# | Term 2 | 0          | 1          | ... | 2          |
+# | Term 3 | 2          | 2          | ... | 1          |
+# | ...    | ...        | ...        | ... | ...        |
+# | Term N | 1          | 0          | ... | 0          |
+# 
+# 
+# This is a huge matrix with all elements' frequency in all documents. Now consider de idf (inverse document frequency) as an operation to transform this frequency into word importance, calculated by:
+# 
+# $$ tfidf_{i,j} = tf_{i,j}  \times log(\frac{N}{df_{i}}) $$
+# 
+# Where $i$ refers to term index and $j$ document index. $N$ is the total number of documents and $df_{i}$ is the number of documents containing $i$.
+# 
+# 
 
 # In[ ]:
 
 
 from sklearn.feature_extraction.text import TfidfVectorizer
-tfidf=TfidfVectorizer()
-features=tfidf.fit_transform(clean_content)
+vectorizer = TfidfVectorizer(stop_words="english",
+                        use_idf=True,
+                        ngram_range=(1,1), # considering only 1-grams
+                        min_df = 0.05,     # cut words present in less than 5% of documents
+                        max_df = 0.3)      # cut words present in more than 30% of documents 
+t0 = time()
+
+tfidf = vectorizer.fit_transform(transcripts_df['transcript'])
+print("done in %0.3fs." % (time() - t0))
 
 
-# **Implement K-Nearest-Neighbors model**
-
-# In[ ]:
-
-
-from sklearn.neighbors import NearestNeighbors
-knn=NearestNeighbors(n_neighbors=30,algorithm='brute',metric='cosine')
-knn_fit=knn.fit(features)
-
-
-# ## Wrap everything up to a small, personalized recommending system
+# Keeping that in mind, we'll want to see the 'most important' words in our matrix...
 
 # In[ ]:
 
 
-def recommend_to_user(author):
-    ## Find All Authors##
-    indexes=[]
-    for i in range(len(df)):
-        if author in df['authors'][i]:
-            indexes.append(i)
-    tmp_df=df.iloc[indexes,:]
-    author_content=[]
-    for each in tmp_df['content']:
-        author_content.append(to_words(each))
-    wordcloud = WordCloud(background_color='black',
-                      width=3000,
-                      height=2500
-                     ).generate(author_content[0])
-    ## Find Nearest Neighbors based on the latest aritcles the author published on the website
-    Neighbors = knn_fit.kneighbors(features[indexes[0]])[1].tolist()[0][2:]
-    ## Get rid of all articles that is authored/co-authored by the author and find the articles
-    All_article = df.iloc[Neighbors,:]
-    All_article = All_article.reset_index(drop=True)
-    kept_index = []
-    for j in range(len(All_article)):
-        if author in All_article['authors'][j]:
-            pass
-        else:
-            kept_index.append(j)
-    Final_frame = All_article.iloc[kept_index,:]
-    Final_frame=Final_frame.reset_index(drop=True)
-    Selected_articles = Final_frame.iloc[0:5,:]
-    
-    ## Print out result directly ##
-    print('==='*30)
-    print('The article(s) of '+author+' is always featured by the following words')
-    plt.figure(1,figsize=(8,8))
-    plt.imshow(wordcloud)
-    plt.axis('off')
-    plt.show()
-    print("==="*30)
-    print('The top five articles recommended to '+author+' are:')
-    for k in range(len(Selected_articles)):
-        print(Selected_articles['title'][k]+', authored by '+Selected_articles['authors'][k][0]+' ,article can be visted at \n '+Selected_articles['url'][k])
+# Let's make a function to call the top ranked words in a vectorizer
+def rank_words(terms, feature_matrix):
+    sums = feature_matrix.sum(axis=0)
+    data = []
+    for col, term in enumerate(terms):
+        data.append( (term, sums[0,col]) )
+    ranked = pd.DataFrame(data, columns=['term','rank']).sort_values('rank', ascending=False)
+    return ranked
 
-
-# ## Run a test for the recommender
-
-# In[ ]:
-
-
-recommend_to_user('Bastiaan Janmaat')
+ranked = rank_words(terms=vectorizer.get_feature_names(), feature_matrix=tfidf)
+ranked.head()
 
 
 # In[ ]:
 
 
-recommend_to_user('Matthew Lynley')
+# Let's visualize a word cloud with the frequencies obtained by idf transformation
+dic = {ranked.loc[i,'term'].upper(): ranked.loc[i,'rank'] for i in range(0,len(ranked))}
+
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+wordcloud = WordCloud(background_color='white',
+                      max_words=100,
+                      colormap='Reds').generate_from_frequencies(dic)
+fig = plt.figure(1,figsize=(12,10))
+plt.imshow(wordcloud,interpolation="bilinear")
+plt.axis('off')
+plt.show()
 
 
-# ## Conclusion
-
-# **We can find that the recommendation system is somehow making sense, if you just quickly compare the word cloud and the titles of article recommended by KNN algorithm. However, the recommender is still restricted, in terms of the following aspects:**
+# ## 2. Topic modeling
 # 
-# **1. For the user who has not published many articles on the website, the recommendation system may result in a disappointing outcome.**
+# Not recently decomposition techniques have been used to extract topics from text data. A topic is a mixture of words and a document should be pertinent to a topic if these words are present in there. Look at the diagram to understand better.
 # 
-# **2. For the cases of cold-start (new users), it is more wise to use classification technique to make recommendation. Considering we do not have many user-wide data, we have to skip that.**
+# ![alt text](https://image.ibb.co/kH9t87/d.png)
+# 
+# Here we will extract topics from NMF and LDA to check for better results. First, let's try LDA.
+
+# In[ ]:
+
+
+from sklearn.decomposition import LatentDirichletAllocation
+
+n_topics = 10
+lda = LatentDirichletAllocation(n_components=n_topics,random_state=0)
+
+topics = lda.fit_transform(tfidf)
+top_n_words = 5
+t_words, word_strengths = {}, {}
+for t_id, t in enumerate(lda.components_):
+    t_words[t_id] = [vectorizer.get_feature_names()[i] for i in t.argsort()[:-top_n_words - 1:-1]]
+    word_strengths[t_id] = t[t.argsort()[:-top_n_words - 1:-1]]
+t_words
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize=(7,15), ncols=2, nrows=5)
+plt.subplots_adjust(
+    wspace  =  0.5,
+    hspace  =  0.5
+)
+c=0
+for row in range(0,5):
+    for col in range(0,2):
+        sns.barplot(x=word_strengths[c], y=t_words[c], color="red", ax=ax[row][col])
+        c+=1
+plt.show()
+
+
+# Not so bad, but there are topics that has words fairly inappropriate. We could say that these topics are uncohesive for humans. That is common difficult when applying topic modeling to real problems. 
+# 
+# Another problem is the optimal number of topics. There are several ways to validate it, as with perplexity or log-likelyhood. However, let's keep with 10 topics! :)
+
+# In[ ]:
+
+
+from sklearn.decomposition import NMF
+
+n_topics = 10
+nmf = NMF(n_components=n_topics,random_state=0)
+
+topics = nmf.fit_transform(tfidf)
+top_n_words = 5
+t_words, word_strengths = {}, {}
+for t_id, t in enumerate(nmf.components_):
+    t_words[t_id] = [vectorizer.get_feature_names()[i] for i in t.argsort()[:-top_n_words - 1:-1]]
+    word_strengths[t_id] = t[t.argsort()[:-top_n_words - 1:-1]]
+t_words
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize=(7,15), ncols=2, nrows=5)
+plt.subplots_adjust(
+    wspace  =  0.5,
+    hspace  =  0.5
+)
+c=0
+for row in range(0,5):
+    for col in range(0,2):
+        sns.barplot(x=word_strengths[c], y=t_words[c], color="red", ax=ax[row][col])
+        c+=1
+plt.show()
+
+
+# Hmm. Now you see that with NMF things get better. So, we'll use it testing for a document and see what topics are extracted.
+
+# In[ ]:
+
+
+# Formulating a pipeline to insert a document and extract the topics pertinency
+from sklearn.pipeline import Pipeline
+pipe = Pipeline([
+    ('tfidf', vectorizer),
+    ('nmf', nmf)
+])
+
+document_id = 4
+t = pipe.transform([transcripts_df['transcript'].iloc[document_id]]) 
+print('Topic distribution for document #{}: \n'.format(document_id),t)
+print('Relevant topics for document #{}: \n'.format(document_id),np.where(t>0.01)[1])
+print('\nTranscript:\n',transcripts_df['transcript'].iloc[document_id][:500],'...')
+
+talk = ted_main_df[ted_main_df['url']==transcripts_df['url'].iloc[document_id]]
+print('\nTrue tags from ted_main.csv: \n',talk['tags'])
+
+
+# Seems nice! The transcript #4 really talk about topic #5.
+# 
+# Now we would do a exploratory analysis about our topics and extract descriptitve statistics and visualizations for the transcripts.
+
+# In[ ]:
+
+
+t = pipe.transform(transcripts_df['transcript']) 
+t = pd.DataFrame(t, columns=['#{}'.format(i) for i in range(0,10)])
+
+
+# In[ ]:
+
+
+import seaborn as sns
+
+new_t = pd.DataFrame({'value':t['#0'].values,'topic':['#0']*len(t)})
+for tid in t.columns[1:]:
+    new_t = pd.concat([new_t, pd.DataFrame({'value':t[tid].values,'topic':[tid]*len(t)})])
+
+fig = plt.figure(1,figsize=(12,6))
+sns.violinplot(x="topic", y="value", data=new_t, palette='Reds')
+plt.show()
+
+
+# Through analyzing this plot, I would say that in general the topic distribution behaves evenly, excepts for #0. Things to be concluded:
+# 
+# 1. Topic #0 (['god', 'book', 'stories', 'oh', 'art']) is very general per si in terms of words meaning and perhaps explain this result. 
+# 2. Topic #2 is only about music and it has high incidences because of its specificity, in contrast to #0.
+# 3. Excluding #0 (open meaning issues), topics **#4 (about earth), #5 (about government), #7 (about data&information) and #9 (about education)** have higher quartiles, meaning that they are the most frequent topics that TED Talks carry on.
+# 
+# I believe that it effectively summarizes what TEDs are about: **ideas that really matter and worth spreading**.
+# 
+# Hope that it could help NLP beginners!

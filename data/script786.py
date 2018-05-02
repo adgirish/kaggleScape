@@ -1,9 +1,8 @@
 
 # coding: utf-8
 
-# Being an avid cricket fan, I am pretty much excited to see this dataset hosted here. Thank you for this dataset.
-# 
-# Now let us get to the business.!
+# Do some simple statics on Death Metal dataset.
+# ----------------------------------------------
 
 # In[ ]:
 
@@ -14,465 +13,476 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+import warnings
+warnings.filterwarnings("ignore")
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+bands = pd.read_csv(
+    filepath_or_buffer="../input/bands.csv", 
+    sep=",", 
+    na_values=["N/A"], 
+    dtype={"id": "int32", "formed_in": "float32"}
+)
+
+
+# In[ ]:
+
+
+albums = pd.read_csv(
+    filepath_or_buffer="../input/albums.csv", 
+    sep=",", 
+    na_values=["N/A"], 
+    dtype={"id": "int32", "band": "int32", "year": "int32"}
+)
+
+
+# In[ ]:
+
+
+np.sort(albums.year.unique())[-1]
+print("There are {:,} death metal bands and {:,} albums by {:d}.".format(
+    bands.shape[0], albums.shape[0], np.sort(albums.year.unique())[-1]))
+
+
+# In[ ]:
+
+
+first_death_metal_band = bands.loc[bands.formed_in.idxmin()]
+print("The world's first death metal band is \"{}\" which formed in {:.0f}.".format(first_death_metal_band["name"], first_death_metal_band["formed_in"]))
+
+
+# What? The first death metal band is not Possessed or Death? Who is Satan's Host? Let's check this band closely.
+
+# In[ ]:
+
+
+for key, value in zip(first_death_metal_band.index.values, first_death_metal_band):
+    print("{:>10}: {:<}".format(key, value))
+
+
+# Ah. They changed their genre. Their genre was Heavy Metal when they formed.
+
+# In[ ]:
+
+
+first_death_metal_album = albums.loc[albums.year.idxmin()]
+print("The world's first death metal album is \"{}\" released in {:.0f}.".format(first_death_metal_album["title"], first_death_metal_album["year"]))
+
+
+# Number of Bands and Albums
+# --------------------------
+
+# In[ ]:
+
+
 import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('ggplot')
 
-# create a function for labeling #
-def autolabel(rects):
-    for rect in rects:
-        height = rect.get_height()
-        ax.text(rect.get_x() + rect.get_width()/2., 1.02*height,
-                '%d' % int(height),
-                ha='center', va='bottom')
+bands_count = bands.groupby("formed_in")["id"].count().cumsum().loc[:2015]
+albums_count = albums.groupby("year")["id"].count().cumsum().loc[:2015]
+
+df = pd.DataFrame(
+    {
+        "bands": bands_count,
+        "albums": albums_count
+    }
+)
+
+ax = df.plot(marker="o", markersize=4)
+ax.set_xlabel("year", fontsize=8)
+ax.set_title("Number of Albums Until the End of That Year", fontsize=10)
+_ = ax.legend(fontsize=8, loc="upper left")
+
+
+# Number of New Bands and Albums
+# ------------------------------
+
+# In[ ]:
+
+
+bands_count = bands.groupby("formed_in")["id"].count().loc[:2015]
+albums_count = albums.groupby("year")["id"].count().loc[:2015]
+
+df = pd.DataFrame(
+    {
+        "bands": bands_count,
+        "albums": albums_count
+    }
+)
+
+ax = df.plot(marker="o", markersize=4)
+ax.set_xlabel("year", fontsize=8)
+ax.set_title("Number of New Albums Released in That Year", fontsize=10)
+ax.annotate("Nirvana's \"nevermind\" was released", xy=(1991, 950), xytext=(1980, 1600), arrowprops={"width": 2.0, "headwidth": 8})
+_ = ax.legend(fontsize=8, loc="upper left")
+
+
+# Recording & distributing is becoming cheaper and easier, so although there are less bands but more album released. 
+
+# Genre Explosion
+# -----------------
+# Number of distinct genres of bands formed in each year.
+
+# In[ ]:
+
+
+ax = bands[["formed_in", "genre"]].drop_duplicates().groupby("formed_in")["genre"].count().loc[:2015].plot(color="#ee7621", marker="o", markersize=4, ylim=[0, 400])
+_ = ax.set_xlabel("year", fontsize=8)
+_ = ax.set_title("Number of Disinct Genres of Albums Released in That Year", fontsize=10)
 
 
 # In[ ]:
 
 
-# read the input files and look at the top few lines #
-data_path = "../input/"
-match_df = pd.read_csv(data_path+"matches.csv")
-score_df = pd.read_csv(data_path+"deliveries.csv")
-match_df.head()
+dominant_genres = bands.groupby("genre")["genre"].count().sort_values().tail(10)
+dominant_genres["others"] = bands.shape[0] - dominant_genres.sum()
+_ = dominant_genres.plot.pie(figsize=(6, 6))
 
 
-# In[ ]:
+# "Black/Death Metal" and "Death/Black Metal" are two different genres. Those metal nerds.
 
-
-# Let us get some basic stats #
-print("Number of matches played so far : ", match_df.shape[0])
-print("Number of seasons : ", len(match_df.season.unique()))
-
-
-# **Number of matches each season:**
+# Number of New Albums of Each Genre
+# ----------------------------------
 # 
-# Let us first look at the number of matches played per season.
+# The genre field is quite irregular. Many bands have multiple genres (genre changed, like "Satan's Host" 
+# and/or combined genre. So a better way is to process genres as short texts. 
+# 
+# I expelled combined genres by expelled all genres which contain "/". I also expelled genres which contains no more than 50 bands.
 
 # In[ ]:
 
 
-sns.countplot(x='season', data=match_df)
+genre_count = bands.groupby("genre")["id"].count()
+main_genres = genre_count[genre_count >= 50].index.values
+main_genres = [genre for genre in main_genres if "/" not in genre]
+
+main_genres_bands = bands[bands.genre.isin(main_genres)]
+main_genres_albums = pd.merge(
+    left=main_genres_bands,
+    right=albums,
+    left_on="id",
+    right_on="band",
+    suffixes=["_band", "_album"],
+    how="inner"
+)[["id_album", "year", "genre"]]
+
+main_genres_albums = main_genres_albums.groupby(["year", "genre"])["id_album"].count().unstack("genre").fillna(0)
+main_genres_albums = main_genres_albums.loc[:2015] # data of 2017 is incomplete.
+main_genres_albums.drop(["Blackened Death Metal", "Industrial Death Metal", "Experimental Death Metal"], axis=1, inplace=True)
+
+ax = main_genres_albums.plot(figsize=(8, 5), marker="o", markersize=4)
+ax.set_xlabel("year", fontsize=8)
+_ = ax.set_title("Number of New Albums of Each Main Genres Released in That Year", fontsize=10)
+_ = ax.legend(fontsize=8, loc="upper left")
+
+
+# Which bands are most productive?
+# --------------------------------
+
+# We find top 20 bands by the number of albums released.
+
+# In[ ]:
+
+
+bands_albums = pd.merge(
+    left=bands, 
+    right=albums, 
+    left_on="id", 
+    right_on="band", 
+    suffixes=["_band", "_album"],
+    how="left"
+).drop("band", axis=1)
+
+
+# In[ ]:
+
+
+bands_albums_count = pd.DataFrame(bands_albums.groupby("id_band")["id_album"].count().sort_values().tail(20))
+bands_albums_count.columns = ["albums_count"] 
+
+bands_high_production_top20 = pd.merge(
+    left=bands,
+    right=bands_albums_count,
+    left_on="id",
+    right_index=True
+)[["name", "albums_count"]].sort_values("albums_count").set_index("name")
+
+_ = bands_high_production_top20.plot.barh(color="#00304e")
+
+
+# Which albums are most popular?
+# ------------------------------
+
+# We find top 20 albums by the number of reviews received.
+
+# In[ ]:
+
+
+reviews = pd.read_csv(
+    filepath_or_buffer="../input/reviews.csv", 
+    sep=",", 
+    na_values=["N/A"], 
+    usecols=["id", "album", "title", "score"],
+    dtype={"id": "int32", "album": "int32", "score": "float32"}
+)
+
+
+# In[ ]:
+
+
+bands_albums_reviews = pd.merge(
+    left=bands_albums, 
+    right=reviews, 
+    left_on="id_album", 
+    right_on="album", 
+    suffixes=["", "_review"],
+    how="left"
+).drop("album", axis=1)
+
+
+# In[ ]:
+
+
+albums_reviews_count = pd.DataFrame(bands_albums_reviews.groupby("id_album")["id"].count().sort_values().tail(20))
+albums_reviews_count.columns = ["reviews_count"] 
+
+reviews_more_reviews_top20 = pd.merge(
+    left=bands_albums,
+    right=albums_reviews_count,
+    left_on="id_album",
+    right_index=True
+)[["name", "title", "reviews_count"]].sort_values("reviews_count")
+
+reviews_more_reviews_top20["band/album"] = reviews_more_reviews_top20.name + "'s \"" + reviews_more_reviews_top20.title + "\""
+_ = reviews_more_reviews_top20[["band/album", "reviews_count"]].set_index("band/album").plot.barh(color="#00304e", legend=False, figsize=(8, 6))
+
+
+# They are all famous bands and classical or controversial albums
+
+# Which countries have more death metal bands?
+# ---------------------------------------
+
+# In[ ]:
+
+
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
+
+
+# In[ ]:
+
+
+country_bands_count = bands.groupby("country")["id"].count()
+country_bands_count = pd.DataFrame(country_bands_count)
+country_bands_count.columns = ["bands_count"]
+country_bands_count.reset_index(inplace=True)
+
+
+# In[ ]:
+
+
+# I copy and modify this piece of code from Anisotropico's kernel 
+# "Interactive Plotly: Global Youth Unemployment". Thank him.
+
+metricscale = [
+    [0, 'rgb(102,194,165)'], 
+    [0.05, 'rgb(102,194,165)'], 
+    [0.15, 'rgb(171,221,164)'], 
+    [0.2, 'rgb(230,245,152)'], 
+    [0.25, 'rgb(255,255,191)'], 
+    [0.35, 'rgb(254,224,139)'], 
+    [0.45, 'rgb(253,174,97)'], 
+    [0.55, 'rgb(213,62,79)'], 
+    [1.0, 'rgb(158,1,66)']
+]
+
+data = [ dict(
+        type = 'choropleth',
+        autocolorscale = False,
+        colorscale = metricscale,
+        showscale = True,
+        locations = country_bands_count['country'].values,
+        z = country_bands_count['bands_count'].values,
+        locationmode = 'country names',
+        text = country_bands_count['country'].values,
+        marker = dict(
+            line = dict(color = 'rgb(250,250,225)', width = 0.5)),
+            colorbar = dict(autotick = True, tickprefix = '', 
+            title = 'Number of Death Metal Bands')
+            )
+       ]
+
+layout = dict(
+    title = 'World Map of Number of Death Metal Bands',
+    geo = dict(
+        showframe = True,
+        showocean = True,
+        oceancolor = 'rgb(0,0,52)',
+        #oceancolor = 'rgb(222,243,246)',
+        projection = dict(
+        type = 'orthographic',
+            rotation = dict(
+                    lon = 60,
+                    lat = 10),
+        ),
+        lonaxis =  dict(
+                showgrid = False,
+                gridcolor = 'rgb(102, 102, 102)'
+            ),
+        lataxis = dict(
+                showgrid = False,
+                gridcolor = 'rgb(102, 102, 102)'
+                )
+            ),
+        )
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False, filename='worldmapdeathmetal')
+
+
+# Bar plot of  top 20 countries by the number of death metal bands
+
+# In[ ]:
+
+
+ax = bands.groupby("country")["id"].count().sort_values(ascending=False).head(20).sort_values().plot(kind="barh", color="#00304e")
+_ = ax.set_xlabel("number of bands")
+
+
+# Best albums
+# -----------
+
+# We find top 30 best reviewed albums in death metal genre. Only consider albums which have received more than or equal to 8 reviews, and rank them by their average score.
+
+# In[ ]:
+
+
+albums_reviews_count = bands_albums_reviews.groupby("id_album")["id"].count()
+popular_albums = albums_reviews_count[albums_reviews_count >= 8].index.values
+popular_bands_albums_reviews = bands_albums_reviews[bands_albums_reviews.id_album.isin(popular_albums)]
+
+best_albums = popular_bands_albums_reviews.groupby("id_album")["score"].sum() / popular_bands_albums_reviews.groupby("id_album")["score"].count()
+
+best_albums = pd.DataFrame(best_albums.sort_values().tail(30))
+best_albums.columns = ["average_score"] 
+
+bands_albums_best_top = pd.merge(
+    left=bands_albums,
+    right=best_albums,
+    left_on="id_album",
+    right_index=True
+)[["name", "title", "average_score"]].sort_values("average_score")
+
+bands_albums_best_top["band/album"] = bands_albums_best_top.name + "'s \"" + bands_albums_best_top.title + "\""
+ax = bands_albums_best_top[["band/album", "average_score"]].set_index("band/album").plot.barh(color="#00304e", legend=False, figsize=(8, 12), xlim=[0.85, 1.0])
+_ = ax.set_xlabel("avg. score")
+
+for y, x in zip(np.arange(0, bands_albums_best_top.shape[0]), bands_albums_best_top.average_score):
+    _ = ax.annotate("{:.3f}".format(x), xy=(x-0.008, y-0.1), fontsize=8, color="#eeeeee")
+
+
+# ## Word Cloud of Lyrics' Themes ##
+
+# In[ ]:
+
+
+from wordcloud import WordCloud, STOPWORDS
+
+
+# In[ ]:
+
+
+catcloud = WordCloud(
+    stopwords=STOPWORDS,
+    background_color='black',
+    width=1200,
+    height=800
+).generate(" ".join(bands.theme.dropna().str.replace("|", ",").values))
+
+plt.imshow(catcloud, alpha=0.8)
+plt.axis('off')
 plt.show()
 
 
-# There is a spike in the middle for three years where the number of matches are more than 70. 
-# 
-# **Number of matches in each venue:**
+# Word cloud for each sub-genres.
+
+# *Brutal Death Metal*
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-sns.countplot(x='venue', data=match_df)
-plt.xticks(rotation='vertical')
+catcloud = WordCloud(
+    stopwords=STOPWORDS,
+    background_color='black',
+    width=1200,
+    height=800
+).generate(" ".join(bands[bands.genre=="Brutal Death Metal"].theme.dropna().str.replace("|", ",").values))
+
+plt.imshow(catcloud, alpha=0.8)
+plt.axis('off')
 plt.show()
 
 
-# There are quite a few venues present in the data with "M Chinnaswamy Stadium" being the one with most number of matches followed by "Eden Gardens".
-# 
-# **Number of matches played by each team:**
+# *Melodic Death Metal*
 
 # In[ ]:
 
 
-temp_df = pd.melt(match_df, id_vars=['id','season'], value_vars=['team1', 'team2'])
+catcloud = WordCloud(
+    stopwords=STOPWORDS,
+    background_color='black',
+    width=1200,
+    height=800
+).generate(" ".join(bands[bands.genre=="Melodic Death Metal"].theme.dropna().str.replace("|", ",").values))
 
-plt.figure(figsize=(12,6))
-sns.countplot(x='value', data=temp_df)
-plt.xticks(rotation='vertical')
+plt.imshow(catcloud, alpha=0.8)
+plt.axis('off')
 plt.show()
 
 
-# "Mumbai Indians" lead the pack with most number of matches played followed by "Royal Challengers Bangalore". There are also teams with very few matches like 'Rising Pune Supergiants', 'Gujarat Lions' as they are new teams that came in only last season.
-# 
-# **Number of wins per team:**
+# *Technical Death Metal*
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-sns.countplot(x='winner', data=match_df)
-plt.xticks(rotation='vertical')
+catcloud = WordCloud(
+    stopwords=STOPWORDS,
+    background_color='black',
+    width=1200,
+    height=800
+).generate(" ".join(bands[bands.genre=="Technical Death Metal"].theme.dropna().str.replace("|", ",").values))
+
+plt.imshow(catcloud, alpha=0.8)
+plt.axis('off')
 plt.show()
 
 
-# MI again leads the pack followed by CSK.
-# 
-# **Champions each season:**
-# 
-# Now let us see the champions in each season.
+# *Progressive Death Metal*
 
 # In[ ]:
 
 
-temp_df = match_df.drop_duplicates(subset=['season'], keep='last')[['season', 'winner']].reset_index(drop=True)
-temp_df
+catcloud = WordCloud(
+    stopwords=STOPWORDS,
+    background_color='black',
+    width=1200,
+    height=800
+).generate(" ".join(bands[bands.genre=="Progressive Death Metal"].theme.dropna().str.replace("|", ",").values))
 
-
-# **Toss decision:**
-# 
-# Let us see the toss decisions taken so far.
-
-# In[ ]:
-
-
-temp_series = match_df.toss_decision.value_counts()
-labels = (np.array(temp_series.index))
-sizes = (np.array((temp_series / temp_series.sum())*100))
-colors = ['gold', 'lightskyblue']
-plt.pie(sizes, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=90)
-plt.title("Toss decision percentage")
-plt.show()
-          
-
-
-# Almost 55% of the toss decisions are made to field first. Now let us see how this decision varied over time.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-sns.countplot(x='season', hue='toss_decision', data=match_df)
-plt.xticks(rotation='vertical')
+plt.imshow(catcloud, alpha=0.8)
+plt.axis('off')
 plt.show()
 
-
-# It seems during the initial years, teams wanted to bat first. Voila.! Look at the 2016 season, most of the toss decisions are to field first.
-# 
-# Since there is a very strong trend towards batting second let us see the win percentage of teams batting second.
-
-# In[ ]:
-
-
-num_of_wins = (match_df.win_by_wickets>0).sum()
-num_of_loss = (match_df.win_by_wickets==0).sum()
-labels = ["Wins", "Loss"]
-total = float(num_of_wins + num_of_loss)
-sizes = [(num_of_wins/total)*100, (num_of_loss/total)*100]
-colors = ['gold', 'lightskyblue']
-plt.pie(sizes, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=90)
-plt.title("Win percentage batting second")
-plt.show()
-
-
-# So percentage of times teams batting second has won is 53.2. Now let us split this by year and see the distribution.
-
-# In[ ]:
-
-
-match_df["field_win"] = "win"
-match_df["field_win"].ix[match_df['win_by_wickets']==0] = "loss"
-plt.figure(figsize=(12,6))
-sns.countplot(x='season', hue='field_win', data=match_df)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Number of wins batting second is also quite high in the latest season (2016) while in 2015 teams batting first has won more than batting second.
-# 
-# **Top players of the match:**
-
-# In[ ]:
-
-
-
-temp_series = match_df.player_of_match.value_counts()[:10]
-labels = np.array(temp_series.index)
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_series), width=width, color='y')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Top player of the match awardees")
-autolabel(rects)
-plt.show()
-
-
-# CH Gayle is the top player of the match awardee in all the seasons of IPL.
-# 
-# **Top Umpires:**
-
-# In[ ]:
-
-
-temp_df = pd.melt(match_df, id_vars=['id'], value_vars=['umpire1', 'umpire2'])
-
-temp_series = temp_df.value.value_counts()[:10]
-labels = np.array(temp_series.index)
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_series), width=width, color='r')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Top Umpires")
-autolabel(rects)
-plt.show()
-
-
-# Dharmasena seems to be the most sought after umpire for IPL matches followed by Ravi. Others are fairly close to each other.
-# 
-# **How lucky are the toss winning teams?:**
-# 
-# Now let us see how lucky is the toss winner. Do they often end up on the winning side?! Let us see.
-
-# In[ ]:
-
-
-match_df['toss_winner_is_winner'] = 'no'
-match_df['toss_winner_is_winner'].ix[match_df.toss_winner == match_df.winner] = 'yes'
-temp_series = match_df.toss_winner_is_winner.value_counts()
-
-labels = (np.array(temp_series.index))
-sizes = (np.array((temp_series / temp_series.sum())*100))
-colors = ['gold', 'lightskyblue']
-plt.pie(sizes, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=90)
-plt.title("Toss winner is match winner")
-plt.show()
-
-
-# It is not really the case it seems. The chance is 50-50 for both the teams.
-# 
-# Let us also look at the team wise break up. If the team wins the toss, will it end up in the winning side. Will be interesting to see.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-sns.countplot(x='toss_winner', hue='toss_winner_is_winner', data=match_df)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# It seems for Chennai Super Kings (CSK) winning the toss is an indication of winning the match with high probability.
-# 
-# On the other hand, Pune Warriors end up losing the matches more often when they won the toss. 
-# 
-# So far we have looked at the match data to get insights. Now let us look at the delivery dataset which is more granular to gain some more insights. To start with, let us look at the top few rows.
-
-# In[ ]:
-
-
-score_df.head()
-
-
-# **Batsman analysis:**
-# 
-# Let us start our analysis with batsman. Let us first see the ones with most number of IPL runs under their belt.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('batsman')['batsman_runs'].agg('sum').reset_index().sort_values(by='batsman_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['batsman'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['batsman_runs']), width=width, color='blue')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Top run scorers in IPL")
-autolabel(rects)
-plt.show()
-
-
-# Virat Kohli is leading the chart followed closely by Raina. Gayle is the top scorer among foreign players.
-# 
-# Now let us see the players with more number of boundaries in IPL.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('batsman')['batsman_runs'].agg(lambda x: (x==4).sum()).reset_index().sort_values(by='batsman_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['batsman'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['batsman_runs']), width=width, color='green')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Batsman with most number of boundaries.!")
-autolabel(rects)
-plt.show()
-
-
-# Gambhir is way ahead of others - almost 60 boundaries more than Kohli.! Nice to Sachin in the top 10 list :)
-# 
-# Now let us check the number of 6's
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('batsman')['batsman_runs'].agg(lambda x: (x==6).sum()).reset_index().sort_values(by='batsman_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['batsman'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['batsman_runs']), width=width, color='m')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Batsman with most number of sixes.!")
-autolabel(rects)
-plt.show()
-
-
-# There you see the big man. Gayle, the unassailable leader in the number of sixes. 
-# 
-# Raina is third in both number of 4's and 6's
-# 
-# Now let us see the batsman who has played the most number of dot balls.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('batsman')['batsman_runs'].agg(lambda x: (x==0).sum()).reset_index().sort_values(by='batsman_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['batsman'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['batsman_runs']), width=width, color='c')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Batsman with most number of dot balls.!")
-autolabel(rects)
-plt.show()
-
-
-# It is interesting to see that the same names repeat again here as well. I think since these guys have played more number of balls, they have more dot balls as well. 
-# 
-# Let us check the percentage distribution now.
-
-# In[ ]:
-
-
-def balls_faced(x):
-    return len(x)
-
-def dot_balls(x):
-    return (x==0).sum()
-
-temp_df = score_df.groupby('batsman')['batsman_runs'].agg([balls_faced, dot_balls]).reset_index()
-temp_df = temp_df.ix[temp_df.balls_faced>200,:]
-temp_df['percentage_of_dot_balls'] = (temp_df['dot_balls'] / temp_df['balls_faced'])*100.
-temp_df = temp_df.sort_values(by='percentage_of_dot_balls', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-fig, ax1 = plt.subplots()
-ax2 = ax1.twinx()
-labels = np.array(temp_df['batsman'])
-ind = np.arange(len(labels))
-width = 0.9
-rects = ax1.bar(ind, np.array(temp_df['dot_balls']), width=width, color='brown')
-ax1.set_xticks(ind+((width)/2.))
-ax1.set_xticklabels(labels, rotation='vertical')
-ax1.set_ylabel("Count of dot balls", color='brown')
-ax1.set_title("Batsman with highest percentage of dot balls (balls faced > 200)")
-ax2.plot(ind+0.45, np.array(temp_df['percentage_of_dot_balls']), color='b', marker='o')
-ax2.set_ylabel("Percentage of dot balls", color='b')
-ax2.set_ylim([0,100])
-ax2.grid(b=False)
-plt.show()
-
-
-# Batsman with more than 200 balls faced in taken and the ones with higher percentage of dot balls are seen. It is interesting to see Ganguly with more than 1000 balls and nearly half of them are dot balls. It is surprising to see names like Jayasuriya and Gibbs in there.!
-# 
-# **Bowler Analysis:**
-# 
-# Now let us see the bowlers who has bowled most number of balls in IPL.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('bowler')['ball'].agg('count').reset_index().sort_values(by='ball', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['bowler'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['ball']), width=width, color='cyan')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Top Bowlers - Number of balls bowled in IPL")
-autolabel(rects)
-plt.show()
-
-
-# Harbhajan Singh is the the bowler with most number of balls bowled in IPL matches. Now let us see the bowler with more number of dot balls.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('bowler')['total_runs'].agg(lambda x: (x==0).sum()).reset_index().sort_values(by='total_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['bowler'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['total_runs']), width=width, color='yellow')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Top Bowlers - Number of dot balls bowled in IPL")
-autolabel(rects)
-plt.show()
-
-
-# Pravin Kumar is the one with more number of dot balls followed by Steyn and Malinga.
-# 
-# Now let us see the bowlers who has bowled more number of extras in IPL.
-
-# In[ ]:
-
-
-temp_df = score_df.groupby('bowler')['extra_runs'].agg(lambda x: (x>0).sum()).reset_index().sort_values(by='extra_runs', ascending=False).reset_index(drop=True)
-temp_df = temp_df.iloc[:10,:]
-
-labels = np.array(temp_df['bowler'])
-ind = np.arange(len(labels))
-width = 0.9
-fig, ax = plt.subplots()
-rects = ax.bar(ind, np.array(temp_df['extra_runs']), width=width, color='magenta')
-ax.set_xticks(ind+((width)/2.))
-ax.set_xticklabels(labels, rotation='vertical')
-ax.set_ylabel("Count")
-ax.set_title("Bowlers with more extras in IPL")
-autolabel(rects)
-plt.show()
-
-
-# Malinga tops the chart with 178 extra runs followed by Pravin Kumar.
-# 
-# Now let us see most common dismissal types in IPL.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,6))
-sns.countplot(x='dismissal_kind', data=score_df)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Caught is the most common dismissal type in IPL followed by Bowled. There are very few instances of hit wicket as well. 'Obstructing the field' is one of the dismissal type as well in IPL.!

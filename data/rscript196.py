@@ -1,246 +1,175 @@
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+#
+# https://www.kaggle.com/hakeem/stacked-then-averaged-models-0-5697/code
+# https://www.kaggle.com/c/mercedes-benz-greener-manufacturing
 
-import datetime
-import pandas as pd
 import numpy as np
-from sklearn.cross_validation import KFold
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import roc_auc_score
+from sklearn.base import BaseEstimator,TransformerMixin, ClassifierMixin
+from sklearn.preprocessing import LabelEncoder
 import xgboost as xgb
-import random
-from operator import itemgetter
-import time
-import copy
-
-random.seed(2016)
-
-
-def create_feature_map(features):
-    outfile = open('xgb.fmap', 'w')
-    for i, feat in enumerate(features):
-        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
-    outfile.close()
-
-
-def get_importance(gbm, features):
-    create_feature_map(features)
-    importance = gbm.get_fscore(fmap='xgb.fmap')
-    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
-    return importance
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.linear_model import ElasticNetCV, LassoLarsCV
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.pipeline import make_pipeline, make_union
+from sklearn.utils import check_array
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.random_projection import GaussianRandomProjection
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.decomposition import PCA, FastICA
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics import r2_score
 
 
-def intersect(a, b):
-    return list(set(a) & set(b))
+
+class StackingEstimator(BaseEstimator, TransformerMixin):
+    
+    def __init__(self, estimator):
+        self.estimator = estimator
+
+    def fit(self, X, y=None, **fit_params):
+        self.estimator.fit(X, y, **fit_params)
+        return self
+    def transform(self, X):
+        X = check_array(X)
+        X_transformed = np.copy(X)
+        # add class probabilities as a synthetic feature
+        if issubclass(self.estimator.__class__, ClassifierMixin) and hasattr(self.estimator, 'predict_proba'):
+            X_transformed = np.hstack((self.estimator.predict_proba(X), X))
+
+        # add class prodiction as a synthetic feature
+        X_transformed = np.hstack((np.reshape(self.estimator.predict(X), (-1, 1)), X_transformed))
+
+        return X_transformed
 
 
-def run_single(train, test, features, target, random_state=0):
-    eta = 0.2
-    max_depth = 5
-    subsample = 0.8
-    colsample_bytree = 0.8
-    start_time = time.time()
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
-    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
-    params = {
-        "objective": "binary:logistic",
-        "booster" : "gbtree",
-        "eval_metric": "auc",
-        "eta": eta,
-        "tree_method": 'exact',
-        "max_depth": max_depth,
-        "subsample": subsample,
-        "colsample_bytree": colsample_bytree,
-        "silent": 1,
-        "seed": random_state,
-    }
-    num_boost_round = 115
-    early_stopping_rounds = 10
-    test_size = 0.1
+for c in train.columns:
+    if train[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(train[c].values) + list(test[c].values))
+        train[c] = lbl.transform(list(train[c].values))
+        test[c] = lbl.transform(list(test[c].values))
 
-    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
-    print('Length train:', len(X_train.index))
-    print('Length valid:', len(X_valid.index))
-    y_train = X_train[target]
-    y_valid = X_valid[target]
-    dtrain = xgb.DMatrix(X_train[features], y_train)
-    dvalid = xgb.DMatrix(X_valid[features], y_valid)
+# local R2
+# n_comp = 6 ;  R2 score on train data: 0.65089225245 ; LB: 0.55577
+# n_comp = 12;  R2 score on train data: 0.65950822961 ; LB: 0.56760
+# n_comp = 16;  R2 score on train data: 0.65799524004 ; LB: 0.56317
+# n_comp = 20;  R2 score on train data: 0.66681870314 ; LB: 0.56262
+# n_comp = 40;  R2 score on train data: 0.67135596029 ; LB: 0.55842
+# n_comp = 80;  R2 score on train data: 0.67589753862
+# n_comp = 160; R2 score on train data: 0.68492424399 : LB: 0.55897
+# n_comp = 240; R2 score on train data: 0.69159326043 ; LB: 
+# n_comp = 320; R2 score on train data: 0.69908510068 ; LB: 
 
-    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
-    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+n_comp = 320
 
-    print("Validating...")
-    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_iteration+1)
-    score = roc_auc_score(X_valid[target].values, check)
-    print('Check error value: {:.6f}'.format(score))
+# tSVD
+tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
+tsvd_results_train = tsvd.fit_transform(train.drop(["y"], axis=1))
+tsvd_results_test = tsvd.transform(test)
 
-    imp = get_importance(gbm, features)
-    print('Importance array: ', imp)
+# PCA
+pca = PCA(n_components=n_comp, random_state=420)
+pca2_results_train = pca.fit_transform(train.drop(["y"], axis=1))
+pca2_results_test = pca.transform(test)
 
-    print("Predict test set...")
-    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_iteration+1)
+# ICA
+ica = FastICA(n_components=n_comp, random_state=420)
+ica2_results_train = ica.fit_transform(train.drop(["y"], axis=1))
+ica2_results_test = ica.transform(test)
 
-    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
-    return test_prediction.tolist(), score
+# GRP
+grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
+grp_results_train = grp.fit_transform(train.drop(["y"], axis=1))
+grp_results_test = grp.transform(test)
 
+# SRP
+srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
+srp_results_train = srp.fit_transform(train.drop(["y"], axis=1))
+srp_results_test = srp.transform(test)
 
-def run_kfold(nfolds, train, test, features, target, random_state=0):
-    eta = 0.1
-    max_depth = 5
-    subsample = 0.8
-    colsample_bytree = 0.8
-    start_time = time.time()
+#save columns list before adding the decomposition components
 
-    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
-    params = {
-        "objective": "binary:logistic",
-        "booster" : "gbtree",
-        "eval_metric": "auc",
-        "eta": eta,
-        "max_depth": max_depth,
-        "subsample": subsample,
-        "colsample_bytree": colsample_bytree,
-        "silent": 1,
-        "seed": random_state
-    }
-    num_boost_round = 50
-    early_stopping_rounds = 10
+usable_columns = list(set(train.columns) - set(['y']))
 
-    yfull_train = dict()
-    yfull_test = copy.deepcopy(test[['activity_id']].astype(object))
-    kf = KFold(len(train.index), n_folds=nfolds, shuffle=True, random_state=random_state)
-    num_fold = 0
-    for train_index, test_index in kf:
-        num_fold += 1
-        print('Start fold {} from {}'.format(num_fold, nfolds))
-        X_train, X_valid = train[features].as_matrix()[train_index], train[features].as_matrix()[test_index]
-        y_train, y_valid = train[target].as_matrix()[train_index], train[target].as_matrix()[test_index]
-        X_test = test[features].as_matrix()
+# Append decomposition components to datasets
+for i in range(1, n_comp + 1):
+    train['pca_' + str(i)] = pca2_results_train[:, i - 1]
+    test['pca_' + str(i)] = pca2_results_test[:, i - 1]
 
-        print('Length train:', len(X_train))
-        print('Length valid:', len(X_valid))
+    train['ica_' + str(i)] = ica2_results_train[:, i - 1]
+    test['ica_' + str(i)] = ica2_results_test[:, i - 1]
 
-        dtrain = xgb.DMatrix(X_train, y_train)
-        dvalid = xgb.DMatrix(X_valid, y_valid)
+    train['tsvd_' + str(i)] = tsvd_results_train[:, i - 1]
+    test['tsvd_' + str(i)] = tsvd_results_test[:, i - 1]
 
-        watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
-        gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
-        
-        print("Validating...")
-        yhat = gbm.predict(xgb.DMatrix(X_valid), ntree_limit=gbm.best_iteration+1)
-        score = roc_auc_score(y_valid.tolist(), yhat)
-        print('Check error value: {:.6f}'.format(score))
+    train['grp_' + str(i)] = grp_results_train[:, i - 1]
+    test['grp_' + str(i)] = grp_results_test[:, i - 1]
 
-        # Each time store portion of precicted data in train predicted values
-        for i in range(len(test_index)):
-            yfull_train[test_index[i]] = yhat[i]
+    train['srp_' + str(i)] = srp_results_train[:, i - 1]
+    test['srp_' + str(i)] = srp_results_test[:, i - 1]
 
-        imp = get_importance(gbm, features)
-        print('Importance array: ', imp)
+#usable_columns = list(set(train.columns) - set(['y']))
 
-        print("Predict test set...")
-        test_prediction = gbm.predict(xgb.DMatrix(X_test), ntree_limit=gbm.best_iteration+1)
-        yfull_test['kfold_' + str(num_fold)] = test_prediction
-
-    # Copy dict to list
-    train_res = []
-    for i in sorted(yfull_train.keys()):
-        train_res.append(yfull_train[i])
-
-    score = roc_auc_score(train[target], np.array(train_res))
-    print('Check error value: {:.6f}'.format(score))
-
-    # Find mean for KFolds on test
-    merge = []
-    for i in range(1, nfolds+1):
-        merge.append('kfold_' + str(i))
-    yfull_test['mean'] = yfull_test[merge].mean(axis=1)
-
-    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
-    return yfull_test['mean'].values, score
+y_train = train['y'].values
+y_mean = np.mean(y_train)
+id_test = test['ID'].values
+#finaltrainset and finaltestset are data to be used only the stacked model (does not contain PCA, SVD... arrays) 
+finaltrainset = train[usable_columns].values
+finaltestset = test[usable_columns].values
 
 
-def create_submission(score, test, prediction):
-    now = datetime.datetime.now()
-    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    print('Writing submission: ', sub_file)
-    f = open(sub_file, 'w')
-    f.write('activity_id,outcome\n')
-    total = 0
-    for id in test['activity_id']:
-        str1 = str(id) + ',' + str(prediction[total])
-        str1 += '\n'
-        total += 1
-        f.write(str1)
-    f.close()
+'''Train the xgb model then predict the test data'''
+
+xgb_params = {
+    'n_trees': 520, 
+    'eta': 0.0045,
+    'max_depth': 4,
+    'subsample': 0.93,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'base_score': y_mean, # base prediction = mean(target)
+    'silent': 1
+}
+# NOTE: Make sure that the class is labeled 'class' in the data file
+
+dtrain = xgb.DMatrix(train.drop('y', axis=1), y_train)
+dtest = xgb.DMatrix(test)
+
+num_boost_rounds = 1250
+# train model
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
+y_pred = model.predict(dtest)
+
+'''Train the stacked models then predict the test data'''
+
+stacked_pipeline = make_pipeline(
+    StackingEstimator(estimator=LassoLarsCV(normalize=True)),
+    StackingEstimator(estimator=GradientBoostingRegressor(learning_rate=0.001, loss="huber", max_depth=3, max_features=0.55, min_samples_leaf=18, min_samples_split=14, subsample=0.7)),
+    LassoLarsCV()
+
+)
 
 
-def get_features(train, test):
-    trainval = list(train.columns.values)
-    testval = list(test.columns.values)
-    output = intersect(trainval, testval)
-    output.remove('people_id')
-    output.remove('activity_id')
-    return sorted(output)
+stacked_pipeline.fit(finaltrainset, y_train)
+results = stacked_pipeline.predict(finaltestset)
+
+'''R2 Score on the entire Train data when averaging'''
+r2_stacked = r2_score(y_train,stacked_pipeline.predict(finaltrainset)*0.2855 + model.predict(dtrain)*0.7145)
+print('R2 score on train data:',r2_stacked)
 
 
-def read_test_train():
+'''Average the preditionon test data  of both models then save it on a csv file'''
 
-    print("Read people.csv...")
-    people = pd.read_csv("../input/people.csv",
-                       dtype={'people_id': np.str,
-                              'activity_id': np.str,
-                              'char_38': np.int32},
-                       parse_dates=['date'])
+sub = pd.DataFrame()
+sub['ID'] = id_test
+sub['y'] = y_pred*0.75 + results*0.25
+sub.to_csv('stacked-models.csv', index=False)
+print('Finished.')
 
-    print("Load train.csv...")
-    train = pd.read_csv("../input/act_train.csv",
-                        dtype={'people_id': np.str,
-                               'activity_id': np.str,
-                               'outcome': np.int8},
-                        parse_dates=['date'])
-
-    print("Load test.csv...")
-    test = pd.read_csv("../input/act_test.csv",
-                       dtype={'people_id': np.str,
-                              'activity_id': np.str},
-                       parse_dates=['date'])
-
-    print("Process tables...")
-    for table in [train, test]:
-        table['year'] = table['date'].dt.year
-        table['month'] = table['date'].dt.month
-        table['day'] = table['date'].dt.day
-        table.drop('date', axis=1, inplace=True)
-        table['activity_category'] = table['activity_category'].str.lstrip('type ').astype(np.int32)
-        for i in range(1, 11):
-            table['char_' + str(i)].fillna('type -999', inplace=True)
-            table['char_' + str(i)] = table['char_' + str(i)].str.lstrip('type ').astype(np.int32)
-
-    people['year'] = people['date'].dt.year
-    people['month'] = people['date'].dt.month
-    people['day'] = people['date'].dt.day
-    people.drop('date', axis=1, inplace=True)
-    people['group_1'] = people['group_1'].str.lstrip('group ').astype(np.int32)
-    for i in range(1, 10):
-        people['char_' + str(i)] = people['char_' + str(i)].str.lstrip('type ').astype(np.int32)
-    for i in range(10, 38):
-        people['char_' + str(i)] = people['char_' + str(i)].astype(np.int32)
-
-    print("Merge...")
-    train = pd.merge(train, people, how='left', on='people_id', left_index=True)
-    train.fillna(-999, inplace=True)
-    test = pd.merge(test, people, how='left', on='people_id', left_index=True)
-    test.fillna(-999, inplace=True)
-
-    features = get_features(train, test)
-    return train, test, features
-
-
-train, test, features = read_test_train()
-print('Length of train: ', len(train))
-print('Length of test: ', len(test))
-print('Features [{}]: {}'.format(len(features), sorted(features)))
-
-test_prediction, score = run_single(train, test, features, 'outcome')
-# test_prediction, score = run_kfold(3, train, test, features, 'outcome')
-create_submission(score, test, test_prediction)
+# Any results you write to the current directory are saved as output.

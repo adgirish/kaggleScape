@@ -1,464 +1,1295 @@
 
 # coding: utf-8
 
-# **NOTE:** I managed to get an LB of 0.0052 with this code, but due to some randomness still in the script, the score varies between 0.016 and 0.005. Using some form of kfold-validation reduces this variance.
+# **Author:** Raoul Malm  
 # 
-# **EDIT:** I would run this somewhere other than Kaggle locally for 150 epochs instead of 89 like I have it set to below; 89 is the best I could do without the script timing out.
+# **Abstract:** 
 # 
-# # The Idea
+# We implement a deep neural network consisting of convolutional and fully connected layers to classify  handwritten digits of the MNIST dataset. The labeled dataset consists of 42000 images of size 28x28 = 784 pixels (one gray-scale number) including the corresponding labels from 0,..,9. The test set consists of 28000 images. Each image is normalized such that each pixel takes on values in the range [0,1]. First, we try out basic models like logistic regression, random forest and so on. After that the images are fed into the neural network, which has the following architecture:
 # 
-# I started this competition by simply feeding the pre-extracted features into a multi-layer perceptron with one hidden layer and got surprisingly good results, but I still had all this image data that I wasn't using. My immediate thought then was to simply combine a convolutional neural network on the images with the pre-extracted features MLP and train the entire model end to end. Keras's functional API gives us a really easy way to do this. Below, I'll outline the process of getting this model working along, point out some nice resources to learning about convolutional nets, and do some visualization of what the neural network is actually doing. But before we do that, let's just get all the data loading out of the way.
+# - input layer: [.,784]
+# - layer: Conv1 -> ReLu -> MaxPool: [.,14,14,36] 
+# - layer: Conv2 -> ReLu -> MaxPool: [.,7,7,36]
+# - layer: Conv3 -> ReLu -> MaxPool: [.,4,4,36]
+# - layer: FC -> ReLu: [.,576]
+# - output layer: FC -> ReLu: [.,10]
+# 
+# This architecture is implemented with TensorFlow. In order to prevent the network from overfitting during learning we implement dropout and data augmentation, i.e. new images are generated from the original ones via rotation, translation and zooming. Finally, we predict the digit classes for the test set and write the submission file.     
+# 
+# **Results:** 
+# 
+# - The best results are achieved by using 10-fold cross validation, by stacking the neural networks on top of each other and then by training a meta model. Since each neural network is trained for 15 epochs including data augmentation which takes roughly 30 minutes on kaggle hardware, it takes in total roughly 5 hours. The final accuracy is 99.51% on the public test set. Note that we have attached saver and summary tensors to the graph, which slows down the computation.  
+# <br>
+# 
+# - We can also train one neural network and implement a training/validation split of 95%/5% on the labeled original images. Training on 39900 original images and including data augmentation we can achieve after 15 epochs an accuracy of roughly 99.43% on the validation set of 2100 images. Of course this can vary depending on the specific training/validation splits. It also takes roughly 30 minutes on kaggle hardware. On the public test set it can achieve an accuracy of about 99.30%. Training on all data one can actually achieve the 99.43%.
+# 
+# **Update:** 
+# 
+# - Stacking of models and training of a meta-model is now implemented.
+# 
+# - The neural network is now implemented as a python class and the complete TensorFlow session can be saved to or restored from a file. We also implement tensor summaries, which can be visualized with TensorBoard.
+# 
+# **Outline:**
+# 
+# 1. [Libraries and settings](#1-bullet)
+# 2. [Analyze data](#2-bullet)
+# 3. [Manipulate data](#3-bullet)
+# 4. [Try out some basic models with sklearn](#4-bullet)
+# 5. [Build the neural network with TensorFlow](#5-bullet)
+# 6. [Train and validate the neural network](#6-bullet)
+# 7. [Stacking of models and training a meta-model](#7-bullet)
+# 8. [Submit the test results](#8-bullet)
+# 
+# 
+# **Reference:** 
+# 
+# [TensorFlow deep NN by Kirill Kliavin](https://www.kaggle.com/kakauandme/tensorflow-deep-nn?scriptVersionId=164725)
+# 
+# 
+# # 1. Libraries and settings <a class="anchor" id="1-bullet"></a>
+# - import relevant libraries
+# - set number of features, neurons and filter size of the neural network 
 
 # In[ ]:
 
-
-import os
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import StratifiedShuffleSplit
-
-# If you want to use Theano, all you need to change
-# is the dim ordering whenever you are dealing with
-# the image array. Instead of
-# (samples, rows, cols, channels) it should be
-# (samples, channels, rows, cols)
-
-# Keras stuff
-from keras.utils.np_utils import to_categorical
-from keras.preprocessing.image import img_to_array, load_img
-
-# A large amount of the data loading code is based on najeebkhan's kernel
-# Check it out at https://www.kaggle.com/najeebkhan/leaf-classification/neural-network-through-keras
-root = '../input'
-np.random.seed(2016)
-split_random_state = 7
-split = .9
-
-
-def load_numeric_training(standardize=True):
-    """
-    Loads the pre-extracted features for the training data
-    and returns a tuple of the image ids, the data, and the labels
-    """
-    # Read data from the CSV file
-    data = pd.read_csv(os.path.join(root, 'train.csv'))
-    ID = data.pop('id')
-
-    # Since the labels are textual, so we encode them categorically
-    y = data.pop('species')
-    y = LabelEncoder().fit(y).transform(y)
-    # standardize the data by setting the mean to 0 and std to 1
-    X = StandardScaler().fit(data).transform(data) if standardize else data.values
-
-    return ID, X, y
-
-
-def load_numeric_test(standardize=True):
-    """
-    Loads the pre-extracted features for the test data
-    and returns a tuple of the image ids, the data
-    """
-    test = pd.read_csv(os.path.join(root, 'test.csv'))
-    ID = test.pop('id')
-    # standardize the data by setting the mean to 0 and std to 1
-    test = StandardScaler().fit(test).transform(test) if standardize else test.values
-    return ID, test
-
-
-def resize_img(img, max_dim=96):
-    """
-    Resize the image to so the maximum side is of size max_dim
-    Returns a new image of the right size
-    """
-    # Get the axis with the larger dimension
-    max_ax = max((0, 1), key=lambda i: img.size[i])
-    # Scale both axes so the image's largest dimension is max_dim
-    scale = max_dim / float(img.size[max_ax])
-    return img.resize((int(img.size[0] * scale), int(img.size[1] * scale)))
-
-
-def load_image_data(ids, max_dim=96, center=True):
-    """
-    Takes as input an array of image ids and loads the images as numpy
-    arrays with the images resized so the longest side is max-dim length.
-    If center is True, then will place the image in the center of
-    the output array, otherwise it will be placed at the top-left corner.
-    """
-    # Initialize the output array
-    # NOTE: Theano users comment line below and
-    X = np.empty((len(ids), max_dim, max_dim, 1))
-    # X = np.empty((len(ids), 1, max_dim, max_dim)) # uncomment this
-    for i, idee in enumerate(ids):
-        # Turn the image into an array
-        x = resize_img(load_img(os.path.join(root, 'images', str(idee) + '.jpg'), grayscale=True), max_dim=max_dim)
-        x = img_to_array(x)
-        # Get the corners of the bounding box for the image
-        # NOTE: Theano users comment the two lines below and
-        length = x.shape[0]
-        width = x.shape[1]
-        # length = x.shape[1] # uncomment this
-        # width = x.shape[2] # uncomment this
-        if center:
-            h1 = int((max_dim - length) / 2)
-            h2 = h1 + length
-            w1 = int((max_dim - width) / 2)
-            w2 = w1 + width
-        else:
-            h1, w1 = 0, 0
-            h2, w2 = (length, width)
-        # Insert into image matrix
-        # NOTE: Theano users comment line below and
-        X[i, h1:h2, w1:w2, 0:1] = x
-        # X[i, 0:1, h1:h2, w1:w2] = x  # uncomment this
-    # Scale the array values so they are between 0 and 1
-    return np.around(X / 255.0)
-
-
-def load_train_data(split=split, random_state=None):
-    """
-    Loads the pre-extracted feature and image training data and
-    splits them into training and cross-validation.
-    Returns one tuple for the training data and one for the validation
-    data. Each tuple is in the order pre-extracted features, images,
-    and labels.
-    """
-    # Load the pre-extracted features
-    ID, X_num_tr, y = load_numeric_training()
-    # Load the image data
-    X_img_tr = load_image_data(ID)
-    # Split them into validation and cross-validation
-    sss = StratifiedShuffleSplit(n_splits=1, train_size=split, random_state=random_state)
-    train_ind, test_ind = next(sss.split(X_num_tr, y))
-    X_num_val, X_img_val, y_val = X_num_tr[test_ind], X_img_tr[test_ind], y[test_ind]
-    X_num_tr, X_img_tr, y_tr = X_num_tr[train_ind], X_img_tr[train_ind], y[train_ind]
-    return (X_num_tr, X_img_tr, y_tr), (X_num_val, X_img_val, y_val)
-
-
-def load_test_data():
-    """
-    Loads the pre-extracted feature and image test data.
-    Returns a tuple in the order ids, pre-extracted features,
-    and images.
-    """
-    # Load the pre-extracted features
-    ID, X_num_te = load_numeric_test()
-    # Load the image data
-    X_img_te = load_image_data(ID)
-    return ID, X_num_te, X_img_te
-
-print('Loading the training data...')
-(X_num_tr, X_img_tr, y_tr), (X_num_val, X_img_val, y_val) = load_train_data(random_state=split_random_state)
-y_tr_cat = to_categorical(y_tr)
-y_val_cat = to_categorical(y_val)
-print('Training data loaded!')
-
-
-# # Data Augmentation
-# 
-# One trick we are going to use to improve the robustness of our model is image data augmentation, allowing it to perform better on the test set. 
-# 
-# If you take a look at [Rhyando Anggoro Adi's post](https://www.kaggle.com/c/leaf-classification/forums/t/24764/create-gif-based-on-leaf-class) on the forum containing a GIF of each training sample for each species, you'll notice that for a given species most of the leaves look very similar except that the leaf is rotated slightly or is slightly larger in scale. We'll try to emphasize this in our dataset by randomly performing a rotation or zoom transformation to each leaf image as the image is passed to the neural network. Below is the code for the data augmentation image generator along with a slight change to the source code to help us out later on.
-# 
-# **NOTE:** the change to the source code is not the only way to get around the problem of matching the indices of our two inputs (images and pre-extracted features). You can also manually shuffle the indices, set the shuffle parameter for the ImageDataGenerator to False, and flow the generator from the manually shuffled images.
-
-# In[ ]:
-
-
-from keras.preprocessing.image import ImageDataGenerator, NumpyArrayIterator, array_to_img
-
-# A little hacky piece of code to get access to the indices of the images
-# the data augmenter is working with.
-class ImageDataGenerator2(ImageDataGenerator):
-    def flow(self, X, y=None, batch_size=32, shuffle=True, seed=None,
-             save_to_dir=None, save_prefix='', save_format='jpeg'):
-        return NumpyArrayIterator2(
-            X, y, self,
-            batch_size=batch_size, shuffle=shuffle, seed=seed,
-            dim_ordering=self.dim_ordering,
-            save_to_dir=save_to_dir, save_prefix=save_prefix, save_format=save_format)
-
-
-class NumpyArrayIterator2(NumpyArrayIterator):
-    def next(self):
-        # for python 2.x.
-        # Keeps under lock only the mechanism which advances
-        # the indexing of each batch
-        # see http://anandology.com/blog/using-iterators-and-generators/
-        with self.lock:
-            # We changed index_array to self.index_array
-            self.index_array, current_index, current_batch_size = next(self.index_generator)
-        # The transformation of images is not under thread lock so it can be done in parallel
-        batch_x = np.zeros(tuple([current_batch_size] + list(self.X.shape)[1:]))
-        for i, j in enumerate(self.index_array):
-            x = self.X[j]
-            x = self.image_data_generator.random_transform(x.astype('float32'))
-            x = self.image_data_generator.standardize(x)
-            batch_x[i] = x
-        if self.save_to_dir:
-            for i in range(current_batch_size):
-                img = array_to_img(batch_x[i], self.dim_ordering, scale=True)
-                fname = '{prefix}_{index}_{hash}.{format}'.format(prefix=self.save_prefix,
-                                                                  index=current_index + i,
-                                                                  hash=np.random.randint(1e4),
-                                                                  format=self.save_format)
-                img.save(os.path.join(self.save_to_dir, fname))
-        if self.y is None:
-            return batch_x
-        batch_y = self.y[self.index_array]
-        return batch_x, batch_y
-
-print('Creating Data Augmenter...')
-imgen = ImageDataGenerator2(
-    rotation_range=20,
-    zoom_range=0.2,
-    horizontal_flip=True,
-    vertical_flip=True,
-    fill_mode='nearest')
-imgen_train = imgen.flow(X_img_tr, y_tr_cat, seed=np.random.randint(1, 10000))
-print('Finished making data augmenter...')
-
-
-# # Combining the Image CNN with the Pre-Extracted Features MLP
-# 
-# Now that we've gotten all the data preparation work out of the way, we can actually construct our model.
-# 
-# ## Wait!! I don't know what a convolutional neural network is!
-# 
-# No worries! I've linked below a few great places to get an overview of convnets. You can find more by just googling "convolutional neural network explained".
-# 
-# * http://cs231n.github.io/convolutional-networks/
-# * https://ujjwalkarn.me/2016/08/11/intuitive-explanation-convnets/
-# * http://neuralnetworksanddeeplearning.com/chap6.html
-# 
-# ## Keras Functional API
-# 
-# For basic neural network architectures we can use Keras's Sequential API, but since we need to build a model that takes two different inputs (image and pre-extracted features) in two different locations in the model, we won't be able to use the Sequential API. Instead, we'll be using the Functional API. This API is just as straightforward, but instead of having a model we add layers to, we'll instead be passing an array through a layer, and passing that output through another layer, and so on. You can think of each layer as a function and the array we give it as its argument. Click [here](https://keras.io/getting-started/functional-api-guide/) for more info about the functional API.
-
-# In[ ]:
-
-
-from keras.models import Model
-from keras.layers import Dense, Dropout, Activation, Convolution2D, MaxPooling2D, Flatten, Input, merge
-
-
-def combined_model():
-
-    # Define the image input
-    image = Input(shape=(96, 96, 1), name='image')
-    # Pass it through the first convolutional layer
-    x = Convolution2D(8, 5, 5, input_shape=(96, 96, 1), border_mode='same')(image)
-    x = (Activation('relu'))(x)
-    x = (MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))(x)
-
-    # Now through the second convolutional layer
-    x = (Convolution2D(32, 5, 5, border_mode='same'))(x)
-    x = (Activation('relu'))(x)
-    x = (MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))(x)
-
-    # Flatten our array
-    x = Flatten()(x)
-    # Define the pre-extracted feature input
-    numerical = Input(shape=(192,), name='numerical')
-    # Concatenate the output of our convnet with our pre-extracted feature input
-    concatenated = merge([x, numerical], mode='concat')
-
-    # Add a fully connected layer just like in a normal MLP
-    x = Dense(100, activation='relu')(concatenated)
-    x = Dropout(.5)(x)
-
-    # Get the final output
-    out = Dense(99, activation='softmax')(x)
-    # How we create models with the Functional API
-    model = Model(input=[image, numerical], output=out)
-    model.compile(loss='categorical_crossentropy', optimizer='rmsprop', metrics=['accuracy'])
-
-    return model
-
-print('Creating the model...')
-model = combined_model()
-print('Model created!')
-
-
-# Now we're finally ready to actually train the model! Running on Kaggle will take a while. It's MUCH faster to run it locally if you have a GPU, or on an AWS instance with a GPU.
-
-# In[ ]:
-
-
-from keras.callbacks import ModelCheckpoint
-from keras.models import load_model
-
-
-def combined_generator(imgen, X):
-    """
-    A generator to train our keras neural network. It
-    takes the image augmenter generator and the array
-    of the pre-extracted features.
-    It yields a minibatch and will run indefinitely
-    """
-    while True:
-        for i in range(X.shape[0]):
-            # Get the image batch and labels
-            batch_img, batch_y = next(imgen)
-            # This is where that change to the source code we
-            # made will come in handy. We can now access the indicies
-            # of the images that imgen gave us.
-            x = X[imgen.index_array]
-            yield [batch_img, x], batch_y
-
-# autosave best Model
-best_model_file = "leafnet.h5"
-best_model = ModelCheckpoint(best_model_file, monitor='val_loss', verbose=1, save_best_only=True)
-
-print('Training model...')
-history = model.fit_generator(combined_generator(imgen_train, X_num_tr),
-                              samples_per_epoch=X_num_tr.shape[0],
-                              nb_epoch=89,
-                              validation_data=([X_img_val, X_num_val], y_val_cat),
-                              nb_val_samples=X_num_val.shape[0],
-                              verbose=0,
-                              callbacks=[best_model])
-
-print('Loading the best model...')
-model = load_model(best_model_file)
-print('Best Model loaded!')
-
-
-# And now we create our submission. From the last version's submission created from running this on Kaggle I got a 0.01672 LB, but I had managed to get a 0.00520 LB score with this exact same code after running for 100 epochs (though the best model occurred at the 89th epoch for me) on an AWS p2.xlarge instance. I did set the random seeds but there is still randomness somewhere. This variance in the results could definitely be improved upon with some k-fold validation, but I'll leave the implementation up to the reader.
-
-# In[ ]:
-
-
-# Get the names of the column headers
-LABELS = sorted(pd.read_csv(os.path.join(root, 'train.csv')).species.unique())
-
-index, test, X_img_te = load_test_data()
-
-yPred_proba = model.predict([X_img_te, test])
-
-# Converting the test predictions in a dataframe as depicted by sample submission
-yPred = pd.DataFrame(yPred_proba,index=index,columns=LABELS)
-
-print('Creating and writing submission...')
-fp = open('submit.csv', 'w')
-fp.write(yPred.to_csv())
-print('Finished writing submission')
-# Display the submission
-yPred.tail()
-
-
-# # Visualization
-# 
-# Great! So we've got our combined model working that incorporates both the raw binary images of the leaves and the pre-extracted features. But you might ask now, what is the neural network actually learning? One easy way to tell what the convolutional portion of the neural net is learning is through visualization of the hidden layers. First, we'll pick a few random leaves from our validation set and we'll pass each one through the neural network. As the leaf goes through, the convolutional neural net will apply many filters each looking for something in the image. Once the filter is applied we'll grab the new image of the leaf and the white portions of the image will tell us where the filter activated and the black will tell us where it didn't. If you take a look at our architecture for the neural net, you'll notice we created 8 filters for the first convolutional layer and 32 for the second one. Thus, for each leaf image we should get a set of 8 and another set of 32 new images.
-# 
-# To do this in Keras we'll build a Keras function as outlined in the [Keras FAQ](https://keras.io/getting-started/faq/#how-can-i-visualize-the-output-of-an-intermediate-layer).
-
-# In[ ]:
-
-
-from math import sqrt
-
+import tensorflow as tf
+import keras.preprocessing.image
+import sklearn.preprocessing
+import sklearn.model_selection
+import sklearn.metrics
+import sklearn.linear_model
+import sklearn.naive_bayes
+import sklearn.tree
+import sklearn.ensemble
+import os;
+import datetime  
+import cv2 
+import seaborn as sns
 import matplotlib.pyplot as plt
-from keras import backend as K
+import matplotlib.cm as cm  
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-NUM_LEAVES = 3
-model_fn = 'leafnet.h5'
-
-# Function by gcalmettes from http://stackoverflow.com/questions/11159436/multiple-figures-in-a-single-window
-def plot_figures(figures, nrows = 1, ncols=1, titles=False):
-    """Plot a dictionary of figures.
-
-    Parameters
-    ----------
-    figures : <title, figure> dictionary
-    ncols : number of columns of subplots wanted in the display
-    nrows : number of rows of subplots wanted in the figure
-    """
-
-    fig, axeslist = plt.subplots(ncols=ncols, nrows=nrows)
-    for ind,title in enumerate(sorted(figures.keys(), key=lambda s: int(s[3:]))):
-        axeslist.ravel()[ind].imshow(figures[title], cmap=plt.gray())
-        if titles:
-            axeslist.ravel()[ind].set_title(title)
-
-    for ind in range(nrows*ncols):
-        axeslist.ravel()[ind].set_axis_off()
-
-    if titles:
-        plt.tight_layout()
-    plt.show()
+#display parent directory and working directory
+print(os.path.dirname(os.getcwd())+':', os.listdir(os.path.dirname(os.getcwd())));
+print(os.getcwd()+':', os.listdir(os.getcwd()));
 
 
-def get_dim(num):
-    """
-    Simple function to get the dimensions of a square-ish shape for plotting
-    num images
-    """
+# # 2. Analyze data <a class="anchor" id="2-bullet"></a> 
+# - load images and have a first look
+# - normalize images
 
-    s = sqrt(num)
-    if round(s) < s:
-        return (int(s), int(s)+1)
-    else:
-        return (int(s)+1, int(s)+1)
-
-# Load the best model
-model = load_model(model_fn)
-
-# Get the convolutional layers
-conv_layers = [layer for layer in model.layers if isinstance(layer, MaxPooling2D)]
-
-# Pick random images to visualize
-imgs_to_visualize = np.random.choice(np.arange(0, len(X_img_val)), NUM_LEAVES)
-
-# Use a keras function to extract the conv layer data
-convout_func = K.function([model.layers[0].input, K.learning_phase()], [layer.output for layer in conv_layers])
-conv_imgs_filts = convout_func([X_img_val[imgs_to_visualize], 0])
-# Also get the prediction so we know what we predicted
-predictions = model.predict([X_img_val[imgs_to_visualize], X_num_val[imgs_to_visualize]])
-
-imshow = plt.imshow #alias
-# Loop through each image disply relevant info
-for img_count, img_to_visualize in enumerate(imgs_to_visualize):
-
-    # Get top 3 predictions
-    top3_ind = predictions[img_count].argsort()[-3:]
-    top3_species = np.array(LABELS)[top3_ind]
-    top3_preds = predictions[img_count][top3_ind]
-
-    # Get the actual leaf species
-    actual = LABELS[y_val[img_to_visualize]]
-
-    # Display the top 3 predictions and the actual species
-    print("Top 3 Predicitons:")
-    for i in range(2, -1, -1):
-        print("\t%s: %s" % (top3_species[i], top3_preds[i]))
-    print("\nActual: %s" % actual)
-
-    # Show the original image
-    plt.title("Image used: #%d (digit=%d)" % (img_to_visualize, y_val[img_to_visualize]))
-    # For Theano users comment the line below and
-    imshow(X_img_val[img_to_visualize][:, :, 0], cmap='gray')
-    # imshow(X_img_val[img_to_visualize][0], cmap='gray') # uncomment this
-    plt.tight_layout()
-    plt.show()
-
-    # Plot the filter images
-    for i, conv_imgs_filt in enumerate(conv_imgs_filts):
-        conv_img_filt = conv_imgs_filt[img_count]
-        print("Visualizing Convolutions Layer %d" % i)
-        # Get it ready for the plot_figures function
-        # For Theano users comment the line below and
-        fig_dict = {'flt{0}'.format(i): conv_img_filt[:, :, i] for i in range(conv_img_filt.shape[-1])}
-        # fig_dict = {'flt{0}'.format(i): conv_img_filt[i] for i in range(conv_img_filt.shape[-1])} # uncomment this
-        plot_figures(fig_dict, *get_dim(len(fig_dict)))
+# In[ ]:
 
 
-# # Conclusion
+## load and check data
+
+if os.path.isfile('../input/train.csv'):
+    data_df = pd.read_csv('../input/train.csv') # on kaggle 
+    print('train.csv loaded: data_df({0[0]},{0[1]})'.format(data_df.shape))
+elif os.path.isfile('data/train.csv'):
+    data_df = pd.read_csv('data/train.csv') # on local environment
+    print('train.csv loaded: data_df({0[0]},{0[1]})'.format(data_df.shape))
+else:
+    print('Error: train.csv not found')
+
+# basic info about data
+#print('')
+#print(data_df.info())
+
+# no missing values
+print('')
+print(data_df.isnull().any().describe())
+
+# 10 different labels ranging from 0 to 9
+print('')
+print('distinct labels ', data_df['label'].unique())
+
+# data are approximately balanced (less often occurs 5, most often 1)
+print('')
+print(data_df['label'].value_counts())
+
+
+# In[ ]:
+
+
+## normalize data and split into training and validation sets
+
+# function to normalize data
+def normalize_data(data): 
+    # scale features using statistics that are robust to outliers
+    #rs = sklearn.preprocessing.RobustScaler()
+    #rs.fit(data)
+    #data = rs.transform(data)
+    #data = (data-data.mean())/(data.std()) # standardisation
+    data = data / data.max() # convert from [0:255] to [0.:1.]
+    #data = ((data / 255.)-0.5)*2. # convert from [0:255] to [-1.:+1.]
+    return data
+
+# convert class labels from scalars to one-hot vectors e.g. 1 => [0 1 0 0 0 0 0 0 0 0]
+def dense_to_one_hot(labels_dense, num_classes):
+    num_labels = labels_dense.shape[0]
+    index_offset = np.arange(num_labels) * num_classes
+    labels_one_hot = np.zeros((num_labels, num_classes))
+    labels_one_hot.flat[index_offset + labels_dense.ravel()] = 1
+    return labels_one_hot
+
+# convert one-hot encodings into labels
+def one_hot_to_dense(labels_one_hot):
+    return np.argmax(labels_one_hot,1)
+
+# computet the accuracy of label predictions
+def accuracy_from_dense_labels(y_target, y_pred):
+    y_target = y_target.reshape(-1,)
+    y_pred = y_pred.reshape(-1,)
+    return np.mean(y_target == y_pred)
+
+# computet the accuracy of one-hot encoded predictions
+def accuracy_from_one_hot_labels(y_target, y_pred):
+    y_target = one_hot_to_dense(y_target).reshape(-1,)
+    y_pred = one_hot_to_dense(y_pred).reshape(-1,)
+    return np.mean(y_target == y_pred)
+
+# extract and normalize images
+x_train_valid = data_df.iloc[:,1:].values.reshape(-1,28,28,1) # (42000,28,28,1) array
+x_train_valid = x_train_valid.astype(np.float) # convert from int64 to float32
+x_train_valid = normalize_data(x_train_valid)
+image_width = image_height = 28
+image_size = 784
+
+# extract image labels
+y_train_valid_labels = data_df.iloc[:,0].values # (42000,1) array
+labels_count = np.unique(y_train_valid_labels).shape[0]; # number of different labels = 10
+
+#plot some images and labels
+plt.figure(figsize=(15,9))
+for i in range(50):
+    plt.subplot(5,10,1+i)
+    plt.title(y_train_valid_labels[i])
+    plt.imshow(x_train_valid[i].reshape(28,28), cmap=cm.binary)
+    
+# labels in one hot representation
+y_train_valid = dense_to_one_hot(y_train_valid_labels, labels_count).astype(np.uint8)
+
+# dictionaries for saving results
+y_valid_pred = {}
+y_train_pred = {}
+y_test_pred = {}
+train_loss, valid_loss = {}, {}
+train_acc, valid_acc = {}, {}
+
+print('x_train_valid.shape = ', x_train_valid.shape)
+print('y_train_valid_labels.shape = ', y_train_valid_labels.shape)
+print('image_size = ', image_size )
+print('image_width = ', image_width)
+print('image_height = ', image_height)
+print('labels_count = ', labels_count)
+
+
+# # 3. Manipulate data <a class="anchor" id="3-bullet"></a> 
+# - generate new images via rotations, translations and zooming
+
+# In[ ]:
+
+
+## augment data
+
+# generate new images via rotations, translations, zoom using keras
+def generate_images(imgs):
+    
+    # rotations, translations, zoom
+    image_generator = keras.preprocessing.image.ImageDataGenerator(
+        rotation_range = 10, width_shift_range = 0.1 , height_shift_range = 0.1,
+        zoom_range = 0.1)
+
+    # get transformed images
+    imgs = image_generator.flow(imgs.copy(), np.zeros(len(imgs)),
+                                batch_size=len(imgs), shuffle = False).next()    
+  
+    return imgs[0]
+
+# check image generation
+fig,axs = plt.subplots(5,10, figsize=(15,9))
+for i in range(5):
+    n = np.random.randint(0,x_train_valid.shape[0]-2)
+    axs[i,0].imshow(x_train_valid[n:n+1].reshape(28,28),cmap=cm.binary)
+    axs[i,1].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,2].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,3].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,4].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,5].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,6].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,7].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,8].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+    axs[i,9].imshow(generate_images(x_train_valid[n:n+1]).reshape(28,28), cmap=cm.binary)
+
+
+# # 4. Try out some basic models with sklearn <a class="anchor" id="4-bullet"></a> 
+
+# In[ ]:
+
+
+## First try out some basic sklearn models
+
+logreg = sklearn.linear_model.LogisticRegression(verbose=0, solver='lbfgs',
+                                                 multi_class='multinomial')
+decision_tree = sklearn.tree.DecisionTreeClassifier()
+extra_trees = sklearn.ensemble.ExtraTreesClassifier(verbose=0)
+gradient_boost = sklearn.ensemble.GradientBoostingClassifier(verbose=0)
+random_forest = sklearn.ensemble.RandomForestClassifier(verbose=0)
+gaussianNB = sklearn.naive_bayes.GaussianNB()
+
+# store models in dictionary
+base_models = {'logreg': logreg, 'extra_trees': extra_trees,
+               'gradient_boost': gradient_boost, 'random_forest': random_forest, 
+               'decision_tree': decision_tree, 'gaussianNB': gaussianNB}
+
+# choose models for out-of-folds predictions
+take_models = ['logreg','random_forest','extra_trees']
+
+for mn in take_models:
+    train_acc[mn] = []
+    valid_acc[mn] = []
+
+# cross validations
+cv_num = 10 # cross validations default = 20 => 5% validation set
+kfold = sklearn.model_selection.KFold(cv_num, shuffle=True, random_state=123)
+
+for i,(train_index, valid_index) in enumerate(kfold.split(x_train_valid)):
+
+    # start timer
+    start = datetime.datetime.now();
+
+    # train and validation data of original images
+    x_train = x_train_valid[train_index].reshape(-1,784)
+    y_train = y_train_valid[train_index]
+    x_valid = x_train_valid[valid_index].reshape(-1,784)
+    y_valid = y_train_valid[valid_index]
+
+    for mn in take_models:
+
+        # create cloned model from base models
+        model = sklearn.base.clone(base_models[mn])
+        model.fit(x_train, one_hot_to_dense(y_train))
+
+        # predictions
+        y_train_pred[mn] = model.predict_proba(x_train)
+        y_valid_pred[mn] = model.predict_proba(x_valid)
+        train_acc[mn].append(accuracy_from_one_hot_labels(y_train_pred[mn], y_train))
+        valid_acc[mn].append(accuracy_from_one_hot_labels(y_valid_pred[mn], y_valid))
+
+        print(i,': '+mn+' train/valid accuracy = %.3f/%.3f'%(train_acc[mn][-1], 
+                                                             valid_acc[mn][-1]))
+    # only one iteration
+    if False:
+        break;
+
+print(mn+': averaged train/valid accuracy = %.3f/%.3f'%(np.mean(train_acc[mn]),
+                                                        np.mean(valid_acc[mn])))
+
+
+# In[ ]:
+
+
+## compare accuracies of base models
+
+# boxplot algorithm comparison
+fig = plt.figure(figsize=(20,8))
+ax = fig.add_subplot(1,2,1)
+plt.title('Train accuracy')
+plt.boxplot([train_acc[mn] for mn in train_acc.keys()])
+ax.set_xticklabels([mn for mn in train_acc.keys()])
+ax.set_ylabel('Accuracy');
+ax.set_ylim([0.90,1.0])
+
+ax = fig.add_subplot(1,2,2)
+plt.title('Valid accuracy')
+plt.boxplot([valid_acc[mn] for mn in train_acc.keys()])
+ax.set_xticklabels([mn for mn in train_acc.keys()])
+ax.set_ylabel('Accuracy');
+ax.set_ylim([0.90,1.0])
+
+for mn in train_acc.keys():
+    print(mn + ' averaged train/valid accuracy = %.3f/%.3f'%(np.mean(train_acc[mn]),
+                                                             np.mean(valid_acc[mn])))
+
+
+# # 5. Build the neural network with tensorflow <a class="anchor" id="5-bullet"></a> 
+
+# In[ ]:
+
+
+## build the neural network class
+
+class nn_class:
+# class that implements the neural network
+
+    # constructor
+    def __init__(self, nn_name = 'nn_1'):
+
+        # tunable hyperparameters for nn architecture
+        self.s_f_conv1 = 3; # filter size of first convolution layer (default = 3)
+        self.n_f_conv1 = 36; # number of features of first convolution layer (default = 36)
+        self.s_f_conv2 = 3; # filter size of second convolution layer (default = 3)
+        self.n_f_conv2 = 36; # number of features of second convolution layer (default = 36)
+        self.s_f_conv3 = 3; # filter size of third convolution layer (default = 3)
+        self.n_f_conv3 = 36; # number of features of third convolution layer (default = 36)
+        self.n_n_fc1 = 576; # number of neurons of first fully connected layer (default = 576)
+
+        # tunable hyperparameters for training
+        self.mb_size = 50 # mini batch size
+        self.keep_prob = 0.33 # keeping probability with dropout regularization 
+        self.learn_rate_array = [10*1e-4, 7.5*1e-4, 5*1e-4, 2.5*1e-4, 1*1e-4, 1*1e-4,
+                                 1*1e-4,0.75*1e-4, 0.5*1e-4, 0.25*1e-4, 0.1*1e-4, 
+                                 0.1*1e-4, 0.075*1e-4,0.050*1e-4, 0.025*1e-4, 0.01*1e-4, 
+                                 0.0075*1e-4, 0.0050*1e-4,0.0025*1e-4,0.001*1e-4]
+        self.learn_rate_step_size = 3 # in terms of epochs
+        
+        # parameters
+        self.learn_rate = self.learn_rate_array[0]
+        self.learn_rate_pos = 0 # current position pointing to current learning rate
+        self.index_in_epoch = 0 
+        self.current_epoch = 0
+        self.log_step = 0.2 # log results in terms of epochs
+        self.n_log_step = 0 # counting current number of mini batches trained on
+        self.use_tb_summary = False # True = use tensorboard visualization
+        self.use_tf_saver = False # True = use saver to save the model
+        self.nn_name = nn_name # name of the neural network
+        
+        # permutation array
+        self.perm_array = np.array([])
+        
+    # function to get the next mini batch
+    def next_mini_batch(self):
+
+        start = self.index_in_epoch
+        self.index_in_epoch += self.mb_size
+        self.current_epoch += self.mb_size/len(self.x_train)  
+        
+        # adapt length of permutation array
+        if not len(self.perm_array) == len(self.x_train):
+            self.perm_array = np.arange(len(self.x_train))
+        
+        # shuffle once at the start of epoch
+        if start == 0:
+            np.random.shuffle(self.perm_array)
+
+        # at the end of the epoch
+        if self.index_in_epoch > self.x_train.shape[0]:
+            np.random.shuffle(self.perm_array) # shuffle data
+            start = 0 # start next epoch
+            self.index_in_epoch = self.mb_size # set index to mini batch size
+            
+            if self.train_on_augmented_data:
+                # use augmented data for the next epoch
+                self.x_train_aug = normalize_data(self.generate_images(self.x_train))
+                self.y_train_aug = self.y_train
+                
+        end = self.index_in_epoch
+        
+        if self.train_on_augmented_data:
+            # use augmented data
+            x_tr = self.x_train_aug[self.perm_array[start:end]]
+            y_tr = self.y_train_aug[self.perm_array[start:end]]
+        else:
+            # use original data
+            x_tr = self.x_train[self.perm_array[start:end]]
+            y_tr = self.y_train[self.perm_array[start:end]]
+        
+        return x_tr, y_tr
+               
+    # generate new images via rotations, translations, zoom using keras
+    def generate_images(self, imgs):
+    
+        print('generate new set of images')
+        
+        # rotations, translations, zoom
+        image_generator = keras.preprocessing.image.ImageDataGenerator(
+            rotation_range = 10, width_shift_range = 0.1 , height_shift_range = 0.1,
+            zoom_range = 0.1)
+
+        # get transformed images
+        imgs = image_generator.flow(imgs.copy(), np.zeros(len(imgs)),
+                                    batch_size=len(imgs), shuffle = False).next()    
+
+        return imgs[0]
+
+    # weight initialization
+    def weight_variable(self, shape, name = None):
+        initial = tf.truncated_normal(shape, stddev=0.1)
+        return tf.Variable(initial, name = name)
+
+    # bias initialization
+    def bias_variable(self, shape, name = None):
+        initial = tf.constant(0.1, shape=shape) #  positive bias
+        return tf.Variable(initial, name = name)
+
+    # 2D convolution
+    def conv2d(self, x, W, name = None):
+        return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME', name = name)
+
+    # max pooling
+    def max_pool_2x2(self, x, name = None):
+        return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
+                              padding='SAME', name = name)
+
+    # attach summaries to a tensor for TensorBoard visualization
+    def summary_variable(self, var, var_name):
+        with tf.name_scope(var_name):
+            mean = tf.reduce_mean(var)
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+            tf.summary.scalar('mean', mean)
+            tf.summary.scalar('stddev', stddev)
+            tf.summary.scalar('max', tf.reduce_max(var))
+            tf.summary.scalar('min', tf.reduce_min(var))
+            tf.summary.histogram('histogram', var)
+    
+    # function to create the graph
+    def create_graph(self):
+
+        # reset default graph
+        tf.reset_default_graph()
+
+        # variables for input and output 
+        self.x_data_tf = tf.placeholder(dtype=tf.float32, shape=[None,28,28,1], 
+                                        name='x_data_tf')
+        self.y_data_tf = tf.placeholder(dtype=tf.float32, shape=[None,10], name='y_data_tf')
+
+        # 1.layer: convolution + max pooling
+        self.W_conv1_tf = self.weight_variable([self.s_f_conv1, self.s_f_conv1, 1,
+                                                self.n_f_conv1], 
+                                               name = 'W_conv1_tf') # (5,5,1,32)
+        self.b_conv1_tf = self.bias_variable([self.n_f_conv1], name = 'b_conv1_tf') # (32)
+        self.h_conv1_tf = tf.nn.relu(self.conv2d(self.x_data_tf, 
+                                                 self.W_conv1_tf) + self.b_conv1_tf, 
+                                     name = 'h_conv1_tf') # (.,28,28,32)
+        self.h_pool1_tf = self.max_pool_2x2(self.h_conv1_tf, 
+                                            name = 'h_pool1_tf') # (.,14,14,32)
+
+        # 2.layer: convolution + max pooling
+        self.W_conv2_tf = self.weight_variable([self.s_f_conv2, self.s_f_conv2, 
+                                                self.n_f_conv1, self.n_f_conv2], 
+                                               name = 'W_conv2_tf')
+        self.b_conv2_tf = self.bias_variable([self.n_f_conv2], name = 'b_conv2_tf')
+        self.h_conv2_tf = tf.nn.relu(self.conv2d(self.h_pool1_tf, 
+                                                 self.W_conv2_tf) + self.b_conv2_tf, 
+                                     name ='h_conv2_tf') #(.,14,14,32)
+        self.h_pool2_tf = self.max_pool_2x2(self.h_conv2_tf, name = 'h_pool2_tf') #(.,7,7,32)
+
+        # 3.layer: convolution + max pooling
+        self.W_conv3_tf = self.weight_variable([self.s_f_conv3, self.s_f_conv3, 
+                                                self.n_f_conv2, self.n_f_conv3], 
+                                               name = 'W_conv3_tf')
+        self.b_conv3_tf = self.bias_variable([self.n_f_conv3], name = 'b_conv3_tf')
+        self.h_conv3_tf = tf.nn.relu(self.conv2d(self.h_pool2_tf, 
+                                                 self.W_conv3_tf) + self.b_conv3_tf, 
+                                     name = 'h_conv3_tf') #(.,7,7,32)
+        self.h_pool3_tf = self.max_pool_2x2(self.h_conv3_tf, 
+                                            name = 'h_pool3_tf') # (.,4,4,32)
+
+        # 4.layer: fully connected
+        self.W_fc1_tf = self.weight_variable([4*4*self.n_f_conv3,self.n_n_fc1], 
+                                             name = 'W_fc1_tf') # (4*4*32, 1024)
+        self.b_fc1_tf = self.bias_variable([self.n_n_fc1], name = 'b_fc1_tf') # (1024)
+        self.h_pool3_flat_tf = tf.reshape(self.h_pool3_tf, [-1,4*4*self.n_f_conv3], 
+                                          name = 'h_pool3_flat_tf') # (.,1024)
+        self.h_fc1_tf = tf.nn.relu(tf.matmul(self.h_pool3_flat_tf, 
+                                             self.W_fc1_tf) + self.b_fc1_tf, 
+                                   name = 'h_fc1_tf') # (.,1024)
+      
+        # add dropout
+        self.keep_prob_tf = tf.placeholder(dtype=tf.float32, name = 'keep_prob_tf')
+        self.h_fc1_drop_tf = tf.nn.dropout(self.h_fc1_tf, self.keep_prob_tf, 
+                                           name = 'h_fc1_drop_tf')
+
+        # 5.layer: fully connected
+        self.W_fc2_tf = self.weight_variable([self.n_n_fc1, 10], name = 'W_fc2_tf')
+        self.b_fc2_tf = self.bias_variable([10], name = 'b_fc2_tf')
+        self.z_pred_tf = tf.add(tf.matmul(self.h_fc1_drop_tf, self.W_fc2_tf), 
+                                self.b_fc2_tf, name = 'z_pred_tf')# => (.,10)
+
+        # cost function
+        self.cross_entropy_tf = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+            labels=self.y_data_tf, logits=self.z_pred_tf), name = 'cross_entropy_tf')
+     
+        # optimisation function
+        self.learn_rate_tf = tf.placeholder(dtype=tf.float32, name="learn_rate_tf")
+        self.train_step_tf = tf.train.AdamOptimizer(self.learn_rate_tf).minimize(
+            self.cross_entropy_tf, name = 'train_step_tf')
+
+        # predicted probabilities in one-hot encoding
+        self.y_pred_proba_tf = tf.nn.softmax(self.z_pred_tf, name='y_pred_proba_tf') 
+        
+        # tensor of correct predictions
+        self.y_pred_correct_tf = tf.equal(tf.argmax(self.y_pred_proba_tf, 1),
+                                          tf.argmax(self.y_data_tf, 1),
+                                          name = 'y_pred_correct_tf')  
+        
+        # accuracy 
+        self.accuracy_tf = tf.reduce_mean(tf.cast(self.y_pred_correct_tf, dtype=tf.float32),
+                                         name = 'accuracy_tf')
+
+        # tensors to save intermediate accuracies and losses during training
+        self.train_loss_tf = tf.Variable(np.array([]), dtype=tf.float32, 
+                                         name='train_loss_tf', validate_shape = False)
+        self.valid_loss_tf = tf.Variable(np.array([]), dtype=tf.float32, 
+                                         name='valid_loss_tf', validate_shape = False)
+        self.train_acc_tf = tf.Variable(np.array([]), dtype=tf.float32, 
+                                        name='train_acc_tf', validate_shape = False)
+        self.valid_acc_tf = tf.Variable(np.array([]), dtype=tf.float32, 
+                                        name='valid_acc_tf', validate_shape = False)
+     
+        # number of weights and biases
+        num_weights = (self.s_f_conv1**2*self.n_f_conv1 
+                       + self.s_f_conv2**2*self.n_f_conv1*self.n_f_conv2 
+                       + self.s_f_conv3**2*self.n_f_conv2*self.n_f_conv3 
+                       + 4*4*self.n_f_conv3*self.n_n_fc1 + self.n_n_fc1*10)
+        num_biases = self.n_f_conv1 + self.n_f_conv2 + self.n_f_conv3 + self.n_n_fc1
+        print('num_weights =', num_weights)
+        print('num_biases =', num_biases)
+        
+        return None  
+    
+    def attach_summary(self, sess):
+        
+        # create summary tensors for tensorboard
+        self.use_tb_summary = True
+        self.summary_variable(self.W_conv1_tf, 'W_conv1_tf')
+        self.summary_variable(self.b_conv1_tf, 'b_conv1_tf')
+        self.summary_variable(self.W_conv2_tf, 'W_conv2_tf')
+        self.summary_variable(self.b_conv2_tf, 'b_conv2_tf')
+        self.summary_variable(self.W_conv3_tf, 'W_conv3_tf')
+        self.summary_variable(self.b_conv3_tf, 'b_conv3_tf')
+        self.summary_variable(self.W_fc1_tf, 'W_fc1_tf')
+        self.summary_variable(self.b_fc1_tf, 'b_fc1_tf')
+        self.summary_variable(self.W_fc2_tf, 'W_fc2_tf')
+        self.summary_variable(self.b_fc2_tf, 'b_fc2_tf')
+        tf.summary.scalar('cross_entropy_tf', self.cross_entropy_tf)
+        tf.summary.scalar('accuracy_tf', self.accuracy_tf)
+
+        # merge all summaries for tensorboard
+        self.merged = tf.summary.merge_all()
+
+        # initialize summary writer 
+        timestamp = datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')
+        filepath = os.path.join(os.getcwd(), 'logs', (self.nn_name+'_'+timestamp))
+        self.train_writer = tf.summary.FileWriter(os.path.join(filepath,'train'), sess.graph)
+        self.valid_writer = tf.summary.FileWriter(os.path.join(filepath,'valid'), sess.graph)
+
+    def attach_saver(self):
+        # initialize tensorflow saver
+        self.use_tf_saver = True
+        self.saver_tf = tf.train.Saver()
+
+    # function to train the graph
+    def train_graph(self, sess, x_train, y_train, x_valid, y_valid, n_epoch = 1, 
+                    train_on_augmented_data = False):
+
+        # train on original or augmented data
+        self.train_on_augmented_data = train_on_augmented_data
+        
+        # training and validation data
+        self.x_train = x_train
+        self.y_train = y_train
+        self.x_valid = x_valid
+        self.y_valid = y_valid
+        
+        # use augmented data
+        if self.train_on_augmented_data:
+            print('generate new set of images')
+            self.x_train_aug = normalize_data(self.generate_images(self.x_train))
+            self.y_train_aug = self.y_train
+        
+        # parameters
+        mb_per_epoch = self.x_train.shape[0]/self.mb_size
+        train_loss, train_acc, valid_loss, valid_acc = [],[],[],[]
+        
+        # start timer
+        start = datetime.datetime.now();
+        print(datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S'),': start training')
+        print('learnrate = ',self.learn_rate,', n_epoch = ', n_epoch,
+              ', mb_size = ', self.mb_size)
+        # looping over mini batches
+        for i in range(int(n_epoch*mb_per_epoch)+1):
+
+            # adapt learn_rate
+            self.learn_rate_pos = int(self.current_epoch // self.learn_rate_step_size)
+            if not self.learn_rate == self.learn_rate_array[self.learn_rate_pos]:
+                self.learn_rate = self.learn_rate_array[self.learn_rate_pos]
+                print(datetime.datetime.now()-start,': set learn rate to %.6f'%self.learn_rate)
+            
+            # get new batch
+            x_batch, y_batch = self.next_mini_batch() 
+
+            # run the graph
+            sess.run(self.train_step_tf, feed_dict={self.x_data_tf: x_batch, 
+                                                    self.y_data_tf: y_batch, 
+                                                    self.keep_prob_tf: self.keep_prob, 
+                                                    self.learn_rate_tf: self.learn_rate})
+             
+            
+            # store losses and accuracies
+            if i%int(self.log_step*mb_per_epoch) == 0 or i == int(n_epoch*mb_per_epoch):
+             
+                self.n_log_step += 1 # for logging the results
+                
+                feed_dict_train = {
+                    self.x_data_tf: self.x_train[self.perm_array[:len(self.x_valid)]], 
+                    self.y_data_tf: self.y_train[self.perm_array[:len(self.y_valid)]], 
+                    self.keep_prob_tf: 1.0}
+                
+                feed_dict_valid = {self.x_data_tf: self.x_valid, 
+                                   self.y_data_tf: self.y_valid, 
+                                   self.keep_prob_tf: 1.0}
+                
+                # summary for tensorboard
+                if self.use_tb_summary:
+                    train_summary = sess.run(self.merged, feed_dict = feed_dict_train)
+                    valid_summary = sess.run(self.merged, feed_dict = feed_dict_valid)
+                    self.train_writer.add_summary(train_summary, self.n_log_step)
+                    self.valid_writer.add_summary(valid_summary, self.n_log_step)
+                
+                train_loss.append(sess.run(self.cross_entropy_tf,
+                                           feed_dict = feed_dict_train))
+
+                train_acc.append(self.accuracy_tf.eval(session = sess, 
+                                                       feed_dict = feed_dict_train))
+                
+                valid_loss.append(sess.run(self.cross_entropy_tf,
+                                           feed_dict = feed_dict_valid))
+
+                valid_acc.append(self.accuracy_tf.eval(session = sess, 
+                                                       feed_dict = feed_dict_valid))
+
+                print('%.2f epoch: train/val loss = %.4f/%.4f, train/val acc = %.4f/%.4f'%(
+                    self.current_epoch, train_loss[-1], valid_loss[-1],
+                    train_acc[-1], valid_acc[-1]))
+     
+        # concatenate losses and accuracies and assign to tensor variables
+        tl_c = np.concatenate([self.train_loss_tf.eval(session=sess), train_loss], axis = 0)
+        vl_c = np.concatenate([self.valid_loss_tf.eval(session=sess), valid_loss], axis = 0)
+        ta_c = np.concatenate([self.train_acc_tf.eval(session=sess), train_acc], axis = 0)
+        va_c = np.concatenate([self.valid_acc_tf.eval(session=sess), valid_acc], axis = 0)
+   
+        sess.run(tf.assign(self.train_loss_tf, tl_c, validate_shape = False))
+        sess.run(tf.assign(self.valid_loss_tf, vl_c , validate_shape = False))
+        sess.run(tf.assign(self.train_acc_tf, ta_c , validate_shape = False))
+        sess.run(tf.assign(self.valid_acc_tf, va_c , validate_shape = False))
+        
+        print('running time for training: ', datetime.datetime.now() - start)
+        return None
+  
+    # save tensors/summaries
+    def save_model(self, sess):
+        
+        # tf saver
+        if self.use_tf_saver:
+            #filepath = os.path.join(os.getcwd(), 'logs' , self.nn_name)
+            filepath = os.path.join(os.getcwd(), self.nn_name)
+            self.saver_tf.save(sess, filepath)
+        
+        # tb summary
+        if self.use_tb_summary:
+            self.train_writer.close()
+            self.valid_writer.close()
+        
+        return None
+  
+    # forward prediction of current graph
+    def forward(self, sess, x_data):
+        y_pred_proba = self.y_pred_proba_tf.eval(session = sess, 
+                                                 feed_dict = {self.x_data_tf: x_data,
+                                                              self.keep_prob_tf: 1.0})
+        return y_pred_proba
+    
+    # function to load tensors from a saved graph
+    def load_tensors(self, graph):
+        
+        # input tensors
+        self.x_data_tf = graph.get_tensor_by_name("x_data_tf:0")
+        self.y_data_tf = graph.get_tensor_by_name("y_data_tf:0")
+        
+        # weights and bias tensors
+        self.W_conv1_tf = graph.get_tensor_by_name("W_conv1_tf:0")
+        self.W_conv2_tf = graph.get_tensor_by_name("W_conv2_tf:0")
+        self.W_conv3_tf = graph.get_tensor_by_name("W_conv3_tf:0")
+        self.W_fc1_tf = graph.get_tensor_by_name("W_fc1_tf:0")
+        self.W_fc2_tf = graph.get_tensor_by_name("W_fc2_tf:0")
+        self.b_conv1_tf = graph.get_tensor_by_name("b_conv1_tf:0")
+        self.b_conv2_tf = graph.get_tensor_by_name("b_conv2_tf:0")
+        self.b_conv3_tf = graph.get_tensor_by_name("b_conv3_tf:0")
+        self.b_fc1_tf = graph.get_tensor_by_name("b_fc1_tf:0")
+        self.b_fc2_tf = graph.get_tensor_by_name("b_fc2_tf:0")
+        
+        # activation tensors
+        self.h_conv1_tf = graph.get_tensor_by_name('h_conv1_tf:0')  
+        self.h_pool1_tf = graph.get_tensor_by_name('h_pool1_tf:0')
+        self.h_conv2_tf = graph.get_tensor_by_name('h_conv2_tf:0')
+        self.h_pool2_tf = graph.get_tensor_by_name('h_pool2_tf:0')
+        self.h_conv3_tf = graph.get_tensor_by_name('h_conv3_tf:0')
+        self.h_pool3_tf = graph.get_tensor_by_name('h_pool3_tf:0')
+        self.h_fc1_tf = graph.get_tensor_by_name('h_fc1_tf:0')
+        self.z_pred_tf = graph.get_tensor_by_name('z_pred_tf:0')
+        
+        # training and prediction tensors
+        self.learn_rate_tf = graph.get_tensor_by_name("learn_rate_tf:0")
+        self.keep_prob_tf = graph.get_tensor_by_name("keep_prob_tf:0")
+        self.cross_entropy_tf = graph.get_tensor_by_name('cross_entropy_tf:0')
+        self.train_step_tf = graph.get_operation_by_name('train_step_tf')
+        self.z_pred_tf = graph.get_tensor_by_name('z_pred_tf:0')
+        self.y_pred_proba_tf = graph.get_tensor_by_name("y_pred_proba_tf:0")
+        self.y_pred_correct_tf = graph.get_tensor_by_name('y_pred_correct_tf:0')
+        self.accuracy_tf = graph.get_tensor_by_name('accuracy_tf:0')
+        
+        # tensor of stored losses and accuricies during training
+        self.train_loss_tf = graph.get_tensor_by_name("train_loss_tf:0")
+        self.train_acc_tf = graph.get_tensor_by_name("train_acc_tf:0")
+        self.valid_loss_tf = graph.get_tensor_by_name("valid_loss_tf:0")
+        self.valid_acc_tf = graph.get_tensor_by_name("valid_acc_tf:0")
+  
+        return None
+    
+    # get losses of training and validation sets
+    def get_loss(self, sess):
+        train_loss = self.train_loss_tf.eval(session = sess)
+        valid_loss = self.valid_loss_tf.eval(session = sess)
+        return train_loss, valid_loss 
+        
+    # get accuracies of training and validation sets
+    def get_accuracy(self, sess):
+        train_acc = self.train_acc_tf.eval(session = sess)
+        valid_acc = self.valid_acc_tf.eval(session = sess)
+        return train_acc, valid_acc 
+    
+    # get weights
+    def get_weights(self, sess):
+        W_conv1 = self.W_conv1_tf.eval(session = sess)
+        W_conv2 = self.W_conv2_tf.eval(session = sess)
+        W_conv3 = self.W_conv3_tf.eval(session = sess)
+        W_fc1_tf = self.W_fc1_tf.eval(session = sess)
+        W_fc2_tf = self.W_fc2_tf.eval(session = sess)
+        return W_conv1, W_conv2, W_conv3, W_fc1_tf, W_fc2_tf
+    
+    # get biases
+    def get_biases(self, sess):
+        b_conv1 = self.b_conv1_tf.eval(session = sess)
+        b_conv2 = self.b_conv2_tf.eval(session = sess)
+        b_conv3 = self.b_conv3_tf.eval(session = sess)
+        b_fc1_tf = self.b_fc1_tf.eval(session = sess)
+        b_fc2_tf = self.b_fc2_tf.eval(session = sess)
+        return b_conv1, b_conv2, b_conv3, b_fc1_tf, b_fc2_tf
+    
+    # load session from file, restore graph, and load tensors
+    def load_session_from_file(self, filename):
+        tf.reset_default_graph()
+        filepath = os.path.join(os.getcwd(), filename + '.meta')
+        #filepath = os.path.join(os.getcwd(),'logs', filename + '.meta')
+        saver = tf.train.import_meta_graph(filepath)
+        print(filepath)
+        sess = tf.Session()
+        saver.restore(sess, mn)
+        graph = tf.get_default_graph()
+        self.load_tensors(graph)
+        return sess
+    
+    # receive activations given the input
+    def get_activations(self, sess, x_data):
+        feed_dict = {self.x_data_tf: x_data, self.keep_prob_tf: 1.0}
+        h_conv1 = self.h_conv1_tf.eval(session = sess, feed_dict = feed_dict)
+        h_pool1 = self.h_pool1_tf.eval(session = sess, feed_dict = feed_dict)
+        h_conv2 = self.h_conv2_tf.eval(session = sess, feed_dict = feed_dict)
+        h_pool2 = self.h_pool2_tf.eval(session = sess, feed_dict = feed_dict)
+        h_conv3 = self.h_conv3_tf.eval(session = sess, feed_dict = feed_dict)
+        h_pool3 = self.h_pool3_tf.eval(session = sess, feed_dict = feed_dict)
+        h_fc1 = self.h_fc1_tf.eval(session = sess, feed_dict = feed_dict)
+        h_fc2 = self.z_pred_tf.eval(session = sess, feed_dict = feed_dict)
+        return h_conv1,h_pool1,h_conv2,h_pool2,h_conv3,h_pool3,h_fc1,h_fc2
+    
+
+
+# # 6. Train and validate the neural network <a class="anchor" id="6-bullet"></a> 
+# - first try out some sklearn models
+# - train the neural network 
+# - visualize the losses, accuracies, the weights and the activations
+# - tune the hyperparameters
 # 
-# For the first convolutional layer we can sort of tell that most of the filters are doing edge detection on the leaf. That actually makes a lot of sense since pretty much all of the species specific information of a leaf is stored in the shape of its edge. The second convolutional layer is also mainly edge detection along with some point and edge shape detection I noticed with some leaves that have particularly special shapes. This is actually pretty common with convnets. The first few layers will do really simple stuff like edge and shape detection, but the deeper you go the more abstract it gets. Since we don't really have enough data to go that deep most of our filters look pretty tame. Judging by our LB score though, I think we can assume what it's doing is fairly constructive.
-# 
-# Well, that's all! If you've made it this far that means you've read my first kernel, and I hope it helps if you're stuck and don't know how to improve your score. In addition to questions, I'm very open to any feedback both in general about kernel writing and specifically about this kernel.
-# 
-# ## Thank you for reading!
+
+# In[ ]:
+
+
+## train the neural network graph
+
+#nn_name = ['nn0','nn1','nn2','nn3','nn4','nn5','nn6','nn7','nn8','nn9']
+
+nn_name = ['tmp']
+
+# cross validations
+cv_num = 10 # cross validations default = 20 => 5% validation set
+kfold = sklearn.model_selection.KFold(cv_num, shuffle=True, random_state=123)
+
+for i,(train_index, valid_index) in enumerate(kfold.split(x_train_valid)):
+    
+    # start timer
+    start = datetime.datetime.now();
+    
+    # train and validation data of original images
+    x_train = x_train_valid[train_index]
+    y_train = y_train_valid[train_index]
+    x_valid = x_train_valid[valid_index]
+    y_valid = y_train_valid[valid_index]
+    
+    # create neural network graph
+    nn_graph = nn_class(nn_name = nn_name[i]) # instance of nn_class
+    nn_graph.create_graph() # create graph
+    nn_graph.attach_saver() # attach saver tensors
+    
+    # start tensorflow session
+    with tf.Session() as sess:
+        
+        # attach summaries
+        nn_graph.attach_summary(sess) 
+        
+        # variable initialization of the default graph
+        sess.run(tf.global_variables_initializer()) 
+    
+        # training on original data
+        nn_graph.train_graph(sess, x_train, y_train, x_valid, y_valid, n_epoch = 1.0)
+        
+        # training on augmented data
+        nn_graph.train_graph(sess, x_train, y_train, x_valid, y_valid, n_epoch = 14.0,
+                            train_on_augmented_data = True)
+
+        # save tensors and summaries of model
+        nn_graph.save_model(sess)
+        
+    # only one iteration
+    if True:
+        break;
+        
+    
+print('total running time for training: ', datetime.datetime.now() - start)
+    
+
+
+# In[ ]:
+
+
+## visualization with tensorboard
+
+if False:
+    get_ipython().system('tensorboard --logdir=./logs')
+
+
+# In[ ]:
+
+
+## show confusion matrix
+
+mn = nn_name[0]
+nn_graph = nn_class()
+sess = nn_graph.load_session_from_file(mn)
+y_valid_pred[mn] = nn_graph.forward(sess, x_valid)
+sess.close()
+
+cnf_matrix = sklearn.metrics.confusion_matrix(
+    one_hot_to_dense(y_valid_pred[mn]), one_hot_to_dense(y_valid)).astype(np.float32)
+
+labels_array = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+fig, ax = plt.subplots(1,figsize=(10,10))
+ax = sns.heatmap(cnf_matrix, ax=ax, cmap=plt.cm.Greens, annot=True)
+ax.set_xticklabels(labels_array)
+ax.set_yticklabels(labels_array)
+plt.title('Confusion matrix of validation set')
+plt.ylabel('True digit')
+plt.xlabel('Predicted digit')
+plt.show();
+
+
+# In[ ]:
+
+
+## loss and accuracy curves
+
+mn = nn_name[0]
+nn_graph = nn_class()
+sess = nn_graph.load_session_from_file(mn)
+train_loss[mn], valid_loss[mn] = nn_graph.get_loss(sess)
+train_acc[mn], valid_acc[mn] = nn_graph.get_accuracy(sess)
+sess.close()
+
+print('final train/valid loss = %.4f/%.4f, train/valid accuracy = %.4f/%.4f'%(
+    train_loss[mn][-1], valid_loss[mn][-1], train_acc[mn][-1], valid_acc[mn][-1]))
+
+plt.figure(figsize=(10, 5));
+plt.subplot(1,2,1);
+plt.plot(np.arange(0,len(train_acc[mn])), train_acc[mn],'-b', label='Training')
+plt.plot(np.arange(0,len(valid_acc[mn])), valid_acc[mn],'-g', label='Validation')
+plt.legend(loc='lower right', frameon=False)
+plt.ylim(ymax = 1.1, ymin = 0.0)
+plt.ylabel('accuracy')
+plt.xlabel('log steps');
+
+plt.subplot(1,2,2)
+plt.plot(np.arange(0,len(train_loss[mn])), train_loss[mn],'-b', label='Training')
+plt.plot(np.arange(0,len(valid_loss[mn])), valid_loss[mn],'-g', label='Validation')
+plt.legend(loc='lower right', frameon=False)
+plt.ylim(ymax = 3.0, ymin = 0.0)
+plt.ylabel('loss')
+plt.xlabel('log steps');
+
+
+# In[ ]:
+
+
+## visualize weights
+
+mn = nn_name[0]
+nn_graph = nn_class()
+sess = nn_graph.load_session_from_file(mn)
+W_conv1, W_conv2, W_conv3, _, _ = nn_graph.get_weights(sess)
+sess.close()
+
+print('W_conv1: min = ' + str(np.min(W_conv1)) + ' max = ' + str(np.max(W_conv1))
+      + ' mean = ' + str(np.mean(W_conv1)) + ' std = ' + str(np.std(W_conv1)))
+print('W_conv2: min = ' + str(np.min(W_conv2)) + ' max = ' + str(np.max(W_conv2))
+      + ' mean = ' + str(np.mean(W_conv2)) + ' std = ' + str(np.std(W_conv2)))
+print('W_conv3: min = ' + str(np.min(W_conv3)) + ' max = ' + str(np.max(W_conv3))
+      + ' mean = ' + str(np.mean(W_conv3)) + ' std = ' + str(np.std(W_conv3)))
+
+s_f_conv1 = nn_graph.s_f_conv1
+s_f_conv2 = nn_graph.s_f_conv2
+s_f_conv3 = nn_graph.s_f_conv3
+
+W_conv1 = np.reshape(W_conv1,(s_f_conv1,s_f_conv1,1,6,6))
+W_conv1 = np.transpose(W_conv1,(3,0,4,1,2))
+W_conv1 = np.reshape(W_conv1,(s_f_conv1*6,s_f_conv1*6,1))
+
+W_conv2 = np.reshape(W_conv2,(s_f_conv2,s_f_conv2,6,6,36))
+W_conv2 = np.transpose(W_conv2,(2,0,3,1,4))
+W_conv2 = np.reshape(W_conv2,(6*s_f_conv2,6*s_f_conv2,6,6))
+W_conv2 = np.transpose(W_conv2,(2,0,3,1))
+W_conv2 = np.reshape(W_conv2,(6*6*s_f_conv2,6*6*s_f_conv2))
+
+W_conv3 = np.reshape(W_conv3,(s_f_conv3,s_f_conv3,6,6,36))
+W_conv3 = np.transpose(W_conv3,(2,0,3,1,4))
+W_conv3 = np.reshape(W_conv3,(6*s_f_conv3,6*s_f_conv3,6,6))
+W_conv3 = np.transpose(W_conv3,(2,0,3,1))
+W_conv3 = np.reshape(W_conv3,(6*6*s_f_conv3,6*6*s_f_conv3))
+
+plt.figure(figsize=(15,5))
+plt.subplot(1,3,1)
+plt.gca().set_xticks(np.arange(-0.5, s_f_conv1*6, s_f_conv1), minor = False);
+plt.gca().set_yticks(np.arange(-0.5, s_f_conv1*6, s_f_conv1), minor = False);
+plt.grid(which = 'minor', color='b', linestyle='-', linewidth=1)
+plt.title('W_conv1 ' + str(W_conv1.shape))
+plt.colorbar(plt.imshow(W_conv1[:,:,0], cmap=cm.binary));
+
+plt.subplot(1,3,2)
+plt.gca().set_xticks(np.arange(-0.5, 6*6*s_f_conv2, 6*s_f_conv2), minor = False);
+plt.gca().set_yticks(np.arange(-0.5, 6*6*s_f_conv2, 6*s_f_conv2), minor = False);
+plt.grid(which = 'minor', color='b', linestyle='-', linewidth=1)
+plt.title('W_conv2 ' + str(W_conv2.shape))
+plt.colorbar(plt.imshow(W_conv2[:,:], cmap=cm.binary));
+
+plt.subplot(1,3,3)
+plt.gca().set_xticks(np.arange(-0.5, 6*6*s_f_conv3, 6*s_f_conv3), minor = False);
+plt.gca().set_yticks(np.arange(-0.5, 6*6*s_f_conv3, 6*s_f_conv3), minor = False);
+plt.grid(which = 'minor', color='b', linestyle='-', linewidth=1)
+plt.title('W_conv3 ' + str(W_conv3.shape))
+plt.colorbar(plt.imshow(W_conv3[:,:], cmap=cm.binary));
+
+
+# In[ ]:
+
+
+## visualize activations
+
+img_no = 10;
+mn = nn_name[0]
+nn_graph = nn_class()
+sess = nn_graph.load_session_from_file(mn)
+(h_conv1, h_pool1, h_conv2, h_pool2,h_conv3, h_pool3, h_fc1,
+ h_fc2) = nn_graph.get_activations(sess, x_train_valid[img_no:img_no+1])
+sess.close()
+    
+# original image
+plt.figure(figsize=(15,9))
+plt.subplot(2,4,1)
+plt.imshow(x_train_valid[img_no].reshape(28,28),cmap=cm.binary);
+
+# 1. convolution
+plt.subplot(2,4,2)
+plt.title('h_conv1 ' + str(h_conv1.shape))
+h_conv1 = np.reshape(h_conv1,(-1,28,28,6,6))
+h_conv1 = np.transpose(h_conv1,(0,3,1,4,2))
+h_conv1 = np.reshape(h_conv1,(-1,6*28,6*28))
+plt.imshow(h_conv1[0], cmap=cm.binary);
+
+# 1. max pooling
+plt.subplot(2,4,3)
+plt.title('h_pool1 ' + str(h_pool1.shape))
+h_pool1 = np.reshape(h_pool1,(-1,14,14,6,6))
+h_pool1 = np.transpose(h_pool1,(0,3,1,4,2))
+h_pool1 = np.reshape(h_pool1,(-1,6*14,6*14))
+plt.imshow(h_pool1[0], cmap=cm.binary);
+
+# 2. convolution
+plt.subplot(2,4,4)
+plt.title('h_conv2 ' + str(h_conv2.shape))
+h_conv2 = np.reshape(h_conv2,(-1,14,14,6,6))
+h_conv2 = np.transpose(h_conv2,(0,3,1,4,2))
+h_conv2 = np.reshape(h_conv2,(-1,6*14,6*14))
+plt.imshow(h_conv2[0], cmap=cm.binary);
+
+# 2. max pooling
+plt.subplot(2,4,5)
+plt.title('h_pool2 ' + str(h_pool2.shape))
+h_pool2 = np.reshape(h_pool2,(-1,7,7,6,6))
+h_pool2 = np.transpose(h_pool2,(0,3,1,4,2))
+h_pool2 = np.reshape(h_pool2,(-1,6*7,6*7))
+plt.imshow(h_pool2[0], cmap=cm.binary);
+
+# 3. convolution
+plt.subplot(2,4,6)
+plt.title('h_conv3 ' + str(h_conv3.shape))
+h_conv3 = np.reshape(h_conv3,(-1,7,7,6,6))
+h_conv3 = np.transpose(h_conv3,(0,3,1,4,2))
+h_conv3 = np.reshape(h_conv3,(-1,6*7,6*7))
+plt.imshow(h_conv3[0], cmap=cm.binary);
+
+# 3. max pooling
+plt.subplot(2,4,7)
+plt.title('h_pool2 ' + str(h_pool3.shape))
+h_pool3 = np.reshape(h_pool3,(-1,4,4,6,6))
+h_pool3 = np.transpose(h_pool3,(0,3,1,4,2))
+h_pool3 = np.reshape(h_pool3,(-1,6*4,6*4))
+plt.imshow(h_pool3[0], cmap=cm.binary);
+
+# 4. FC layer
+plt.subplot(2,4,8)
+plt.title('h_fc1 ' + str(h_fc1.shape))
+h_fc1 = np.reshape(h_fc1,(-1,24,24))
+plt.imshow(h_fc1[0], cmap=cm.binary);
+
+# 5. FC layer
+np.set_printoptions(precision=2)
+print('h_fc2 = ', h_fc2)
+
+
+# In[ ]:
+
+
+## show misclassified images
+
+mn = nn_name[0]
+nn_graph = nn_class()
+sess = nn_graph.load_session_from_file(mn)
+y_valid_pred[mn] = nn_graph.forward(sess, x_valid)
+sess.close()
+
+y_valid_pred_label = one_hot_to_dense(y_valid_pred[mn])
+y_valid_label = one_hot_to_dense(y_valid)
+y_val_false_index = []
+
+for i in range(y_valid_label.shape[0]):
+    if y_valid_pred_label[i] != y_valid_label[i]:
+        y_val_false_index.append(i)
+
+print('# false predictions: ', len(y_val_false_index),'out of', len(y_valid))
+
+plt.figure(figsize=(10,15))
+for j in range(0,5):
+    for i in range(0,10):
+        if j*10+i<len(y_val_false_index):
+            plt.subplot(10,10,j*10+i+1)
+            plt.title('%d/%d'%(y_valid_label[y_val_false_index[j*10+i]],
+                               y_valid_pred_label[y_val_false_index[j*10+i]]))
+            plt.imshow(x_valid[y_val_false_index[j*10+i]].reshape(28,28),cmap=cm.binary)    
+
+
+# # 7. Stacking of models and training a meta-model  <a class="anchor" id="7-bullet"></a> 
+
+# In[ ]:
+
+
+## read test data
+
+# read test data from CSV file 
+if os.path.isfile('../input/test.csv'):
+    test_df = pd.read_csv('../input/test.csv') # on kaggle 
+    print('test.csv loaded: test_df{0}'.format(test_df.shape))
+elif os.path.isfile('data/test.csv'):
+    test_df = pd.read_csv('data/test.csv') # on local environment
+    print('test.csv loaded: test_df{0}'.format(test_df.shape))
+else:
+    print('Error: test.csv not found')
+    
+# transforma and normalize test data
+x_test = test_df.iloc[:,0:].values.reshape(-1,28,28,1) # (28000,28,28,1) array
+x_test = x_test.astype(np.float)
+x_test = normalize_data(x_test)
+print('x_test.shape = ', x_test.shape)
+
+# for saving results
+y_test_pred = {}
+y_test_pred_labels = {}
+
+
+# In[ ]:
+
+
+## Stacking of neural networks
+
+if False:
+    
+    take_models = ['nn0','nn1','nn2','nn3','nn4','nn5','nn6','nn7','nn8','nn9']
+
+    # cross validations
+    # choose the same seed as was done for training the neural nets
+    kfold = sklearn.model_selection.KFold(len(take_models), shuffle=True, random_state = 123)
+
+    # train and test data for meta model
+    x_train_meta = np.array([]).reshape(-1,10)
+    y_train_meta = np.array([]).reshape(-1,10)
+    x_test_meta = np.zeros((x_test.shape[0], 10))
+
+    print('Out-of-folds predictions:')
+
+    # make out-of-folds predictions from base models
+    for i,(train_index, valid_index) in enumerate(kfold.split(x_train_valid)):
+
+        # training and validation data
+        x_train = x_train_valid[train_index]
+        y_train = y_train_valid[train_index]
+        x_valid = x_train_valid[valid_index]
+        y_valid = y_train_valid[valid_index]
+
+        # load neural network and make predictions
+        mn = take_models[i] 
+        nn_graph = nn_class()
+        sess = nn_graph.load_session_from_file(mn)
+        y_train_pred[mn] = nn_graph.forward(sess, x_train[:len(x_valid)])
+        y_valid_pred[mn] = nn_graph.forward(sess, x_valid)
+        y_test_pred[mn] = nn_graph.forward(sess, x_test)
+        sess.close()
+
+        # create cloned model from base models
+        #model = sklearn.base.clone(base_models[take_models[i]])
+        #model.fit(x_train, y_train)
+        #y_train_pred_proba['tmp'] = model.predict_proba(x_train)[:,1]
+        #y_valid_pred_proba['tmp'] = model.predict_proba(x_valid)[:,1]
+        #y_test_pred_proba['tmp'] = model.predict_proba(x_test)[:,1]
+
+        # collect train and test data for meta model 
+        x_train_meta = np.concatenate([x_train_meta, y_valid_pred[mn]])
+        y_train_meta = np.concatenate([y_train_meta, y_valid]) 
+        x_test_meta += y_test_pred[mn]
+
+        print(take_models[i],': train/valid accuracy = %.4f/%.4f'%(
+            accuracy_from_one_hot_labels(y_train_pred[mn], y_train[:len(x_valid)]),
+            accuracy_from_one_hot_labels(y_valid_pred[mn], y_valid)))
+
+        if False:
+            break;
+
+    # take average of test predictions
+    x_test_meta = x_test_meta/(i+1)
+    y_test_pred['stacked_models'] = x_test_meta
+
+    print('')
+    print('Stacked models: valid accuracy = %.4f'%accuracy_from_one_hot_labels(x_train_meta,
+                                                                               y_train_meta))
+     
+
+
+# In[ ]:
+
+
+## use meta model
+
+if False:
+    
+    logreg = sklearn.linear_model.LogisticRegression(verbose=0, solver='lbfgs',
+                                                     multi_class='multinomial')
+    
+    # choose meta model
+    take_meta_model = 'logreg'
+
+    # train meta model
+    model = sklearn.base.clone(base_models[take_meta_model]) 
+    model.fit(x_train_meta, one_hot_to_dense(y_train_meta))
+    
+    y_train_pred['meta_model'] = model.predict_proba(x_train_meta)
+    y_test_pred['meta_model'] = model.predict_proba(x_test_meta)
+
+    print('Meta model: train accuracy = %.4f'%accuracy_from_one_hot_labels(x_train_meta, 
+                                                           y_train_pred['meta_model']))
+
+
+# In[ ]:
+
+
+## choose one single model for test prediction
+
+if True:
+    
+    mn = nn_name[0] # choose saved model
+    nn_graph = nn_class() # create instance
+    sess = nn_graph.load_session_from_file(mn) # receive session 
+    y_test_pred = {}
+    y_test_pred_labels = {}
+
+    # split evaluation of test predictions into batches
+    kfold = sklearn.model_selection.KFold(40, shuffle=False) 
+    for i,(train_index, valid_index) in enumerate(kfold.split(x_test)):
+        if i==0:
+            y_test_pred[mn] = nn_graph.forward(sess, x_test[valid_index])
+        else: 
+            y_test_pred[mn] = np.concatenate([y_test_pred[mn],
+                                              nn_graph.forward(sess, x_test[valid_index])])
+
+    sess.close()
+    
+    
+
+
+# # 8. Submit the test results <a class="anchor" id="8-bullet"></a> 
+
+# In[ ]:
+
+
+# choose the test predictions and submit the results
+
+#mn = 'meta_model'
+mn = nn_name[0]
+y_test_pred_labels[mn] = one_hot_to_dense(y_test_pred[mn])
+
+print(mn+': y_test_pred_labels[mn].shape = ', y_test_pred_labels[mn].shape)
+unique, counts = np.unique(y_test_pred_labels[mn], return_counts=True)
+print(dict(zip(unique, counts)))
+
+# save predictions
+np.savetxt('submission.csv', 
+           np.c_[range(1,len(x_test)+1), y_test_pred_labels[mn]], 
+           delimiter=',', 
+           header = 'ImageId,Label', 
+           comments = '', 
+           fmt='%d')
+
+print('submission.csv completed')
+
+
+# In[ ]:
+
+
+## look at some test images and predicted labels
+
+plt.figure(figsize=(10,15))
+for j in range(0,5):
+    for i in range(0,10):
+        plt.subplot(10,10,j*10+i+1)
+        plt.title('%d'%y_test_pred_labels[mn][j*10+i])
+        plt.imshow(x_test[j*10+i].reshape(28,28), cmap=cm.binary)
+

@@ -1,100 +1,170 @@
 
 # coding: utf-8
 
-# Updates:
-# 
-# The stacking model:
-# https://www.kaggle.com/schoolpal/nn-stacking-magic-no-magic-30409-private-31063
-# 
-# https://www.kaggle.com/schoolpal/modifications-to-reynaldo-s-script/notebook
-# I just added two XGB models, they were used together with in this one and one more DNN model in the stacking
-# 
-# --------------------------------------------------------
-# 
-# This is a simple LightGBM script. It got two magic number, one took from Andy's script (proposed by Louis?). The second one actually down scale only the "old" investment properties, as the new ones are supported by the mortgage subsidy program? The LB score is at 0.3094. 
-# 
-# 
-# One nice thing is that the classical BoxCox transformation can further improve the performance to 0.3093. It can also be verified by local skewness.  I wonder why no one bring this up in the kernel/forum.
-# 
-# This script (log version) serves as one of the basis model for the later stacking.
+# Simple example of the use of Neural Networks. The Neural Net has performed particularly well with only 3 epochs of training despite the very heavily imbalanced dataset. Enjoy and extend!
+# *For some reason that I cannot reckon, the exact same code outputs 97.2% AUC score in my PC - if anyone has any hint on that I would like to hear it :)
 
-# In[ ]:
+# In[1]:
 
 
-from sklearn.model_selection import train_test_split,KFold,TimeSeriesSplit
-from sklearn import model_selection, preprocessing
-import pandas as pd
+#Import modules
 import numpy as np
-import lightgbm as lgb
-from sklearn import model_selection, preprocessing
-import pdb
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from keras.models import Sequential
+from keras.layers import Activation, Dense, Dropout
+from keras import optimizers
+from sklearn.metrics import confusion_matrix,accuracy_score, roc_curve, auc
+get_ipython().run_line_magic('matplotlib', 'inline')
+sns.set_style("whitegrid")
+np.random.seed(697)
 
-def process(train,test):
-    RS=1
-    np.random.seed(RS)
-    ROUNDS = 1500 # 1300,1400 all works fine
-    params = {
-        'objective': 'regression',
-            'metric': 'rmse',
-            'boosting': 'gbdt',
-            'learning_rate': 0.01 , #small learn rate, large number of iterations
-            'verbose': 0,
-            'num_leaves': 2 ** 5,
-            'bagging_fraction': 0.95,
-            'bagging_freq': 1,
-            'bagging_seed': RS,
-            'feature_fraction': 0.7,
-            'feature_fraction_seed': RS,
-            'max_bin': 100,
-            'max_depth': 7,
-            'num_rounds': ROUNDS,
-        }
-    #Remove the bad prices as suggested by Radar
-    train=train[(train.price_doc>1e6) & (train.price_doc!=2e6) & (train.price_doc!=3e6)]
-    train.loc[(train.product_type=='Investment') & (train.build_year<2000),'price_doc']*=0.9 
-    train.loc[train.product_type!='Investment','price_doc']*=0.969 #Louis/Andy's magic number
-    test = pd.read_csv('../input/test.csv',parse_dates=['timestamp'])
 
-  
-    id_test = test.id
-    times=pd.concat([train.timestamp,test.timestamp])
-    num_train=train.shape[0]
-    y_train = train["price_doc"]
-    train.drop(['price_doc'],inplace=True,axis=1)
-    da=pd.concat([train,test])
-    da['na_count']=da.isnull().sum(axis=1)
-    df_cat=None
-    to_remove=[]
-    for c in da.columns:
-        if da[c].dtype=='object':
-            oh=pd.get_dummies(da[c],prefix=c)
-            if df_cat is None:
-                df_cat=oh
-            else:
-                df_cat=pd.concat([df_cat,oh],axis=1)
-            to_remove.append(c)
-    da.drop(to_remove,inplace=True,axis=1)
+# In[2]:
 
-    #Remove rare features,prevent overfitting
-    to_remove=[]
-    if df_cat is not None:
-        sums=df_cat.sum(axis=0)
-        to_remove=sums[sums<200].index.values
-        df_cat=df_cat.loc[:,df_cat.columns.difference(to_remove)]
-        da = pd.concat([da, df_cat], axis=1)
-    x_train=da[:num_train].drop(['timestamp','id'],axis=1)
-    x_test=da[num_train:].drop(['timestamp','id'],axis=1)
-    #Log transformation, boxcox works better.
-    y_train=np.log(y_train)
-    train_lgb=lgb.Dataset(x_train,y_train)
-    model=lgb.train(params,train_lgb,num_boost_round=ROUNDS)
-    predict=model.predict(x_test)
-    predict=np.exp(predict)
-    return predict,id_test
-if __name__=='__main__':
-    train = pd.read_csv('../input/train.csv',parse_dates=['timestamp'])
-    test = pd.read_csv('../input/test.csv',parse_dates=['timestamp'])
-    predict,id_test=process(train,test)
-    output=pd.DataFrame({'id':id_test,'price_doc':predict})
-    output.to_csv('lgb.csv',index=False)
+
+#Import data
+df = pd.read_csv('../input/train_sample.csv', header = 0)
+
+
+# In[3]:
+
+
+#Check num of cases in label 
+print(df.is_attributed.value_counts()) #very imbalanced data set
+
+
+# In[4]:
+
+
+#---------------------------Pre-processing-------------------------
+#Create new variables
+df['ip_cut'] = pd.cut(df.ip,15)
+df['time_interval'] = df.click_time.str[11:13]
+
+#Drop unneeded variables
+df = df.drop(['ip', 'attributed_time', 'click_time'], axis = 1)
+
+
+# In[5]:
+
+
+#Encode categorical variables to ONE-HOT
+categorical_columns = ['app', 'device', 'os', 'channel', 'ip_cut', 'time_interval']
+
+df = pd.get_dummies(df, columns = categorical_columns)     
+
+
+# In[6]:
+
+
+#Split in 75% train and 25% test set
+train_df, test_df = train_test_split(df, test_size = 0.25, random_state= 1984)
+
+#Make sure labels are equally distributed in train and test set
+train_df.is_attributed.sum()/train_df.shape[0] #0.2233
+test_df.is_attributed.sum()/test_df.shape[0] #0.2148
+
+#Get the data ready for the Neural Network
+train_y = train_df.is_attributed
+test_y = test_df.is_attributed
+
+train_x = train_df.drop(['is_attributed'], axis = 1)
+test_x = test_df.drop(['is_attributed'], axis = 1)
+
+train_x =np.array(train_x)
+test_x = np.array(test_x)
+
+train_y = np.array(train_y)
+test_y = np.array(test_y)
+
+
+# In[7]:
+
+
+#-------------------Build the Neural Network model-------------------
+print('Building Neural Network model...')
+adam = optimizers.adam(lr = 0.005, decay = 0.0000001)
+
+model = Sequential()
+model.add(Dense(48, input_dim=train_x.shape[1],
+                kernel_initializer='normal',
+                #kernel_regularizer=regularizers.l2(0.02),
+                activation="relu"))
+model.add(Dropout(0.2))
+model.add(Dense(24,
+                #kernel_regularizer=regularizers.l2(0.02),
+                activation="tanh"))
+model.add(Dropout(0.3))
+model.add(Dense(1))
+model.add(Activation("sigmoid"))
+model.compile(loss="binary_crossentropy", optimizer='adam')
+
+history = model.fit(train_x, train_y, validation_split=0.2, epochs=3, batch_size=64)
+
+
+# In[8]:
+
+
+# summarize history for loss
+plt.figure()
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper right')
+plt.show()
+
+
+# In[9]:
+
+
+#Predict on test set
+predictions_NN_prob = model.predict(test_x)
+predictions_NN_prob = predictions_NN_prob[:,0]
+
+predictions_NN_01 = np.where(predictions_NN_prob > 0.5, 1, 0) #Turn probability to 0-1 binary output
+
+
+# In[10]:
+
+
+#Print accuracy
+acc_NN = accuracy_score(test_y, predictions_NN_01)
+print('Overall accuracy of Neural Network model:', acc_NN)
+
+
+# In[11]:
+
+
+#Print Area Under Curve
+false_positive_rate, recall, thresholds = roc_curve(test_y, predictions_NN_prob)
+roc_auc = auc(false_positive_rate, recall)
+plt.figure()
+plt.title('Receiver Operating Characteristic (ROC)')
+plt.plot(false_positive_rate, recall, 'b', label = 'AUC = %0.3f' %roc_auc)
+plt.legend(loc='lower right')
+plt.plot([0,1], [0,1], 'r--')
+plt.xlim([0.0,1.0])
+plt.ylim([0.0,1.0])
+plt.ylabel('Recall')
+plt.xlabel('Fall-out (1-Specificity)')
+plt.show()
+
+
+# In[12]:
+
+
+#Print Confusion Matrix
+cm = confusion_matrix(test_y, predictions_NN_01)
+labels = ['No Default', 'Default']
+plt.figure(figsize=(8,6))
+sns.heatmap(cm,xticklabels=labels, yticklabels=labels, annot=True, fmt='d', cmap="Blues", vmin = 0.2);
+plt.title('Confusion Matrix')
+plt.ylabel('True Class')
+plt.xlabel('Predicted Class')
+plt.show()
 

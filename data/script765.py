@@ -1,588 +1,471 @@
 
 # coding: utf-8
 
-# I will do some explorations through the Loan Club Data. 
+# Hi, this is my first try on kaggle with python. 
 # 
-# English is not my native language, so sorry about if you see any error
-
-# Do you wanna see anothers interesting dataset analysis? <a href="https://www.kaggle.com/kabure/kernels">Click here</a> <br>
-# Please, give your feedback and if you like this Kernel  <b>votes up </b> =)
-# 
-
-# <b>About the dataset</b> <br>
-# These files contain complete loan data for all loans issued through the 2007-2015, including the current loan status (Current, Late, Fully Paid, etc.) and latest payment information. The file containing loan data through the "present" contains complete loan data for all loans issued through the previous completed calendar quarter. Additional features include credit scores, number of finance inquiries, address including zip codes, and state, and collections among others. The file is a matrix of about 890 thousand observations and 75 variables. A data dictionary is provided in a separate file.
-
-# <h2> Importing the Librarys </h2> 
+# Sorry for my english, this is not my native language.  I would appreciate any feedback ;)
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from pandas import Series,DataFrame
 import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib import rcParams
+from math import log10
+sns.set_style('whitegrid')
 
-#To plot figs on jupyter
-get_ipython().run_line_magic('matplotlib', 'inline')
-# figure size in inches
-rcParams['figure.figsize'] = 8,6
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# <h2> Importing our dataset</h2> 
+# Any results you write to the current directory are saved as output.
+
 
 # In[ ]:
 
 
-df_loan = pd.read_csv("../input/loan.csv",low_memory=False)
+# get data csv files as a DataFrame
+database_df = pd.read_csv("../input/database.csv")
+# database_df.columns.values to visualize the name of every columns
 
-
-# Looking the infos of our dataset
 
 # In[ ]:
 
 
-df_loan.info()
+# Preview of data :
+
+# Remove Unknown data and some categories 
+
+database_df = database_df.replace('Unknown', np.nan)
+database_df = database_df.dropna()
 
 
-# <h2> Knowing our data </h2> 
+data = (database_df.drop(['Record ID', 'Agency Code','Crime Solved', 'Agency Name', 'Agency Type',
+       'Record Source'],axis=1))
 
-# In[ ]:
-
-
-df_loan.head()
+ID = database_df['Record ID'].values
 
 
-# <h2> Column names </h2> 
-
-# In[ ]:
+data.head()
 
 
-print(df_loan.columns)
-
-
-# <h2> Unique values </h2> 
+# **1) First Analysis on global data**
 
 # In[ ]:
 
 
-#Let's see the data shape and NaN values
-print(df_loan.shape)
-print(df_loan.isnull().sum().value_counts())
+# Definition of a small function to construct a dictionnary
+def list_par(x,l):
+    if x not in l :
+        l[x]=len(l)
+    return l
 
-
-# I will hand with Na's later
-
-# <h2>Let's start by the distribuition of the LOAN AMOUNT  </h2>
 
 # In[ ]:
 
 
-#I will start looking the loan_amnt column
-plt.figure(figsize=(12,6))
+# Definition of all dictionnaries to allow an acp on data
 
-plt.subplot(121)
-g = sns.distplot(df_loan["loan_amnt"])
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Frequency Dist", fontsize=12)
-g.set_title("Frequency Distribuition", fontsize=20)
+dic_city = {}
+for city in data['City']:
+    (list_par(city,dic_city))
 
-plt.subplot(122)
-g1 = sns.violinplot(y="loan_amnt", data=df_loan, 
-               inner="quartile", palette="hls")
-g1.set_xlabel("", fontsize=12)
-g1.set_ylabel("Amount Dist", fontsize=12)
-g1.set_title("Amount Distribuition", fontsize=20)
+dic_state = {}
+for state in data['State']:
+    (list_par(state,dic_state))
+    
+dic_crime_type = {}
+for crime_type in data['Crime Type']:
+    (list_par(crime_type,dic_crime_type))
+    
+dic_victim_race = {}
+for victim_race in data['Victim Race']:
+    (list_par(victim_race,dic_victim_race))
+    
+dic_victim_ethnicity = {}
+for victim_ethnicity in data['Victim Ethnicity']:
+    (list_par(victim_ethnicity,dic_victim_ethnicity))
+    
+dic_perpetrator_race = {}
+for perpetrator_race in data['Perpetrator Race']:
+    (list_par(perpetrator_race,dic_perpetrator_race))
+    
+dic_perpetrator_sex = {}
+for perpetrator_sex in data['Perpetrator Sex']:
+    (list_par(perpetrator_sex,dic_perpetrator_sex))
+    
+dic_perpetrator_ethnicity = {}
+for perpetrator_ethnicity in data['Perpetrator Ethnicity']:
+    (list_par(perpetrator_ethnicity,dic_perpetrator_ethnicity))
+    
+dic_relationship = {}
+for relationship in data['Relationship']:
+    (list_par(relationship,dic_relationship))
 
-plt.show()
+dic_weapon = {}
+for weapon in data['Weapon']:
+    (list_par(weapon,dic_weapon))
 
+dic_month = {}
+for month in data['Month']:
+    (list_par(month,dic_month))
+    
+dic_sexe = {}
+for sexe in data['Victim Sex']:
+    (list_par(sexe,dic_sexe))
 
-# <h2>Another interesting value to a Loan is the interest rate. Let's look this colum: </h2>
 
 # In[ ]:
 
 
-df_loan['int_round'] = df_loan['int_rate'].round(0).astype(int)
+# Data transformation with dictionnaries 
 
-plt.figure(figsize = (10,8))
-
-#Exploring the Int_rate
-plt.subplot(211)
-g = sns.distplot(np.log(df_loan["int_rate"]))
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Distribuition", fontsize=12)
-g.set_title("Int Rate Log distribuition", fontsize=20)
-
-plt.subplot(212)
-g1 = sns.countplot(x="int_round",data=df_loan, 
-                   palette="Set2")
-g1.set_xlabel("Int Rate", fontsize=12)
-g1.set_ylabel("Count", fontsize=12)
-g1.set_title("Int Rate Normal Distribuition", fontsize=20)
-
-plt.subplots_adjust(wspace = 0.2, hspace = 0.6,top = 0.9)
-
-plt.show()
+data['Month']=data['Month'].map(dic_month)
+data['Victim Sex']=data['Victim Sex'].map(dic_sexe)
+data['City']=data['City'].map(dic_city)
+data['State']=data['State'].map(dic_state)
+data['Crime Type']=data['Crime Type'].map(dic_crime_type)
+data['Victim Race']=data['Victim Race'].map(dic_victim_race)
+data['Victim Ethnicity']=data['Victim Ethnicity'].map(dic_victim_ethnicity)
+data['Perpetrator Race']=data['Perpetrator Race'].map(dic_perpetrator_race)
+data['Perpetrator Sex']=data['Perpetrator Sex'].map(dic_perpetrator_sex)
+data['Perpetrator Ethnicity']=data['Perpetrator Ethnicity'].map(dic_perpetrator_ethnicity)
+data['Relationship']=data['Relationship'].map(dic_relationship)
+data['Weapon']=data['Weapon'].map(dic_weapon)
 
 
-# We can clearly see that the Int rate have a interesting distribuition
+# In[ ]:
 
-# <h1>Some exploration of loan_status</h1><br>
-# Understanding the default
+
+# New dataframes 
+data.head()
+
+
+# In[ ]:
+
+
+# Correlation between all datas 
+data.corr()
+
+
+# In[ ]:
+
+
+# Visualization of the correlations, code by nirajverma
+correlation = data.corr()
+plt.figure(figsize=(15,15))
+sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='cubehelix')
+
+plt.title('Correlation between different fearures')
+
+
+# Correlation between City and State is obvious.
 # 
-
-# In[ ]:
-
-
-df_loan.loc[df_loan.loan_status ==             'Does not meet the credit policy. Status:Fully Paid', 'loan_status'] = 'NMCP Fully Paid'
-df_loan.loc[df_loan.loan_status ==             'Does not meet the credit policy. Status:Charged Off', 'loan_status'] = 'NMCP Charged Off'
-
-
-# <h2>Loan Status Distribuition</h2>
-
-# In[ ]:
-
-
-print(df_loan.loan_status.value_counts())
-
-plt.figure(figsize = (12,14))
-
-plt.subplot(311)
-g = sns.countplot(x="loan_status", data=df_loan)
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Count", fontsize=15)
-g.set_title("Loan Status Count", fontsize=20)
-
-plt.subplot(312)
-g1 = sns.boxplot(x="loan_status", y="total_acc", data=df_loan)
-g1.set_xticklabels(g1.get_xticklabels(),rotation=45)
-g1.set_xlabel("", fontsize=12)
-g1.set_ylabel("Total Acc", fontsize=15)
-g1.set_title("Duration Count", fontsize=20)
-
-plt.subplot(313)
-g2 = sns.violinplot(x="loan_status", y="loan_amnt", data=df_loan)
-g2.set_xticklabels(g2.get_xticklabels(),rotation=45)
-g2.set_xlabel("Duration Distribuition", fontsize=15)
-g2.set_ylabel("Count", fontsize=15)
-g2.set_title("Loan Amount", fontsize=20)
-
-plt.subplots_adjust(wspace = 0.2, hspace = 0.7,top = 0.9)
-
-plt.show()
-
-
-# <h2>ISSUE_D</h2>
+# As a first interpretation of results, we can see a correlation between the Victim Ethnicity and the Perpetrator Ethnicity and between the Perpetrator Race and the Victim Race with respectively 0.72 and 0.73.  Race and Ethnicity are also correlated.
 # 
-# Going depth in the default exploration to see the amount and counting though the <b>ISSUE_D </b>,<br>
-# that is: <i><b> The month which the loan was funded</b></i>
+# A second link is visible between relationship and crimes. We got a correlation of 0.19 between relationship and Perpetrator Sex.
+# 
+# It seems to have connection between years and Ethnicity involved, with a connection rate of 0.16. 
+# 
+# Finaly we have a link of 0.13 between the Relationship and the Weapon type.
+
+# **2) Analysis of crime data with victim(s)**
 
 # In[ ]:
 
 
-df_loan['issue_month'], df_loan['issue_year'] = df_loan['issue_d'].str.split('-', 1).str
+# Remove incident data to only keep crime data
+
+data_crime = data [ data["Victim Count"] >= 1 ]
+
+# Remove high correlation data 
+data_crime = (data_crime.drop(['Incident','State','City','Month'],axis=1))
 
 
 # In[ ]:
 
 
-months_order = ["Jan", "Feb", "Mar", "Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-df_loan['issue_month'] = pd.Categorical(df_loan['issue_month'],categories=months_order, ordered=True)
+# Correlation between all datas 
+data_crime.corr()
 
-#Issue_d x loan_amount
-plt.figure(figsize = (14,6))
 
-g = sns.pointplot(x='issue_month', y='loan_amnt', 
-                  data=df_loan, 
-                  hue='loan_status')
-g.set_xticklabels(g.get_xticklabels(),rotation=90)
-g.set_xlabel("Duration Distribuition", fontsize=15)
-g.set_ylabel("Mean amount", fontsize=15)
-g.legend(loc='best')
-g.set_title("Loan Amount by Months", fontsize=20)
+# In[ ]:
+
+
+# Visualization of the correlations, code by nirajverma
+correlation = data_crime.corr()
+plt.figure(figsize=(15,15))
+sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='cubehelix')
+
+plt.title('Correlation between different fearures')
+
+
+# We are only discussing of new link in this part. 
+# 
+# The relation between Perpetrator Sex and Relationship is higher in this case with 0.26, Perpetrator Sex is also linked to Weapon with 0.24.
+# 
+# In case of crime with victim(s), we can see a new link between Victim Sexe and Perpetrator Count with 0.16. 
+# 
+# Greant anticorrelation is visible between Weapon and Crime Type with -0.23 and between Relantionship and Victim Age with -0.21.
+
+# In[ ]:
+
+
+# Number of incident with at least one victim
+len(data_crime)
+
+
+# **3) Analysis of crime data without victim**
+
+# In[ ]:
+
+
+# Remove crime data to only keep incident data
+
+data_incident = data [ data["Victim Count"] == 0 ]
+data_incident = (data_incident.drop(['Victim Count'],axis=1))
+
+
+# In[ ]:
+
+
+# Correlation between all datas 
+data_incident.corr()
+
+
+# In[ ]:
+
+
+# Visualization of the correlations, code by nirajverma
+correlation = data_incident.corr()
+plt.figure(figsize=(15,15))
+sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='cubehelix')
+
+plt.title('Correlation between different fearures')
+
+
+# Perpetrator count is less important in this Incident case.
+# 
+# Ethnicity and Race are more linked in during Incident whereas Victim Ethnicity and Victim Sex are less connected.
+
+# In[ ]:
+
+
+# Number of incident without victim
+len(data_incident)
+
+
+# **4) PCA Analysis on crime data with victim**
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+ss = StandardScaler()
+
+#data_crime = (data_crime.drop(['Year'],axis=1))
+data_crime_std = ss.fit_transform(data_crime)
+
+from sklearn.decomposition import PCA as sklearnPCA
+sklearn_pca = sklearnPCA(n_components=6)
+Y_sklearn = sklearn_pca.fit_transform(data_crime_std)
+
+print(sklearn_pca.explained_variance_ratio_) 
+
+
+# In[ ]:
+
+
+# Display PCA
+from matplotlib import pyplot
+import pylab
+from mpl_toolkits.mplot3d import Axes3D
+
+fig = pylab.figure()
+ax = Axes3D(fig)
+ax.scatter(Y_sklearn[:,0], Y_sklearn[:,1], Y_sklearn[:,2])
 plt.show()
-
-
-# Looking the years
-
-# In[ ]:
-
-
-plt.figure(figsize = (14,6))
-#Looking the count of defaults though the issue_d that is The month which the loan was funded
-g = sns.countplot(x='issue_year', data=df_loan,
-                  hue='loan_status')
-g.set_xticklabels(g.get_xticklabels(),rotation=90)
-g.set_xlabel("Dates", fontsize=15)
-g.set_ylabel("Count", fontsize=15)
-g.legend(loc='upper left')
-g.set_title("Analysing Loan Status by Years", fontsize=20)
-plt.show()
-
-
-# <h2> Taking a look of Default counting  through the Years column </h2>
-
-# In[ ]:
-
-
-plt.figure(figsize = (14,6))
-#Looking the count of defaults though the issue_d that is The month which the loan was funded
-g = sns.countplot(x='issue_year', data=df_loan[df_loan['loan_status'] =='Default'])
-g.set_xticklabels(g.get_xticklabels(),rotation=90)
-g.set_xlabel("Dates", fontsize=15)
-g.set_ylabel("Count", fontsize=15)
-g.legend(loc='upper left')
-g.set_title("Analysing Defaults Count by Time", fontsize=20)
-plt.show()
-
-
-# Interesting, maybe anything happens in Dec'14. It's the most frequent Defaults in our data.
-
-# <h2> Now let's take a look on the crosstab using a heatmap to better see this</h2>
-
-# In[ ]:
-
-
-#Exploring the loan_status x purpose
-purp_loan= ['purpose', 'loan_status']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[purp_loan[0]], df_loan[purp_loan[1]]).style.background_gradient(cmap = cm)
+            
 
 
 # In[ ]:
 
 
-loan_grade = ['loan_status', 'grade']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[loan_grade[0]], df_loan[loan_grade[1]]).style.background_gradient(cmap = cm)
-
-
-# In[ ]:
-
-
-loan_home = ['loan_status', 'home_ownership']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[loan_home[0]], df_loan[loan_home[1]]).style.background_gradient(cmap = cm)
-
-
-# In[ ]:
-
-
-#Looking the 'verification_status' column that is the Indicates 
-#if the co-borrowers' joint income was verified by LC, not verified, or if the income source was verified
-loan_verification = ['loan_status', 'verification_status']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[loan_verification[0]], df_loan[loan_verification[1]]).style.background_gradient(cmap = cm)
-
-
-# <h2>Looking verification status using plotly library</h2>
-
-# In[ ]:
-
-
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-import warnings
-from collections import Counter
-
-#First plot
-trace0 = go.Bar(
-    x = df_loan['verification_status'].value_counts().index.values,
-    y = df_loan['verification_status'].value_counts().values,
-    marker=dict(
-        color=df_loan['verification_status'].value_counts().values,
-        colorscale = 'Viridis'
-    ),
-)
-
-data = [trace0]
-
-layout = go.Layout(
-    yaxis=dict(
-        title='Count'
-    ),
-    xaxis=dict(
-        title='Status'
-    ),
-    title='Verification Status Count'
-)
-
-fig = go.Figure(data=data, layout=layout)
-
-py.iplot(fig, filename='verification-bar')
-
-
-# <h2>Looking the column INSTALLMENT that is: </h2> <br>
-# <i>The monthly payment owed by the borrower if the loan originates.</i>
-
-# In[ ]:
-
-
-sns.distplot(df_loan['installment'])
-plt.show()
-
-
-# <h2>Crossing the Loan Status and Installment</h2>
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,6))
-
-g = sns.violinplot(x='loan_status', y="installment",
-                   data=df_loan)
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-g.set_xlabel("", fontsize=12)
-g.set_ylabel("Installment Dist", fontsize=15)
-g.set_title("Loan Status by Installment", fontsize=20)
-
+plt.figure(figsize=(5,5))
+plt.scatter(Y_sklearn[:,0], Y_sklearn[:,1],s=10)
 plt.show()
 
 
 # In[ ]:
 
 
-#Exploring the loan_status x Application_type
-loan_application = ['loan_status', 'application_type']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[loan_application[0]], df_loan[loan_application[1]]).style.background_gradient(cmap = cm)
-
-
-# <h2>Distribuition of Application_tye thought the Loan Amount and Interest Rate</h2>
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,14))
-#The amount and int rate x application_type 
-plt.subplot(211)
-g = sns.violinplot(x="application_type", y="loan_amnt",data=df_loan, 
-            palette="hls")
-g.set_title("Application Type - Loan Amount", fontsize=20)
-g.set_xlabel("", fontsize=15)
-g.set_ylabel("Loan Amount", fontsize=15)
-
-plt.subplot(212)
-g1 = sns.violinplot(x="application_type", y="int_rate",data=df_loan,
-               palette="hls")
-g1.set_title("Application Type - Interest Rate", fontsize=20)
-g1.set_xlabel("", fontsize=15)
-g1.set_ylabel("Int Rate", fontsize=15)
-
-plt.subplots_adjust(wspace = 0.4, hspace = 0.4,top = 0.9)
-
+plt.figure(figsize=(5,5))
+plt.scatter(Y_sklearn[:,0], Y_sklearn[:,2],s=10)
 plt.show()
 
 
-# <h2>Looking the Home Ownership by Loan_Amount</h2>
-
 # In[ ]:
 
 
-plt.figure(figsize = (10,6))
-
-g = sns.violinplot(x="home_ownership",y="loan_amnt",data=df_loan,
-               kind="violin",
-               split=True,palette="hls",
-               hue="application_type")
-g.set_title("Homer Ownership - Loan Distribuition", fontsize=20)
-g.set_xlabel("", fontsize=15)
-g.set_ylabel("Loan Amount", fontsize=15)
-
+plt.figure(figsize=(5,5))
+plt.scatter(Y_sklearn[:,2], Y_sklearn[:,0],s=10)
 plt.show()
 
 
-# <h2> Looking the Purpose distribuition  </h2>
-
 # In[ ]:
 
 
-# Now will start exploring the Purpose variable
-print("Purposes count description: ")
-print(pd.crosstab(df_loan.purpose, df_loan.application_type))
-
-plt.figure(figsize = (12,8))
-
-plt.subplot(211)
-g = sns.countplot(x="purpose",data=df_loan,
-                  palette='hls')
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-g.set_title("Application Type - Loan Amount", fontsize=20)
-g.set_xlabel("", fontsize=15)
-g.set_ylabel("Loan Amount", fontsize=15)
-
-plt.subplot(212)
-g1 = sns.violinplot(x="purpose",y="loan_amnt",data=df_loan,
-               hue="application_type", split=True)
-g1.set_xticklabels(g1.get_xticklabels(),rotation=45)
-g1.set_title("Application Type - Loan Amount", fontsize=20)
-g1.set_xlabel("", fontsize=15)
-g1.set_ylabel("Loan Amount", fontsize=15)
-
-plt.subplots_adjust(wspace = 0.2, hspace = 0.8,top = 0.9)
+plt.figure(figsize=(5,5))
+plt.scatter(Y_sklearn[:,2], Y_sklearn[:,1],s=10)
 plt.show()
 
 
-# <h2>Looking the Grade<h2>
-
-# I will explore some variables.<br>
-# the first variable I will explore is GRADE.<br>
-# description of grade: <b>LC assigned loan grade</b>
+# Next Step : Remove useless column
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(3,1, figsize=(14,10))
-sns.boxplot(x="grade", y="loan_amnt", data=df_loan,
-            palette="hls",ax=ax[0], hue="application_type", 
-            order=["A",'B','C','D','E','F', 'G'])
-sns.violinplot(x='grade', y="int_rate",data=df_loan, 
-              hue="application_type", palette = "hls", ax=ax[1], 
-            order=["A",'B','C','D','E','F', 'G'])
-sns.lvplot(x="sub_grade", y="loan_amnt",data=df_loan, 
-               palette="hls", ax=ax[2])
+ID1 = database_df[database_df["Victim Count"] >= 1 ]
 
-plt.show()
+ID_crime = ID1['Record ID']
 
+s1 = pd.Series(ID_crime, name='ID Crime')
 
-# Very very inteWe can clearly see difference patterns between Individual and Joint applications
+data_crime = pd.concat([data_crime, s1], axis=1)
 
-# <h1>Let's look the Employment title Distribuition </h1>
+data_crime.head()
+
 
 # In[ ]:
 
 
-#First plot
-trace0 = go.Bar(
-    x = df_loan.emp_title.value_counts()[:40].index.values,
-    y = df_loan.emp_title.value_counts()[:40].values,
-    marker=dict(
-        color=df_loan.emp_title.value_counts()[:40].values
-    ),
-)
+a = Y_sklearn[:,0]
+#s2 = pd.Series(a, name='k0')
+s2 = DataFrame(index = (ID_crime-1), data =a)
 
-data = [trace0]
+data_crime1 = pd.concat([data_crime, s2], axis=1)
 
-layout = go.Layout(
-    yaxis=dict(
-        title='Count'
-    ),
-    xaxis=dict(
-        title='Employment name'
-    ),
-    title='TOP 40 Employment Title'
-)
+data_crime1 = data_crime1[data_crime1[0] >= 5 ]
 
-fig = go.Figure(data=data, layout=layout)
+data_crime1
 
-py.iplot(fig, filename='emp-title-bar')
-
-
-# <h2>And, whats the most frequent Title in our Dataset? </h2>
 
 # In[ ]:
 
 
-#First plot
-trace0 = go.Bar(
-    x = df_loan.title.value_counts()[:40].index.values,
-    y = df_loan.title.value_counts()[:40].values,
-    marker=dict(
-        color=df_loan.title.value_counts()[:40].values
-    ),
-)
+s3 = DataFrame(index = (ID_crime-1), data =Y_sklearn[:,2])
 
-data = [trace0]
+data_crime2 = pd.concat([data_crime, s3], axis=1)
 
-layout = go.Layout(
-    yaxis=dict(
-        title='Count'
-    ),
-    xaxis=dict(
-        title='Employment name'
-    ),
-    title='TOP 40 Employment Title'
-)
+data_crime2 = data_crime2[data_crime2[0] >= 8 ]
 
-fig = go.Figure(data=data, layout=layout)
-
-py.iplot(fig, filename='emp-title-bar')
+data_crime2.head()
 
 
-# <h2>Emp lenght crossed by some columns</h2>
+# In conlusion of this part, the two independant part seen on different scatterplot are linked to the age of the victim. Victim older than 85 Yo are linked by this variable.
+
+# **5) Learning Machine**
 
 # In[ ]:
 
 
-# emp_lenght description: 
-# Employment length in years. Possible values are between 0 and 10 where 0 means 
-# less than one year and 10 means ten or more years. 
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
 
-print(pd.crosstab(df_loan["emp_length"], df_loan["application_type"]))
+data_X = (data.drop(['Perpetrator Sex','Perpetrator Age','Perpetrator Race','Perpetrator Ethnicity','Relationship','Perpetrator Count'],axis=1))
 
-fig, ax = plt.subplots(2,1, figsize=(12,10))
-g = sns.boxplot(x="emp_length", y="int_rate", data=df_loan,
-              palette="hls",ax=ax[0],
-               order=["n/a",'< 1 year','1 year','2 years','3 years','4 years', '5 years',
-                      '6 years', '7 years', '8 years','9 years','10+ years'])
+Perpetrator_Sex_y = data['Perpetrator Sex'].values
+Perpetrator_Age_y = data['Perpetrator Age'].values
+Perpetrator_Race_y = data['Perpetrator Race'].values
+Perpetrator_Ethnicity_y = data['Perpetrator Ethnicity'].values
+Relationship_y = data['Relationship'].values
+Perpetrator_Count_y = data['Perpetrator Count'].values
 
-z = sns.violinplot(x="emp_length", y="loan_amnt",data=df_loan, 
-               palette="hls", ax=ax[1],
-               order=["n/a",'< 1 year','1 year','2 years','3 years','4 years', '5 years',
-                      '6 years', '7 years', '8 years','9 years','10+ years'])
-               
-plt.legend(loc='upper left')
-plt.show()
+misslabel = []
+misslabel1 = []
+misslabel2 = []
+misslabel3 = []
+misslabel4 = []
+misslabel5 = []
 
+for i in range(10):
+    np.random.seed(i)
+    indices = np.random.permutation(155851)
+    indices_train = indices[:-25000]
+    indices_test = indices[-25000:]
 
-# Interesting! We can see that the years do not influence the interest rate but it have a difference considering the loan_amount
+    data_X_train = data_X.iloc[indices_train]
+    Perpetrator_Race_y_train = Perpetrator_Race_y[indices_train]
+    Perpetrator_Sex_y_train = Perpetrator_Sex_y[indices_train]
+    Perpetrator_Age_y_train = Perpetrator_Age_y[indices_train]
+    Perpetrator_Ethnicity_y_train = Perpetrator_Ethnicity_y[indices_train]
+    Relationship_y_train = Relationship_y[indices_train]
+    Perpetrator_Count_y_train = Perpetrator_Count_y[indices_train]
+    
+    
 
-# <h2>Terms column</h2>
-
-# In[ ]:
-
-
-print('Term x application type Description')
-print(pd.crosstab(df_loan.term, df_loan.application_type))
-
-#First plot
-trace0 = go.Bar(
-    x = df_loan.term.value_counts().index.values,
-    y = df_loan.term.value_counts().values,
-    marker=dict(
-        color=df_loan.term.value_counts().values
-    ),
-)
-
-data = [trace0]
-
-layout = go.Layout(
-    yaxis=dict(
-        title='Count'
-    ),
-    xaxis=dict(
-        title='Term name'
-    ),
-    title='Term Distribuition'
-)
-
-fig = go.Figure(data=data, layout=layout)
-
-py.iplot(fig, filename='Term-bar')
+    data_X_test  = data_X.iloc[indices_test]
+    Perpetrator_Race_y_test  = Perpetrator_Race_y[indices_test]
+    Perpetrator_Sex_y_test = Perpetrator_Sex_y[indices_test]
+    Perpetrator_Age_y_test = Perpetrator_Age_y[indices_test]
+    Perpetrator_Ethnicity_y_test = Perpetrator_Ethnicity_y[indices_test]
+    Relationship_y_test = Relationship_y[indices_test]
+    Perpetrator_Count_y_test = Perpetrator_Count_y[indices_test]
 
 
-# <h2>Looking the heatmap cross tab of Adress State x Loan Status<h2>
 
-# In[ ]:
+    
+    gnb_race = GaussianNB()
+    y_pred_race = gnb_race.fit(data_X_train, Perpetrator_Race_y_train).predict(data_X_test)
+    misslabel.append((Perpetrator_Race_y_test != y_pred_race).sum()/25000)
+    
+    gnb_sex = GaussianNB()
+    y_pred_sex = gnb_sex.fit(data_X_train, Perpetrator_Sex_y_train).predict(data_X_test)
+
+    misslabel1.append((Perpetrator_Sex_y_test != y_pred_sex).sum()/25000)
+    
+    #gnb_age = GaussianNB()
+    #y_pred_age = gnb_age.fit(data_X_train, Perpetrator_Age_y_train).predict(data_X_test)
+
+    #misslabel2.append((Perpetrator_Age_y_test != y_pred_age).sum()/25000)
+    
+    gnb_ethni = GaussianNB()
+    y_pred_ethni = gnb_ethni.fit(data_X_train, Perpetrator_Ethnicity_y_train).predict(data_X_test)
+
+    misslabel3.append((Perpetrator_Ethnicity_y_test != y_pred_ethni).sum()/25000)
+     
+    gnb_rela = GaussianNB()
+    y_pred_rela = gnb_rela.fit(data_X_train, Relationship_y_train).predict(data_X_test)
+
+    misslabel4.append((Relationship_y_test != y_pred_rela).sum()/25000)
+    
+    gnb_count = GaussianNB()
+    y_pred_count = gnb_count.fit(data_X_train, Perpetrator_Count_y_train).predict(data_X_test)
+
+    misslabel5.append((Perpetrator_Count_y_test != y_pred_count).sum()/25000)
+    
 
 
-#Exploring the State Adress x Loan Status
-adress_loan = ['addr_state', 'loan_status']
-cm = sns.light_palette("green", as_cmap=True)
-pd.crosstab(df_loan[adress_loan[0]], df_loan[adress_loan[1]]).style.background_gradient(cmap = cm)
+    knn_rela = KNeighborsClassifier()
+    knn_rela.fit(data_X_train, Relationship_y_train)
+    
+    misslabel4.append((Relationship_y_test != knn_rela.predict(data_X_test)).sum()/25000)
+    
+    
+print("Misslabel Perpetrator Race : ",misslabel)
+print("Misslabel Perpetrator Sex : ",misslabel1)
+print("Misslabel Perpetrator Ethnicity : ",misslabel3)
+print("Misslabel Perpetrator Count : ",misslabel5)
+print("Misslabel Perpetrator Age : ",misslabel2)
+print("Misslabel Perpetrator Relationship : ",misslabel4)
 
 
-# <h1> Someone can tell me about plot the map using the initials? 
+# With Naives_Bayes it's possible to predict 3 classes around 90% true. With only data on victims, we can estimate the Perpretator Race, the Ethnicity and the Perpetrator Race (Be carefull with the last, it's possible to overestimate the precision with a larger amount of male).

@@ -1,162 +1,187 @@
-import csv
-import gzip
-###
 import numpy as np
-###
-from keras.layers.advanced_activations import PReLU
-from keras.layers.core import Dense, Dropout, Activation
-from keras.layers.normalization import BatchNormalization
-from keras.models import Sequential
-from keras.utils import np_utils
-from sklearn import metrics
-from sklearn.cross_validation import KFold
-from sklearn.preprocessing import StandardScaler
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesRegressor
+from sklearn import cross_validation
+import re
+import operator
+from sklearn.feature_selection import SelectKBest, f_classif
+
+#Print you can execute arbitrary python code
+train = pd.read_csv("../input/train.csv", dtype={"Age": np.float64}, )
+test = pd.read_csv("../input/test.csv", dtype={"Age": np.float64}, )
+
+target = train["Survived"].values
+full = pd.concat([train, test])
+#print(full.head())
+#print(full.describe())
+#print(full.info())
+
+full['surname'] = full["Name"].apply(lambda x: x.split(',')[0].lower())
+
+full["Title"] = full["Name"].apply(lambda x: re.search(' ([A-Za-z]+)\.',x).group(1))
+title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Dr": 5, "Rev": 6, "Major": 7, "Col": 7, "Mlle": 2, "Mme": 3,"Don": 9,"Dona": 9, "Lady": 10, "Countess": 10, "Jonkheer": 10, "Sir": 9, "Capt": 7, "Ms": 2}
+full["TitleCat"] = full.loc[:,'Title'].map(title_mapping)
+
+full["FamilySize"] = full["SibSp"] + full["Parch"] + 1
+full["FamilySize"] = pd.cut(full["FamilySize"], bins=[0,1,4,20], labels=[0,1,2])
+
+full["NameLength"] = full["Name"].apply(lambda x: len(x))
+
+full["Embarked"] = pd.Categorical.from_array(full.Embarked).codes
+
+full["Fare"] = full["Fare"].fillna(8.05)
+
+full = pd.concat([full,pd.get_dummies(full['Sex'])],axis=1)
+
+full['CabinCat'] = pd.Categorical.from_array(full.Cabin.fillna('0').apply(lambda x: x[0])).codes
+
+# function to get oven/odd/null from cabine 
+def get_type_cabine(cabine):
+    # Use a regular expression to search for a title. 
+    cabine_search = re.search('\d+', cabine)
+    # If the title exists, extract and return it.
+    if cabine_search:
+        num = cabine_search.group(0)
+        if np.float64(num) % 2 == 0:
+            return '2'
+        else:
+            return '1'
+    return '0'
+full["Cabin"] = full["Cabin"].fillna(" ")
+
+full["CabinType"] = full["Cabin"].apply(get_type_cabine)
+#print(pd.value_counts(full["CabinType"]))
 
 
-def get_data(fn):
-  data = []
-  with open(fn) as f:
-    reader = csv.DictReader(f)
-    data = [row for row in reader]
-  return data
+
+#### CHILD/FEMALE ADULT/MALE ADULT------------------------------------------------------------
+child_age = 18
+def get_person(passenger):
+    age, sex = passenger
+    if (age < child_age):
+        return 'child'
+    elif (sex == 'female'):
+        return 'female_adult'
+    else:
+        return 'male_adult'
+full = pd.concat([full, pd.DataFrame(full[['Age', 'Sex']].apply(get_person, axis=1), columns=['person'])],axis=1)
+full = pd.concat([full,pd.get_dummies(full['person'])],axis=1)
+
+### FEATURES BASED ON TICKET   --------------------------------------------------------
+table_ticket = pd.DataFrame(full["Ticket"].value_counts())
+table_ticket.rename(columns={'Ticket':'Ticket_Members'}, inplace=True)
+
+table_ticket['Ticket_perishing_women'] = full.Ticket[(full.female_adult == 1.0) 
+                                    & (full.Survived == 0.0) 
+                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
+table_ticket['Ticket_perishing_women'] = table_ticket['Ticket_perishing_women'].fillna(0)
+table_ticket['Ticket_perishing_women'][table_ticket['Ticket_perishing_women'] > 0] = 1.0 
+
+table_ticket['Ticket_surviving_men'] = full.Ticket[(full.male_adult == 1.0) 
+                                    & (full.Survived == 1.0) 
+                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
+table_ticket['Ticket_surviving_men'] = table_ticket['Ticket_surviving_men'].fillna(0)
+table_ticket['Ticket_surviving_men'][table_ticket['Ticket_surviving_men'] > 0] = 1.0 
+
+table_ticket["Ticket_Id"]= pd.Categorical.from_array(table_ticket.index).codes
+# compress under 3 members into one code.
+table_ticket["Ticket_Id"][table_ticket["Ticket_Members"] < 3 ] = -1
+table_ticket["Ticket_Members"] = pd.cut(table_ticket["Ticket_Members"], bins=[0,1,4,20], labels=[0,1,2])
+
+full = pd.merge(full, table_ticket, left_on="Ticket",right_index=True,how='left', sort=False)
+
+### FEATURES BASED ON SURNAME    --------------------------------------------------------
+table_surname = pd.DataFrame(full["surname"].value_counts())
+table_surname.rename(columns={'surname':'Surname_Members'}, inplace=True)
+
+table_surname['Surname_perishing_women'] = full.surname[(full.female_adult == 1.0) 
+                                    & (full.Survived == 0.0) 
+                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
+table_surname['Surname_perishing_women'] = table_surname['Surname_perishing_women'].fillna(0)
+table_surname['Surname_perishing_women'][table_surname['Surname_perishing_women'] > 0] = 1.0 
+
+table_surname['Surname_surviving_men'] = full.surname[(full.male_adult == 1.0) 
+                                    & (full.Survived == 1.0) 
+                                    & ((full.Parch > 0) | (full.SibSp > 0))].value_counts()
+table_surname['Surname_surviving_men'] = table_surname['Surname_surviving_men'].fillna(0)
+table_surname['Surname_surviving_men'][table_surname['Surname_surviving_men'] > 0] = 1.0 
+
+table_surname["Surname_Id"]= pd.Categorical.from_array(table_surname.index).codes
+# compress under 3 members into one code.
+table_surname["Surname_Id"][table_surname["Surname_Members"] < 3 ] = -1
+
+table_surname["Surname_Members"] = pd.cut(table_surname["Surname_Members"], bins=[0,1,4,20], labels=[0,1,2])
+
+full = pd.merge(full, table_surname, left_on="surname",right_index=True,how='left', sort=False)
+
+### AGE PROCESSING --------------------------------------------------------------------------
+classers = ['Fare','Parch','Pclass','SibSp','TitleCat', 
+'CabinCat','female','male', 'Embarked', 'FamilySize', 'NameLength','Ticket_Members','Ticket_Id']
+etr = ExtraTreesRegressor(n_estimators=200)
+X_train = full[classers][full['Age'].notnull()]
+Y_train = full['Age'][full['Age'].notnull()]
+X_test = full[classers][full['Age'].isnull()]
+etr.fit(X_train,np.ravel(Y_train))
+age_preds = etr.predict(X_test)
+full['Age'][full['Age'].isnull()] = age_preds
+
+# FEATURES -----------------------------------------------------------------------------------
+features = ['female','male','Age','male_adult','female_adult', 'child','TitleCat', 'Pclass',
+'Pclass','Ticket_Id','NameLength','CabinType','CabinCat', 'SibSp', 'Parch',
+'Fare','Embarked','Surname_Members','Ticket_Members','FamilySize',
+'Ticket_perishing_women','Ticket_surviving_men',
+'Surname_perishing_women','Surname_surviving_men']
+
+train = full[0:891].copy()
+test = full[891:].copy()
+
+selector = SelectKBest(f_classif, k=len(features))
+selector.fit(train[features], target)
+scores = -np.log10(selector.pvalues_)
+indices = np.argsort(scores)[::-1]
+print("Features importance :")
+for f in range(len(scores)):
+    print("%0.2f %s" % (scores[indices[f]],features[indices[f]]))
+
+# BEST CLASSIFIER METHOD ==> RANDOM FOREST -----------------------------------------------------
+rfc = RandomForestClassifier(n_estimators=3000, min_samples_split=4, class_weight={0:0.745,1:0.255})
 
 
-def get_fields(data, fields):
-  extracted = []
-  for row in data:
-    extract = []
-    for field, f in sorted(fields.items()):
-      info = f(row[field])
-      if type(info) == list:
-        extract.extend(info)
-      else:
-        extract.append(info)
-    extracted.append(np.array(extract, dtype=np.float32))
-  return extracted
+# CROSS VALIDATION WITH RANDOM FOREST CLASSIFIER METHOD-----------------------------------------
+kf = cross_validation.KFold(train.shape[0], n_folds=3, random_state=1)
+
+scores = cross_validation.cross_val_score(rfc, train[features], target, cv=kf)
+print("Accuracy: %0.3f (+/- %0.2f) [%s]" % (scores.mean()*100, scores.std()*100, 'RFC Cross Validation'))
+rfc.fit(train[features], target)
+score = rfc.score(train[features], target)
+print("Accuracy: %0.3f            [%s]" % (score*100, 'RFC full test'))
+importances = rfc.feature_importances_
+indices = np.argsort(importances)[::-1]
+for f in range(len(features)):
+    print("%d. feature %d (%f) %s" % (f + 1, indices[f]+1, importances[indices[f]]*100, features[indices[f]]))
 
 
-def shuffle(X, y, seed=1337):
-  np.random.seed(seed)
-  shuffle = np.arange(len(y))
-  np.random.shuffle(shuffle)
-  X = X[shuffle]
-  y = y[shuffle]
-  return X, y
+# PREDICTION  -----------------------------------------------------------------------------------
+rfc.fit(train[features], target)
+predictions = rfc.predict(test[features])
+
+# OUTPUT FILE -----------------------------------------------------------------------------------
+PassengerId =np.array(test["PassengerId"]).astype(int)
+my_prediction = pd.DataFrame(predictions, PassengerId, columns = ["Survived"])
+
+my_prediction.to_csv("my_prediction.csv", index_label = ["PassengerId"])
+
+print("The end ...")
 
 
-def preprocess_data(X, scaler=None):
-  if not scaler:
-    scaler = StandardScaler()
-    scaler.fit(X)
-  X = scaler.transform(X)
-  return X, scaler
 
 
-def dating(x):
-  date, time = x.split(' ')
-  y, m, d = map(int, date.split('-'))
-  time = time.split(':')[:2]
-  time = int(time[0]) * 60 + int(time[1])
-  return [y, m, d, time]
-
-days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-districts = ['BAYVIEW', 'CENTRAL', 'INGLESIDE', 'MISSION', 'NORTHERN', 'PARK', 'RICHMOND', 'SOUTHERN', 'TARAVAL', 'TENDERLOIN']
-labels = 'ARSON,ASSAULT,BAD CHECKS,BRIBERY,BURGLARY,DISORDERLY CONDUCT,DRIVING UNDER THE INFLUENCE,DRUG/NARCOTIC,DRUNKENNESS,EMBEZZLEMENT,EXTORTION,FAMILY OFFENSES,FORGERY/COUNTERFEITING,FRAUD,GAMBLING,KIDNAPPING,LARCENY/THEFT,LIQUOR LAWS,LOITERING,MISSING PERSON,NON-CRIMINAL,OTHER OFFENSES,PORNOGRAPHY/OBSCENE MAT,PROSTITUTION,RECOVERED VEHICLE,ROBBERY,RUNAWAY,SECONDARY CODES,SEX OFFENSES FORCIBLE,SEX OFFENSES NON FORCIBLE,STOLEN PROPERTY,SUICIDE,SUSPICIOUS OCC,TREA,TRESPASS,VANDALISM,VEHICLE THEFT,WARRANTS,WEAPON LAWS'.split(',')
-data_fields = {
-    'X': lambda x: float(x),
-    'Y': lambda x: float(x),
-    'DayOfWeek': lambda x: days.index(x) / float(len(days)),
-    'Address': lambda x: [1 if 'block' in x.lower() else 0],
-    'PdDistrict': lambda x: [1 if x == d else 0 for d in districts],
-    'Dates': dating,  # Parse 2015-05-13 23:53:00
-}
-label_fields = {'Category': lambda x: labels.index(x.replace(',', ''))}
-
-print('Loading training data...')
-raw_train = get_data('../input/train.csv')
-print('Creating training data...')
-X = np.array(get_fields(raw_train, data_fields), dtype=np.float32)
-print('Creating training labels...')
-y = np.array(get_fields(raw_train, label_fields))
-del raw_train
-
-X, y = shuffle(X, y)
-X, scaler = preprocess_data(X)
-Y = np_utils.to_categorical(y)
-
-input_dim = X.shape[1]
-output_dim = len(labels)
-print('Input dimensions: {}'.format(input_dim))
 
 
-def build_model(input_dim, output_dim, hn=32, dp=0.5, layers=1):
-    model = Sequential()
-    model.add(Dense(input_dim, hn, init='glorot_uniform'))
-    model.add(PReLU((hn,)))
-    model.add(Dropout(dp))
 
-    for i in range(layers):
-      model.add(Dense(hn, hn, init='glorot_uniform'))
-      model.add(PReLU((hn,)))
-      model.add(BatchNormalization((hn,)))
-      model.add(Dropout(dp))
 
-    model.add(Dense(hn, output_dim, init='glorot_uniform'))
-    model.add(Activation('softmax'))
 
-    model.compile(loss='categorical_crossentropy', optimizer='adam')
-    return model
 
-EPOCHS = 1
-BATCHES = 128
-HN = 64
-RUN_FOLDS = False
-nb_folds = 4
-kfolds = KFold(len(y), nb_folds)
-av_ll = 0.
-f = 0
-if RUN_FOLDS:
-  for train, valid in kfolds:
-      print('---' * 20)
-      print('Fold', f)
-      print('---' * 20)
-      f += 1
-      X_train = X[train]
-      X_valid = X[valid]
-      Y_train = Y[train]
-      Y_valid = Y[valid]
-      y_valid = y[valid]
 
-      print("Building model...")
-      model = build_model(input_dim, output_dim, HN)
 
-      print("Training model...")
 
-      model.fit(X_train, Y_train, nb_epoch=EPOCHS, batch_size=BATCHES, validation_data=(X_valid, Y_valid), verbose=0)
-      valid_preds = model.predict_proba(X_valid)
-      ll = metrics.log_loss(y_valid, valid_preds)
-      print("LL:", ll)
-      av_ll += ll
-  print('Average LL:', av_ll / nb_folds)
-
-print("Generating submission...")
-
-model = build_model(input_dim, output_dim, HN)
-model.fit(X, Y, nb_epoch=EPOCHS, batch_size=BATCHES, verbose=0)
-
-print('Loading testing data...')
-raw_test = get_data('../input/test.csv')
-print('Creating testing data...')
-X_test = np.array(get_fields(raw_test, data_fields), dtype=np.float32)
-del raw_test
-X_test, _ = preprocess_data(X_test, scaler)
-
-print('Predicting over testing data...')
-preds = model.predict_proba(X_test, verbose=0)
-
-with gzip.open('sf-nn.csv.gz', 'wt') as outf:
-  fo = csv.writer(outf, lineterminator='\n')
-  fo.writerow(['Id'] + labels)
-
-  for i, pred in enumerate(preds):
-    fo.writerow([i] + list(pred))

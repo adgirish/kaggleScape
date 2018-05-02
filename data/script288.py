@@ -1,188 +1,275 @@
 
 # coding: utf-8
 
-# The previously suggested Lung Segmentation methods in the challenge Kernels mainly involve thresholding the lung tissue based on its hounsfield value and using morphological dilation to include nodules in border regions. These methods have the severe drawback of also including lots of tissue that is neither lung, nor a region of interest. I coded up an algorithm based on the one presented in R Shojaii et al (2005, DOI: 10.1109/ICIP.2005.1530294) with some modifications, that I will present here. Some preprocessing and presentation code for this is also taken from the Kernels presented by Guido Zuidhof and ArnavJain. Lots of thanks to them for sharing their code.
-# 
-# The resulting CT Images are in HU and have the same (not necessarily equidistant) scale as the original scans.
+# # Import packages
 
 # In[ ]:
 
 
-# Required Imports and loading up a scan for processing as presented by Guide Zuidhof
+# Linear algebra
+import numpy as np
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+# Data processing, CSV file I/O (e.g. pd.read_csv)
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import dicom
-import os
-import scipy.ndimage as ndimage
-import matplotlib.pyplot as plt
+# Analyze data skewness
+from scipy.stats import skew
 
-from skimage import measure, morphology, segmentation
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+# Label encoder
+from sklearn.preprocessing import LabelEncoder
 
-# Some constants 
-INPUT_FOLDER = '../input/sample_images/'
-patients = os.listdir(INPUT_FOLDER)
-patients.sort()
+# Import Ensemble models
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import LinearRegression
+from mlxtend.regressor import StackingRegressor
 
-# Load the scans in given folder path
-def load_scan(path):
-    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
-    slices.sort(key = lambda x: int(x.InstanceNumber))
-    try:
-        slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
-    except:
-        slice_thickness = np.abs(slices[0].SliceLocation - slices[1].SliceLocation)
-        
-    for s in slices:
-        s.SliceThickness = slice_thickness
-        
-    return slices
-
-def get_pixels_hu(scans):
-    image = np.stack([s.pixel_array for s in scans])
-    # Convert to int16 (from sometimes int16), 
-    # should be possible as values should always be low enough (<32k)
-    image = image.astype(np.int16)
-
-    # Set outside-of-scan pixels to 0
-    # The intercept is usually -1024, so air is approximately 0
-    image[image == -2000] = 0
-    
-    # Convert to Hounsfield units (HU)
-    intercept = scans[0].RescaleIntercept
-    slope = scans[0].RescaleSlope
-    
-    if slope != 1:
-        image = slope * image.astype(np.float64)
-        image = image.astype(np.int16)
-        
-    image += np.int16(intercept)
-    
-    return np.array(image, dtype=np.int16)
-
-test_patient_scans = load_scan(INPUT_FOLDER + patients[8])
-test_patient_images = get_pixels_hu(test_patient_scans)
-print ("Original Slice")
-plt.imshow(test_patient_images[65], cmap='gray')
-plt.show()
+# Metrics for root mean squared error
+from sklearn.metrics import mean_squared_error
+from math import sqrt
 
 
-# In order to use marker based watershed segmentation, we need to identify two markers. An internal marker, that is definitely lung tissue and an external marker, that is definitely outside of our ROI. We're starting by creating the internal marker by thresholding the Image and removing all regions but the biggest one. The external marker is created by morphological dilation of the internal marker with 2 different iterations and subtracting the results. A watershed marker is created superimposing the 2 markers with different grayscale values.
+# # Load data
 
 # In[ ]:
 
 
-# Some of the starting Code is taken from ArnavJain, since it's more readable then my own
-def generate_markers(image):
-    #Creation of the internal Marker
-    marker_internal = image < -400
-    marker_internal = segmentation.clear_border(marker_internal)
-    marker_internal_labels = measure.label(marker_internal)
-    areas = [r.area for r in measure.regionprops(marker_internal_labels)]
-    areas.sort()
-    if len(areas) > 2:
-        for region in measure.regionprops(marker_internal_labels):
-            if region.area < areas[-2]:
-                for coordinates in region.coords:                
-                       marker_internal_labels[coordinates[0], coordinates[1]] = 0
-    marker_internal = marker_internal_labels > 0
-    #Creation of the external Marker
-    external_a = ndimage.binary_dilation(marker_internal, iterations=10)
-    external_b = ndimage.binary_dilation(marker_internal, iterations=55)
-    marker_external = external_b ^ external_a
-    #Creation of the Watershed Marker matrix
-    marker_watershed = np.zeros((512, 512), dtype=np.int)
-    marker_watershed += marker_internal * 255
-    marker_watershed += marker_external * 128
-    
-    return marker_internal, marker_external, marker_watershed
+# Load training data
+df_train = pd.read_csv('../input/train.csv')
 
-#Show some example markers from the middle        
-test_patient_internal, test_patient_external, test_patient_watershed = generate_markers(test_patient_images[65])
-print ("Internal Marker")
-plt.imshow(test_patient_internal, cmap='gray')
-plt.show()
-print ("External Marker")
-plt.imshow(test_patient_external, cmap='gray')
-plt.show()
-print ("Watershed Marker")
-plt.imshow(test_patient_watershed, cmap='gray')
-plt.show()
+# Load test data
+df_test = pd.read_csv('../input/test.csv')
 
 
-# Now we apply the marker based Watershed algorithm to find the precise border of the Lung located in the Black strip of the Watershed marker shown above. In order to do the algorithm we also need the Sobel-Gradient-Image of our original scan, which is calculated first.
+# # Adjust data
 # 
-# In order to not miss nodules located next to the border regions a Black Top Hat Operation is performed to re-include those areas and areas surrounding the lung-hili. This is the main advantage of this method here over the methods from other kernels: Only areas that need re-inclusion get dilated, everywhere else the lung border stays precise.
 
 # In[ ]:
 
 
-def seperate_lungs(image):
-    #Creation of the markers as shown above:
-    marker_internal, marker_external, marker_watershed = generate_markers(image)
-    
-    #Creation of the Sobel-Gradient
-    sobel_filtered_dx = ndimage.sobel(image, 1)
-    sobel_filtered_dy = ndimage.sobel(image, 0)
-    sobel_gradient = np.hypot(sobel_filtered_dx, sobel_filtered_dy)
-    sobel_gradient *= 255.0 / np.max(sobel_gradient)
-    
-    #Watershed algorithm
-    watershed = morphology.watershed(sobel_gradient, marker_watershed)
-    
-    #Reducing the image created by the Watershed algorithm to its outline
-    outline = ndimage.morphological_gradient(watershed, size=(3,3))
-    outline = outline.astype(bool)
-    
-    #Performing Black-Tophat Morphology for reinclusion
-    #Creation of the disk-kernel and increasing its size a bit
-    blackhat_struct = [[0, 0, 1, 1, 1, 0, 0],
-                       [0, 1, 1, 1, 1, 1, 0],
-                       [1, 1, 1, 1, 1, 1, 1],
-                       [1, 1, 1, 1, 1, 1, 1],
-                       [1, 1, 1, 1, 1, 1, 1],
-                       [0, 1, 1, 1, 1, 1, 0],
-                       [0, 0, 1, 1, 1, 0, 0]]
-    blackhat_struct = ndimage.iterate_structure(blackhat_struct, 8)
-    #Perform the Black-Hat
-    outline += ndimage.black_tophat(outline, structure=blackhat_struct)
-    
-    #Use the internal marker and the Outline that was just created to generate the lungfilter
-    lungfilter = np.bitwise_or(marker_internal, outline)
-    #Close holes in the lungfilter
-    #fill_holes is not used here, since in some slices the heart would be reincluded by accident
-    lungfilter = ndimage.morphology.binary_closing(lungfilter, structure=np.ones((5,5)), iterations=3)
-    
-    #Apply the lungfilter (note the filtered areas being assigned -2000 HU)
-    segmented = np.where(lungfilter == 1, image, -2000*np.ones((512, 512)))
-    
-    return segmented, lungfilter, outline, watershed, sobel_gradient, marker_internal, marker_external, marker_watershed
-
-#Some Testcode:
-test_segmented, test_lungfilter, test_outline, test_watershed, test_sobel_gradient, test_marker_internal, test_marker_external, test_marker_watershed = seperate_lungs(test_patient_images[65])
-
-print ("Sobel Gradient")
-plt.imshow(test_sobel_gradient, cmap='gray')
-plt.show()
-print ("Watershed Image")
-plt.imshow(test_watershed, cmap='gray')
-plt.show()
-print ("Outline after reinclusion")
-plt.imshow(test_outline, cmap='gray')
-plt.show()
-print ("Lungfilter after closing")
-plt.imshow(test_lungfilter, cmap='gray')
-plt.show()
-print ("Segmented Lung")
-plt.imshow(test_segmented, cmap='gray')
-plt.show()
+# Remove outliers
+df_train = df_train.drop(
+    df_train[(df_train['GrLivArea']>4000) & (df_train['SalePrice']<300000)].index)
 
 
-# The resulting images of this code are still in the original dimensions of the CT Scan and in Hounsfield Units with the filtered areas being assigned -2000.
-# 
-# This method of lung segmentation preserves the original lung border very precisely while re-including possible nodule candidates in border regions. The main downside is the much longer processing time per patient.
-# 
-# Please note in the end: I'm a c# exile, so my code might not be the fastest or most pythonesque. Please excuse this.
+# In[ ]:
+
+
+# Concatenate data
+all_data = pd.concat((df_train.loc[:,'MSSubClass':'SaleCondition'],
+                      df_test.loc[:,'MSSubClass':'SaleCondition']))
+
+
+# In[ ]:
+
+
+# Drop utilities column
+all_data = all_data.drop(['Utilities'], axis=1)
+
+
+# # Impute missing data
+
+# In[ ]:
+
+
+# Impute missing categorical values
+all_data["PoolQC"] = all_data["PoolQC"].fillna("None")
+all_data["MiscFeature"] = all_data["MiscFeature"].fillna("None")
+all_data["Alley"] = all_data["Alley"].fillna("None")
+all_data["Fence"] = all_data["Fence"].fillna("None")
+all_data["FireplaceQu"] = all_data["FireplaceQu"].fillna("None")
+for col in ('GarageType', 'GarageFinish', 'GarageQual', 'GarageCond'):
+    all_data[col] = all_data[col].fillna('None')
+for col in ('BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2'):
+    all_data[col] = all_data[col].fillna('None')
+all_data['MSZoning'] = all_data['MSZoning'].fillna(all_data['MSZoning'].mode()[0])
+all_data["MasVnrType"] = all_data["MasVnrType"].fillna("None")
+all_data["Functional"] = all_data["Functional"].fillna("Typ")
+all_data['Electrical'] = all_data['Electrical'].fillna(all_data['Electrical'].mode()[0])
+all_data['KitchenQual'] = all_data['KitchenQual'].fillna(all_data['KitchenQual'].mode()[0])
+all_data['Exterior1st'] = all_data['Exterior1st'].fillna(all_data['Exterior1st'].mode()[0])
+all_data['Exterior2nd'] = all_data['Exterior2nd'].fillna(all_data['Exterior2nd'].mode()[0])
+all_data['SaleType'] = all_data['SaleType'].fillna(all_data['SaleType'].mode()[0])
+all_data['MSSubClass'] = all_data['MSSubClass'].fillna("None")
+
+
+# In[ ]:
+
+
+# Group by neighborhood and fill in missing value by the median LotFrontage of all the neighborhood
+all_data["LotFrontage"] = all_data.groupby("Neighborhood")["LotFrontage"].transform(
+    lambda x: x.fillna(x.median()))
+
+for col in ('GarageYrBlt', 'GarageArea', 'GarageCars'):
+    all_data[col] = all_data[col].fillna(0)
+    
+for col in ('BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF','TotalBsmtSF', 'BsmtFullBath', 'BsmtHalfBath'):
+    all_data[col] = all_data[col].fillna(0)
+    
+all_data["MasVnrArea"] = all_data["MasVnrArea"].fillna(0)
+
+
+# # Transform numerical to categorical
+
+# In[ ]:
+
+
+#MSSubClass=The building class
+all_data['MSSubClass'] = all_data['MSSubClass'].apply(str)
+
+#Changing OverallCond into a categorical variable
+all_data['OverallCond'] = all_data['OverallCond'].astype(str)
+
+#Year and month sold are transformed into categorical features.
+all_data['YrSold'] = all_data['YrSold'].astype(str)
+all_data['MoSold'] = all_data['MoSold'].astype(str)
+
+
+# # Include "TotalSF" feature
+
+# In[ ]:
+
+
+# Adding total sqfootage feature 
+all_data['TotalSF'] = all_data['TotalBsmtSF'] + all_data['1stFlrSF'] + all_data['2ndFlrSF']
+
+
+# # Transform skewed numerical data
+
+# In[ ]:
+
+
+#log transform the target:
+df_train["SalePrice"] = np.log1p(df_train["SalePrice"])
+
+
+# In[ ]:
+
+
+#log transform skewed numeric features:
+numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
+
+skewed_feats = all_data[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
+skewed_feats = skewed_feats[skewed_feats > 0.75]
+skewed_feats = skewed_feats.index
+
+all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
+
+
+#  # Encode and extract dummies from categorical features
+
+# In[ ]:
+
+
+cols = ('FireplaceQu', 'BsmtQual', 'BsmtCond', 'GarageQual', 'GarageCond', 
+        'ExterQual', 'ExterCond','HeatingQC', 'PoolQC', 'KitchenQual', 'BsmtFinType1', 
+        'BsmtFinType2', 'Functional', 'Fence', 'BsmtExposure', 'GarageFinish', 'LandSlope',
+        'LotShape', 'PavedDrive', 'Street', 'Alley', 'CentralAir', 'MSSubClass', 'OverallCond', 
+        'YrSold', 'MoSold')
+
+# process columns, apply LabelEncoder to categorical features
+for c in cols:
+    lbl = LabelEncoder() 
+    lbl.fit(list(all_data[c].values)) 
+    all_data[c] = lbl.transform(list(all_data[c].values))
+
+
+# In[ ]:
+
+
+all_data = pd.get_dummies(all_data)
+
+
+# # Select features
+# In this notebook, we will sellect all numeric features.
+
+# In[ ]:
+
+
+X_train = all_data[:df_train.shape[0]]
+X_test = all_data[df_train.shape[0]:]
+
+y = df_train.SalePrice
+
+
+# # Ensemble
+# XGBoost + Lasso + ElasticNet
+
+# In[ ]:
+
+
+# Initialize models
+lr = LinearRegression(
+    n_jobs = -1
+)
+
+rd = Ridge(
+    alpha = 4.84
+)
+
+rf = RandomForestRegressor(
+    n_estimators = 12,
+    max_depth = 3,
+    n_jobs = -1
+)
+
+gb = GradientBoostingRegressor(
+    n_estimators = 40,
+    max_depth = 2
+)
+
+nn = MLPRegressor(
+    hidden_layer_sizes = (90, 90),
+    alpha = 2.75
+)
+
+
+# In[ ]:
+
+
+# Initialize Ensemble
+model = StackingRegressor(
+    regressors=[rf, gb, nn, rd],
+    meta_regressor=lr
+)
+
+# Fit the model on our data
+model.fit(X_train, y)
+
+
+# In[ ]:
+
+
+# Predict training set
+y_pred = model.predict(X_train)
+print(sqrt(mean_squared_error(y, y_pred)))
+
+
+# In[ ]:
+
+
+# Predict test set
+Y_pred = model.predict(X_test)
+
+
+# # Submission
+
+# In[ ]:
+
+
+# Create empty submission dataframe
+sub = pd.DataFrame()
+
+# Insert ID and Predictions into dataframe
+sub['Id'] = df_test['Id']
+sub['SalePrice'] = np.expm1(Y_pred)
+
+# Output submission file
+sub.to_csv('submission.csv',index=False)
+
+
+# # See also:
+# * [Alexandru Papiu's Regularized Linear Models](https://www.kaggle.com/apapiu/regularized-linear-models)
+# * [Serigne's Stacked Regressions : Top 4% on LeaderBoard](https://www.kaggle.com/serigne/stacked-regressions-top-4-on-leaderboard)

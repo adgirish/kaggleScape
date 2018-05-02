@@ -1,174 +1,415 @@
 
 # coding: utf-8
 
-# # Styling your plots
+# # Introduction
 # 
-# ## Introduction
+# Thanks to [Peter Giannakopoulos](https://www.kaggle.com/petrosgk) and [Heng CherKeng](https://www.kaggle.com/hengck23) for their starter kits. I collected their data augmentation methods and added a few based on the keras.preprocessing.image.
 # 
-# Whenever exposing your work to an external audience (like, say, the Kaggle userbase), styling your work is a must. The defaults in `pandas` (and other tools) are rarely exactly right for the message you want to communicate. Tweaking your plot can greatly enhance the communicative power of your visualizations, helping to make your work more impactful.
-# 
-# In this section we'll learn how to style the visualizations we've been creating. Because there are *so many* things you can tweak in your plot, it's impossible to cover everything, so we won't try to be comprehensive here. Instead this section will cover some of the most useful basics: changing figure sizes, colors, and font sizes; adding titles; and removing axis borders.
-# 
-# An important skill in plot styling is knowing how to look things up. Comments like "I have been using Matplotlib for a decade now, and I still have to look most things up" are [all too common](https://youtu.be/aRxahWy-ul8?t=2m42s). If you're styling a `seaborn` plot, the library's [gallery](http://seaborn.pydata.org/examples/) and [API documentation](https://seaborn.pydata.org/api.html) are a great place to find styling options. And for both `seaborn` and `pandas` there is a wealth of information that you can find by looking up "how to do X with Y" on [StackOverflow](https://stackoverflow.com/) (replacing X with what you want to do, and Y with `pandas` or `seaborn`). If you want to change your plot in some way not covered in this brief tutorial, and don't already know what function you need to do it, searching like this is the most efficient way of finding it.
+# Let me know if they help your learning process.
 
 # In[ ]:
 
 
+import numpy as np
 import pandas as pd
-reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
-reviews.head(3)
-
-
-# ## Points on style
-# 
-# Recall our bar plot from earlier:
-
-# In[ ]:
-
-
-reviews['points'].value_counts().sort_index().plot.bar()
-
-
-# Throughout this section we're going to work on making this plot look nicer.
-# 
-# This plot is kind of hard to see. So make it bigger! We can use the `figsize` parameter to do that.
-
-# In[ ]:
-
-
-reviews['points'].value_counts().sort_index().plot.bar(figsize=(12, 6))
-
-
-# `figsize` controls the size of the image, in inches. It expects a tuple of `(width, height)` values.
-# 
-# Next, we can change the color of the bars to be more thematic, using the `color` parameter.
-
-# In[ ]:
-
-
-reviews['points'].value_counts().sort_index().plot.bar(
-    figsize=(12, 6),
-    color='mediumvioletred'
-)
-
-
-# The text labels are very hard to read at this size. They fit the plot when our plot was very small, but now that the plot is much bigger we need much bigger labels. We can used `fontsize` to adjust this.
-
-# In[ ]:
-
-
-reviews['points'].value_counts().sort_index().plot.bar(
-    figsize=(12, 6),
-    color='mediumvioletred',
-    fontsize=16
-)
-
-
-# We also need a `title`.
-
-# In[ ]:
-
-
-reviews['points'].value_counts().sort_index().plot.bar(
-    figsize=(12, 6),
-    color='mediumvioletred',
-    fontsize=16,
-    title='Rankings Given by Wine Magazine',
-)
-
-
-# However, this title is too small. Unfortunately, `pandas` doesn't give us an easy way of adjusting the title size.
-# 
-# Under the hood, `pandas` data visualization tools are built on top of another, lower-level graphics library called `matplotlib`. Anything that you build in `pandas` can be built using `matplotlib` directly. `pandas` merely make it easier to get that work done.
-# 
-# `matplotlib` *does* provide a way of adjusting the title size. Let's go ahead and do it that way, and see what's different:
-
-# In[ ]:
-
-
+# import tensorflow as tf
+from keras.preprocessing import image
+from os.path import join
 import matplotlib.pyplot as plt
 
-ax = reviews['points'].value_counts().sort_index().plot.bar(
-    figsize=(12, 6),
-    color='mediumvioletred',
-    fontsize=16
-)
-ax.set_title("Rankings Given by Wine Magazine", fontsize=20)
-
-
-# In the cell immediately above, all we've done is grabbed that object, assigned it to the variable `ax`, and then called `set_title` on `ax`. The `ax.set_title` method makes it easy to change the fontsize; the `title=` keyword parameter in the `pandas` library does not.
-# 
-# `seaborn`, covered in a separate section of the tutorial, *also* uses `matplotlib` under the hood. This means that the tricks above work there too. `seaborn` has its own tricks, too&mdash;for example, we can use the very convenient `sns.despine` method to turn off the ugly black border.
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-ax = reviews['points'].value_counts().sort_index().plot.bar(
-    figsize=(12, 6),
-    color='mediumvioletred',
-    fontsize=16
-)
-ax.set_title("Rankings Given by Wine Magazine", fontsize=20)
-sns.despine(bottom=True, left=True)
-
-
-# Prefect. This graph is more clearer than what we started with; it will do a much better job communicating the analysis to our readers.
-# 
-# There are many, many more things that you can do than just what we've shown here. Different plots provide different styling options: `color` is almost universal for example, while `s` (size) only makes sense in a scatterplot. For now, the operations we've shown here are enough to get you started.
-
-# # Exercises
-# 
-# To put your design skills to the test, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
-
-# In[ ]:
-
-
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv")
-pokemon.head(3)
+input_size = 512
+data_dir = '../input'
+np.random.seed(1987)
 
 
 # In[ ]:
 
 
-pokemon.plot.scatter(x='Attack', y='Defense',
-                     figsize=(12, 6),
-                     title='Pokemon by Attack and Defense')
+df_train = pd.read_csv(join(data_dir, 'train_masks.csv'), usecols=['img'])
+df_train['img_id'] = df_train['img'].map(lambda s: s.split('.')[0])
+df_train.head(3)
+
+
+# ## Read and show images and masks
+
+# In[ ]:
+
+
+def get_image_and_mask(img_id):
+    img = image.load_img(join(data_dir, 'train', '%s.jpg' % img_id),
+                         target_size=(input_size, input_size))
+    img = image.img_to_array(img)
+    mask = image.load_img(join(data_dir, 'train_masks', '%s_mask.gif' % img_id),
+                          grayscale=True, target_size=(input_size, input_size))
+    mask = image.img_to_array(mask)
+    img, mask = img / 255., mask / 255.
+    return img, mask
+
+def plot_img_and_mask(img, mask):
+    fig, axs = plt.subplots(ncols=2, figsize=(10, 5), sharex=True, sharey=True)
+    axs[0].imshow(img)
+    axs[1].imshow(mask[:, :, 0])
+    for ax in axs:
+        ax.set_xlim(0, input_size)
+        ax.axis('off')
+    fig.tight_layout()
+    plt.show()
 
 
 # In[ ]:
 
 
-ax = pokemon['Total'].plot.hist(
-    figsize=(12, 6),
-    fontsize=14,
-    bins=50,
-    color='gray'
-)
-ax.set_title('Pokemon by Stat Total', fontsize=20)
+img_ids = df_train['img_id'].values
+np.random.shuffle(img_ids)
+img_id = img_ids[0]
+img, mask = get_image_and_mask(img_id)
+print((img.shape, mask.shape))
+plot_img_and_mask(img, mask)
+
+
+# # Pixel Transformations
+
+# In[ ]:
+
+
+def plot_img_and_mask_transformed(img, mask, img_tr, mask_tr):
+    fig, axs = plt.subplots(ncols=4, figsize=(16, 4), sharex=True, sharey=True)
+    axs[0].imshow(img)
+    axs[1].imshow(mask[:, :, 0])
+    axs[2].imshow(img_tr)
+    axs[3].imshow(mask_tr[:, :, 0])
+    for ax in axs:
+        ax.set_xlim(0, input_size)
+        ax.axis('off')
+    fig.tight_layout()
+    plt.show()
+
+
+# ## Flip
+
+# In[ ]:
+
+
+def random_flip(img, mask, u=0.5):
+    if np.random.random() < u:
+        img = image.flip_axis(img, 1)
+        mask = image.flip_axis(mask, 1)
+    return img, mask
 
 
 # In[ ]:
 
 
-ax = pokemon['Type 1'].value_counts().plot.bar(
-    figsize=(12, 6),
-    fontsize=14
-)
-ax.set_title("Pokemon by Primary Type", fontsize=20)
-sns.despine(bottom=True, left=True)
+img_flip, mask_flip = random_flip(img, mask, u=1)
+plot_img_and_mask_transformed(img, mask, img_flip, mask_flip)
 
 
-# # Conclusion
+# ## Rotate
+
+# In[ ]:
+
+
+def rotate(x, theta, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest', cval=0.):
+    rotation_matrix = np.array([[np.cos(theta), -np.sin(theta), 0],
+                                [np.sin(theta), np.cos(theta), 0],
+                                [0, 0, 1]])
+    h, w = x.shape[row_axis], x.shape[col_axis]
+    transform_matrix = image.transform_matrix_offset_center(rotation_matrix, h, w)
+    x = image.apply_transform(x, transform_matrix, channel_axis, fill_mode, cval)
+    return x
+
+def random_rotate(img, mask, rotate_limit=(-20, 20), u=0.5):
+    if np.random.random() < u:
+        theta = np.pi / 180 * np.random.uniform(rotate_limit[0], rotate_limit[1])
+        img = rotate(img, theta)
+        mask = rotate(mask, theta)
+    return img, mask
+
+
+# In[ ]:
+
+
+rotate_limit=(-30, 30)
+theta = np.pi / 180 * np.random.uniform(rotate_limit[0], rotate_limit[1])
+print('theta %.2f' % theta)
+img_rot = rotate(img, theta)
+mask_rot = rotate(mask, theta)
+plot_img_and_mask_transformed(img, mask, img_rot, mask_rot)
+
+
+# ## Shift
+
+# In[ ]:
+
+
+def shift(x, wshift, hshift, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest', cval=0.):
+    h, w = x.shape[row_axis], x.shape[col_axis]
+    tx = hshift * h
+    ty = wshift * w
+    translation_matrix = np.array([[1, 0, tx],
+                                   [0, 1, ty],
+                                   [0, 0, 1]])
+    transform_matrix = translation_matrix  # no need to do offset
+    x = image.apply_transform(x, transform_matrix, channel_axis, fill_mode, cval)
+    return x
+
+def random_shift(img, mask, w_limit=(-0.1, 0.1), h_limit=(-0.1, 0.1), u=0.5):
+    if np.random.random() < u:
+        wshift = np.random.uniform(w_limit[0], w_limit[1])
+        hshift = np.random.uniform(h_limit[0], h_limit[1])
+        img = shift(img, wshift, hshift)
+        mask = shift(mask, wshift, hshift)
+    return img, mask
+
+
+# In[ ]:
+
+
+w_limit=(-0.2, 0.2)
+h_limit=(-0.2, 0.2)
+wshift = np.random.uniform(w_limit[0], w_limit[1])
+hshift = np.random.uniform(h_limit[0], h_limit[1])
+print('wshift: %.2f, hshift: %.2f' % (wshift, hshift))
+img_shift = shift(img, wshift, hshift)
+mask_shift = shift(mask, wshift, hshift)
+plot_img_and_mask_transformed(img, mask, img_shift, mask_shift)
+
+
+# ## Zoom
+
+# In[ ]:
+
+
+def zoom(x, zx, zy, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest', cval=0.):
+    zoom_matrix = np.array([[zx, 0, 0],
+                            [0, zy, 0],
+                            [0, 0, 1]])
+    h, w = x.shape[row_axis], x.shape[col_axis]
+    transform_matrix = image.transform_matrix_offset_center(zoom_matrix, h, w)
+    x = image.apply_transform(x, transform_matrix, channel_axis, fill_mode, cval)
+    return x
+
+def random_zoom(img, mask, zoom_range=(0.8, 1), u=0.5):
+    if np.random.random() < u:
+        zx, zy = np.random.uniform(zoom_range[0], zoom_range[1], 2)
+        img = zoom(img, zx, zy)
+        mask = zoom(mask, zx, zy)
+    return img, mask
+
+
+# In[ ]:
+
+
+zoom_range=(0.7, 1)
+zx, zy = np.random.uniform(zoom_range[0], zoom_range[1], 2)
+print('zx: %.2f, zy: %.2f' % (zx, zy))
+img_zoom = zoom(img, zx, zy)
+mask_zoom = zoom(mask, zx, zy)
+plot_img_and_mask_transformed(img, mask, img_zoom, mask_zoom)
+
+
+# ## Shear
+
+# In[ ]:
+
+
+def shear(x, shear, row_axis=0, col_axis=1, channel_axis=2, fill_mode='nearest', cval=0.):
+    shear_matrix = np.array([[1, -np.sin(shear), 0],
+                             [0, np.cos(shear), 0],
+                             [0, 0, 1]])
+    h, w = x.shape[row_axis], x.shape[col_axis]
+    transform_matrix = image.transform_matrix_offset_center(shear_matrix, h, w)
+    x = image.apply_transform(x, transform_matrix, channel_axis, fill_mode, cval)
+    return x
+
+def random_shear(img, mask, intensity_range=(-0.5, 0.5), u=0.5):
+    if np.random.random() < u:
+        sh = np.random.uniform(-intensity_range[0], intensity_range[1])
+        img = shear(img, sh)
+        mask = shear(mask, sh)
+    return img, mask
+
+
+# In[ ]:
+
+
+intensity = 0.5
+sh = np.random.uniform(-intensity, intensity)
+print('sh: %.2f' % sh)
+img_shear = shear(img, sh)
+mask_shear = shear(mask, sh)
+plot_img_and_mask_transformed(img, mask, img_shear, mask_shear)
+
+
+# # Color transformations
+
+# In[ ]:
+
+
+def plot_img_transformed(img, img_tr):
+    fig, axs = plt.subplots(ncols=2, figsize=(10, 5), sharex=True, sharey=True)
+    axs[0].imshow(img)
+    axs[1].imshow(img_tr)
+    for ax in axs:
+        ax.set_xlim(0, input_size)
+        ax.axis('off')
+    fig.tight_layout()
+    plt.show()
+
+
+# ## Random channel shift
+
+# In[ ]:
+
+
+def random_channel_shift(x, limit, channel_axis=2):
+    x = np.rollaxis(x, channel_axis, 0)
+    min_x, max_x = np.min(x), np.max(x)
+    channel_images = [np.clip(x_ch + np.random.uniform(-limit, limit), min_x, max_x) for x_ch in x]
+    x = np.stack(channel_images, axis=0)
+    x = np.rollaxis(x, 0, channel_axis + 1)
+    return x
+
+
+# In[ ]:
+
+
+img_chsh = random_channel_shift(img, limit=0.05)
+plot_img_transformed(img, img_chsh)
+
+
+# ## Grayscale
+
+# In[ ]:
+
+
+def random_gray(img, u=0.5):
+    if np.random.random() < u:
+        coef = np.array([[[0.114, 0.587, 0.299]]])  # rgb to gray (YCbCr)
+        gray = np.sum(img * coef, axis=2)
+        img = np.dstack((gray, gray, gray))
+    return img
+
+
+# In[ ]:
+
+
+img_gray = random_gray(img, u=1)
+plot_img_transformed(img, img_gray)
+
+
+# ## Contrast
+
+# In[ ]:
+
+
+def random_contrast(img, limit=(-0.3, 0.3), u=0.5):
+    if np.random.random() < u:
+        alpha = 1.0 + np.random.uniform(limit[0], limit[1])
+        coef = np.array([[[0.114, 0.587, 0.299]]])  # rgb to gray (YCbCr)
+        gray = img * coef
+        gray = (3.0 * (1.0 - alpha) / gray.size) * np.sum(gray)
+        img = alpha * img + gray
+        img = np.clip(img, 0., 1.)
+    return img
+
+
+# In[ ]:
+
+
+img_contrast = random_contrast(img, u=1)
+plot_img_transformed(img, img_contrast)
+
+
+# ## Brightness
+
+# In[ ]:
+
+
+def random_brightness(img, limit=(-0.3, 0.3), u=0.5):
+    if np.random.random() < u:
+        alpha = 1.0 + np.random.uniform(limit[0], limit[1])
+        img = alpha * img
+        img = np.clip(img, 0., 1.)
+    return img
+
+
+# In[ ]:
+
+
+img_brightness = random_brightness(img, u=1)
+plot_img_transformed(img, img_brightness)
+
+
+# ## Saturation
+
+# In[ ]:
+
+
+def random_saturation(img, limit=(-0.3, 0.3), u=0.5):
+    if np.random.random() < u:
+        alpha = 1.0 + np.random.uniform(limit[0], limit[1])
+        coef = np.array([[[0.114, 0.587, 0.299]]])
+        gray = img * coef
+        gray = np.sum(gray, axis=2, keepdims=True)
+        img = alpha * img + (1. - alpha) * gray
+        img = np.clip(img, 0., 1.)
+    return img
+
+
+# In[ ]:
+
+
+img_sat = random_saturation(img, u=1)
+plot_img_transformed(img, img_sat)
+
+
+# # All together
+# Not all the transformations help the learning process. The limits here were chosen to have visible effects.
 # 
-# In this section of the tutorial, we learned a few simple tricks for making our plots more visually appealing, and hence, more communicative. We also learned that there is another plotting library, `matplotlib`, which lies "underneath" the `pandas` data visualization tools, and which we can use to more finely manipulate our plots.
-# 
-# In the next section we will learn to compose plots together using a technique called subplotting.
-# 
-# [Click here to go to the next section, "Subplots"](https://www.kaggle.com/residentmario/subplots).
+# I am using less transformations and lower limits in my pipeline.
+
+# In[ ]:
+
+
+def plot_img_and_mask_transformed3(img, mask, img_tr1, mask_tr1, img_tr2, mask_tr2):
+    fig, axs = plt.subplots(ncols=6, figsize=(30, 5), sharex=True, sharey=True)
+    axs[0].imshow(img)
+    axs[1].imshow(mask[:, :, 0])
+    axs[2].imshow(img_tr1)
+    axs[3].imshow(mask_tr1[:, :, 0])
+    axs[4].imshow(img_tr2)
+    axs[5].imshow(mask_tr2[:, :, 0])
+    for ax in axs:
+        ax.set_xlim(0, input_size)
+        ax.axis('off')
+    fig.tight_layout()
+    plt.show()
+
+
+# In[ ]:
+
+
+def random_augmentation(img, mask):
+    img = random_channel_shift(img, limit=0.05)
+    img = random_brightness(img, limit=(-0.5, 0.5), u=0.5)
+    img = random_contrast(img, limit=(-0.5, 0.5), u=0.5)
+    img = random_saturation(img, limit=(-0.5, 0.5), u=0.5)
+    img = random_gray(img, u=0.2)
+    img, mask = random_rotate(img, mask, rotate_limit=(-20, 20), u=0.5)
+    img, mask = random_shear(img, mask, intensity_range=(-0.3, 0.3), u=0.2)
+    img, mask = random_flip(img, mask, u=0.3)
+    img, mask = random_shift(img, mask, w_limit=(-0.1, 0.1), h_limit=(-0.1, 0.1), u=0.3)
+    img, mask = random_zoom(img, mask, zoom_range=(0.8, 1), u=0.3)
+    return img, mask
+
+
+# In[ ]:
+
+
+for img_id in img_ids[:16]:
+    img, mask = get_image_and_mask(img_id)
+    img_aug1, mask_aug1 = random_augmentation(img, mask)
+    img_aug2, mask_aug2 = random_augmentation(img, mask)
+    plot_img_and_mask_transformed3(img, mask, img_aug1, mask_aug1, img_aug2, mask_aug2)
+

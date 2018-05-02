@@ -1,413 +1,296 @@
 
 # coding: utf-8
 
-# # Identifying Duplicate Questions
-# 
-# Welcome to the Quora Question Pairs competition! Here, our goal is to identify which questions asked on [Quora](https://www.quora.com/), a quasi-forum website with over 100 million visitors a month, are duplicates of questions that have already been asked. This could be useful, for example, to instantly provide answers to questions that have already been answered. We are tasked with predicting whether a pair of questions are duplicates or not, and submitting a binary prediction against the logloss metric.
-# 
-# If you have any questions or want to discuss competitions/hardware/games/anything with other Kagglers, then join the KaggleNoobs Slack channel [here](https://goo.gl/gGWFXe). We also have regular AMAs with top Kagglers there.
-# 
-# **And as always, if this helped you, some upvotes would be very much appreciated - that's where I get my motivation! :D**
-# 
-# Let's dive right into the data!
+# I’m recently started to be interested in data analysis and it is my first visualization. 
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
+import seaborn as sns
+import time
+import warnings
+warnings.filterwarnings('ignore')
 
-pal = sns.color_palette()
-
-print('# File sizes')
-for f in os.listdir('../input'):
-    if 'zip' not in f:
-        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
+global_temp_country = pd.read_csv('../input/GlobalLandTemperaturesByCountry.csv')
 
 
-# Looks like we are simply given two files this time round, one for the training set and one for the test set. They are relatively small compared to other recent competitions, weighing in at less than 400MB total.
-# 
-# It's worth noting that there is a lot more testing data than training data. This could be a sign that some of the test data is dummy data designed to deter hand-labelling, and not included in the calculations, like we recently saw in the [DSTL competition](https://www.kaggle.com/c/dstl-satellite-imagery-feature-detection/leaderboard).
-# 
-# Let's open up one of the datasets.
-# 
-# ## Training set
+# ##1) Mapping of average temperatures in the countries
 
 # In[ ]:
 
 
-df_train = pd.read_csv('../input/train.csv')
-df_train.head()
+#Let's remove the duplicated countries (in the analysis, we don't consider the presence of 
+#colonies at this the countries) and countries for which no information about the temperature
 
+global_temp_country_clear = global_temp_country[~global_temp_country['Country'].isin(
+    ['Denmark', 'Antarctica', 'France', 'Europe', 'Netherlands',
+     'United Kingdom', 'Africa', 'South America'])]
 
-# We are given a minimal number of data fields here, consisting of:
-# 
-# **`id`:** Looks like a simple rowID    
-# **`qid{1, 2}`:** The unique ID of each question in the pair    
-# **`question{1, 2}`:** The actual textual contents of the questions.    
-# **`is_duplicate`:** The **label** that we are trying to predict - whether the two questions are duplicates of each other.
+global_temp_country_clear = global_temp_country_clear.replace(
+   ['Denmark (Europe)', 'France (Europe)', 'Netherlands (Europe)', 'United Kingdom (Europe)'],
+   ['Denmark', 'France', 'Netherlands', 'United Kingdom'])
 
-# In[ ]:
+#Let's average temperature for each country
 
+countries = np.unique(global_temp_country_clear['Country'])
+mean_temp = []
+for country in countries:
+    mean_temp.append(global_temp_country_clear[global_temp_country_clear['Country'] == 
+                                               country]['AverageTemperature'].mean())
 
-print('Total number of question pairs for training: {}'.format(len(df_train)))
-print('Duplicate pairs: {}%'.format(round(df_train['is_duplicate'].mean()*100, 2)))
-qids = pd.Series(df_train['qid1'].tolist() + df_train['qid2'].tolist())
-print('Total number of questions in the training data: {}'.format(len(
-    np.unique(qids))))
-print('Number of questions that appear multiple times: {}'.format(np.sum(qids.value_counts() > 1)))
 
-plt.figure(figsize=(12, 5))
-plt.hist(qids.value_counts(), bins=50)
-plt.yscale('log', nonposy='clip')
-plt.title('Log-Histogram of question appearance counts')
-plt.xlabel('Number of occurences of question')
-plt.ylabel('Number of questions')
-print()
-
-
-# In terms of questions, everything looks as I would expect here. Most questions only appear a few times, with very few questions appearing several times (and a few questions appearing many times). One question appears more than 160 times, but this is an outlier.
-# 
-# We can see that we have a 37% positive class in this dataset. Since we are using the [LogLoss](https://www.kaggle.com/wiki/LogarithmicLoss) metric, and LogLoss looks at the actual predicts as opposed to the order of predictions, we should be able to get a decent score by creating a submission predicting the mean value of the label.
-# 
-# ## Test Submission
-
-# In[ ]:
-
-
-from sklearn.metrics import log_loss
-
-p = df_train['is_duplicate'].mean() # Our predicted probability
-print('Predicted score:', log_loss(df_train['is_duplicate'], np.zeros_like(df_train['is_duplicate']) + p))
-
-df_test = pd.read_csv('../input/test.csv')
-sub = pd.DataFrame({'test_id': df_test['test_id'], 'is_duplicate': p})
-sub.to_csv('naive_submission.csv', index=False)
-sub.head()
-
-
-# **0.55 on the leaderboard! Score!**
-# 
-# However, not all is well. The discrepancy between our local score and the LB one indicates that the distribution of values on the leaderboard is very different to what we have here, which could cause problems with validation later on in the competition.
-# 
-# According to this [excellent notebook by David Thaler](www.kaggle.com/davidthaler/quora-question-pairs/how-many-1-s-are-in-the-public-lb/notebook), using our score and submission we can calculate that we have about 16.5% positives in the test set. This is quite surprising to see, so it'll be something that will need to be taken into account in machine learning models.
-# 
-# Next, I'll take a quick peek at the statistics of the test data before we look at the text itself.
-# 
-# ## Test Set
-
-# In[ ]:
-
-
-df_test = pd.read_csv('../input/test.csv')
-df_test.head()
-
-
-# In[ ]:
-
-
-print('Total number of question pairs for testing: {}'.format(len(df_test)))
-
-
-# Nothing out of the ordinary here. We are once again given rowIDs and the textual data of the two questions. It is worth noting that we are not given question IDs here however for the two questions in the pair.
-# 
-# It is also worth pointing out that the actual number of test rows are likely to be much lower than 2.3 million. According to the [data page](https://www.kaggle.com/c/quora-question-pairs/data), most of the rows in the test set are using auto-generated questions to pad out the dataset, and deter any hand-labelling. This means that the true number of rows that are scored could be very low.
-# 
-# We can actually see in the head of the test data that some of the questions are obviously auto-generated, as we get delights such as "How their can I start reading?" and "What foods fibre?". Truly insightful questions.
-# 
-# Now onto the good stuff - the text data!
-# ## Text analysis
-# 
-# First off, some quick histograms to understand what we're looking at. **Most analysis here will be only on the training set, to avoid the auto-generated questions**
-
-# In[ ]:
-
-
-train_qs = pd.Series(df_train['question1'].tolist() + df_train['question2'].tolist()).astype(str)
-test_qs = pd.Series(df_test['question1'].tolist() + df_test['question2'].tolist()).astype(str)
-
-dist_train = train_qs.apply(len)
-dist_test = test_qs.apply(len)
-plt.figure(figsize=(15, 10))
-plt.hist(dist_train, bins=200, range=[0, 200], color=pal[2], normed=True, label='train')
-plt.hist(dist_test, bins=200, range=[0, 200], color=pal[1], normed=True, alpha=0.5, label='test')
-plt.title('Normalised histogram of character count in questions', fontsize=15)
-plt.legend()
-plt.xlabel('Number of characters', fontsize=15)
-plt.ylabel('Probability', fontsize=15)
-
-print('mean-train {:.2f} std-train {:.2f} mean-test {:.2f} std-test {:.2f} max-train {:.2f} max-test {:.2f}'.format(dist_train.mean(), 
-                          dist_train.std(), dist_test.mean(), dist_test.std(), dist_train.max(), dist_test.max()))
-
-
-# We can see that most questions have anywhere from 15 to 150 characters in them. It seems that the test distribution is a little different from the train one, but not too much so (I can't tell if it is just the larger data reducing noise, but it also seems like the distribution is a lot smoother in the test set).
-# 
-# One thing that catches my eye is the steep cut-off at 150 characters for the training set, for most questions, while the test set slowly decreases after 150. Could this be some sort of Quora question size limit?
-# 
-# It's also worth noting that I've truncated this histogram at 200 characters, and that the max of the distribution is at just under 1200 characters for both sets - although samples with over 200 characters are very rare.
-# 
-# Let's do the same for word count. I'll be using a naive method for splitting words (splitting on spaces instead of using a serious tokenizer), although this should still give us a good idea of the distribution.
-
-# In[ ]:
-
-
-dist_train = train_qs.apply(lambda x: len(x.split(' ')))
-dist_test = test_qs.apply(lambda x: len(x.split(' ')))
-
-plt.figure(figsize=(15, 10))
-plt.hist(dist_train, bins=50, range=[0, 50], color=pal[2], normed=True, label='train')
-plt.hist(dist_test, bins=50, range=[0, 50], color=pal[1], normed=True, alpha=0.5, label='test')
-plt.title('Normalised histogram of word count in questions', fontsize=15)
-plt.legend()
-plt.xlabel('Number of words', fontsize=15)
-plt.ylabel('Probability', fontsize=15)
-
-print('mean-train {:.2f} std-train {:.2f} mean-test {:.2f} std-test {:.2f} max-train {:.2f} max-test {:.2f}'.format(dist_train.mean(), 
-                          dist_train.std(), dist_test.mean(), dist_test.std(), dist_train.max(), dist_test.max()))
-
-
-# We see a similar distribution for word count, with most questions being about 10 words long. It looks to me like the distribution of the training set seems more "pointy", while on the test set it is wider. Nevertheless, they are quite similar.
-# 
-# So what are the most common words? Let's take a look at a word cloud.
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-cloud = WordCloud(width=1440, height=1080).generate(" ".join(train_qs.astype(str)))
-plt.figure(figsize=(20, 15))
-plt.imshow(cloud)
-plt.axis('off')
-
-
-# ## Semantic Analysis
-# 
-# Next, I will take a look at usage of different punctuation in questions - this may form a basis for some interesting features later on.
-
-# In[ ]:
-
-
-qmarks = np.mean(train_qs.apply(lambda x: '?' in x))
-math = np.mean(train_qs.apply(lambda x: '[math]' in x))
-fullstop = np.mean(train_qs.apply(lambda x: '.' in x))
-capital_first = np.mean(train_qs.apply(lambda x: x[0].isupper()))
-capitals = np.mean(train_qs.apply(lambda x: max([y.isupper() for y in x])))
-numbers = np.mean(train_qs.apply(lambda x: max([y.isdigit() for y in x])))
-
-print('Questions with question marks: {:.2f}%'.format(qmarks * 100))
-print('Questions with [math] tags: {:.2f}%'.format(math * 100))
-print('Questions with full stops: {:.2f}%'.format(fullstop * 100))
-print('Questions with capitalised first letters: {:.2f}%'.format(capital_first * 100))
-print('Questions with capital letters: {:.2f}%'.format(capitals * 100))
-print('Questions with numbers: {:.2f}%'.format(numbers * 100))
-
-
-# # Initial Feature Analysis
-# 
-# Before we create a model, we should take a look at how powerful some features are. I will start off with the word share feature from the benchmark model.
-
-# In[ ]:
-
-
-from nltk.corpus import stopwords
-
-stops = set(stopwords.words("english"))
-
-def word_match_share(row):
-    q1words = {}
-    q2words = {}
-    for word in str(row['question1']).lower().split():
-        if word not in stops:
-            q1words[word] = 1
-    for word in str(row['question2']).lower().split():
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
-    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
-    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
-    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
-    return R
-
-plt.figure(figsize=(15, 5))
-train_word_match = df_train.apply(word_match_share, axis=1, raw=True)
-plt.hist(train_word_match[df_train['is_duplicate'] == 0], bins=20, normed=True, label='Not Duplicate')
-plt.hist(train_word_match[df_train['is_duplicate'] == 1], bins=20, normed=True, alpha=0.7, label='Duplicate')
-plt.legend()
-plt.title('Label distribution over word_match_share', fontsize=15)
-plt.xlabel('word_match_share', fontsize=15)
-
-
-# Here we can see that this feature has quite a lot of predictive power, as it is good at separating the duplicate questions from the non-duplicate ones. Interestingly, it seems very good at identifying questions which are definitely different, but is not so great at finding questions which are definitely duplicates.
-# 
-# ## TF-IDF
-# 
-# I'm now going to try to improve this feature, by using something called TF-IDF (term-frequency-inverse-document-frequency). This means that we weigh the terms by how **uncommon** they are, meaning that we care more about rare words existing in both questions than common one. This makes sense, as for example we care more about whether the word "exercise" appears in both than the word "and" - as uncommon words will be more indicative of the content.
-# 
-# You may want to look into using sklearn's [TfidfVectorizer](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html) to compute weights if you are implementing this yourself, but as I am too lazy to read the documentation I will write a version in pure python with a few changes which I believe should help the score.
-
-# In[ ]:
-
-
-from collections import Counter
-
-# If a word appears only once, we ignore it completely (likely a typo)
-# Epsilon defines a smoothing constant, which makes the effect of extremely rare words smaller
-def get_weight(count, eps=10000, min_count=2):
-    if count < min_count:
-        return 0
-    else:
-        return 1 / (count + eps)
-
-eps = 5000 
-words = (" ".join(train_qs)).lower().split()
-counts = Counter(words)
-weights = {word: get_weight(count) for word, count in counts.items()}
-
-
-# In[ ]:
-
-
-print('Most common words and weights: \n')
-print(sorted(weights.items(), key=lambda x: x[1] if x[1] > 0 else 9999)[:10])
-print('\nLeast common words and weights: ')
-(sorted(weights.items(), key=lambda x: x[1], reverse=True)[:10])
-
-
-# In[ ]:
-
-
-def tfidf_word_match_share(row):
-    q1words = {}
-    q2words = {}
-    for word in str(row['question1']).lower().split():
-        if word not in stops:
-            q1words[word] = 1
-    for word in str(row['question2']).lower().split():
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
     
-    shared_weights = [weights.get(w, 0) for w in q1words.keys() if w in q2words] + [weights.get(w, 0) for w in q2words.keys() if w in q1words]
-    total_weights = [weights.get(w, 0) for w in q1words] + [weights.get(w, 0) for w in q2words]
-    
-    R = np.sum(shared_weights) / np.sum(total_weights)
-    return R
+data = [ dict(
+        type = 'choropleth',
+        locations = countries,
+        z = mean_temp,
+        locationmode = 'country names',
+        text = countries,
+        marker = dict(
+            line = dict(color = 'rgb(0,0,0)', width = 1)),
+            colorbar = dict(autotick = True, tickprefix = '', 
+            title = '# Average\nTemperature,\n°C')
+            )
+       ]
+
+layout = dict(
+    title = 'Average land temperature in countries',
+    geo = dict(
+        showframe = False,
+        showocean = True,
+        oceancolor = 'rgb(0,255,255)',
+        projection = dict(
+        type = 'orthographic',
+            rotation = dict(
+                    lon = 60,
+                    lat = 10),
+        ),
+        lonaxis =  dict(
+                showgrid = True,
+                gridcolor = 'rgb(102, 102, 102)'
+            ),
+        lataxis = dict(
+                showgrid = True,
+                gridcolor = 'rgb(102, 102, 102)'
+                )
+            ),
+        )
+
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False, filename='worldmap')
 
 
-# In[ ]:
-
-
-plt.figure(figsize=(15, 5))
-tfidf_train_word_match = df_train.apply(tfidf_word_match_share, axis=1, raw=True)
-plt.hist(tfidf_train_word_match[df_train['is_duplicate'] == 0].fillna(0), bins=20, normed=True, label='Not Duplicate')
-plt.hist(tfidf_train_word_match[df_train['is_duplicate'] == 1].fillna(0), bins=20, normed=True, alpha=0.7, label='Duplicate')
-plt.legend()
-plt.title('Label distribution over tfidf_word_match_share', fontsize=15)
-plt.xlabel('word_match_share', fontsize=15)
-
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_auc_score
-print('Original AUC:', roc_auc_score(df_train['is_duplicate'], train_word_match))
-print('   TFIDF AUC:', roc_auc_score(df_train['is_duplicate'], tfidf_train_word_match.fillna(0)))
-
-
-# So it looks like our TF-IDF actually got _worse_ in terms of overall AUC, which is a bit disappointing. (I am using the AUC metric since it is unaffected by scaling and similar, so it is a good metric for testing the predictive power of individual features.
+# It is possible to notice that Russia has one of the lowest average temperature (like a Canada). The lowest temperature in Greenland (it is distinctly visible on the map). The hottest country in Africa, on the equator. It is quite natural.
 # 
-# However, I still think that this feature should provide some extra information which is not provided by the original feature. Our next job is to combine these features and use it to make a prediction. For this, I will use our old friend XGBoost to make a classification model.
+# ##2) Sort the countries by the average temperature and plot Horizontal Bar
+
+# In[ ]:
+
+
+mean_temp_bar, countries_bar = (list(x) for x in zip(*sorted(zip(mean_temp, countries), 
+                                                             reverse = True)))
+sns.set(font_scale=0.9) 
+f, ax = plt.subplots(figsize=(4.5, 50))
+colors_cw = sns.color_palette('coolwarm', len(countries))
+sns.barplot(mean_temp_bar, countries_bar, palette = colors_cw[::-1])
+Text = ax.set(xlabel='Average temperature', title='Average land temperature in countries')
+
+
+# ##3) Is there a global warming?
+
+# Let's read the data from the "GlobalTemperatures.csv" file, which has a monthly Earth’s temperature  and plot it on the chart.
+
+# In[ ]:
+
+
+global_temp = pd.read_csv("../input/GlobalTemperatures.csv")
+
+#Extract the year from a date
+years = np.unique(global_temp['dt'].apply(lambda x: x[:4]))
+mean_temp_world = []
+mean_temp_world_uncertainty = []
+
+for year in years:
+    mean_temp_world.append(global_temp[global_temp['dt'].apply(
+        lambda x: x[:4]) == year]['LandAverageTemperature'].mean())
+    mean_temp_world_uncertainty.append(global_temp[global_temp['dt'].apply(
+                lambda x: x[:4]) == year]['LandAverageTemperatureUncertainty'].mean())
+
+trace0 = go.Scatter(
+    x = years, 
+    y = np.array(mean_temp_world) + np.array(mean_temp_world_uncertainty),
+    fill= None,
+    mode='lines',
+    name='Uncertainty top',
+    line=dict(
+        color='rgb(0, 255, 255)',
+    )
+)
+trace1 = go.Scatter(
+    x = years, 
+    y = np.array(mean_temp_world) - np.array(mean_temp_world_uncertainty),
+    fill='tonexty',
+    mode='lines',
+    name='Uncertainty bot',
+    line=dict(
+        color='rgb(0, 255, 255)',
+    )
+)
+
+trace2 = go.Scatter(
+    x = years, 
+    y = mean_temp_world,
+    name='Average Temperature',
+    line=dict(
+        color='rgb(199, 121, 093)',
+    )
+)
+data = [trace0, trace1, trace2]
+
+layout = go.Layout(
+    xaxis=dict(title='year'),
+    yaxis=dict(title='Average Temperature, °C'),
+    title='Average land temperature in world',
+    showlegend = False)
+
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# From the charts you can see, that there is global warming nowadays. The average temperature of Earth surface has the highest value in the last three centuries. The fastest temperature growth occurred in the last 30 years! This worries me, I hope soon humanity will fully switch to ecological sources of energy, that will reduce CO2. If it’s will not happened, we will be in disaster. This charts also have confidence intervals, which shows that measurement of temperature has become more accurate in the last few years.
 # 
-# ## Rebalancing the Data
-# However, before I do this, I would like to rebalance the data that XGBoost receives, since we have 37% positive class in our training data, and only 17% in the test data. By re-balancing the data so our training set has 17% positives, we can ensure that XGBoost outputs probabilities that will better match the data on the leaderboard, and should get a better score (since LogLoss looks at the probabilities themselves and not just the order of the predictions like AUC)
+# Let’s look at the chart of annual temperature changes in certain continents (we take into consideration one country per continent and mark Greenland as the coldest place on Earth).
 
 # In[ ]:
 
 
-# First we create our training and testing data
-x_train = pd.DataFrame()
-x_test = pd.DataFrame()
-x_train['word_match'] = train_word_match
-x_train['tfidf_word_match'] = tfidf_train_word_match
-x_test['word_match'] = df_test.apply(word_match_share, axis=1, raw=True)
-x_test['tfidf_word_match'] = df_test.apply(tfidf_word_match_share, axis=1, raw=True)
+continent = ['Russia', 'United States', 'Niger', 'Greenland', 'Australia', 'Bolivia']
+mean_temp_year_country = [ [0] * len(years[70:]) for i in range(len(continent))]
+j = 0
+for country in continent:
+    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
+    i = 0
+    for year in years[70:]:
+        mean_temp_year_country[j][i] = all_temp_country[all_temp_country['dt'].apply(
+                lambda x: x[:4]) == year]['AverageTemperature'].mean()
+        i +=1
+    j += 1
 
-y_train = df_train['is_duplicate'].values
+traces = []
+colors = ['rgb(0, 255, 255)', 'rgb(255, 0, 255)', 'rgb(0, 0, 0)',
+          'rgb(255, 0, 0)', 'rgb(0, 255, 0)', 'rgb(0, 0, 255)']
+for i in range(len(continent)):
+    traces.append(go.Scatter(
+        x=years[70:],
+        y=mean_temp_year_country[i],
+        mode='lines',
+        name=continent[i],
+        line=dict(color=colors[i]),
+    ))
 
+layout = go.Layout(
+    xaxis=dict(title='year'),
+    yaxis=dict(title='Average Temperature, °C'),
+    title='Average land temperature on the continents',)
 
-# In[ ]:
-
-
-pos_train = x_train[y_train == 1]
-neg_train = x_train[y_train == 0]
-
-# Now we oversample the negative class
-# There is likely a much more elegant way to do this...
-p = 0.165
-scale = ((len(pos_train) / (len(pos_train) + len(neg_train))) / p) - 1
-while scale > 1:
-    neg_train = pd.concat([neg_train, neg_train])
-    scale -=1
-neg_train = pd.concat([neg_train, neg_train[:int(scale * len(neg_train))]])
-print(len(pos_train) / (len(pos_train) + len(neg_train)))
-
-x_train = pd.concat([pos_train, neg_train])
-y_train = (np.zeros(len(pos_train)) + 1).tolist() + np.zeros(len(neg_train)).tolist()
-del pos_train, neg_train
-
-
-# In[ ]:
+fig = go.Figure(data=traces, layout=layout)
+py.iplot(fig)
 
 
-# Finally, we split some of the data off for validation
-from sklearn.cross_validation import train_test_split
+# We can see that since the 1980 there has been a continuous increase in mean annual temperature for the countries, which we take into consideration (particularly strong dynamics can be seen in the cold countries). The interruption of the temperature values on the chart is due to the lack of observations in these years.
 
-x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=4242)
+# ##4) Dynamic map
 
-
-# ## XGBoost
+# I've done a visualization in Jupyter, using "plotly". When I tried to upload my research on the Kaggle there was a problem: the "Stream()" function doesn't work with "pyplot.offline". Therefore, to show a dynamically changing is not an easy task.
 # 
-# Now we can finally run XGBoost on our data, in order to see the score on the leaderboard!
+# Let's create a map that shows changes in average temperature of countries with 10 years period.
 
 # In[ ]:
 
 
-import xgboost as xgb
+#Extract the year from a date
+years = np.unique(global_temp_country_clear['dt'].apply(lambda x: x[:4]))
 
-# Set our parameters for xgboost
-params = {}
-params['objective'] = 'binary:logistic'
-params['eval_metric'] = 'logloss'
-params['eta'] = 0.02
-params['max_depth'] = 4
+#Let's create an array and add the values of average temperatures in the countries every 10 years
+mean_temp_year_country = [ [0] * len(countries) for i in range(len(years[::10]))]
 
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
-
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-
-bst = xgb.train(params, d_train, 400, watchlist, early_stopping_rounds=50, verbose_eval=10)
+j = 0
+for country in countries:
+    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
+    i = 0
+    for year in years[::10]:
+        mean_temp_year_country[i][j] = all_temp_country[all_temp_country['dt'].apply(
+                lambda x: x[:4]) == year]['AverageTemperature'].mean()
+        i +=1
+    j += 1
 
 
 # In[ ]:
 
 
-d_test = xgb.DMatrix(x_test)
-p_test = bst.predict(d_test)
+#Let's create a Streaming in Plotly (here, alas, does not work, so commented out)
+#stream_tokens = tls.get_credentials_file()['stream_ids']
+#token =  stream_tokens[-1]
+#stream_id = dict(token=token, maxpoints=60)
 
-sub = pd.DataFrame()
-sub['test_id'] = df_test['test_id']
-sub['is_duplicate'] = p_test
-sub.to_csv('simple_xgb.csv', index=False)
+data = [ dict(
+        type = 'choropleth',
+        locations = countries,
+        z = mean_temp,
+        locationmode = 'country names',
+        text = countries,
+        marker = dict(
+            line = dict(color = 'rgb(0,0,0)', width = 1)),
+            colorbar = dict(autotick = True, tickprefix = '',
+            title = '# Average\nTemperature,\n°C'),
+        #The following line is also needed to create Stream
+        #stream = stream_id
+            )
+       ]
+
+layout = dict(
+    title = 'Average land temperature in countries',
+    geo = dict(
+        showframe = False,
+        showocean = True,
+        oceancolor = 'rgb(0,255,255)',
+        type = 'equirectangular'
+    ),
+)
+
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False, filename='world_temp_map')
 
 
-# **0.35460** on the leaderboard - a good first score!
+# It’s a pity, but here you can only see a static map. On the dynamic map we would be seen that the European countries  started to measure temperature much more earlier than another countries. Perhaps this is due to more rapid economic development of the European countries in the 18th century. Russia and the United States began to measure the temperature only a half-century later.
+
+# In[ ]:
+
+
+#Let's run a Stream
+
+"""s = py.Stream(stream_id=token)
+i = 0
+s.open()
+while True:
+    ye = years[::10]
+    s.write(dict(z = mean_temp_year_country[i]), dict(
+            title = 'Average land temperature in countries.   Year: {0}'.format(ye[i])), validate=False)
+    time.sleep(1)
+    i += 1
+    if i == len(ye):
+        i = 0
+s.close()"""
+
+
+# ##The results
+
+# During my research it was found that there has been a global increase trend in temperature, particularly over the last 30 years. This is due to the violent activities of a humankind. In more developed countries the temperature began to register much earlier. Over time the accuracy of the observations is increased, that is quite natural. Mankind must reflect and take all necessary remedies to reduce emissions of greenhouse gases in the atmosphere. This work was entirely done using python and "plotly". I had received practical skills and knowledge in python and in awesome library for data visualisation.

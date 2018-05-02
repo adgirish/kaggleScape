@@ -1,266 +1,202 @@
 
 # coding: utf-8
 
-# # Import Libraries #
+# ## Summary
+# 
+# I tried out a neural network for classification because Machine Learning. With the large number of samples and 1000 samples per class, the task seems to be well-suited for Deep Learning. As expected, the model achieved significant results. There is still some room for improvement, so maybe combining the model with XGBoost can help there.
+# 
+# ## Approach
+# 
+# I used the subm.csv output file from ZFTurbo's [Greedy children baseline [0.8168]](https://www.kaggle.com/zfturbo/greedy-children-baseline-0-8168) kernel. As features, I used the children's wishlists and their id resulting in 11 features.
 
 # In[ ]:
 
 
 import pandas as pd
-import numpy as np
+from keras.layers import Dense
+from keras.models import Sequential
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import Normalizer
-from sklearn.cross_validation import cross_val_score
-from sklearn.preprocessing import Imputer
+INPUT_PATH = '../input/'
 
-from scipy.stats import skew
-
-import seaborn as sns
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-plt.style.use('ggplot')
+child_wishes = pd.read_csv(INPUT_PATH + 'santa-gift-matching/child_wishlist.csv', header=None)
+targets = pd.read_csv(INPUT_PATH + 'greedy-children-baseline-0-8168/subm.csv')['GiftId']
+child_wishes['target'] = targets
 
 
-# #Import Data#
+# We only need 10% of the available data to predict the rest because Artificial Intelligence is very powerful. So, now we make sure that 10% of the labels of each class appear in the training and validation set.
 
 # In[ ]:
 
 
-train = '../input/train.csv'
-test = '../input/test.csv'
+# For each of the 1000 gifts, put 80 samples are in the training data and 20 in 
+# the validation data
+train_data = pd.DataFrame()
+valid_data = pd.DataFrame()
+for gift_id in range(1000):
+    train_split = child_wishes.loc[child_wishes['target'] == gift_id].iloc[:80]
+    valid_split = child_wishes.loc[child_wishes['target'] == gift_id].iloc[80:100]
+    train_data = train_data.append(train_split)
+    valid_data = valid_data.append(valid_split)
 
-df_train = pd.read_csv(train)
-df_test = pd.read_csv(test)
+# Shuffle the training data
+train_data = train_data.sample(frac=1)
 
-
-# #Define Median Absolute Deviation Function#
-# 
-# Function found in this link: http://stackoverflow.com/a/22357811/5082694
 
 # In[ ]:
 
 
-def is_outlier(points, thresh = 3.5):
-    if len(points.shape) == 1:
-        points = points[:,None]
-    median = np.median(points, axis=0)
-    diff = np.sum((points - median)**2, axis=-1)
-    diff = np.sqrt(diff)
-    med_abs_deviation = np.median(diff)
+# Assign the inputs and targets 
+y_train = pd.get_dummies(train_data['target']).values
+X_train = train_data.drop('target', axis=1).values
+y_valid = pd.get_dummies(valid_data['target']).values
+X_valid = valid_data.drop('target', axis=1).values
 
-    modified_z_score = 0.6745 * diff / med_abs_deviation
+print('Shapes: X_train: %s, y_train: %s, X_valid: %s, y_valid: %s' % 
+      (X_train.shape, y_train.shape, X_valid.shape, y_valid.shape))
 
-    return modified_z_score > thresh
-
-
-# # Remove Skew from SalesPrice data#
 
 # In[ ]:
 
 
-target = df_train[df_train.columns.values[-1]]
-target_log = np.log(target)
-
-plt.figure(figsize=(10,5))
-plt.subplot(1,2,1)
-sns.distplot(target, bins=50)
-plt.title('Original Data')
-plt.xlabel('Sale Price')
-
-plt.subplot(1,2,2)
-sns.distplot(target_log, bins=50)
-plt.title('Natural Log of Data')
-plt.xlabel('Natural Log of Sale Price')
-plt.tight_layout()
+# Train the model!
+model = Sequential()
+model.add(Dense(200, activation='relu', input_shape=(11,)))
+model.add(Dense(200, activation='relu'))
+model.add(Dense(1000, activation='softmax'))
+model.compile(optimizer='rmsprop',
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+model.fit(X_train, y_train, validation_data=(X_valid, y_valid), epochs=2)
 
 
-# # Merge Train and Test to evaluate ranges and missing values #
-# This was done primarily to ensure that Categorical data in the training and testing data sets were consistent.
+# Looks good! We see significant progress being made during training. Now, let's unleash the beast!
 
 # In[ ]:
 
 
-df_train = df_train[df_train.columns.values[:-1]]
-df = df_train.append(df_test, ignore_index = True)
+# Predict the whole dataset
+X_all = child_wishes.drop('target', axis=1).values
+predicted_probs = model.predict_proba(X_all)
 
 
-# #Find all categorical data#
-
-# In[ ]:
-
-
-cats = []
-for col in df.columns.values:
-    if df[col].dtype == 'object':
-        cats.append(col)
-
-
-# # Create separte datasets for Continuous vs Categorical #
-# Creating two data sets allowed me to handle the data in more appropriate ways.
+# The problem here is, that there is no guarantee that the model's predictions conform to the 1000 kids per gift constraint and the twin constraint. To keep things simple, we now assign the gifts greedily to the kids based on the probabilites predicted by the model. Deep Learning may yield further improvement at this step.
 
 # In[ ]:
 
 
-df_cont = df.drop(cats, axis=1)
-df_cat = df[cats]
+# Assign gifts greedily until there are no gifts left
+child_to_gift = {}
+# Keep track of how many gifts there are left to give
+gift_counts = dict((gift_id, 1000) for gift_id in range(1000))
+available_gifts = gift_counts.keys()
 
+for i, gift_probs in enumerate(predicted_probs):
+    child_id = child_wishes.iloc[i, 0]
 
-# # Handle Missing Data for continuous data #
-# 
-#  - If any column contains more than 50 entries of missing data, drop the column
-#  - If any column contains fewer that 50 entries of missing data, replace those missing values with the median for that column
-#  - Remove outliers using Median Absolute Deviation
-#  - Calculate skewness for each variable and if greater than 0.75 transform it
-#  - Apply the sklearn.Normalizer to each column
-
-# In[ ]:
-
-
-for col in df_cont.columns.values:
-    if np.sum(df_cont[col].isnull()) > 50:
-        df_cont = df_cont.drop(col, axis = 1)
-    elif np.sum(df_cont[col].isnull()) > 0:
-        median = df_cont[col].median()
-        idx = np.where(df_cont[col].isnull())[0]
-        df_cont[col].iloc[idx] = median
-
-        outliers = np.where(is_outlier(df_cont[col]))
-        df_cont[col].iloc[outliers] = median
-        
-        if skew(df_cont[col]) > 0.75:
-            df_cont[col] = np.log(df_cont[col])
-            df_cont[col] = df_cont[col].apply(lambda x: 0 if x == -np.inf else x)
-        
-        df_cont[col] = Normalizer().fit_transform(df_cont[col].reshape(1,-1))[0]
-
-
-# # Handle Missing Data for Categorical Data #
-# 
-#  - If any column contains more than 50 entries of missing data, drop the column
-#  - If any column contains fewer that 50 entries of missing data, replace those values with the 'MIA'
-#  - Apply the sklearn.LabelEncoder
-#  - For each categorical variable determine the number of unique values and for each, create a new column that is binary
-
-# In[ ]:
-
-
-for col in df_cat.columns.values:
-    if np.sum(df_cat[col].isnull()) > 50:
-        df_cat = df_cat.drop(col, axis = 1)
+    # Ignore children (twins) that already have a gift
+    if child_id in child_to_gift:
         continue
-    elif np.sum(df_cat[col].isnull()) > 0:
-        df_cat[col] = df_cat[col].fillna('MIA')
-        
-    df_cat[col] = LabelEncoder().fit_transform(df_cat[col])
+
+    candidate_gifts = available_gifts
+    # If this is a twin we need the gift two times
+    if child_id < 4000:
+        candidate_gifts = [g for g in available_gifts if gift_counts[g] >= 2]
+
+    # Get the candidate gift with the highest probability
+    gift_id = max(candidate_gifts, key=lambda gift_id: gift_probs[gift_id])
+
+    child_to_gift[child_id] = gift_id
+    gift_counts[gift_id] -= 1
+
+    # If this is a twin, assign the gift to his other sibling as well
+    if child_id < 4000:
+        sibling_id = child_id + 1 if child_id % 2 == 0 else child_id - 1
+        child_to_gift[sibling_id] = gift_id
+        gift_counts[gift_id] -= 1
+
+    # Recalculate the available gifts
+    available_gifts = [g for g in available_gifts if gift_counts[g] > 0]
     
-    num_cols = df_cat[col].max()
-    for i in range(num_cols):
-        col_name = col + '_' + str(i)
-        df_cat[col_name] = df_cat[col].apply(lambda x: 1 if x == i else 0)
-        
-    df_cat = df_cat.drop(col, axis = 1)
+pred = sorted(child_to_gift.items(), key= lambda t: t[0])
 
 
-# # Merge Numeric and Categorical Datasets and Create Training and Testing Data #
+# Done! We have our final predictions. Let's find out by how much this model outperforms the others.
 
 # In[ ]:
 
 
-df_new = df_cont.join(df_cat)
+import numpy as np
+from collections import Counter
 
-df_train = df_new.iloc[:len(df_train) - 1]
-df_train = df_train.join(target_log)
+n_children = 1000000  # n children to give
+n_gift_type = 1000  # n types of gifts available
+n_gift_quantity = 1000  # each type of gifts are limited to this quantity
+n_gift_pref = 10  # number of gifts a child ranks
+n_child_pref = 1000  # number of children a gift ranks
+twins = int(0.004 * n_children)  # 0.4% of all population, rounded to the closest even number
+ratio_gift_happiness = 2
+ratio_child_happiness = 2
 
-df_test = df_new.iloc[len(df_train) + 1:]
 
-X_train = df_train[df_train.columns.values[1:-1]]
-y_train = df_train[df_train.columns.values[-1]]
+def avg_normalized_happiness(pred, child_pref, gift_pref):
+    # check if number of each gift exceeds n_gift_quantity
+    gift_counts = Counter(elem[1] for elem in pred)
+    for count in gift_counts.values():
+        assert count <= n_gift_quantity
 
-X_test = df_test[df_test.columns.values[1:]]
+    # check if twins have the same gift
+    for t1 in range(0, twins, 2):
+        twin1 = pred[t1]
+        twin2 = pred[t1 + 1]
+        assert twin1[1] == twin2[1]
 
+    max_child_happiness = n_gift_pref * ratio_child_happiness
+    max_gift_happiness = n_child_pref * ratio_gift_happiness
+    total_child_happiness = 0
+    total_gift_happiness = np.zeros(n_gift_type)
 
-# # Create Estimator and Apply Cross Validation #
-# 
-# We can gauge the accuracy of our model by implementing an multi-fold cross validation and outputting the score.  In this case I chose to run 15 iterations and output the score as Root Mean Squared Error.
-# 
-# The results range from ~0.11-0.17 with a mean of ~0.14.
+    for row in pred:
+        child_id = row[0]
+        gift_id = row[1]
+
+        # check if child_id and gift_id exist
+        assert child_id < n_children
+        assert gift_id < n_gift_type
+        assert child_id >= 0
+        assert gift_id >= 0
+        child_happiness = (n_gift_pref - np.where(gift_pref[child_id] == gift_id)[0]) * ratio_child_happiness
+        if not child_happiness:
+            child_happiness = -1
+
+        gift_happiness = (n_child_pref - np.where(child_pref[gift_id] == child_id)[0]) * ratio_gift_happiness
+        if not gift_happiness:
+            gift_happiness = -1
+
+        total_child_happiness += child_happiness
+        total_gift_happiness[gift_id] += gift_happiness
+
+    # print(max_child_happiness, max_gift_happiness
+    print('normalized child happiness=',
+          float(total_child_happiness) / (float(n_children) * float(max_child_happiness)), \
+          ', normalized gift happiness', np.mean(total_gift_happiness) / float(max_gift_happiness * n_gift_quantity))
+    return float(total_child_happiness) / (float(n_children) * float(max_child_happiness)) + np.mean(
+        total_gift_happiness) / float(max_gift_happiness * n_gift_quantity)
+
 
 # In[ ]:
 
 
-from sklearn.metrics import make_scorer, mean_squared_error
-scorer = make_scorer(mean_squared_error, False)
+gift_pref = pd.read_csv(INPUT_PATH + 'santa-gift-matching/child_wishlist.csv', header=None).drop(0, 1).values
+child_pref = pd.read_csv(INPUT_PATH + 'santa-gift-matching/gift_goodkids.csv', header=None).drop(0, 1).values
+score = avg_normalized_happiness(pred, child_pref, gift_pref)
 
-clf = RandomForestRegressor(n_estimators=500, n_jobs=-1)
-cv_score = np.sqrt(-cross_val_score(estimator=clf, X=X_train, y=y_train, cv=15, scoring = scorer))
-
-plt.figure(figsize=(10,5))
-plt.bar(range(len(cv_score)), cv_score)
-plt.title('Cross Validation Score')
-plt.ylabel('RMSE')
-plt.xlabel('Iteration')
-
-plt.plot(range(len(cv_score) + 1), [cv_score.mean()] * (len(cv_score) + 1))
-plt.tight_layout()
-
-
-# # Evaluate Feature Significance #
-# 
-# Investigating feature importance is a relatively straight forward process:
-# 
-#  1. Out feature importance coefficients
-#  2. Map coefficients to their feature name
-#  3. Sort features in descending order
-# 
-# Given our choice of model and methods for preprocessing data the most significant features are:
-# 
-#  1. OverallQual
-#  2. GrLivArea
-#  3. TotalBsmtSF
-#  4. GarageArea
-# 
 
 # In[ ]:
 
 
-# Fit model with training data
-clf.fit(X_train, y_train)
-
-# Output feature importance coefficients, map them to their feature name, and sort values
-coef = pd.Series(clf.feature_importances_, index = X_train.columns).sort_values(ascending=False)
-
-plt.figure(figsize=(10, 5))
-coef.head(25).plot(kind='bar')
-plt.title('Feature Significance')
-plt.tight_layout()
+print(score)
 
 
-# # Visualize Predicted vs. Actual Sales Price #
+# ## Conclusion
 # 
-# In order to visualize our predicted values vs our actual values we need to split our data into training and testing data sets.  This can easily be accomplished using sklearn's **train_test_split** module.
-# 
-# We will train the model using a random sampling of our data set and then compare visually against the actual values.
-
-# In[ ]:
-
-
-from sklearn.cross_validation import train_test_split
-
-X_train1, X_test1, y_train1, y_test1 = train_test_split(X_train, y_train)
-clf = RandomForestRegressor(n_estimators=500, n_jobs=-1)
-
-clf.fit(X_train1, y_train1)
-y_pred = clf.predict(X_test1)
-
-plt.figure(figsize=(10, 5))
-plt.scatter(y_test1, y_pred, s=20)
-plt.title('Predicted vs. Actual')
-plt.xlabel('Actual Sale Price')
-plt.ylabel('Predicted Sale Price')
-
-plt.plot([min(y_test1), max(y_test1)], [min(y_test1), max(y_test1)])
-plt.tight_layout()
-
+# Wow! A simple first try with Deep Learning already achieved a whopping -4% Average Normalized Happiness. There is still room for improvement. For example, the 11 features could be preprocessed by a Convolutional Neural Network.. Also, the greedy matching at the end might be replaced with a Blockchain mechanism. But all in all, this path looks very promising. I am curious as to what further enhancements of this approach will yield.

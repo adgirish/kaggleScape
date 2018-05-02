@@ -1,433 +1,350 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
+# 
+# 
+# <h1 style="font-size:30px;color:black;text-align:center; text-decoration:underline">                   An analysis of the most popular repos on Github[completed]</h1>
+# <img src="https://kanbanize.com/blog/wp-content/uploads/2014/11/GitHub.jpg" alt="github" width=50% height=50%>
+# <hr>
+# _Areas of focus include: Type of repo,Metrics of popularity, Languages used_
+# 
+# _Data Source: https://www.kaggle.com/chasewillden/topstarredopensourceprojects _
+# 
+# #### Objective of this analysis:
+# <br>
+# <ol>
+# <li>Learning how to read and analyse a dataset</li>
+# <li>Understanding the dominant languages used for popular GitHub projects and mapping them</li>
+# <li>Extracting the different domains of work done in these projects via the repositories tags</li>
+# <li>Deriving conclusions over the popularity of respective domains and languages</li>
+# </ol>
+# <hr>
+# **All text in blue represents a derived conclusion**
 
 # In[ ]:
 
 
-train.describe()
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-spacegroups = train.spacegroup.unique()
-spacegroups.sort()
-print(spacegroups)
-
-n_spacegroups = len(spacegroups)
-
-
-# **Data Preparation**
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-
-# In[ ]:
-
-
-t1 = 'formation_energy_ev_natom'
-t2 = 'bandgap_energy_ev'
-
-transform_columns = ['number_of_total_atoms', 'percent_atom_al', 'percent_atom_ga', 'percent_atom_in', 'lattice_vector_1_ang', 'lattice_vector_2_ang', 'lattice_vector_3_ang', 'lattice_angle_alpha_degree', 'lattice_angle_beta_degree', 'lattice_angle_gamma_degree']
-feature_columns = ['spacegroup'] + transform_columns
-
-
-# **Visulization**
-
-# In[ ]:
-
-
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+from wordcloud import WordCloud
+import seaborn as sns
+from ggplot import *
+plt.style.use('default')
 
 
 # In[ ]:
 
 
-colors = dict(zip(spacegroups, cm.rainbow(np.linspace(0, 1, n_spacegroups))))
-
-
-plt.figure(figsize=(14, 5))
-
-plt.subplot(1, 2, 1)
-plt.title(t1)
-for g in spacegroups:
-    plt.scatter(
-        range(train[train['spacegroup'] == g].shape[0]), 
-        train.loc[train['spacegroup'] == g, t1], s=9, color=colors[g], label=g)
-plt.legend()
-    
-plt.subplot(1, 2, 2)
-plt.title(t2)
-for g in spacegroups:
-    plt.scatter(
-        range(train[train['spacegroup'] == g].shape[0]), 
-        train.loc[train['spacegroup'] == g, t2], s=9, color=colors[g], label=g)
-plt.legend()
-
-
-plt.show()
-
-
-# **Normalization**
-
-# In[ ]:
-
-
-all = pd.concat([train[feature_columns], test])
-
-scaler = MinMaxScaler()
-#scaler = StandardScaler()
-scaler.fit(all[transform_columns])
-
-train[transform_columns] = scaler.transform(train[transform_columns])
-test[transform_columns] = scaler.transform(test[transform_columns])
+git_df = pd.read_csv("../input/TopStaredRepositories.csv", parse_dates=['Last Update Date'], dayfirst=True)
+git_df.head()
 
 
 # In[ ]:
 
 
-train.head()
+git_df.info()
+
+
+# <h2 style="text-decoration:underline">1. Popular Repositories</h2>
+# <br>
+# **Determining what constitutes a popular repository by extracting the range of maximum and minimum starred repositories**
+
+# <em>Converting the alphanumeric format of "Number of Stars" to numeric
+
+# In[ ]:
+
+
+git_df_max = git_df['Number of Stars'].str.contains('k').all()
+git_df_max
 
 
 # In[ ]:
 
 
-random_seed = 314
+git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
 
-X_train, X_validation = train_test_split(train, test_size=0.2, random_state=random_seed)
 
-y_train = np.log1p(X_train[[t1, t2]])
-X_train = X_train.drop(['id', t1, t2], axis=1)
+# ### 1.1 The top 5 repositories in the dataset [based on "Number of Stars"]
 
-y_validation = np.log1p(X_validation[[t1, t2]])
-X_validation = X_validation.drop(['id', t1, t2], axis=1)
+# In[ ]:
 
-print(X_train.shape, y_train.shape)
-print(X_validation.shape, y_validation.shape)
+
+git_df.head()
+
+
+# ### 1.2 The bottom 5 repositories in the dataset
+
+# In[ ]:
+
+
+git_df.tail()
+
+
+# ### 1.3 Statistical analysis of the repositories
+
+# In[ ]:
+
+
+git_df['Number of Stars'].describe()
+
+
+# <h4 style="color:blue">Most popular repo- 290,000 stars</h4>
+# <h4 style="color:blue"> Least popular repo- 6400 stars</h4>
+# <h4 style="color:blue">Average rating of repos- 13,000 stars</h4>
+
+# ### 1.3 List of all repositories with stars > 13,000
+
+# In[ ]:
+
+
+popular_repos= git_df[git_df['Number of Stars'] > 13.0]
+len(popular_repos)
 
 
 # In[ ]:
 
 
-X_train.head()
+popular_repos.head(8)
 
 
 # In[ ]:
 
 
-y_train.head()
+popular_repos.tail(8)
+
+
+# 
+# <h3 style="color:blue"> Here we see that freeCodeCamp tops the list with 290,000 stars to its repository.</h3>
+# <hr>
+# ### The above list lists all repos that have > 13,000 stars [above average repositories]
+# #### A few more observations can be derived from this list:
+# <ol>
+# <li style="color:blue">5 of the most popular repos are frameworks</li>
+# <li style="color:blue">The third, sixth and eighth most popular repos are educational, and instructive in nature.</li>
+# </ol>
+
+# In[ ]:
+
+
+# classifying repositories according to the popularity
+classified_repos=[]
+for i in range(8,300,7):
+    x = git_df[(git_df['Number of Stars'] >= i) & (git_df['Number of Stars'] <(i+7.0))]
+    classified_repos.append(len(x))
 
 
 # In[ ]:
 
 
-X_validation.head()
+indexes = []
+
+for i in range (8000,300000, 7000):
+    x = '[' + str(i) +','+ (str(i+7000)) + ')'
+    indexes.append(x)
 
 
 # In[ ]:
 
 
-y_validation.head()
+divided_repos = pd.Series(data=classified_repos, index=indexes)
+divided_repos.plot(kind='bar', figsize=(15,10), color=['red'],legend=True, label='Number of repositories')
 
 
-# **TensorFlow**
-
-# In[ ]:
-
-
-import tensorflow as tf
-
-
-# **Neural Network**
+# <h2 style="text-decoration:underline">2. Popular Languages</h2>
+# <br>
+# **Determining the popularity of a language based on the number of repositories using it.**
 
 # In[ ]:
 
 
-tf.set_random_seed(1)
-np.random.seed(1)
-
-layers = [16] * 8
-
-#activation = None
-activation = tf.tanh
-#activation = tf.nn.relu
-#activation = tf.nn.sigmoid
-
-#kernel_regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=0.00001)
-kernel_regularizer_l2 = None
+x=git_df['Language'].value_counts()
+x.head()
+#p = ggplot(aes(x='index',y='count'), data =x) + geom_point(color='coral') + geom_line(color='red')
+#print(p)
 
 
 # In[ ]:
 
 
-tf.reset_default_graph() 
-
-tf_is_training = tf.placeholder(tf.bool, None)
-
-tf_x = tf.placeholder(tf.float32, (None, X_train.shape[1]), name='tf_x')
-tf_y = tf.placeholder(tf.float32, (None, 2), name='tf_y')
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.figure()
+x.plot(kind='barh',figsize=(15,10),grid=True, label='Number of repositories',legend='No of repos',title='No of repositories vs language used')
 
 
 # In[ ]:
 
 
-l = tf_x
-for i, n in enumerate(layers):
-    l = tf.layers.dense(l, n, activation=activation, kernel_regularizer=kernel_regularizer_l2, name='layer%s' % (i + 1))
-
-#     if i == 0:
-#         l = tf.layers.dropout(l, training=tf_is_training, name='dropout%s' % (i + 1))
-
-output = tf.layers.dense(l, 2, name='output')
+get_ipython().run_line_magic('matplotlib', 'inline')
+x[:5].plot.pie(label="Division of the top 5 languages",fontsize=10,figsize=(10,10),legend=True)
 
 
 # In[ ]:
 
 
-# loss
-loss_y = tf.sqrt(tf.reduce_mean(tf.squared_difference(tf_y, output), 0), name='tf_y_loss')
-loss_total = tf.reduce_mean(loss_y, name='tf_total_loss')
-
-rl = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-if len(rl) > 0:
-    loss_total += tf.add_n(rl)
-
-#optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.05)
-#optimizer = tf.train.MomentumOptimizer(learning_rate=0.05, momentum=1.0)
-optimizer = tf.train.AdamOptimizer(learning_rate=0.002)
-train_op = optimizer.minimize(loss_total)
+get_ipython().run_line_magic('matplotlib', 'inline')
+x[:20].plot.pie(label="Division of the top 20 languages",fontsize=10,figsize=(10,10),legend=True)
 
 
-# **Training**
+# <h2 style="text-decoration:underline">3. Popular Domains</h2>
+# <br>
+# **Determining the popular domains by analysing the repository tags**
+
+# <em>Removing all the null-tags fields from the dataframe
 
 # In[ ]:
 
 
-sess = tf.Session()
-sess.run(tf.global_variables_initializer())
+#git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
+nonull_df = git_df[['Tags','Number of Stars']].dropna()
+tags_list = nonull_df['Tags'].str.split(',')
 
 
 # In[ ]:
 
 
-loss_data = []
-
-for step in range(500):
-    # training loss
-    _, lt, lt_y = sess.run([train_op, loss_total, loss_y], {tf_x: X_train, tf_y: y_train, tf_is_training: True})
-    
-    # validation loss
-    lv, lv_y = sess.run([loss_total, loss_y], {tf_x: X_validation, tf_y: y_validation, tf_is_training: False})
-    
-    loss_data.append([step, lt, lt_y[0], lt_y[1], lv, lv_y[0], lv_y[1]])
-
-loss_data = np.array(loss_data)
-
-print(loss_data[-1][1:])
+tags_list.head()
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(15,10))
-plt.subplot(2, 1, 1)
-plt.title('loss')
-plt.plot(loss_data[:, 0], loss_data[:, 1], label='training')
-plt.plot(loss_data[:, 0], loss_data[:, 4], label='validation')
-plt.legend()
+initial = nonull_df['Tags'].str.split(',')
+a = []
+for item in initial:
+       a = a+item
+wc_text = ' '.join(a)
 
-plt.subplot(2, 2, 3)
-plt.title(t1)
-plt.plot(loss_data[:, 0], loss_data[:, 2], label='training')
-plt.plot(loss_data[:, 0], loss_data[:, 5], label='validation')
-plt.legend()
-
-plt.subplot(2, 2, 4)
-plt.title(t2)
-plt.plot(loss_data[:, 0], loss_data[:, 3], label='training')
-plt.plot(loss_data[:, 0], loss_data[:, 6], label='validation')
-plt.legend()
-
-plt.show()
-
-
-# **Validation**
-
-# In[ ]:
-
-
-loss, pred_y = sess.run([loss_total, output], {tf_x: X_validation, tf_y: y_validation, tf_is_training: False})
-
-print('loss:', loss)
+get_ipython().run_line_magic('matplotlib', 'inline')
+wordcloud = WordCloud(background_color='black',width=800, height=400).generate(wc_text)
+plt.figure(figsize=(25,10), facecolor='k')
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.tight_layout(pad=0)
+plt.axis("off")
 
 
 # In[ ]:
 
 
-n_row = len(y_validation)
-
-plt.figure(figsize=(14, 5))
-plt.suptitle('validation')
-
-# Formation energy
-plt.subplot(1, 2, 1)
-plt.title(t1)
-plt.scatter(range(n_row), y_validation[t1], s=12, label='labels')
-plt.scatter(range(n_row), pred_y[:, 0], s=12, label='predictions')
-plt.legend()
-
-# Bandgap energy
-plt.subplot(1, 2, 2)
-plt.title(t2)
-plt.scatter(range(n_row), y_validation[t2], s=12, label='labels')
-plt.scatter(range(n_row), pred_y[:, 1], s=12, label='predictions')
-plt.legend()
-
-plt.show()
+web_dev_count = 0
+tags = ['javascript', 'css', 'html', 'nodejs', 'bootstrap','react', 'react-native', 'rest-api', 'rest', 'web-development','typescript','coffeescript']
+for item in tags_list:
+    if set(tags).intersection(item):
+        web_dev_count+=1
+web_dev_count
 
 
 # In[ ]:
 
 
-pd_y_pred = pd.DataFrame()
-pd_y_pred[t1] = pred_y[:, 0]
-pd_y_pred[t2] = pred_y[:, 1]
-pd_y_pred['index'] = y_validation.index
-pd_y_pred.set_index('index', inplace=True)
+machine_data_count=0
+mach=[]
+tags=['machine-learning', 'jupyter','jupter-notebook', 'tensorflow','data-science','data-analytics']
+for item in tags_list:
+    if set(tags).intersection(item):
+        machine_data_count+=1
+        mach.append(item)
+machine_data_count
 
 
 # In[ ]:
 
 
-from sklearn.metrics import mean_squared_error
-
-for i, g in enumerate(spacegroups):
-    labels = y_validation.loc[X_validation[X_validation['spacegroup'] == g].index]
-    predictions = pd_y_pred.loc[X_validation[X_validation['spacegroup'] == g].index]
-    loss = np.sqrt(mean_squared_error(labels, predictions, multioutput='raw_values'))
-    print ('spacegroup=%d' % g, *loss, np.mean(loss))
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(14, 28))
-
-for i, g in enumerate(spacegroups):
-    for j, target in enumerate([t1, t2]):
-        plt.subplot(n_spacegroups, 2, i * 2 + j + 1)
-        if j == 0:
-            plt.ylabel('spacegroup=%d' % g)
-        plt.scatter(range(X_validation[X_validation['spacegroup'] == g].shape[0]), y_validation.loc[X_validation[X_validation['spacegroup'] == g].index, target], s=12, label='labels')
-        plt.scatter(range(X_validation[X_validation['spacegroup'] == g].shape[0]), pd_y_pred.loc[X_validation[X_validation['spacegroup'] == g].index, target], s=12, label='predictions')
-        plt.legend()
-
-plt.show()
-
-
-# **Submission**
-
-# In[ ]:
-
-
-# sample submission
-sample = pd.read_csv('../input/sample_submission.csv')
-sample.head()
+mobile_dev_count=0
+tags=['android','sdk','ios','swift','mobile','react','macos','windows']
+for item in tags_list:
+    if set(tags).intersection(item):
+        mobile_dev_count+=1
+mobile_dev_count
 
 
 # In[ ]:
 
 
-y_train = np.log1p(train[[t1, t2]])
-X_train = train.drop(['id', t1, t2], axis=1)
-
-sess = tf.Session()
-sess.run(tf.global_variables_initializer())
-
-loss_data = []
-for step in range(2000):
-    # training loss
-    _, l, l_y = sess.run([train_op, loss_total, loss_y], {tf_x: X_train, tf_y: y_train, tf_is_training: True})
-
-    loss_data.append([step, l, l_y[0], l_y[1]])
-
-print(loss_data[-1][1:])
-
-loss_data = np.array(loss_data)
+linux_dev_count=0
+linux=[]
+tags=['linux','unix','bash','shell','cli','bsd']
+for item in tags_list:
+    if set(tags).intersection(item):
+        linux_dev_count+=1
+        linux.append(item)
+linux_dev_count
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(14, 8))
-
-plt.subplot(2, 1, 1)
-plt.title('loss')
-plt.plot(loss_data[:, 0], loss_data[:, 1])
-
-plt.subplot(2, 2, 3)
-plt.title(t1)
-plt.plot(loss_data[:, 0], loss_data[:, 2])
-plt.subplot(2, 2, 4)
-plt.title(t2)
-plt.plot(loss_data[:, 0], loss_data[:, 3])
-
-plt.show()
+hardware_dev_count=0
+hardware=[]
+tags=['hardware','iot','smart','system','system-architecture','cloud']
+for item in tags_list:
+    if set(tags).intersection(item):
+        hardware.append(item)
+        hardware_dev_count+=1
+hardware_dev_count
 
 
 # In[ ]:
 
 
-X_test = test.drop(['id'], axis=1)
-pred_y = sess.run(output, {tf_x: X_test, tf_is_training: False})
+domain_series=pd.Series(index=['Web Development','Data Science and Machine Learning','Mobile Development','Linux and Shell Programming','System hardware and IOT'],
+                        data=[web_dev_count,machine_data_count,mobile_dev_count,linux_dev_count,hardware_dev_count])
 
-pred_y = np.expm1(pred_y)
 
-pred_y[pred_y[:, 0] < 0, 0] = 0
-pred_y[pred_y[:, 1] < 0, 1] = 0
+# In[ ]:
 
-subm = pd.DataFrame()
-subm['id'] = sample['id']
-subm[t1] = pred_y[:, 0]
-subm[t2] = pred_y[:, 1]
-subm.to_csv("subm.csv", index=False)
 
-subm.head()
+domain_series
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+fig_domain=domain_series.plot(lw=2,kind='barh',figsize=(20,10),color=['green'],grid=True,title='Domain-wise repository analysis',
+                              )
+fig_domain.set(xlabel="Number of repositories", ylabel="Domain Name")
+
+
+# <h2 style="text-decoration:underline">3. Determing the correlation between Number of Tags and Number of Stars</h2>
+
+# In[ ]:
+
+
+nonull_df['CountTag']=0
+for i in range(0,489,1):
+    nonull_df['CountTag'].iloc[i] = len(list(nonull_df['Tags'].iloc[i].split(',')))
+
+
+# In[ ]:
+
+
+nonull_df['CountTag'].corr(nonull_df['Number of Stars'])
+
+
+# <hr>
+# <h2 style="text-decoration:underline">4. Conclusion</h2>
+# <br>
+# **Inferences from the analysis**
+# <hr>
+# <ol>
+# <li>The most popular repository on GitHub is freeCodeCamp, with 290,000 stars</li>
+# <li>In the top 8 repositories in the dataset, 3 are instructional and educational</li>
+# <li>JavaScript is the most popularly used language, and constitutes <b>38.5 %</b> of the total languages in these repositories</li> 
+# <li>Frameworks are the most popular type of projects across GitHub</li>
+# <li>In domains, Web Development is the most popular domain of work, followed by Mobile (android, iOS, macOS, Windows) development</li>
+# <li>There is no determinable correlation between the number of tags and the number of stars. The correlation coefficient is a weak 0.04646</li>
+
+# ### [Extra] Popular python based projects 
+
+# In[ ]:
+
+
+python_tags = git_df[git_df['Language'] == 'Python'][['Username', 'Repository Name', 'Description', 'Tags']]
+
+
+# In[ ]:
+
+
+python_tags
 

@@ -1,73 +1,53 @@
-#!/usr/bin/python
+# Note: Kaggle only runs Python 3, not Python 2
 
-# Note to Kagglers: This script will not run directly in Kaggle kernels. You
-# need to download it and run it on your local machine.
+# We'll use the pandas library to read CSV files into dataframes
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
-# Downloads images from the Google Landmarks dataset using multiple threads.
-# Images that already exist will not be downloaded again, so the script can
-# resume a partially completed download. All images will be saved in the JPG
-# format with 90% compression quality.
+# The competition datafiles are in the directory ../input
+# Read competition data files:
+train = pd.read_csv("../input/train.csv")
 
-import sys, os, multiprocessing, urllib2, csv
-from PIL import Image
-from StringIO import StringIO
+# preprocessing columns
+# factorizing column values
+train['T1_V4'] = pd.factorize(train['T1_V4'])[0]
+train['T1_V5'] = pd.factorize(train['T1_V5'])[0]
+# simple yes/no
+train['T1_V6'] = pd.factorize(train['T1_V6'])[0]
+train['T1_V7'] = pd.factorize(train['T1_V7'])[0]
+train['T1_V8'] = pd.factorize(train['T1_V8'])[0]
+train['T1_V9'] = pd.factorize(train['T1_V9'])[0]
+train['T1_V11'] = pd.factorize(train['T1_V11'])[0]
+train['T1_V12'] = pd.factorize(train['T1_V12'])[0]
+train['T1_V15'] = pd.factorize(train['T1_V15'])[0]
+train['T1_V16'] = pd.factorize(train['T1_V16'])[0]
+train['T1_V17'] = pd.factorize(train['T1_V17'])[0]
 
-
-def ParseData(data_file):
-  csvfile = open(data_file, 'r')
-  csvreader = csv.reader(csvfile)
-  key_url_list = [line[:2] for line in csvreader]
-  return key_url_list[1:]  # Chop off header
-
-
-def DownloadImage(key_url):
-  out_dir = sys.argv[2]
-  (key, url) = key_url
-  filename = os.path.join(out_dir, '%s.jpg' % key)
-
-  if os.path.exists(filename):
-    print('Image %s already exists. Skipping download.' % filename)
-    return
-
-  try:
-    response = urllib2.urlopen(url)
-    image_data = response.read()
-  except:
-    print('Warning: Could not download image %s from %s' % (key, url))
-    return
-
-  try:
-    pil_image = Image.open(StringIO(image_data))
-  except:
-    print('Warning: Failed to parse image %s' % key)
-    return
-
-  try:
-    pil_image_rgb = pil_image.convert('RGB')
-  except:
-    print('Warning: Failed to convert image %s to RGB' % key)
-    return
-
-  try:
-    pil_image_rgb.save(filename, format='JPEG', quality=90)
-  except:
-    print('Warning: Failed to save image %s' % filename)
-    return
+train['T2_V3'] = pd.factorize(train['T2_V3'])[0]
+train['T2_V5'] = pd.factorize(train['T2_V5'])[0]
+train['T2_V11'] = pd.factorize(train['T2_V11'])[0]
+train['T2_V12'] = pd.factorize(train['T2_V12'])[0]
+train['T2_V13'] = pd.factorize(train['T2_V13'])[0]
 
 
-def Run():
-  if len(sys.argv) != 3:
-    print('Syntax: %s <data_file.csv> <output_dir/>' % sys.argv[0])
-    sys.exit(0)
-  (data_file, out_dir) = sys.argv[1:]
+fig = plt.figure(figsize=(15, 12))
 
-  if not os.path.exists(out_dir):
-    os.mkdir(out_dir)
+# loop over all vars (total: 34)
+for i in range(1, train.shape[1]):
+    plt.subplot(6, 6, i)
+    f = plt.gca()
+    f.axes.get_yaxis().set_visible(False)
+    # f.axes.set_ylim([0, train.shape[0]])
 
-  key_url_list = ParseData(data_file)
-  pool = multiprocessing.Pool(processes=50)
-  pool.map(DownloadImage, key_url_list)
+    vals = np.size(train.iloc[:, i].unique())
+    if vals < 10:
+        bins = vals
+    else:
+        vals = 10
 
+    plt.hist(train.iloc[:, i], bins=30, color='#3F5D7D')
 
-if __name__ == '__main__':
-  Run()
+plt.tight_layout()
+
+plt.savefig("histogram-distribution.png")

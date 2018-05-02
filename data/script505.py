@@ -1,200 +1,150 @@
 
 # coding: utf-8
 
-# It seems the current [high scoring script][1] is written in R using H2O. So let us do one in python using XGBoost. 
+# $$
+# \huge\text{Visualizing iMaterialist Data}\\
+# \large\text{March 2018}\\
+# \text{Andrew Riberio @ https://github.com/Andrewnetwork}
+# $$
+# <img width="700" height="300" src="https://i.imgur.com/HcJJmzj.jpg" />
+# In this notebook we will visualize data from the Kaggle challenge *iMaterialist Challenge (Furniture) at FGVC5*. 
 # 
-# Thanks to [this script][2] for feature engineering ideas. 
+# **NOTE**: In order for the interactive componnents of this kernel to function, you must either fork this kernel or download it to your local machine which has the required environment and dependencies. The simplest method is to fork the kernel here on kaggle. 
+
+# In[6]:
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import json
+
+# Libraries for displying the data. 
+from IPython.core.display import HTML 
+from ipywidgets import interact
+from IPython.display import display
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# ## Loading the data
+
+# We use the json library to load the data into python dictionary objects. 
+
+# In[7]:
+
+
+training   = json.load(open("../input/train.json"))
+test       = json.load(open("../input/test.json"))
+validation = json.load(open("../input/validation.json"))
+
+
+# We itterate over the json dictionaries loaded in above and produce a pandas dataframe for the training, validation, and test data. 
+
+# In[8]:
+
+
+# A function to be mapped over the json dictionary. 
+def joinFn(dat):
+    return [dat[0]["url"][0], dat[1]["label_id"]]
+
+trainingDF   = pd.DataFrame(list(map(joinFn, zip(training["images"],training["annotations"]))),columns=["url","label"])
+validationDF = pd.DataFrame(list(map(joinFn, zip(validation["images"],validation["annotations"]))),columns=["url","label"])
+testDF       = pd.DataFrame(list(map(lambda x: x["url"],test["images"])),columns=["url"])
+
+
+# In[12]:
+
+
+trainingDF
+
+
+# In[10]:
+
+
+validationDF.head()
+
+
+# In[11]:
+
+
+testDF.head()
+
+
+# ## Basic Visualization 
+
+# In[13]:
+
+
+print("Number of classes: {0}".format(len( trainingDF["label"].unique())))
+
+
+# In[14]:
+
+
+trainingDF["label"].value_counts().plot(kind='bar',figsize=(40,10),title="Number of Training Examples Versus Class").title.set_size(40)
+
+
+# In the above chart we can see that we have a heavily skewed dataset in respect the the number of training examples per class. Class 20 has about 4,000 examples where class 83 has less than 500. 
 # 
-# We shall start with importing the necessary modules
+# We use the next funciton to view examples of each class in the training data. The overlayed number is the class label. 
+
+# In[15]:
+
+
+def displayExamples(exampleIndex=0):
+    outHTML = "<div>"
+    for label in range(1,129):
+        img_style = "width: 180px;height:180px; margin: 0px; float: left; border: 1px solid black;"
+        captionDiv = "<div style='position:absolute;right:30px;color:red;font-size:30px;background-color:grey;padding:5px;opacity:0.5'>"+str(label)+"</div>"
+        outHTML += "<div style='position:relative;display:inline-block'><img style='"+img_style+"' src='"+trainingDF[trainingDF.label == label].iloc[exampleIndex][0]+"'/>"+captionDiv+"</div>"
+    outHTML += "</div>"
+    display(HTML(outHTML))
+
+displayExamples()
+
+
+# We can use the following function to view examples for a particular category/class. 
+
+# In[16]:
+
+
+def displayCategoryExamples(category=0,nExamples=20):
+    outHTML = "<div>"
+    for idx in range(0,nExamples):
+        img_style = "width: 180px;height:180px; margin: 0px; float: left; border: 1px solid black;"
+        outHTML += "<div style='position:relative;display:inline-block'><img style='"+img_style+"' src='"+trainingDF[trainingDF.label == category].iloc[idx][0]+"'/></div>"
+    outHTML += "</div>"
+    display(HTML(outHTML))
+    
+displayCategoryExamples(7)
+
+
+# Just from looking at examples in class 7, TVs, we can note a few things: 
+# * Some are natural images with the TVs included in their surroundings. 
+# * Some are artifical images of cartoon TVs. 
+# * Some images have digital artifacts overlayed upon the image ( like the date of the image ). 
+# * There are different angles provided. 
 # 
+# Let's look at another category to see if this type of variablity is consistent across the classes. 
 # 
-#   [1]: https://www.kaggle.com/gospursgo/two-sigma-connect-rental-listing-inquiries/h2o-starter-pack/run/835757
-#   [2]: https://www.kaggle.com/aikinogard/two-sigma-connect-rental-listing-inquiries/random-forest-starter-with-numerical-features
 
-# In[ ]:
+# In[17]:
 
 
-import os
-import sys
-import operator
-import numpy as np
-import pandas as pd
-from scipy import sparse
-import xgboost as xgb
-from sklearn import model_selection, preprocessing, ensemble
-from sklearn.metrics import log_loss
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+displayCategoryExamples(24)
 
 
-# Now let us write a custom function to run the xgboost model.
+# It does seem like there is a huge variablity within each class. In the next section you will be able to interactively pan around the dataset. This requires you to be running this notebook as a fork, as a static rendering will not include interactive elements. There is no preloading done here, so it may take some time for all the images to load. 
 
-# In[ ]:
-
-
-def runXGB(train_X, train_y, test_X, test_y=None, feature_names=None, seed_val=0, num_rounds=1000):
-    param = {}
-    param['objective'] = 'multi:softprob'
-    param['eta'] = 0.1
-    param['max_depth'] = 6
-    param['silent'] = 1
-    param['num_class'] = 3
-    param['eval_metric'] = "mlogloss"
-    param['min_child_weight'] = 1
-    param['subsample'] = 0.7
-    param['colsample_bytree'] = 0.7
-    param['seed'] = seed_val
-    num_rounds = num_rounds
-
-    plst = list(param.items())
-    xgtrain = xgb.DMatrix(train_X, label=train_y)
-
-    if test_y is not None:
-        xgtest = xgb.DMatrix(test_X, label=test_y)
-        watchlist = [ (xgtrain,'train'), (xgtest, 'test') ]
-        model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=20)
-    else:
-        xgtest = xgb.DMatrix(test_X)
-        model = xgb.train(plst, xgtrain, num_rounds)
-
-    pred_test_y = model.predict(xgtest)
-    return pred_test_y, model
+# In[18]:
 
 
-# Let us read the train and test files and store it.
-
-# In[ ]:
-
-
-data_path = "../input/"
-train_file = data_path + "train.json"
-test_file = data_path + "test.json"
-train_df = pd.read_json(train_file)
-test_df = pd.read_json(test_file)
-print(train_df.shape)
-print(test_df.shape)
+def visCat(cat=1):
+    displayCategoryExamples(cat,40)
+    
+interact(visCat, cat=(1,128))
 
 
-# We do not need any pre-processing for numerical features and so create a list with those features.
-
-# In[ ]:
-
-
-features_to_use  = ["bathrooms", "bedrooms", "latitude", "longitude", "price"]
-
-
-# Now let us create some new features from the given features.
-
-# In[ ]:
-
-
-# count of photos #
-train_df["num_photos"] = train_df["photos"].apply(len)
-test_df["num_photos"] = test_df["photos"].apply(len)
-
-# count of "features" #
-train_df["num_features"] = train_df["features"].apply(len)
-test_df["num_features"] = test_df["features"].apply(len)
-
-# count of words present in description column #
-train_df["num_description_words"] = train_df["description"].apply(lambda x: len(x.split(" ")))
-test_df["num_description_words"] = test_df["description"].apply(lambda x: len(x.split(" ")))
-
-# convert the created column to datetime object so as to extract more features 
-train_df["created"] = pd.to_datetime(train_df["created"])
-test_df["created"] = pd.to_datetime(test_df["created"])
-
-# Let us extract some features like year, month, day, hour from date columns #
-train_df["created_year"] = train_df["created"].dt.year
-test_df["created_year"] = test_df["created"].dt.year
-train_df["created_month"] = train_df["created"].dt.month
-test_df["created_month"] = test_df["created"].dt.month
-train_df["created_day"] = train_df["created"].dt.day
-test_df["created_day"] = test_df["created"].dt.day
-train_df["created_hour"] = train_df["created"].dt.hour
-test_df["created_hour"] = test_df["created"].dt.hour
-
-# adding all these new features to use list #
-features_to_use.extend(["num_photos", "num_features", "num_description_words","created_year", "created_month", "created_day", "listing_id", "created_hour"])
-
-
-# We have 4 categorical features in our data
+# ## Next Steps
+# For futher visualization we would need to download the images which we are unable to do in a contained Kaggle kernel. There are a few download scripts available in the kernels section. It would be nice if someone could download the images and upload a partial set of the training, validation, and test data so we can do more analysis in these notebooks. 
 # 
-#  - display_address
-#  - manager_id
-#  - building_id
-#  - listing_id
-# 
-# So let us label encode these features.
-
-# In[ ]:
-
-
-categorical = ["display_address", "manager_id", "building_id", "street_address"]
-for f in categorical:
-        if train_df[f].dtype=='object':
-            #print(f)
-            lbl = preprocessing.LabelEncoder()
-            lbl.fit(list(train_df[f].values) + list(test_df[f].values))
-            train_df[f] = lbl.transform(list(train_df[f].values))
-            test_df[f] = lbl.transform(list(test_df[f].values))
-            features_to_use.append(f)
-
-
-# We have features column which is a list of string values. So we can first combine all the strings together to get a single string and then apply count vectorizer on top of it.
-
-# In[ ]:
-
-
-train_df['features'] = train_df["features"].apply(lambda x: " ".join(["_".join(i.split(" ")) for i in x]))
-test_df['features'] = test_df["features"].apply(lambda x: " ".join(["_".join(i.split(" ")) for i in x]))
-print(train_df["features"].head())
-tfidf = CountVectorizer(stop_words='english', max_features=200)
-tr_sparse = tfidf.fit_transform(train_df["features"])
-te_sparse = tfidf.transform(test_df["features"])
-
-
-# Now let us stack both the dense and sparse features into a single dataset and also get the target variable.
-
-# In[ ]:
-
-
-train_X = sparse.hstack([train_df[features_to_use], tr_sparse]).tocsr()
-test_X = sparse.hstack([test_df[features_to_use], te_sparse]).tocsr()
-
-target_num_map = {'high':0, 'medium':1, 'low':2}
-train_y = np.array(train_df['interest_level'].apply(lambda x: target_num_map[x]))
-print(train_X.shape, test_X.shape)
-
-
-# Now let us do some cross validation to check the scores. 
-# 
-# Please run it in local to get the cv scores. I am commenting it out here for time.
-
-# In[ ]:
-
-
-cv_scores = []
-kf = model_selection.KFold(n_splits=5, shuffle=True, random_state=2016)
-for dev_index, val_index in kf.split(range(train_X.shape[0])):
-        dev_X, val_X = train_X[dev_index,:], train_X[val_index,:]
-        dev_y, val_y = train_y[dev_index], train_y[val_index]
-        preds, model = runXGB(dev_X, dev_y, val_X, val_y)
-        cv_scores.append(log_loss(val_y, preds))
-        print(cv_scores)
-        break
-
-
-# Now let us build the final model and get the predictions on the test set.
-
-# In[ ]:
-
-
-preds, model = runXGB(train_X, train_y, test_X, num_rounds=400)
-out_df = pd.DataFrame(preds)
-out_df.columns = ["high", "medium", "low"]
-out_df["listing_id"] = test_df.listing_id.values
-out_df.to_csv("xgb_starter2.csv", index=False)
-
-
-# 
-# Hope this helps the python users as a good starting point.

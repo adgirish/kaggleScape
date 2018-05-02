@@ -1,110 +1,76 @@
-from __future__ import division
-import sqlite3, time, csv, re, random
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cross_validation import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import accuracy_score
-from scipy.sparse import csr_matrix
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from xgboost.sklearn import XGBClassifier
 
-'''
-This script was inspired by smerity's script "The Biannual Reddit Sarcasm
-Hunt." A natural follow-up question is whether we can detect posts with the
-/s flag using a BOW model. 
+np.random.seed(0)
 
-The corpus has about 54m posts, of which about 30k have the /s flag. It is 
-impossible to compete with a majority baseline that strong, so instead I've
-framed it as a binary classification task with uniform class distribution.
-Realistic, no, but enough to see some pronounced trends in the features. A
-logistic regression model scores about 72% on unseen data.
+#Loading data
+df_train = pd.read_csv('../input/train_users.csv')
+df_test = pd.read_csv('../input/test_users.csv')
+labels = df_train['country_destination'].values
+df_train = df_train.drop(['country_destination'], axis=1)
+id_test = df_test['id']
+piv_train = df_train.shape[0]
 
-You can read my blurb about the results at davefernig.com
+#Creating a DataFrame with train+test data
+df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
+#Removing id and date_first_booking
+df_all = df_all.drop(['id', 'date_first_booking'], axis=1)
+#Filling nan
+df_all = df_all.fillna(-1)
 
-Lots of work has been done on irony detection, here are a couple references:
-Bamman, Contextualized Sarcasm Detection on Twitter, ICWSM 2015
-Wallace, Humans Require Context to Infer Ironic Intent (so Computers 
-Probably do, too), ACL 2014
-'''
+#####Feature engineering#######
+#date_account_created
+dac = np.vstack(df_all.date_account_created.astype(str).apply(lambda x: list(map(int, x.split('-')))).values)
+df_all['dac_year'] = dac[:,0]
+df_all['dac_month'] = dac[:,1]
+df_all['dac_day'] = dac[:,2]
+df_all = df_all.drop(['date_account_created'], axis=1)
 
-#Parameters
-srs_lmt = 30100 #serious posts to train on
-sar_lmt = 30100 #sarcastic posts to train on
-top_k = 30 #features to display
-num_ex = 20 #examples displayed per feature
-min_ex = 0 #shortest example displayed
-max_ex = 120 #longest example displayed
-ovr_ex = True #display longer/shorter examples if we run out
+#timestamp_first_active
+tfa = np.vstack(df_all.timestamp_first_active.astype(str).apply(lambda x: list(map(int, [x[:4],x[4:6],x[6:8],x[8:10],x[10:12],x[12:14]]))).values)
+df_all['tfa_year'] = tfa[:,0]
+df_all['tfa_month'] = tfa[:,1]
+df_all['tfa_day'] = tfa[:,2]
+df_all = df_all.drop(['timestamp_first_active'], axis=1)
 
-print('Querying DB...\n')
-sql_conn = sqlite3.connect('../input/database.sqlite')
+#Age
+av = df_all.age.values
+df_all['age'] = np.where(np.logical_or(av<14, av>100), -1, av)
 
-sarcasmData = sql_conn.execute("SELECT subreddit, body, score FROM May2015\
-                                WHERE body LIKE '% /s'\
-                                LIMIT " + str(sar_lmt))
+#One-hot-encoding features
+ohe_feats = ['gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser']
+for f in ohe_feats:
+    df_all_dummy = pd.get_dummies(df_all[f], prefix=f)
+    df_all = df_all.drop([f], axis=1)
+    df_all = pd.concat((df_all, df_all_dummy), axis=1)
 
-seriousData = sql_conn.execute("SELECT subreddit, body, score FROM May2015\
-                                WHERE body NOT LIKE '%/s%'\
-                                LIMIT " + str(srs_lmt))
+#Splitting train and test
+vals = df_all.values
+X = vals[:piv_train]
+le = LabelEncoder()
+y = le.fit_transform(labels)   
+X_test = vals[piv_train:]
 
-print('Building Corpora...\n')
-corpus, raw_corpus, srs_corpus = [], [], []
+#Classifier
+xgb = XGBClassifier(max_depth=6, learning_rate=0.3, n_estimators=25,
+                    objective='multi:softprob', subsample=0.5, colsample_bytree=0.5, seed=0)                  
+xgb.fit(X, y)
+y_pred = xgb.predict_proba(X_test)  
 
-for sar_post in sarcasmData:
-    raw_corpus.append(re.sub('\n', '', sar_post[1]))
-    cln_post = re.sub('/s|\n', '', sar_post[1]) #Remove /s and newlines
-    corpus.append(re.sub(r'([^\s\w]|_)+', '', cln_post)) #and then non-alpha
+#Taking the 5 classes with highest probabilities
+ids = []  #list of ids
+cts = []  #list of countries
+for i in range(len(id_test)):
+    idx = id_test[i]
+    ids += [idx] * 5
+    cts += le.inverse_transform(np.argsort(y_pred[i])[::-1])[:5].tolist()
 
-for srs_post in seriousData:
-    srs_corpus.append(re.sub('\n', '', srs_post[1]))
-    cln_post = re.sub('\n', '', srs_post[1]) #Remove newlines
-    corpus.append(re.sub(r'([^\s\w]|_)+', '', cln_post)) #and then non-alpha
+#Generate submission
+sub = pd.DataFrame(np.column_stack((ids, cts)), columns=['id', 'country'])
+sub.to_csv('sub.csv',index=False)
 
-print('Fitting TF-IDF and Classifier...\n')
-vec, clf = TfidfVectorizer(min_df=5), LogisticRegression(C=1.25)
 
-td_matrix = csr_matrix(vec.fit_transform(corpus).toarray())
-labels = [1]*sar_lmt+[-1]*srs_lmt
-X_train, X_test, y_train, y_test = train_test_split(td_matrix, labels, 
-                                   test_size=0.33, random_state=42)
-
-clf.fit(X_train, y_train)
-y_out = clf.predict(X_test)
-
-print("Accuracy on held-out data: ",\
-      str(100*accuracy_score(y_out, y_test))[0:5], "%\n")
-
-X_train = y_train = X_test = y_test = y_out = None
-
-print('Folding held-out data back into the training set, fitting...\n')
-clf.fit(td_matrix, labels)
-
-#See what features were informative
-feature_weights, feature_names = clf.coef_[0], vec.get_feature_names()
-sar_indices = feature_weights.argsort()[-top_k:][::-1]
-
-print("The", top_k, "most informative words for predicting sarcasm on reddit:\n")
-for k in range(0, top_k):
+  
     
-    feature = feature_names[sar_indices[k]]
-    all_examples = [post for post in raw_corpus 
-                    if ' '+feature+' ' in post]
-                    
-    srs_examples = [post for post in srs_corpus 
-                    if ' '+feature+' ' in post]
-    
-    print("Feature", str(k+1),':', '"'+feature+'"',\
-          "(Appears", len(all_examples), "times sarcastically", len(srs_examples), "sincerely")
-    print("Examples:")
-    examples = [post for post in all_examples 
-                if len(post) <= max_ex and len(post) >= min_ex]
-    
-    in_range = len(examples)
-    extra_examples = [post for post in all_examples if post not in examples]
-    random.shuffle(examples)
-    extra_examples.sort(key = lambda s: len(s))
-    examples += extra_examples
-
-    for i in range(0, min(num_ex, len(examples))):
-        if in_range > i or ovr_ex:
-            print(str(i+1), ':', examples[i])
-    print('')        

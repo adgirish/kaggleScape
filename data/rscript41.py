@@ -1,330 +1,245 @@
-import gc
 import numpy as np
 import pandas as pd
-import os
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold, RepeatedKFold
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import StratifiedKFold
+import random
+from math import exp
+import xgboost as xgb
+from nltk.stem import PorterStemmer
+import re
+#import distance
 
-from tqdm import tqdm
-import lightgbm as lgb
+random.seed(321)
+np.random.seed(321)
 
-
-# Load Data
-dtype = {
-    'id': str,
-    'teacher_id': str,
-    'teacher_prefix': str,
-    'school_state': str,
-    'project_submitted_datetime': str,
-    'project_grade_category': str,
-    'project_subject_categories': str,
-    'project_subject_subcategories': str,
-    'project_title': str,
-    'project_essay_1': str,
-    'project_essay_2': str,
-    'project_essay_3': str,
-    'project_essay_4': str,
-    'project_resource_summary': str,
-    'teacher_number_of_previously_posted_projects': int,
-    'project_is_approved': np.uint8,
-}
-data_path = os.path.join('..', 'input')
-train = pd.read_csv(os.path.join(data_path, 'train.csv'), dtype=dtype, low_memory=True)
-test = pd.read_csv(os.path.join(data_path, 'test.csv'), dtype=dtype, low_memory=True)
-res = pd.read_csv(os.path.join(data_path, 'resources.csv'))
-
-print(train.head())
-# print(test.head())
-print(train.shape, test.shape)
+X_train = pd.read_json("../input/train.json")
+X_test = pd.read_json("../input/test.json")
 
 
-# Preprocess data
-train['project_essay'] = train.apply(lambda row: ' '.join([
-    str(row['project_essay_1']), 
-    str(row['project_essay_2']), 
-    str(row['project_essay_3']), 
-    str(row['project_essay_4']),
-    ]), axis=1)
-test['project_essay'] = test.apply(lambda row: ' '.join([
-    str(row['project_essay_1']), 
-    str(row['project_essay_2']), 
-    str(row['project_essay_3']), 
-    str(row['project_essay_4']),
-    ]), axis=1)
+interest_level_map = {'low': 0, 'medium': 1, 'high': 2}
+X_train['interest_level'] = X_train['interest_level'].apply(lambda x: interest_level_map[x])
+X_test['interest_level'] = -1
 
-# Extract features
-def extract_features(df):
-    df['project_title_len'] = df['project_title'].apply(lambda x: len(str(x)))
-    df['project_essay_1_len'] = df['project_essay_1'].apply(lambda x: len(str(x)))
-    df['project_essay_2_len'] = df['project_essay_2'].apply(lambda x: len(str(x)))
-    df['project_essay_3_len'] = df['project_essay_3'].apply(lambda x: len(str(x)))
-    df['project_essay_4_len'] = df['project_essay_4'].apply(lambda x: len(str(x)))
-    df['project_resource_summary_len'] = df['project_resource_summary'].apply(lambda x: len(str(x)))
-    
-    df['project_title_wc'] = df['project_title'].apply(lambda x: len(str(x).split(' ')))
-    df['project_essay_1_wc'] = df['project_essay_1'].apply(lambda x: len(str(x).split(' ')))
-    df['project_essay_2_wc'] = df['project_essay_2'].apply(lambda x: len(str(x).split(' ')))
-    df['project_essay_3_wc'] = df['project_essay_3'].apply(lambda x: len(str(x).split(' ')))
-    df['project_essay_4_wc'] = df['project_essay_4'].apply(lambda x: len(str(x).split(' ')))
-    df['project_resource_summary_wc'] = df['project_resource_summary'].apply(lambda x: len(str(x).split(' ')))
-  
-extract_features(train)
-extract_features(test)
+#remove some noise
+#ulimit = np.percentile(X_train.price.values, 99)
+X_train['price'].ix[X_train['price']>13000] = 13000
 
-train.drop([
-    'project_essay_1', 
-    'project_essay_2', 
-    'project_essay_3', 
-    'project_essay_4'], axis=1, inplace=True)
-test.drop([
-    'project_essay_1', 
-    'project_essay_2', 
-    'project_essay_3', 
-    'project_essay_4'], axis=1, inplace=True)
+#modify description 
+#stemmer = PorterStemmer()
+#def clean(x):
+#    regex = re.compile('[^a-zA-Z ]')
+    # For user clarity, broken it into three steps
+#    i = regex.sub(' ', x).lower()
+#    i = i.split(" ") 
+#    i= [stemmer.stem(l) for l in i]
+#    i= " ".join([l.strip() for l in i if (len(l)>2) ]) # Keeping words that have length greater than 2
+#    return i
 
-df_all = pd.concat([train, test], axis=0)
-gc.collect()
+#X_train['description'] = X_train.description.apply(lambda x: clean(x))    
+#X_test['description'] = X_test.description.apply(lambda x: clean(x))    
 
-# Accepted projects counter (gave imrovement on CV but worse on LB, need to be implemented withing a CV loop with splitting data by time)
-# df_all['project_is_approved'].fillna(0, inplace=True)
-# cumsums = df_all[
-#             ['id', 
-#             'teacher_id', 
-#             'project_submitted_datetime', 
-#             'project_is_approved']].\
-#         sort_values('project_submitted_datetime').\
-#         groupby(['teacher_id']).agg({'project_is_approved': lambda x: x.shift().sum(), 'id': 'first'}).fillna(0).\
-#         groupby(level=0).agg({'project_is_approved': 'cumsum', 'id': 'first'}).reset_index()
-# cumsums = pd.DataFrame(cumsums)
-# cumsums.rename(columns={'project_is_approved': 'teacher_number_of_previously_accepted_projects'}, inplace=True)
-# print(cumsums.head())
-# train = train.merge(cumsums, on=['id', 'teacher_id'], how='left')
-# test = test.merge(cumsums, on=['id', 'teacher_id'], how='left')
+#add features
+feature_transform = CountVectorizer(stop_words='english', max_features=150)
+X_train['features'] = X_train["features"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
+X_test['features'] = X_test["features"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
+feature_transform.fit(list(X_train['features']) + list(X_test['features']))
 
-# train['approve_rate'] = (train['teacher_number_of_previously_accepted_projects'] + 5)/\
-#     (train['teacher_number_of_previously_posted_projects'] + 10)
-# test['approve_rate'] = (test['teacher_number_of_previously_accepted_projects'] + 5)/\
-#     (test['teacher_number_of_previously_posted_projects'] + 10)
+#featured_transform = CountVectorizer(stop_words='english', max_features=200)
+#X_train['description'] = X_train["description"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
+#X_test['description'] = X_test["description"].apply(lambda x: " ".join(["_".join(i.lower().split(" ")) for i in x]))
+#featured_transform.fit(list(X_train['description']) + list(X_test['description']))
 
-# print(train.head())
-# print(test.head())
+train_size = len(X_train)
+low_count = len(X_train[X_train['interest_level'] == 0])
+medium_count = len(X_train[X_train['interest_level'] == 1])
+high_count = len(X_train[X_train['interest_level'] == 2])
 
-# Merge with resources
-res = pd.DataFrame(res[['id', 'quantity', 'price']].groupby('id').agg(\
-    {
-        'quantity': [
-            'sum',
-            'min', 
-            'max', 
-            'mean', 
-            'std', 
-            # lambda x: len(np.unique(x)),
-        ],
-        'price': [
-            'count', 
-            'sum', 
-            'min', 
-            'max', 
-            'mean', 
-            'std', 
-            lambda x: len(np.unique(x)),
-        ]}
-    )).reset_index()
-res.columns = ['_'.join(col) for col in res.columns]
-res.rename(columns={'id_': 'id'}, inplace=True)
-res['mean_price'] = res['price_sum']/res['quantity_sum']
-# res['price_max_to_price_min'] = res['price_max']/res['price_min']
-# res['quantity_max_to_quantity_min'] = res['quantity_max']/res['quantity_min']
+def find_objects_with_only_one_record(feature_name):
+    temp = pd.concat([X_train[feature_name].reset_index(), 
+                      X_test[feature_name].reset_index()])
+    temp = temp.groupby(feature_name, as_index = False).count()
+    return temp[temp['index'] == 1]
 
-print(res.head())
-train = train.merge(res, on='id', how='left')
-test = test.merge(res, on='id', how='left')
-del res
-gc.collect()
+managers_with_one_lot = find_objects_with_only_one_record('manager_id')
+buildings_with_one_lot = find_objects_with_only_one_record('building_id')
+addresses_with_one_lot = find_objects_with_only_one_record('display_address')
 
-# Preprocess columns with label encoder
-print('Label Encoder...')
-cols = [
-    'teacher_id', 
-    'teacher_prefix', 
-    'school_state', 
-    'project_grade_category', 
-    'project_subject_categories', 
-    'project_subject_subcategories'
-]
+lambda_val = None
+k=5.0
+f=1.0
+r_k=0.01 
+g = 1.0
 
-for c in tqdm(cols):
-    le = LabelEncoder()
-    le.fit(df_all[c].astype(str))
-    train[c] = le.transform(train[c].astype(str))
-    test[c] = le.transform(test[c].astype(str))
-del le
-gc.collect()
-print('Done.')
+def categorical_average(variable, y, pred_0, feature_name):
+    def calculate_average(sub1, sub2):
+        s = pd.DataFrame(data = {
+                                 variable: sub1.groupby(variable, as_index = False).count()[variable],                              
+                                 'sumy': sub1.groupby(variable, as_index = False).sum()['y'],
+                                 'avgY': sub1.groupby(variable, as_index = False).mean()['y'],
+                                 'cnt': sub1.groupby(variable, as_index = False).count()['y']
+                                 })
+                                 
+        tmp = sub2.merge(s.reset_index(), how='left', left_on=variable, right_on=variable) 
+        del tmp['index']                       
+        tmp.loc[pd.isnull(tmp['cnt']), 'cnt'] = 0.0
+        tmp.loc[pd.isnull(tmp['cnt']), 'sumy'] = 0.0
 
-
-# Preprocess timestamp
-print('Preprocessing timestamp...')
-def process_timestamp(df):
-    df['year'] = df['project_submitted_datetime'].apply(lambda x: int(x.split('-')[0]))
-    df['month'] = df['project_submitted_datetime'].apply(lambda x: int(x.split('-')[1]))
-    df['date'] = df['project_submitted_datetime'].apply(lambda x: int(x.split(' ')[0].split('-')[2]))
-    df['day_of_week'] = pd.to_datetime(df['project_submitted_datetime']).dt.weekday
-    df['hour'] = df['project_submitted_datetime'].apply(lambda x: int(x.split(' ')[-1].split(':')[0]))
-    df['minute'] = df['project_submitted_datetime'].apply(lambda x: int(x.split(' ')[-1].split(':')[1]))
-    df['project_submitted_datetime'] = pd.to_datetime(df['project_submitted_datetime']).values.astype(np.int64)
-
-process_timestamp(train)
-process_timestamp(test)
-print('Done.')
-
-# Preprocess text
-print('Preprocessing text...')
-cols = [
-    'project_title', 
-    'project_essay', 
-    'project_resource_summary'
-]
-n_features = [
-    400, 
-    4040, 
-    400,
-]
-
-for c_i, c in tqdm(enumerate(cols)):
-    tfidf = TfidfVectorizer(
-        max_features=n_features[c_i],
-        norm='l2',
-        )
-    tfidf.fit(df_all[c])
-    tfidf_train = np.array(tfidf.transform(train[c]).toarray(), dtype=np.float16)
-    tfidf_test = np.array(tfidf.transform(test[c]).toarray(), dtype=np.float16)
-
-    for i in range(n_features[c_i]):
-        train[c + '_tfidf_' + str(i)] = tfidf_train[:, i]
-        test[c + '_tfidf_' + str(i)] = tfidf_test[:, i]
-        
-    del tfidf, tfidf_train, tfidf_test
-    gc.collect()
-    
-print('Done.')
-del df_all
-gc.collect()
-
-# Prepare data
-cols_to_drop = [
-    'id',
-    'teacher_id',
-    'project_title', 
-    'project_essay', 
-    'project_resource_summary',
-    'project_is_approved',
-]
-X = train.drop(cols_to_drop, axis=1, errors='ignore')
-y = train['project_is_approved']
-X_test = test.drop(cols_to_drop, axis=1, errors='ignore')
-id_test = test['id'].values
-feature_names = list(X.columns)
-print(X.shape, X_test.shape)
-
-del train, test
-gc.collect()
-
-# Build the model
-cnt = 0
-p_buf = []
-n_splits = 5
-n_repeats = 1
-kf = RepeatedKFold(
-    n_splits=n_splits, 
-    n_repeats=n_repeats, 
-    random_state=0)
-auc_buf = []   
-
-for train_index, valid_index in kf.split(X):
-    print('Fold {}/{}'.format(cnt + 1, n_splits))
-    params = {
-        'boosting_type': 'gbdt',
-        'objective': 'binary',
-        'metric': 'auc',
-        'max_depth': 14,
-        'num_leaves': 31,
-        'learning_rate': 0.025,
-        'feature_fraction': 0.85,
-        'bagging_fraction': 0.85,
-        'bagging_freq': 5,
-        'verbose': 0,
-        'num_threads': 1,
-        'lambda_l2': 1.0,
-        'min_gain_to_split': 0,
-    }  
-
-    lgb_train = lgb.Dataset(
-        X.loc[train_index], 
-        y.loc[train_index], 
-        feature_name=feature_names,
-        )
-    lgb_train.raw_data = None
-
-    lgb_valid = lgb.Dataset(
-        X.loc[valid_index], 
-        y.loc[valid_index],
-        )
-    lgb_valid.raw_data = None
-
-    model = lgb.train(
-        params,
-        lgb_train,
-        num_boost_round=10000,
-        valid_sets=[lgb_train, lgb_valid],
-        early_stopping_rounds=100,
-        verbose_eval=100,
-    )
-
-    if cnt == 0:
-        importance = model.feature_importance()
-        model_fnames = model.feature_name()
-        tuples = sorted(zip(model_fnames, importance), key=lambda x: x[1])[::-1]
-        tuples = [x for x in tuples if x[1] > 0]
-        print('Important features:')
-        for i in range(60):
-            if i < len(tuples):
-                print(tuples[i])
-            else:
-                break
+        def compute_beta(row):
+            cnt = row['cnt'] if row['cnt'] < 200 else float('inf')
+            return 1.0 / (g + exp((cnt - k) / f))
             
-        del importance, model_fnames, tuples
-
-    p = model.predict(X.loc[valid_index], num_iteration=model.best_iteration)
-    auc = roc_auc_score(y.loc[valid_index], p)
-
-    print('{} AUC: {}'.format(cnt, auc))
-
-    p = model.predict(X_test, num_iteration=model.best_iteration)
-    if len(p_buf) == 0:
-        p_buf = np.array(p, dtype=np.float16)
-    else:
-        p_buf += np.array(p, dtype=np.float16)
-    auc_buf.append(auc)
-
-    cnt += 1
-    if cnt > 0: # Comment this to run several folds
-        break
+        if lambda_val is not None:
+            tmp['beta'] = lambda_val
+        else:
+            tmp['beta'] = tmp.apply(compute_beta, axis = 1)
+            
+        tmp['adj_avg'] = tmp.apply(lambda row: (1.0 - row['beta']) * row['avgY'] + row['beta'] * row['pred_0'],
+                                   axis = 1)
+                                   
+        tmp.loc[pd.isnull(tmp['avgY']), 'avgY'] = tmp.loc[pd.isnull(tmp['avgY']), 'pred_0']
+        tmp.loc[pd.isnull(tmp['adj_avg']), 'adj_avg'] = tmp.loc[pd.isnull(tmp['adj_avg']), 'pred_0']
+        tmp['random'] = np.random.uniform(size = len(tmp))
+        tmp['adj_avg'] = tmp.apply(lambda row: row['adj_avg'] *(1 + (row['random'] - 0.5) * r_k),
+                                   axis = 1)
     
-    del model, lgb_train, lgb_valid, p
-    gc.collect
+        return tmp['adj_avg'].ravel()
+     
+    #cv for training set 
+    k_fold = StratifiedKFold(5)
+    X_train[feature_name] = -999 
+    for (train_index, cv_index) in k_fold.split(np.zeros(len(X_train)),
+                                                X_train['interest_level'].ravel()):
+        sub = pd.DataFrame(data = {variable: X_train[variable],
+                                   'y': X_train[y],
+                                   'pred_0': X_train[pred_0]})
+            
+        sub1 = sub.iloc[train_index]        
+        sub2 = sub.iloc[cv_index]
+        
+        X_train.loc[cv_index, feature_name] = calculate_average(sub1, sub2)
+    
+    #for test set
+    sub1 = pd.DataFrame(data = {variable: X_train[variable],
+                                'y': X_train[y],
+                                'pred_0': X_train[pred_0]})
+    sub2 = pd.DataFrame(data = {variable: X_test[variable],
+                                'y': X_test[y],
+                                'pred_0': X_test[pred_0]})
+    X_test.loc[:, feature_name] = calculate_average(sub1, sub2)                               
 
-auc_mean = np.mean(auc_buf)
-auc_std = np.std(auc_buf)
-print('AUC = {:.6f} +/- {:.6f}'.format(auc_mean, auc_std))
+def transform_data(X):
+    #add features    
+    feat_sparse = feature_transform.transform(X["features"])
+    vocabulary = feature_transform.vocabulary_
+    del X['features']
+    X1 = pd.DataFrame([ pd.Series(feat_sparse[i].toarray().ravel()) for i in np.arange(feat_sparse.shape[0]) ])
+    X1.columns = list(sorted(vocabulary.keys()))
+    X = pd.concat([X.reset_index(), X1.reset_index()], axis = 1)
+    del X['index']
+    
+    #featd_sparse = featured_transform.transform(X["description"])
+    #vocabularyd = featured_transform.vocabulary_
+    #del X['description']
+    #X2 = pd.DataFrame([ pd.Series(featd_sparse[i].toarray().ravel()) for i in np.arange(featd_sparse.shape[0]) ])
+    #X2.columns = list(sorted(vocabularyd.keys()))
+    #X = pd.concat([X.reset_index(), X2.reset_index()], axis = 1)
+    #del X['index']
+    
+    X["num_photos"] = X["photos"].apply(len)
+    X['created'] = pd.to_datetime(X["created"])
+    X["num_description_words"] = X["description"].apply(lambda x: len(x.split(" ")))
+    X['price_per_bed'] = X['price'] / X['bedrooms']    
+    X['price_per_bath'] = X['price'] / X['bathrooms']
+    X['price_per_room'] = X['price'] / (X['bathrooms'] + X['bedrooms'] )
+    
+    X['low'] = 0
+    X.loc[X['interest_level'] == 0, 'low'] = 1
+    X['medium'] = 0
+    X.loc[X['interest_level'] == 1, 'medium'] = 1
+    X['high'] = 0
+    X.loc[X['interest_level'] == 2, 'high'] = 1
+    
+    X['display_address'] = X['display_address'].apply(lambda x: x.lower().strip())
+    X['street_address'] = X['street_address'].apply(lambda x: x.lower().strip())
+    
+    X['pred0_low'] = low_count * 1.0 / train_size
+    X['pred0_medium'] = medium_count * 1.0 / train_size
+    X['pred0_high'] = high_count * 1.0 / train_size
+    
+    X.loc[X['manager_id'].isin(managers_with_one_lot['manager_id'].ravel()), 
+          'manager_id'] = "-1"
+    X.loc[X['building_id'].isin(buildings_with_one_lot['building_id'].ravel()), 
+          'building_id'] = "-1"
+    X.loc[X['display_address'].isin(addresses_with_one_lot['display_address'].ravel()), 
+          'display_address'] = "-1"
+          
+    return X
 
-preds = p_buf/cnt
+def normalize_high_cordiality_data():
+    high_cardinality = ["building_id", "manager_id"]
+    for c in high_cardinality:
+        categorical_average(c, "medium", "pred0_medium", c + "_mean_medium")
+        categorical_average(c, "high", "pred0_high", c + "_mean_high")
 
-# Prepare submission
-subm = pd.DataFrame()
-subm['id'] = id_test
-subm['project_is_approved'] = preds
-subm.to_csv('submission.csv', index=False)
+def transform_categorical_data():
+    categorical = ['building_id', 'manager_id', 
+                   'display_address', 'street_address']
+                   
+    for f in categorical:
+        encoder = LabelEncoder()
+        encoder.fit(list(X_train[f]) + list(X_test[f])) 
+        X_train[f] = encoder.transform(X_train[f].ravel())
+        X_test[f] = encoder.transform(X_test[f].ravel())
+                  
+
+def remove_columns(X):
+    columns = ["photos", "pred0_high", "pred0_low", "pred0_medium",
+               "description", "low", "medium", "high",
+               "interest_level", "created"]
+    for c in columns:
+        del X[c]
+
+print("Starting transformations")        
+X_train = transform_data(X_train)    
+X_test = transform_data(X_test) 
+y = X_train['interest_level'].ravel()
+
+print("Normalizing high cordiality data...")
+normalize_high_cordiality_data()
+transform_categorical_data()
+
+remove_columns(X_train)
+remove_columns(X_test)
+
+print("Start fitting...")
+
+param = {}
+param['objective'] = 'multi:softprob'
+param['eta'] = 0.02
+param['max_depth'] = 6
+param['silent'] = 1
+param['num_class'] = 3
+param['eval_metric'] = "mlogloss"
+param['min_child_weight'] = 3
+param['subsample'] = 0.7
+param['colsample_bytree'] = 0.7
+param['seed'] = 321
+param['nthread'] = 8
+num_rounds = 1000
+
+xgtrain = xgb.DMatrix(X_train, label=y)
+clf = xgb.train(param, xgtrain, num_rounds)
+
+print("Fitted")
+
+def prepare_submission(model):
+    xgtest = xgb.DMatrix(X_test)
+    preds = model.predict(xgtest)    
+    sub = pd.DataFrame(data = {'listing_id': X_test['listing_id'].ravel()})
+    sub['low'] = preds[:, 0]
+    sub['medium'] = preds[:, 1]
+    sub['high'] = preds[:, 2]
+    sub.to_csv("submission.csv", index = False, header = True)
+
+prepare_submission(clf)

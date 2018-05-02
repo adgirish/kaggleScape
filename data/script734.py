@@ -1,222 +1,427 @@
 
 # coding: utf-8
 
+# There are several things we will be doing here. Be warned:
 # 
-# There are several ways to measure football players performance.
-# I am trying an approach taking into accounts:
-# - the predicted difficulty of the matches they play (according to betting odds)
-# - the actual results of the matches they play
+# ![TL;DR](https://m.popkey.co/3c4432/1Z7Mx.gif)
 # 
-# So here is the story. Imagine that, **every time a football player takes part in a match, he bets 100€ on a win of his team**. How much money will he make (or lose) at the end of the season? And thus, who is the best player of his team in terms of winnings?
 # 
-# For comparison with the overall results of his team, I also calculate the winnings for a 100€ bet on every match of the team.
+# First, we will do some feature engineering on "categorical" variables (note that I am legally obligated to put that word in quotation marks since, on the surface, they are all numerical variables). I will advertise [__MLBox__](https://github.com/AxeldeRomblay/MLBox) as it will help us with feature engineering. This seems like an excellent ML package, and even though I would not want a single ML package doing everything while I'm just watching, it is undeniable that there are lots of useful tools in it. The one we will use is its [__categorical encoder__](http://mlbox.readthedocs.io/en/latest/features.html#categorical-features). Originally, I wrote this script with [__entity embedding__](https://arxiv.org/abs/1604.06737) as my strategy of choice. We all know what happens with best laid plans ...
 # 
-# NB: I consider the 2015/2016 season in countries with the highest attendance (Germany, England, Spain, Italy and France). The odds used for the calculations are those from bet365.
 # 
-# Let's begin with the results for the 15 most popular teams (according to number of followers on Twitter).
+# ![Best laid plans](https://i.imgur.com/f8sAmnn.gif)
+# 
+# 
+# On my GTX 1080 the entity embedding learning took 3 minutes, while on Kaggle it was going for solid  52 minutes during peak hours. So I went with [__random projection__](https://en.wikipedia.org/wiki/Random_projection) instead for the sake of time, but I do encourage you to uncomment the line below that calls entity embedding and give it a try locally.
+# 
+# Next, we will use these new features as an input for [__XGBoost upsampling__](https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283). That script is very fast so it stands a chance of finishing several runs in an hour, and I like the idea as well. I have left all of the original comments from that script intact, which also give credit to other Kagglers from whom @[olivier](https://www.kaggle.com/ogrellier) has borrowed.
+# 
+# Please read the comment section in that script and @olivier's though on a variety of topics, including the potential for overfitting. Though we are not using his target encoding method here, the same disclaimer applies.
+# 
+# The idea is to do several quick Bayesian optimization runs with relatively high learing rate (0.1) in order to find the best parameters. Once we have the parameters, proper XGBoost training and prediction are done for higher number of iterations and with lower learning rate (0.02). You can explore other Bayesian optimization ideas [__here__](https://www.kaggle.com/tilii7/bayesian-optimization-of-xgboost-parameters).
 
 # In[ ]:
 
 
-import sqlite3 as lite
-database = '../input/database.sqlite'
-conn = lite.connect(database)
+# coding: utf-8
+# The next line is needed for python 2.7 ; probably not for python 3
+from __future__ import print_function
 
-# Features to load
-toload = ['season', 'stage', 'country_id']
-toload += [x+'_'+y for x in['home', 'away'] for y in ['team_api_id', 'team_goal']]
-toload += [x+'_player_'+str(y) for x in ['home', 'away'] for y in range(1, 12)]
-toload += ['B365'+x for x in ['H', 'D', 'A']]
-
-# 2015/2016 season
-import pandas as pd
-query = 'SELECT '+(', '.join(toload))+' FROM Match'
-dfmatch = pd.read_sql(query, conn)
-dfmatch = dfmatch[dfmatch['season']=='2015/2016']
-
-# Use team names instead of ids
-query = 'SELECT team_api_id, team_long_name FROM Team'
-dfteam = pd.read_sql(query, conn)
-seteam = pd.Series(data=dfteam['team_long_name'].values, index=dfteam['team_api_id'].values)
-dfmatch['home_team_name'] = dfmatch['home_team_api_id'].map(seteam)
-dfmatch['away_team_name'] = dfmatch['away_team_api_id'].map(seteam)
-
-# Use country names instead of ids
-query = 'SELECT id, name FROM Country'
-dfcountry = pd.read_sql(query, conn)
-secountry = pd.Series(data=dfcountry['name'].values, index=dfcountry['id'].values)
-dfmatch['country'] = dfmatch['country_id'].map(secountry)
-
-# Countries with highest attendance
-countries = ['England', 'Spain', 'Germany', 'Italy', 'France']
-dfmatch = dfmatch[dfmatch['country'].isin(countries)]
-
-# Use player names instead of ids
-query = 'SELECT player_api_id, player_name FROM Player'
-dfplayer = pd.read_sql(query, conn)
-seplayer = pd.Series(data=dfplayer['player_name'].values, index=dfplayer['player_api_id'].values)
-for z in [x+'_player_'+str(y) for x in ['home', 'away'] for y in range(1, 12)]:
-    dfmatch[z+'_name'] = dfmatch[z].map(seplayer)
-
-# dict containing all the results
-dict_results = dict()
-from collections import defaultdict
-for t in dfmatch['home_team_name'].unique():
-    dict_results[t] = defaultdict(list)
-
-# Winnings calculation
-import math
-for _, row in dfmatch.iterrows():
-    # Some bets are missing, so we skip these matches
-    if math.isnan(row['B365D']):
-        continue
-    home_gain = -100
-    away_gain = -100
-    if row['home_team_goal']>row['away_team_goal']:
-        home_gain += row['B365H']*100
-    elif row['home_team_goal']<row['away_team_goal']:
-        away_gain += row['B365A']*100
-    stage = row['stage']
-    home_team = row['home_team_name']
-    dict_results[home_team][row['home_team_name']].append([stage, home_gain])
-    for z in ['home_player_'+str(y)+'_name' for y in range(1, 12)]:
-        dict_results[home_team][row[z]].append([stage, home_gain])
-    away_team = row['away_team_name']
-    dict_results[away_team][row['away_team_name']].append([stage, away_gain])
-    for z in ['away_player_'+str(y)+'_name' for y in range(1, 12)]:
-        dict_results[away_team][row[z]].append([stage, away_gain])
-
-# Keeping the results of each team and its player with biggest winnings
-res_teams = []
-res_bestp = []
-relevant_prop_match = 0.5
-for t in dfmatch['home_team_name'].unique():
-    best = ['', -100000]
-    for p in dict_results[t]:
-        avg = sum([x[1] for x in dict_results[t][p]])
-        if p==t:
-            res_teams.append([t, int(avg)])
-            avgteam = int(avg)
-            continue
-        if (avg>best[1]) and (len(dict_results[t][p])>len(dict_results[t][t])*relevant_prop_match):
-            best = [p, avg]
-    res_bestp.append([best[0], int(best[1]), t, avgteam, len(dict_results[t][best[0]])])
-
-# Popular teams
-popular_teams = ['Real Madrid', 'Barcelona', 'Manchester United', 'Arsenal', 'Chelsea', 'Liverpool', 'AC Milan', 'Paris Saint Germain', 'Manchester City', 'Juventus', 'Bayern Munich', 'Atletico Madrid', 'Borussia Dortmund', 'Marseille', 'Tottenham']
-res_pop_teams = [x for x in res_teams if x[0] in popular_teams]
-res_pop_bestp = [x for x in res_bestp if x[2] in popular_teams]
-
-# Plotting the results
-import matplotlib.pyplot as plt
 import numpy as np
-plt.rcParams["figure.figsize"] = (6, 24)
-ax1 = plt.figure().add_subplot(111)
-x_axis = [x[1] for x in res_pop_teams]
-ax1.barh(range(45, 0, -3), x_axis, height=1, color='#4163f5')
-x_axis = [x[1] for x in res_pop_bestp]
-ax1.barh(range(44, 0, -3), x_axis, height=1, color='#49e419')
-y_axis_labels = [x[0] for x in res_pop_bestp]+[x[0] for x in res_pop_teams]
-y_range = np.concatenate((np.arange(44.5, 0.5, -3), np.arange(45.5, 0.5, -3)))
-ax1.set_yticks(y_range)
-ax1.set_yticklabels(y_axis_labels)
-ax1.tick_params(axis='y', labelsize=18)
-ax2 = ax1.twinx()
-ax2.set_ylim(ax1.get_ylim())
-ax2.set_yticks(y_range)
-def str_euro(n):
-    if n>0:
-        return '+'+str(n)+'€'
-    return str(n)+'€'
-y_axis_labels = [str_euro(x[1]) for x in res_pop_bestp]+[str_euro(x[1]) for x in res_pop_teams]
-ax2.set_yticklabels(y_axis_labels)
-ax2.tick_params(axis='y', labelsize=18)
-ax2.set_ylabel('Winnings', fontsize=16, labelpad=30)
-ax1.set_ylabel('Team / Player', fontsize=16, labelpad=30)
-plt.title('2015/2016\n~ Popular teams ~\nWinnings for a 100€ bet on every match:\n- of a team\n- of the player with best results in the team', fontsize=20)
-plt.show()
+import pandas as pd
+import gc
+import warnings
+from bayes_opt import BayesianOptimization
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import log_loss, matthews_corrcoef, roc_auc_score
+import xgboost as xgb
+from xgboost import XGBClassifier
+import gc
+from numba import jit
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import MinMaxScaler
+import time
+from datetime import datetime
+from mlbox.encoding import Categorical_encoder as CE
+
+@jit
+def eval_gini(y_true, y_prob):
+    """
+    Original author CPMP : https://www.kaggle.com/cpmpml
+    In kernel : https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
+    """
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
+
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = eval_gini(labels, preds)
+    return [('gini', gini_score)]
+
+def add_noise(series, noise_level):
+    return series * (1 + noise_level * np.random.randn(len(series)))
+
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        thour, temp_sec = divmod(
+            (datetime.now() - start_time).total_seconds(), 3600)
+        tmin, tsec = divmod(temp_sec, 60)
+        print('\n Time taken: %i hours %i minutes and %s seconds.' % (thour, tmin, round(tsec, 2)))
+
+def scale_data(X, scaler=None):
+    if not scaler:
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
 
 
-# NB: I only considered players who took part in at least the half of the matches of their team. Otherwise, we would have seen in some cases better results for players who played only a couple of matches all won by their team, which could not be statistically relevant.
+# Here we define cross-validation variables that are used for parameter search. Each parameter has its own line, so it is easy to comment something out if you wish. Keep in mind that in such a case you must comment out the matching lines in optimization and explore sections below. I commented out *max_delta_step, subsample and colsample_bytree* and assigned them fixed values. This was done after noticing interesting patterns for alpha, lambda and scale_pos_weight in [__this script__](https://www.kaggle.com/aharless/xgboost-cv-lb-284). So I included them in optimization even though I believe that the above-mentioned script is over-fitting. Feel free to uncomment the lines and optimize 9 instead of 6 variables, but keep in mind that you will need much larger number of initial and optimization points to do that properly.
 # 
-# As we could imagine, this is not necessarily a good idea to bet on the best and famous teams. Their odds are often quite low.
-# 
-# It is also interesting to see that some players finish with positive winnings whereas their team does not.
-# To investigate this a little further, here are the biggest differences observed for a player's winnings compared to his team's winnings.
-# 
+# Note that the learning rate ("eta") is set to 0.1 below. That is done so we can learn the parameters quickly (without going over 200 XGBoost iterations on average). __Here is a tip: change n_estimators below from 200 to 300-400 and see if that gives a better score during optimization -- it will take longer, though.__
 
 # In[ ]:
 
 
-# Keep the 10 biggest differences
-diff_bestp_team = sorted(res_bestp, key=lambda h:h[1]-h[3], reverse=True)[:10]
+# Comment out any parameter you don't want to test
+def XGB_CV(
+          max_depth,
+          gamma,
+          min_child_weight,
+#          max_delta_step,
+#          subsample,
+#          colsample_bytree
+          scale_pos_weight,
+          reg_alpha,
+          reg_lambda
+         ):
 
-# Plotting the ranking
-plt.clf()
-plt.rcParams["figure.figsize"] = (6, 21);
-ax1 = plt.figure().add_subplot(111)
-x_axis = [x[3] for x in diff_bestp_team]
-ax1.barh(range(40, 0, -4), x_axis, height=1, color='#4163f5')
-x_axis = [x[1] for x in diff_bestp_team]
-ax1.barh(range(39, 0, -4), x_axis, height=1, color='#49e419')
-y_axis_labels = [x[0] for x in diff_bestp_team]+[x[2] for x in diff_bestp_team]
-y_range = np.concatenate((np.arange(39.5, 0.5, -4), np.arange(40.5, 0.5, -4)))
-ax1.set_yticks(y_range)
-ax1.set_yticklabels(y_axis_labels)
-ax1.tick_params(axis='y', labelsize=18)
-ax2 = ax1.twinx()
-ax2.set_ylim(ax1.get_ylim())
-y_range = np.concatenate((np.arange(38.5, 0.5, -4), y_range))
-ax2.set_yticks(y_range)
-y_axis_labels = ['diff = '+str_euro(x[1]-x[3]) for x in diff_bestp_team]+[str_euro(x[1]) for x in diff_bestp_team]+[str_euro(x[3]) for x in diff_bestp_team]
-ax2.set_yticklabels(y_axis_labels)
-ax2.tick_params(axis='y', labelsize=18)
-ax2.set_ylabel('Winnings and differences', fontsize=16, labelpad=30)
-ax1.set_ylabel('Team / Player', fontsize=16, labelpad=30)
-plt.title('2015/2016\n~ Top 10 differences ~\nTeams with player having the biggest winnings\ncompared to the team\'s winnings', fontsize=20)
-plt.show()
+    global GINIbest
+
+    n_splits = 5
+    n_estimators = 200
+    folds = StratifiedKFold(n_splits=n_splits, random_state=1001)
+    xgb_evals = np.zeros((n_estimators, n_splits))
+    oof = np.empty(len(trn_df))
+    sub_preds = np.zeros(len(sub_df))
+    increase = True
+    np.random.seed(0)
+
+    for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
+        trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
+        val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
+
+#
+# Define all XGboost parameters
+#
+        clf = XGBClassifier(n_estimators=n_estimators,
+                            max_depth=int(max_depth),
+                            objective="binary:logistic",
+                            learning_rate=0.1,
+#                            subsample=max(min(subsample, 1), 0),
+#                            colsample_bytree=max(min(colsample_bytree, 1), 0),
+#                            max_delta_step=int(max_delta_step),
+                            max_delta_step=1,
+                            subsample=0.8,
+                            colsample_bytree=0.8,
+                            gamma=gamma,
+                            reg_alpha=reg_alpha,
+                            reg_lambda=reg_lambda,
+                            scale_pos_weight=scale_pos_weight,
+                            min_child_weight=min_child_weight,
+                            nthread=4)
+
+        # Upsample during cross validation to avoid having the same samples
+        # in both train and validation sets
+        # Validation set is not up-sampled to monitor overfitting
+        if increase:
+            # Get positive examples
+            pos = pd.Series(trn_tgt == 1)
+            # Add positive examples
+            trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
+            trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
+            # Shuffle data
+            idx = np.arange(len(trn_dat))
+            np.random.shuffle(idx)
+            trn_dat = trn_dat.iloc[idx]
+            trn_tgt = trn_tgt.iloc[idx]
+
+        clf.fit(trn_dat, trn_tgt,
+                eval_set=[(trn_dat, trn_tgt), (val_dat, val_tgt)],
+                eval_metric=gini_xgb,
+                early_stopping_rounds=None,
+                verbose=False)
+
+        # Find best round for validation set
+        xgb_evals[:, fold_] = clf.evals_result_["validation_1"]["gini"]
+        # Xgboost provides best round starting from 0 so it has to be incremented
+        best_round = np.argsort(xgb_evals[:, fold_])[::-1][0]
+
+    # Compute mean score and std
+    mean_eval = np.mean(xgb_evals, axis=1)
+    std_eval = np.std(xgb_evals, axis=1)
+    best_round = np.argsort(mean_eval)[::-1][0]
+
+    print(' Stopped after %d iterations with val-gini = %.6f +- %.6f' % ( best_round, mean_eval[best_round], std_eval[best_round]) )
+    if ( mean_eval[best_round] > GINIbest ):
+        GINIbest = mean_eval[best_round]
+
+    return mean_eval[best_round]
 
 
-# And now maybe the most interesting ranking: the players with the biggest winnings!
+# I explained above why I went with random projection over entity embedding, but I encourage you to give the latter a try. I suggest you save the files with learned embeddings, so next time you just open them and skip the learning part.
 # 
-# (Note that, if a team would have several players appearing in this ranking, I only keep the player with the biggest winnings in the team.)
-# 
+# We are dropping all __ps_calc__ variables.
 
 # In[ ]:
 
 
-# Keeping the top 10 winnings
-top_bestp = sorted(res_bestp, key=lambda h:h[1], reverse=True)[:10]
+GINIbest = -1.
 
-# Plotting the ranking
-plt.clf()
-plt.rcParams["figure.figsize"] = (6, 16);
-ax1 = plt.figure().add_subplot(111)
-x_axis = [x[3] for x in top_bestp]
-ax1.barh(range(30, 0, -3), x_axis, height=1, color='#4163f5')
-x_axis = [x[1] for x in top_bestp]
-ax1.barh(range(29, 0, -3), x_axis, height=1, color='#49e419')
-y_axis_labels = [x[0] for x in top_bestp]+[x[2] for x in top_bestp]
-y_range = np.concatenate((np.arange(29.5, 0.5, -3), np.arange(30.5, 0.5, -3)))
-ax1.set_yticks(y_range)
-ax1.set_yticklabels(y_axis_labels)
-ax1.tick_params(axis='y', labelsize=18)
-ax2 = ax1.twinx()
-ax2.set_ylim(ax1.get_ylim())
-ax2.set_yticks(y_range)
-y_axis_labels = [str_euro(x[1]) for x in top_bestp]+[str_euro(x[3]) for x in top_bestp]
-ax2.set_yticklabels(y_axis_labels)
-ax2.tick_params(axis='y', labelsize=18)
-ax2.set_ylabel('Winnings', fontsize=16, labelpad=30)
-ax1.set_ylabel('Team / Player', fontsize=16, labelpad=30)
-plt.title('2015/2016\n~ Top 10 winnings ~\nPlayers with the biggest winnings\nalong with their team\'s winnings', fontsize=20)
-plt.show()
+#ce = CE(strategy='random_projection', verbose=True)
+ce = CE(strategy='entity_embedding', verbose=True)
+
+start_time = timer(None)
+
+train_loader = pd.read_csv('../input/train.csv', dtype={'target': np.int8, 'id': np.int32})
+train = train_loader.drop(['target', 'id'], axis=1)
+print('\n Shape of raw train data:', train.shape)
+col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
+train.drop(col_to_drop, axis=1, inplace=True)
+target = train_loader['target']
+train_ids = train_loader['id'].values
+
+test_loader = pd.read_csv('../input/test.csv', dtype={'id': np.int32})
+test = test_loader.drop(['id'], axis=1)
+print(' Shape of raw test data:', test.shape)
+test.drop(col_to_drop, axis=1, inplace=True)
+test_ids = test_loader['id'].values
+
+#n_train = train.shape[0]
+#train_test = pd.concat((train, test)).reset_index(drop=True)
+col_to_embed = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
+embed_train = train[col_to_embed].astype(np.str)
+embed_test = test[col_to_embed].astype(np.str)
+train.drop(col_to_embed, axis=1, inplace=True)
+test.drop(col_to_embed, axis=1, inplace=True)
+
+print('\n Learning random projections - this will take less time than entity embedding ...')
+#print('\n Learning entity embedding - this will take a while ...')
+ce.fit(embed_train, target)
+embed_enc_train = ce.transform(embed_train)
+embed_enc_test = ce.transform(embed_test)
+trn_df = pd.concat((train, embed_enc_train), axis=1)
+sub_df = pd.concat((test, embed_enc_test), axis=1)
+print('\n Shape of processed train data:', trn_df.shape)
+print(' Shape of processed test data:', sub_df.shape)
+
+timer(start_time)
 
 
-# You may be surprised by the excellent results of West Ham (well at least I was :) ). But looking more accurately, I have seen that they won difficult away matches like Arsenal (odd: 12.0), Liverpool (9.0) and Man City (11.0).
+# Several things are worth noting here. First, the effective range of max_depth is 2-6. Since in that range the overfitting is less likely, I was brave enough to top *gamma* and *min_child_weight* at 5. All of this is done for the sake of time. However, a proper way would be to allow max_depth to be 8 (or even 10), in which case *gamma* and *min_child_weight* should be topping at 10 or so.
 # 
-# Though I really discourage you to bet 100€ on every match of a team or a player, I hope this was a pleasant and enriching reading!
+# *If you decide to uncomment the remaining three parameters here, the same must be done above in XGB_CV section.*
+
+# We are doing a little trick here. Since it is highly unlikely that 5-6 parameter search runs would be able to identify anything remotely close to optimal parameters, I am giving us a head-start by providing two parameter combinations that are known to give good scores.
 # 
-# :)
+# Note that these are specifically for random projection encoding. If you go with entity embedding, you'll want to delete this section and uncomment the whole paragraph underneath it.
+
+# In[1]:
+
+
+XGB_BO = BayesianOptimization(XGB_CV, {
+                                     'max_depth': (2, 6.99),
+                                     'gamma': (0.1, 5),
+                                     'min_child_weight': (0, 5),
+                                     'scale_pos_weight': (1, 5),
+                                     'reg_alpha': (0, 10),
+                                     'reg_lambda': (1, 10),
+#                                     'max_delta_step': (0, 5),
+#                                     'subsample': (0.4, 1.0),
+#                                     'colsample_bytree' :(0.4, 1.0)
+                                    })
+
+#XGB_BO.explore({
+#              'max_depth':            [4, 4],
+#              'gamma':                [0.1511, 2.7823],
+#              'min_child_weight':     [2.4073, 2.6086],
+#              'scale_pos_weight':     [2.2281, 2.4993],
+#              'reg_alpha':            [8.0702, 6.9874],
+#              'reg_lambda':           [2.0126, 3.9598],
+#              'max_delta_step':       [1, 1],
+#              'subsample':            [0.8, 0.8],
+#              'colsample_bytree':     [0.8, 0.8],
+#              })
+
+# If you go with entitiy embedding, these are good starting points
+#XGB_BO.explore({
+#              'max_depth':            [4, 4],
+#              'gamma':                [2.8098, 2.1727],
+#              'min_child_weight':     [4.1592, 4.8113],
+#              'scale_pos_weight':     [2.4450, 1.7195],
+#              'reg_alpha':            [2.8601, 7.6995],
+#              'reg_lambda':           [6.5563, 2.6879],
+#              })
+
+
+# We are doing only one random guess of parameters, which makes a total of 3 when combined with two exploratory groups above. Afterwards, only 2 optimization runs are done.
 # 
-# 
+# A total number of random points (from **.explore** section + init_points) should be at least 10-15. I would consider 20 if you decide to include more than 6 parameters. n_iter should be in 30+ range to do proper parameter optimization.
+
+# In[ ]:
+
+
+print('-'*126)
+
+start_time = timer(None)
+with warnings.catch_warnings():
+    warnings.filterwarnings('ignore')
+    XGB_BO.maximize(init_points=1, n_iter=2, acq='ei', xi=0.0)
+timer(start_time)
+
+
+# Here we print the summary and create a CSV file with grid results.
+
+# In[ ]:
+
+
+print('-'*126)
+print('\n Final Results')
+print(' Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'])
+print(' Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'])
+grid_file = 'Bayes-gini-5fold-XGB-target-enc-run-04-v1-grid.csv'
+print(' Saving grid search parameters to %s' % grid_file)
+XGB_BO.points_to_csv(grid_file)
+
+
+# Finally, we do the last XGBoost upsampling, but this time with larger **n_estimators** and smaller **learning_rate**. You should do 1000 for n_estimators even if you don't touch the learning rate. If you lower the learning rate further, definitely increase n_estimators to 1500-2000.
+
+# In[ ]:
+
+
+
+max_depth = int(XGB_BO.res['max']['max_params']['max_depth'])
+gamma = XGB_BO.res['max']['max_params']['gamma']
+min_child_weight = XGB_BO.res['max']['max_params']['min_child_weight']
+#max_delta_step = int(XGB_BO.res['max']['max_params']['max_delta_step'])
+#subsample = XGB_BO.res['max']['max_params']['subsample']
+#colsample_bytree = XGB_BO.res['max']['max_params']['colsample_bytree']
+scale_pos_weight = XGB_BO.res['max']['max_params']['scale_pos_weight']
+reg_alpha = XGB_BO.res['max']['max_params']['reg_alpha']
+reg_lambda = XGB_BO.res['max']['max_params']['reg_lambda']
+
+start_time = timer(None)
+print('\n Making final prediction - this will take a while ...')
+n_splits = 5
+n_estimators = 800
+folds = StratifiedKFold(n_splits=n_splits, random_state=1001)
+imp_df = np.zeros((len(trn_df.columns), n_splits))
+xgb_evals = np.zeros((n_estimators, n_splits))
+oof = np.empty(len(trn_df))
+sub_preds = np.zeros(len(sub_df))
+increase = True
+np.random.seed(0)
+
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
+    trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
+    val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
+
+    clf = XGBClassifier(n_estimators=n_estimators,
+                        max_depth=max_depth,
+                        objective="binary:logistic",
+                        learning_rate=0.02,
+#                        subsample=subsample,
+#                        colsample_bytree=colsample_bytree,
+#                        max_delta_step=max_delta_step,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        max_delta_step=1,
+                        gamma=gamma,
+                        min_child_weight=min_child_weight,
+                        reg_alpha=reg_alpha,
+                        reg_lambda=reg_lambda,
+                        scale_pos_weight=scale_pos_weight,
+                        nthread=4)
+    # Upsample during cross validation to avoid having the same samples
+    # in both train and validation sets
+    # Validation set is not up-sampled to monitor overfitting
+    if increase:
+        # Get positive examples
+        pos = pd.Series(trn_tgt == 1)
+        # Add positive examples
+        trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
+        trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
+        # Shuffle data
+        idx = np.arange(len(trn_dat))
+        np.random.shuffle(idx)
+        trn_dat = trn_dat.iloc[idx]
+        trn_tgt = trn_tgt.iloc[idx]
+
+    clf.fit(trn_dat, trn_tgt,
+            eval_set=[(trn_dat, trn_tgt), (val_dat, val_tgt)],
+            eval_metric=gini_xgb,
+            early_stopping_rounds=None,
+            verbose=False)
+
+    # Keep feature importances
+    imp_df[:, fold_] = clf.feature_importances_
+
+    # Find best round for validation set
+    xgb_evals[:, fold_] = clf.evals_result_["validation_1"]["gini"]
+    # Xgboost provides best round starting from 0 so it has to be incremented
+    best_round = np.argsort(xgb_evals[:, fold_])[::-1][0]
+
+    # Predict OOF and submission probas with the best round
+    oof[val_idx] = clf.predict_proba(val_dat, ntree_limit=best_round)[:, 1]
+    # Update submission
+    sub_preds += clf.predict_proba(sub_df, ntree_limit=best_round)[:, 1] / n_splits
+
+    # Display results
+    print("Fold %2d : %.6f @%4d / best score is %.6f @%4d"
+          % (fold_ + 1,
+             eval_gini(val_tgt, oof[val_idx]),
+             n_estimators,
+             xgb_evals[best_round, fold_],
+             best_round))
+
+print("Full OOF score : %.6f" % eval_gini(target, oof))
+
+# Compute mean score and std
+mean_eval = np.mean(xgb_evals, axis=1)
+std_eval = np.std(xgb_evals, axis=1)
+best_round = np.argsort(mean_eval)[::-1][0]
+
+print("Best mean score : %.6f + %.6f @%4d"
+      % (mean_eval[best_round], std_eval[best_round], best_round))
+
+best_gini = round(mean_eval[best_round], 6)
+importances = sorted([(trn_df.columns[i], imp) for i, imp in enumerate(imp_df.mean(axis=1))],
+                     key=lambda x: x[1])
+
+for f, imp in importances[::-1]:
+    print("%-34s : %10.4f" % (f, imp))
+
+timer(start_time)
+
+final_df = pd.DataFrame(test_ids, columns=['id'])
+final_df['target'] = sub_preds
+
+now = datetime.now()
+sub_file = 'submission_5fold-xgb-upsampling-target-enc-01_' + str(best_gini) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
+print('\n Writing submission: %s' % sub_file)
+final_df.to_csv(sub_file, index=False, float_format="%.9f")
+

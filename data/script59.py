@@ -1,690 +1,485 @@
 
 # coding: utf-8
 
-# # Titanic data: Learning from disaster
+# This was put together in a couple of hours using code that I used to participate in other Kaggle events. This is a basic startup for those that are interested in using residual networks using Keras. With the code below, the hardware that I was using is:
 # 
-# **Task**: predict survival of a passage giving his/her ticket class class, name, gender, age, number of siblings / spouses aboard,  number of parents / children aboard, ticket number, cabin number and Port of embarkation
+# 1.    Ubuntu 14.04
+# 2.    x64 I7 processor
+# 3.    Python 2.7
+# 4.    Used PIP installer for all python packages (and apt-get for specialized code such as OpenCV)
+# 5.    SSD Harddrive with 1TB storage (I don't think you need more than 100GB though)
+# 6.    NVidia 1080 GTX Founders Edition graphics card
 # 
-# **Notes:**
-#  
-# - Based on the tutorial 
-# - Fix some bugs
-# - Add cross-validation and grid search
-# - Add Validation and Learning curves
+# This was meant as a starting point to build upon for those that are interested.
 # 
-# Part I : Exploratory Data Analysis
-# -------------------------
+# Enjoy!
+# 
+# Rodney Thomas
 
 # In[ ]:
 
 
-# data analysis and wrangling
-import pandas as pd
+from __future__ import division
+
+import six
 import numpy as np
-import random as rnd
+import pandas as pd
+import cv2
+import glob
+import random
 
-# visualization
-import seaborn as sns
-import matplotlib.pyplot as plt
+np.random.seed(2016)
+random.seed(2016)
 
-# machine learning
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import Perceptron
-from sklearn.linear_model import SGDClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import VotingClassifier
-from sklearn.model_selection import GridSearchCV
-
-#Learning curve
-from sklearn.model_selection import learning_curve
-from sklearn.model_selection import ShuffleSplit
-from sklearn.model_selection import cross_val_predict
-from sklearn.model_selection import validation_curve
+from keras.models import Model
+from keras.layers import Input, Activation, merge, Dense, Flatten
+from keras.layers.convolutional import Convolution2D, MaxPooling2D, AveragePooling2D
+from keras.layers.normalization import BatchNormalization
+from keras.regularizers import l2
+from keras import backend as K
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 
-# ## Step 1: Load data
+# ## Removes autoscroll throughout process
 
 # In[ ]:
 
 
-#-----------------------------------------------------------
-# Step 01: load data using panda
-#-----------------------------------------------------------
-train_df = pd.read_csv('../input/train.csv')  # train set
-test_df  = pd.read_csv('../input/test.csv')   # test  set
-combine  = [train_df, test_df]
+get_ipython().run_cell_magic('javascript', '', 'IPython.OutputArea.prototype._should_scroll = function(lines) {\n    return false;\n}')
 
 
-# ## Step 2: Acquire and clean data
+# ## Global Declarations
 
 # In[ ]:
 
 
-#-----------------------------------------------------------
-# Step 02: Acquire and clean data
-#-----------------------------------------------------------
-train_df.head(5)
+conf = dict()
+
+# How many patients will be in train and validation set during training. Range: (0; 1)
+conf['train_valid_fraction'] = 0.75
+
+# Batch size for CNN [Depends on GPU and memory available]
+conf['batch_size'] = 1
+
+# Number of epochs for CNN training
+#conf['nb_epoch'] = 200
+conf['nb_epoch'] = 1
+
+# Early stopping. Stop training after epochs without improving on validation
+conf['patience'] = 3
+
+# Shape of image for CNN (Larger the better, but you need to increase CNN as well)
+#conf['image_shape'] = (4160,4128)
+#conf['image_shape'] = (2080,2064)
+#conf['image_shape'] = (1024,1024)
+conf['image_shape'] = (64,64)
 
 
-# In[ ]:
-
-
-train_df.info()
-
-
-# In[ ]:
-
-
-train_df.describe()
-
-
-# In[ ]:
-
-
-train_df.describe(include=['O'])
-
-
-# Training data statistics:
-# 
-#  - 891 training samples
-#  - Age, Cabin, Embarked: incomplete data
-#  - Data type:
-#       - object: Name, Sex, Ticket, Cabin, Embarked
-#       - int64: PassengerId, Survived, Pclass, SibSp, Parch
-#       - float64: Age, Fare
-#  - Survive rate: 0.383838
+# ## Residual Network Class
 
 # In[ ]:
 
 
-# remove Features: Ticket, Cabin
-#train_df = train_df.drop(['Ticket', 'Cabin'], axis=1)
-#test_df  = test_df.drop(['Ticket', 'Cabin'], axis=1)
-#combine  = [train_df, test_df]
-for dataset in combine:
-   dataset['Cabin'] = dataset['Cabin'].fillna('U')
-   dataset['Cabin'] = dataset.Cabin.str.extract('([A-Za-z])', expand=False)
-   
-for dataset in combine:
-   dataset['Cabin'] = dataset['Cabin'].map( {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E':0, 
-                                           'F':0, 'G':0, 'T':0, 'U':1} ).astype(int)
-   
-train_df.head()
-   
+def _bn_relu(input):
+    """Helper to build a BN -> relu block
+    """
+    norm = BatchNormalization(axis=CHANNEL_AXIS)(input)
+    return Activation("relu")(norm)
 
 
 # In[ ]:
 
 
-train_df = train_df.drop(['Ticket'], axis=1)
-test_df  = test_df.drop(['Ticket'], axis=1)
-combine  = [train_df, test_df]
+def _conv_bn_relu(**conv_params):
+    """Helper to build a conv -> BN -> relu block
+    """
+    nb_filter = conv_params["nb_filter"]
+    nb_row = conv_params["nb_row"]
+    nb_col = conv_params["nb_col"]
+    subsample = conv_params.setdefault("subsample", (1, 1))
+    init = conv_params.setdefault("init", "he_normal")
+    border_mode = conv_params.setdefault("border_mode", "same")
+    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
 
+    def f(input):
+        conv = Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
+                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(input)
+        return _bn_relu(conv)
 
-# survival rate distribtion as a function of Pclass
-train_df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean().sort_values(by='Survived', ascending=False)
-
-
-# In[ ]:
-
-
-# obtain Title from name (Mr, Mrs, Miss etc)
-for dataset in combine:
-    dataset['Title'] = dataset.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
-
-
-for dataset in combine:
-    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess', 'Dona'],'Royalty')
-    dataset['Title'] = dataset['Title'].replace(['Mme'], 'Mrs')
-    dataset['Title'] = dataset['Title'].replace(['Mlle','Ms'], 'Miss')
-    dataset['Title'] = dataset['Title'].replace(['Capt', 'Col', 'Major','Rev'], 'Officer')
-    dataset['Title'] = dataset['Title'].replace(['Jonkheer', 'Don','Sir'], 'Royalty')
-    dataset.loc[(dataset.Sex == 'male')   & (dataset.Title == 'Dr'),'Title'] = 'Mr'
-    dataset.loc[(dataset.Sex == 'female') & (dataset.Title == 'Dr'),'Title'] = 'Mrs'
-
-#: count survived rate for different titles
-train_df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+    return f
 
 
 # In[ ]:
 
 
-# Covert 'Title' to numbers (Mr->1, Miss->2 ...)
-title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Royalty":5, "Officer": 6}
-for dataset in combine:
-    dataset['Title'] = dataset['Title'].map(title_mapping)
-    dataset['Title'] = dataset['Title'].fillna(0)
+def _bn_relu_conv(**conv_params):
+    """Helper to build a BN -> relu -> conv block.
+    This is an improved scheme proposed in http://arxiv.org/pdf/1603.05027v2.pdf
+    """
+    nb_filter = conv_params["nb_filter"]
+    nb_row = conv_params["nb_row"]
+    nb_col = conv_params["nb_col"]
+    subsample = conv_params.setdefault("subsample", (1,1))
+    init = conv_params.setdefault("init", "he_normal")
+    border_mode = conv_params.setdefault("border_mode", "same")
+    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
 
-# Remove 'Name' and 'PassengerId' in training data, and 'Name' in testing data
-train_df = train_df.drop(['Name', 'PassengerId'], axis=1)
-test_df = test_df.drop(['Name'], axis=1)
-combine = [train_df, test_df]
+    def f(input):
+        activation = _bn_relu(input)
+        return Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
+                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(activation)
 
-# if age < 16, set 'Sex' to Child
-for dataset in combine:
-    dataset.loc[(dataset.Age < 16),'Sex'] = 'Child'
-    
-# Covert 'Sex' to numbers (female:1, male:2)
-for dataset in combine:
-    dataset['Sex'] = dataset['Sex'].map( {'female': 1, 'male': 0, 'Child': 2} ).astype(int)
-
-train_df.head()
+    return f
 
 
 # In[ ]:
 
 
-# Age distribution for different values of Pclass and gender
-#grid = sns.FacetGrid(train_df, row='Pclass', col='Sex', size=2.2, aspect=1.6)
-#grid.map(plt.hist, 'Age', bins=20)
-#grid.add_legend()
+def _shortcut(input, residual):
+    """Adds a shortcut between input and residual block and merges them with "sum"
+    """
+    # Expand channels of shortcut to match residual.
+    # Stride appropriately to match residual (width, height)
+    # Should be int if network architecture is correctly configured.
+    input_shape = K.int_shape(input)
+    residual_shape = K.int_shape(residual)
+    stride_width = int(round(input_shape[ROW_AXIS] / residual_shape[ROW_AXIS]))
+    stride_height = int(round(input_shape[COL_AXIS] / residual_shape[COL_AXIS]))
+    equal_channels = input_shape[CHANNEL_AXIS] == residual_shape[CHANNEL_AXIS]
+
+    shortcut = input
+    # 1 X 1 conv if shape is different. Else identity.
+    if stride_width > 1 or stride_height > 1 or not equal_channels:
+        shortcut = Convolution2D(nb_filter=residual_shape[CHANNEL_AXIS],
+                                 nb_row=1, nb_col=1,
+                                 subsample=(stride_width, stride_height),
+                                 init="he_normal", border_mode="valid",
+                                 W_regularizer=l2(0.0001))(input)
+
+    return merge([shortcut, residual], mode="sum")
 
 
 # In[ ]:
 
 
-# Guess age values using median values for age across set of Pclass and gender frature combinations
-for dataset in combine:
-    dataset['Age']=dataset.groupby(['Sex', 'Pclass'])['Age'].transform(lambda x: x.fillna(x.mean())).astype(int)
+def _residual_block(block_function, nb_filter, repetitions, is_first_layer=False):
+    """Builds a residual block with repeating bottleneck blocks.
+    """
+    def f(input):
+        for i in range(repetitions):
+            init_subsample = (1, 1)
+            if i == 0 and not is_first_layer:
+                init_subsample = (2, 2)
+            input = block_function(nb_filter=nb_filter, init_subsample=init_subsample,
+                                   is_first_block_of_first_layer=(is_first_layer and i == 0))(input)
+        return input
 
-# create Age bands and determine correlations with Survived
-train_df['AgeBand'] = pd.cut(train_df['Age'], 5)
-train_df[['AgeBand', 'Survived']].groupby(['AgeBand'], as_index=False).mean().sort_values(by='AgeBand', ascending=True)
-
-
-# In[ ]:
-
-
-for dataset in combine:
-    dataset.loc[ dataset['Age'] <= 16, 'Age'] = 0
-    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
-    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
-    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
-    dataset.loc[ dataset['Age'] > 64, 'Age'] = 4
-
-train_df = train_df.drop(['AgeBand'], axis=1)
-combine = [train_df, test_df]
-train_df.head()
+    return f
 
 
 # In[ ]:
 
 
-# Create family size from 'sibsq + parch + 1'
-for dataset in combine:
-    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
+def basic_block(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
+    """Basic 3 X 3 convolution blocks for use on resnets with layers <= 34.
+    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
+    """
+    def f(input):
 
-train_df[['FamilySize', 'Survived']].groupby(['FamilySize'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+        if is_first_block_of_first_layer:
+            # don't repeat bn->relu since we just did bn->relu->maxpool
+            conv1 = Convolution2D(nb_filter=nb_filter,
+                                 nb_row=3, nb_col=3,
+                                 subsample=init_subsample,
+                                 init="he_normal", border_mode="same",
+                                 W_regularizer=l2(0.0001))(input)
+        else:
+            conv1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3,
+                                  subsample=init_subsample)(input)
 
-#create another feature called IsAlone
-for dataset in combine:
-    dataset['IsAlone'] = 0
-    dataset.loc[(dataset['FamilySize'] == 1), 'IsAlone'] = 1
-    dataset.loc[(dataset['FamilySize'] > 4),  'IsAlone'] = 2
+        residual = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv1)
+        return _shortcut(input, residual)
 
-train_df[['IsAlone','Survived']].groupby(['IsAlone'], as_index=False).mean()
-
-#drop Parch, SibSp, and FamilySize features in favor of IsAlone
-train_df = train_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
-test_df = test_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
-combine = [train_df, test_df]
-train_df.head()
-
-
-# In[ ]:
-
-
-# Create an artfical feature combinbing PClass and Age.
-for dataset in combine:
-    dataset['Age*Class'] = dataset.Age * dataset.Pclass
-
-train_df.loc[:, ['Age*Class', 'Age', 'Pclass']].head()
+    return f
 
 
 # In[ ]:
 
 
-# fill the missing values of Embarked feature with the most common occurance
-freq_port = train_df.Embarked.dropna().mode()[0]
-for dataset in combine:
-    dataset['Embarked'] = dataset['Embarked'].fillna(freq_port)
-train_df[['Embarked', 'Survived']].groupby(['Embarked'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+def bottleneck(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
+    """Bottleneck architecture for > 34 layer resnet.
+    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
 
-for dataset in combine:
-    dataset['Embarked'] = dataset['Embarked'].map( {'S': 0, 'C': 1, 'Q': 2} ).astype(int)
+    Returns:
+        A final conv layer of nb_filter * 4
+    """
+    def f(input):
 
-train_df.head()
+        if is_first_block_of_first_layer:
+            # don't repeat bn->relu since we just did bn->relu->maxpool
+            conv_1_1 = Convolution2D(nb_filter=nb_filter,
+                                 nb_row=1, nb_col=1,
+                                 subsample=init_subsample,
+                                 init="he_normal", border_mode="same",
+                                 W_regularizer=l2(0.0001))(input)
+        else:
+            conv_1_1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=1, nb_col=1,
+                                     subsample=init_subsample)(input)
 
+        conv_3_3 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv_1_1)
+        residual = _bn_relu_conv(nb_filter=nb_filter * 4, nb_row=1, nb_col=1)(conv_3_3)
+        return _shortcut(input, residual)
 
-# In[ ]:
-
-
-# fill the missing values of Fare
-test_df['Fare'].fillna(test_df['Fare'].dropna().median(), inplace=True)
-
-# Create FareBand
-train_df['FareBand'] = pd.qcut(train_df['Fare'], 4)
-train_df[['FareBand', 'Survived']].groupby(['FareBand'], as_index=False).mean().sort_values(by='FareBand', ascending=True)
-
-# Convert the Fare feature to ordinal values based on the FareBand
-for dataset in combine:
-    dataset.loc[ dataset['Fare'] <= 7.91, 'Fare'] = 0
-    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
-    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare']   = 2
-    dataset.loc[ dataset['Fare'] > 31, 'Fare'] = 3
-    dataset['Fare'] = dataset['Fare'].astype(int)
-
-train_df = train_df.drop(['FareBand'], axis=1)
-combine = [train_df, test_df]
-train_df.head()
+    return f
 
 
 # In[ ]:
 
 
-train_df.describe()
-
-
-# In[ ]:
-
-
-#correlation matrix
-f, ax = plt.subplots(figsize=(12, 9))
-sns.heatmap(train_df.corr(), vmax=.8, square=True);
-
-
-# Part II : Learning Model
-# -------------------
-
-# In[ ]:
-
-
-#------------------------------------------------------------------
-# Step 03: Learning model
-#------------------------------------------------------------------
-
-X_data = train_df.drop("Survived", axis=1)          # data: Features
-Y_data = train_df["Survived"]                       # data: Labels
-X_test_kaggle  = test_df.drop("PassengerId", axis=1).copy() # test data (kaggle)
-
-cv = ShuffleSplit(n_splits=100, test_size=0.2, random_state=0)
-
-
-# In[ ]:
-
-
-# grid search
-def grid_search_model(X, Y, model, parameters, cv):
-    CV_model = GridSearchCV(estimator=model, param_grid=parameters, cv=cv)
-    CV_model.fit(X, Y)
-    CV_model.cv_results_
-    print("Best Score:", CV_model.best_score_," / Best parameters:", CV_model.best_params_)
-    
-
-
-# In[ ]:
-
-
-#validation curve
-def validation_curve_model(X, Y, model, param_name, parameters, cv, ylim, log=True):
-
-    train_scores, test_scores = validation_curve(model, X, Y, param_name=param_name, param_range=parameters,cv=cv, scoring="accuracy")
-    train_scores_mean = np.mean(train_scores, axis=1)
-    train_scores_std = np.std(train_scores, axis=1)
-    test_scores_mean = np.mean(test_scores, axis=1)
-    test_scores_std = np.std(test_scores, axis=1)
-
-    plt.figure()
-    plt.title("Validation curve")
-    plt.fill_between(parameters, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
-                     color="r")
-    plt.fill_between(parameters, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
-
-    if log==True:
-        plt.semilogx(parameters, train_scores_mean, 'o-', color="r",label="Training score")
-        plt.semilogx(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+def _handle_dim_ordering():
+    global ROW_AXIS
+    global COL_AXIS
+    global CHANNEL_AXIS
+    if K.image_dim_ordering() == 'tf':
+        ROW_AXIS = 1
+        COL_AXIS = 2
+        CHANNEL_AXIS = 3
     else:
-        plt.plot(parameters, train_scores_mean, 'o-', color="r",label="Training score")
-        plt.plot(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+        CHANNEL_AXIS = 1
+        ROW_AXIS = 2
+        COL_AXIS = 3
 
-    #plt.ylim([0.55, 0.9])
-    if ylim is not None:
-        plt.ylim(*ylim)
 
-    plt.ylabel('Score')
-    plt.xlabel('Parameter C')
-    plt.legend(loc="best")
+# In[ ]:
+
+
+def _get_block(identifier):
+    if isinstance(identifier, six.string_types):
+        res = globals().get(identifier)
+        if not res:
+            raise ValueError('Invalid {}'.format(identifier))
+        return res
+    return identifier
+
+
+# In[ ]:
+
+
+class ResnetBuilder(object):
+    @staticmethod
+    def build(input_shape, num_outputs, block_fn, repetitions):
+        """Builds a custom ResNet like architecture.
+
+        Args:
+            input_shape: The input shape in the form (nb_channels, nb_rows, nb_cols)
+            num_outputs: The number of outputs at final softmax layer
+            block_fn: The block function to use. This is either `basic_block` or `bottleneck`.
+                The original paper used basic_block for layers < 50
+            repetitions: Number of repetitions of various block units.
+                At each block unit, the number of filters are doubled and the input size is halved
+
+        Returns:
+            The keras `Model`.
+        """
+        _handle_dim_ordering()
+        if len(input_shape) != 3:
+            raise Exception("Input shape should be a tuple (nb_channels, nb_rows, nb_cols)")
+
+        # Permute dimension order if necessary
+        if K.image_dim_ordering() == 'tf':
+            input_shape = (input_shape[1], input_shape[2], input_shape[0])
+
+        # Load function from str if needed.
+        block_fn = _get_block(block_fn)
+
+        input = Input(shape=input_shape)
+        conv1 = _conv_bn_relu(nb_filter=64, nb_row=7, nb_col=7, subsample=(2, 2))(input)
+        pool1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), border_mode="same")(conv1)
+
+        block = pool1
+        nb_filter = 64
+        for i, r in enumerate(repetitions):
+            block = _residual_block(block_fn, nb_filter=nb_filter, repetitions=r, is_first_layer=(i == 0))(block)
+            nb_filter *= 2
+
+        # Last activation
+        block = _bn_relu(block)
+
+        block_norm = BatchNormalization(mode=0, axis=CHANNEL_AXIS)(block)
+        block_output = Activation("relu")(block_norm)
+
+        # Classifier block
+        block_shape = K.int_shape(block)
+        pool2 = AveragePooling2D(pool_size=(block_shape[ROW_AXIS], block_shape[COL_AXIS]),
+                                 strides=(1, 1))(block_output)
+        flatten1 = Flatten()(pool2)
+        dense = Dense(output_dim=num_outputs, init="he_normal", activation="softmax")(flatten1)
+        #dense = Dense(output_dim=num_outputs, W_regularizer=l2(0.01), init="he_normal", activation="linear")(flatten1)
+
+        model = Model(input=input, output=dense)
+        return model
+
+    @staticmethod
+    def build_resnet_test(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [1, 1, 1, 1])
+
+    @staticmethod
+    def build_resnet_18(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [2, 2, 2, 2])
+
+    @staticmethod
+    def build_resnet_34(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [3, 4, 6, 3])
+
+    @staticmethod
+    def build_resnet_50(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 6, 3])
+
+    @staticmethod
+    def build_resnet_101(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 23, 3])
+
+    @staticmethod
+    def build_resnet_152(input_shape, num_outputs):
+        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 8, 36, 3])
+
+
+# ## Batch Generator for model fit_generator
+
+# In[ ]:
+
+
+def batch_generator_train(files, batch_size):
+    number_of_batches = np.ceil(len(files)/batch_size)
+    counter = 0
+    random.shuffle(files)
+    while True:
+        batch_files = files[batch_size*counter:batch_size*(counter+1)]
+        image_list = []
+        mask_list = []
+        for f in batch_files:
+            image = cv2.imread(f)
+            image = cv2.resize(image, conf['image_shape'])
+
+            cancer_type = f[20:21] # relies on path lengths that is hard coded below
+            if cancer_type == '1':
+                mask = [1, 0, 0]
+            elif cancer_type == '2':
+                mask = [0, 1, 0]
+            else:
+                mask = [0, 0, 1]
+
+            image_list.append(image)
+            mask_list.append(mask)
+        counter += 1
+        image_list = np.array(image_list)
+        mask_list = np.array(mask_list)
+
+        yield image_list, mask_list
+
+        if counter == number_of_batches:
+            random.shuffle(files)
+            counter = 0
+
+
+# ## Hardcoded paths to training files. Note that the "additional" directories have been left out.
+
+# In[ ]:
+
+
+# file paths to training and additional samples
+filepaths = []
+filepaths.append('../input/train/Type_1/')
+filepaths.append('../input/train/Type_2/')
+filepaths.append('../input/train/Type_3/')
+
+
+# ## Get a list of all training files
+
+# In[ ]:
+
+
+allFiles = []
+
+for i, filepath in enumerate(filepaths):
+    files = glob.glob(filepath + '*.jpg')
+    allFiles = allFiles + files
+
+
+# ## Split data into training and validation sets
+
+# In[ ]:
+
+
+split_point = int(round(conf['train_valid_fraction']*len(allFiles)))
+
+random.shuffle(allFiles)
+
+train_list = allFiles[:split_point]
+valid_list = allFiles[split_point:]
+print('Train patients: {}'.format(len(train_list)))
+print('Valid patients: {}'.format(len(valid_list)))
+
+
+# ## Testing model generator
+
+# In[ ]:
+
+
+print('Create and compile model...')
+
+nb_classes = 3
+img_rows, img_cols = conf['image_shape'][1], conf['image_shape'][0]
+img_channels = 3
+
+model = ResnetBuilder.build_resnet_34((img_channels, img_rows, img_cols), nb_classes)
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+#model.compile(loss='hinge',optimizer='adadelta',metrics=['accuracy'])
+
+callbacks = [
+    EarlyStopping(monitor='val_loss', patience=conf['patience'], verbose=0),
+    ModelCheckpoint('cervical_best.hdf5', monitor='val_loss', save_best_only=True, verbose=0),
+]
+
+print('Fit model...')
+fit = model.fit_generator(generator=batch_generator_train(train_list, conf['batch_size']),
+                      nb_epoch=conf['nb_epoch'],
+                      #samples_per_epoch=len(train_list),
+                      samples_per_epoch=3,
+                      validation_data=batch_generator_train(valid_list, conf['batch_size']),
+                      #nb_val_samples=len(valid_list),
+                      nb_val_samples=1,
+                      verbose=1,
+                      callbacks=callbacks)
+
+
+# ## Create submission files with prediction for submission
+
+# In[ ]:
+
+
+#from keras.models import load_model
+#model = load_model('cervical_best.hdf5')
+
+sample_subm = pd.read_csv("../input/sample_submission.csv")
+ids = sample_subm['image_name'].values
+
+for id in ids:
+    print('Predict for image {}'.format(id))
+    files = glob.glob("../input/test/" + id)
+    image_list = []
+    for f in files:
+        image = cv2.imread(f)
+        image = cv2.resize(image, conf['image_shape'])
+        image_list.append(image)
+        
+    image_list = np.array(image_list)
+
+    predictions = model.predict(image_list, verbose=1, batch_size=1)
+
+    sample_subm.loc[sample_subm['image_name'] == id, 'Type_1'] = predictions[0,0]
+    sample_subm.loc[sample_subm['image_name'] == id, 'Type_2'] = predictions[0,1]
+    sample_subm.loc[sample_subm['image_name'] == id, 'Type_3'] = predictions[0,2]
     
-    return plt
-
-
-# In[ ]:
-
-
-# Learning curve
-def Learning_curve_model(X, Y, model, cv, train_sizes):
-
-    plt.figure()
-    plt.title("Learning curve")
-    plt.xlabel("Training examples")
-    plt.ylabel("Score")
-
-
-    train_sizes, train_scores, test_scores = learning_curve(model, X, Y, cv=cv, n_jobs=4, train_sizes=train_sizes)
-
-    train_scores_mean = np.mean(train_scores, axis=1)
-    train_scores_std  = np.std(train_scores, axis=1)
-    test_scores_mean  = np.mean(test_scores, axis=1)
-    test_scores_std   = np.std(test_scores, axis=1)
-    plt.grid()
-    
-    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
-                     color="r")
-    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
-    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",label="Training score")
-    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",label="Cross-validation score")
-                     
-    plt.legend(loc="best")
-    return plt
-
-
-# In[ ]:
-
-
-# lrearning, prediction and printing results
-def predict_model(X, Y, model, Xtest, submit_name):
-    model.fit(X, Y)
-    Y_pred  = model.predict(Xtest)
-    score   = cross_val_score(model, X, Y, cv=cv)
-
-    submission = pd.DataFrame({
-            "PassengerId": test_df["PassengerId"],
-            "Survived": Y_pred
-        })
-    submission.to_csv(submit_name, index=False)
-    
-    return score 
-
-
-# ###  Logistic Regression
-
-# In[ ]:
-
-
-search_param = 0   # 1 -- grid search / 0 -- don't search
-plot_vc      = 0   # 1--display validation curve/ 0-- don't display
-plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
-
-
-# In[ ]:
-
-
-#grid search: Logistic Regression
-model = LogisticRegression()
-if search_param==1:
-    
-    param_range = np.logspace(-6, 5, 12)
-    param_grid = dict(C=param_range)
-    grid_search_model(X_data, Y_data, model, param_grid, cv)
-
-
-# In[ ]:
-
-
-#Validation Curve: Logistic Regression
-if plot_vc == 1:
-    param_range = np.logspace(-6, 3, 10)
-    param_name="C"
-    ylim=[0.55, 0.9]
-    validation_curve_model(X_data, Y_data, model, "C", param_range, cv, ylim)
-
-
-# In[ ]:
-
-
-#learn curve
-logreg  = LogisticRegression(C=1000)
-
-if plot_lc==1:
-    train_size=np.linspace(.1, 1.0, 15)
-    Learning_curve_model(X_data, Y_data, logreg, cv, train_size)
-
-
-# In[ ]:
-
-
-# Logistic Regression 
-acc_log = predict_model(X_data, Y_data, logreg, X_test_kaggle, 'submission_Logistic.csv')
-
-
-# ###  Support Vector Machines
-
-# In[ ]:
-
-
-search_param = 0   # 1 -- grid search / 0 -- don't search
-plot_vc      = 0   # 1--display validation curve/ 0-- don't display
-plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
-
-
-# In[ ]:
-
-
-
-
-#grid search: SVM
-search_param = 0
-if search_param==1:
-    param_range = np.linspace(0.5, 5, 9)
-    param_grid = dict(C=param_range)
-
-    grid_search_model(X_data, Y_data, SVC(), param_grid, cv)
-
-
-# In[ ]:
-
-
-#Validation Curve: SVC
-if plot_vc == 1:
-    param_range = np.linspace(0.1, 10, 10)
-    param_name="C"
-    ylim=[0.78, 0.90]
-    validation_curve_model(X_data, Y_data, SVC(), "C", param_range, cv, ylim, log=False)
-
-
-# In[ ]:
-
-
-#learn curve: SVC
-svc = SVC(C=1, probability=True)
-
-if plot_lc == 1:
-    train_size=np.linspace(.1, 1.0, 15)
-    Learning_curve_model(X_data, Y_data, svc, cv, train_size)
-
-
-# In[ ]:
-
-
-# Support Vector Machines
-acc_svc = predict_model(X_data, Y_data, svc, X_test_kaggle, 'submission_SVM.csv')
-
-
-# ### KNN
-
-# In[ ]:
-
-
-search_param = 0   # 1 -- grid search / 0 -- don't search
-plot_vc      = 0   # 1--display validation curve/ 0-- don't display
-plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
-
-
-# In[ ]:
-
-
-#grid search: KNN
-if search_param==1:
-    param_range = (np.linspace(1, 10, 10)).astype(int)
-    param_grid = dict(n_neighbors=param_range)
-
-    grid_search_model(X_data, Y_data, KNeighborsClassifier(), param_grid, cv)
-
-
-# In[ ]:
-
-
-#Validation Curve: KNN
-if plot_vc==1:
-    param_range = np.linspace(2, 20, 10).astype(int)
-    param_name="n_neighbors"
-    ylim=[0.75, 0.90]
-    validation_curve_model(X_data, Y_data, KNeighborsClassifier(), "n_neighbors", param_range, cv, ylim, log=False)
-
-
-# In[ ]:
-
-
-#learn curve: KNN
-knn = KNeighborsClassifier(n_neighbors = 10)
-
-if plot_lc==1:
-    train_size=np.linspace(.1, 1.0, 15)
-    Learning_curve_model(X_data, Y_data, knn, cv, train_size)
-
-
-# In[ ]:
-
-
-# KNN
-acc_knn = predict_model(X_data, Y_data, knn, X_test_kaggle, 'submission_KNN.csv')
-
-
-# ###  Naive Bayes
-
-# In[ ]:
-
-
-# Gaussian Naive Bayes
-gaussian = GaussianNB()
-acc_gaussian = predict_model(X_data, Y_data, gaussian, X_test_kaggle, 'submission_Gassian_Naive_Bayes.csv')
-
-
-# ### Perceptron
-
-# In[ ]:
-
-
-# Perceptron
-perceptron = Perceptron()
-acc_perceptron = predict_model(X_data, Y_data, perceptron, X_test_kaggle, 'submission_Perception.csv')
-
-
-# ###  Linear SVC
-
-# In[ ]:
-
-
-# Linear SVC
-linear_svc = LinearSVC()
-acc_linear_svc = predict_model(X_data, Y_data, linear_svc, X_test_kaggle, 'submission_Linear_SVC.csv')
-
-
-# ### Stochastic Gradient Descent
-
-# In[ ]:
-
-
-# Stochastic Gradient Descent
-sgd = SGDClassifier()
-acc_sgd = predict_model(X_data, Y_data, sgd, X_test_kaggle, 'submission_stochastic_Gradient_Descent.csv')
-
-
-# ### Decision Tree
-
-# In[ ]:
-
-
-# Decision Tree
-decision_tree = DecisionTreeClassifier()
-acc_decision_tree = predict_model(X_data, Y_data, decision_tree, X_test_kaggle, 'submission_Decision_Tree.csv')
-
-
-# ### Random Forest
-
-# In[ ]:
-
-
-search_param = 0   # 1 -- grid search / 0 -- don't search
-plot_vc      = 0   # 1--display validation curve/ 0-- don't display
-plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
-
-
-# In[ ]:
-
-
-#grid search: KNN (This step is very slow)
-#param_range = (np.linspace(10, 110, 10)).astype(int)
-#param_leaf = (np.linspace(1, 2, 2)).astype(int)
-#param_grid = {'n_estimators':param_range, 'min_samples_leaf':param_leaf}
-
-#grid_search_model(X_data, Y_data, RandomForestClassifier(), param_grid, cv)
-
-
-# In[ ]:
-
-
-if plot_vc==1:
-    param_range = np.linspace(10, 110, 10).astype(int)
-    ylim=[0.75, 0.90]
-    validation_curve_model(X_data, Y_data, RandomForestClassifier(min_samples_leaf=12), "n_estimators", param_range, cv, ylim, log=False)
-
-
-# In[ ]:
-
-
-if plot_vc==1:
-    param_range = np.linspace(1, 21, 10).astype(int)
-    ylim=[0.75, 0.90]
-    validation_curve_model(X_data, Y_data, RandomForestClassifier(n_estimators=80), "min_samples_leaf", param_range, cv, ylim, log=False)
-
-
-# In[ ]:
-
-
-# Random Forest
-random_forest = RandomForestClassifier(n_estimators=80, random_state =0, min_samples_leaf = 12)
-acc_random_forest = predict_model(X_data, Y_data, random_forest, X_test_kaggle, 'submission_random_forest.csv')
-
-
-# ### Ensemble votring
-
-# In[ ]:
-
-
-#ensemble votring
-ensemble_voting = VotingClassifier(estimators=[('lg', logreg), ('sv', svc), ('rf', random_forest),('kn',knn)], voting='soft')
-acc_ensemble_voting = predict_model(X_data, Y_data, ensemble_voting, X_test_kaggle, 'submission_ensemble_voting.csv')
-
-
-# In[ ]:
-
-
-models = pd.DataFrame({'Model': ['Support Vector Machines', 'KNN', 'Logistic Regression',
-                                'Random Forest', 'Naive Bayes', 'Perceptron',
-                                'Stochastic Gradient Decent', 'Linear SVC',
-                                'Decision Tree', 'ensemble_voting'],'KFoldScore': [acc_svc.mean(), acc_knn.mean(), acc_log.mean(),
-                                acc_random_forest.mean(), acc_gaussian.mean(), acc_perceptron.mean(),
-                                acc_sgd.mean(), acc_linear_svc.mean(), acc_decision_tree.mean(), acc_ensemble_voting.mean()],
-                                'Std': [acc_svc.std(), acc_knn.std(), acc_log.std(),
-                                acc_random_forest.std(), acc_gaussian.std(), acc_perceptron.std(),
-                                acc_sgd.std(), acc_linear_svc.std(), acc_decision_tree.std(), acc_ensemble_voting.std()]})
-
-models.sort_values(by='KFoldScore', ascending=False)
+sample_subm.to_csv("subm.csv", index=False)
 

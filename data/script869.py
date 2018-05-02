@@ -1,135 +1,74 @@
 
 # coding: utf-8
 
-# ## Data loading and preparation ##
+# # Intro
+# **This is Lesson 7 in the [Deep Learning](https://www.kaggle.com/learn/machine-learning) track**  
+# 
+# The models you've built so far have relied on pre-trained models.  But they aren't the ideal solution for many use cases.  In this lesson, you will learn how to build totally new models.
+# 
+# # Lesson
+# 
+
+# In[1]:
+
+
+from IPython.display import YouTubeVideo
+YouTubeVideo('YbNE3zhtsoo', width=800, height=450)
+
+
+# # Sample Code
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from tensorflow.python import keras
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Dense, Flatten, Conv2D, Dropout
+
+a=pd.read_csv("../input/digit-recognizer/train.csv")
+a.drop('label', axis=1)
+
+img_rows, img_cols = 28, 28
+num_classes = 10
+
+def data_prep(raw):
+    out_y = keras.utils.to_categorical(raw.label, num_classes)
+
+    num_images = raw.shape[0]
+    x_as_array = raw.values[:,1:]
+    x_shaped_array = x_as_array.reshape(num_images, img_rows, img_cols, 1)
+    out_x = x_shaped_array / 255
+    return out_x, out_y
+
+train_size = 30000
+train_file = "../input/digit-recognizer/train.csv"
+raw_data = pd.read_csv(train_file)
+
+x, y = data_prep(raw_data)
+
+model = Sequential()
+model.add(Conv2D(20, kernel_size=(3, 3),
+                 activation='relu',
+                 input_shape=(img_rows, img_cols, 1)))
+model.add(Conv2D(20, kernel_size=(3, 3), activation='relu'))
+model.add(Flatten())
+model.add(Dense(128, activation='relu'))
+model.add(Dense(num_classes, activation='softmax'))
+
+model.compile(loss=keras.losses.categorical_crossentropy,
+              optimizer='adam',
+              metrics=['accuracy'])
+model.fit(x, y,
+          batch_size=128,
+          epochs=2,
+          validation_split = 0.2)
 
 
-# In[ ]:
-
-
-train = pd.read_csv("../input/train.csv", index_col=0)
-test = pd.read_csv("../input/test.csv", index_col=0)
-
-
-# Just take a little look at the data. does this look good?
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-# Really simple data preparation
-y_train = pd.get_dummies(train[["type"]], prefix="")
-train.drop("type", inplace=True, axis=1)
-
-train_test = pd.concat([train, test], axis=0)
-
-# It looks like the color actually is just noise, and does not give any signal to the monster-class.
-# Comment one of these lines.
-#train_test = pd.get_dummies( train_test, columns=["color"], drop_first=False)
-train_test.drop("color", inplace=True, axis=1)
-
-X_train = train_test.iloc[:len(y_train)]
-X_test  = train_test.iloc[len(y_train):]
-
-# Clean up
-del train_test
-del train
-del test
-
-
-# ## A really simple neural network ##
-# Here is an implementation of a really simple neural network. This is the kind of neural network you would expect in the late 1990's. There is no weight decay regularisation or dropout or anything fancy, so the only way to prevent overfitting is early stopping, and limiting the capacity by setting the number of hidden units. 
+# # Your Turn
+# You are ready to [build your own model](https://www.kaggle.com/dansbecker/exercise-modeling-from-scratch).
 # 
-# Also note that there is only three layers: input, hidden and output. The output has softmax outputs and the hidden layer has sigmoid activation function. Please try other configurations if you like.
-
-# In[ ]:
-
-
-## A dead simple neural network class in Python+Numpy. Plain SGD, and no regularization.
-def sigmoid(X):
-    return 1.0 / ( 1.0 + np.exp(-X) )
-
-def softmax(X):
-    _sum = np.exp(X).sum()
-    return np.exp(X) / _sum
-
-class neuralnet(object):
-    def __init__(self, num_input, num_hidden, num_output):
-        self._W1 = (np.random.random_sample((num_input, num_hidden)) - 0.5).astype(np.float32)
-        self._b1 = np.zeros((1, num_hidden)).astype(np.float32)
-        self._W2 = (np.random.random_sample((num_hidden, num_output)) - 0.5).astype(np.float32)
-        self._b2 = np.zeros((1, num_output)).astype(np.float32)
-
-    def forward(self,X):
-        net1 = np.matmul( X, self._W1 ) + self._b1
-        y = sigmoid(net1)
-        net2 = np.matmul( y, self._W2 ) + self._b2
-        z = softmax(net2)
-        return z,y
-
-    def backpropagation(self, X, target, eta):
-        z, y = self.forward(X)
-        d2 = (z - target)
-        d1 = y*(1.0-y) * np.matmul(d2, self._W2.T)
-        # The updates are done within this method. This more or less implies
-        # utpdates with Stochastic Gradient Decent. Let's fix that later.
-        # TODO: Support for full batch and mini-batches etc.
-        self._W2 -= eta * np.matmul(y.T,d2)
-        self._W1 -= eta * np.matmul(X.reshape((-1,1)),d1)
-        self._b2 -= eta * d2
-        self._b1 -= eta * d1
-
-
-# *Who you gonna call?*
-# ... The neural network!
-
-# In[ ]:
-
-
-# Some hyper-parameters to tune.
-num_hidden = 8
-n_epochs   = 1500
-eta        = 0.01
-# Create the net.
-nn = neuralnet( X_train.shape[1], num_hidden, y_train.shape[1])
-
-
-# We train in a simple loop, pure Stochastic Gradient Decent.
-
-# In[ ]:
-
-
-# (EDIT: It's much faster to convert the dataframes to numpy arrays and then iterate)
-X = np.array(X_train, dtype=np.float32)
-Y = np.array(y_train, dtype=np.float32)
-for epoch in range(n_epochs):
-    for monster, target in zip(X,Y):
-        nn.backpropagation( monster, target, eta)
-
-
-# *We came, we saw, we kicked its ass!*
-# 
-# Let's make a submission:
-
-# In[ ]:
-
-
-with open('submission-{}-hidden.csv'.format(num_hidden), 'w') as f:
-    f.write("id,type\n")
-    for index, monster in X_test.iterrows():
-        probs = nn.forward( np.array(monster, dtype=np.float32))[0]
-        f.write("{},{}\n".format(index, y_train.columns.values[np.argmax(probs)][1:]))
-
-
-# TODO: Local CV and parameter tuning.
+# # Keep Going
+# [Move on](https://www.kaggle.com/dansbecker/dropout-and-strides-for-larger-models) to learn two techniques that will make your models run faster and more robust to overfitting.

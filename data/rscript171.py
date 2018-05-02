@@ -1,213 +1,324 @@
-"""
-Contributions from:
-DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
-https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
-JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
-https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
-hklee - weighted mean comparisons, LB 0.497, 1ST
-https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
-
-Also all comments for changes, encouragement, and forked scripts rock
-
-Keep the Surprise Going
-"""
-
-import glob, re
 import numpy as np
+import sys
+
+sys.path.insert(0, '../input/wordbatch-133/wordbatch/')
+sys.path.insert(0, '../input/randomstate/randomstate/')
 import pandas as pd
-from sklearn import *
-from datetime import datetime
-from xgboost import XGBRegressor
-import h2o
-from h2o.automl import H2OAutoML
-h2o.init()
+from contextlib import contextmanager
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import KFold
+from scipy.sparse import hstack
+import time
+import regex as re
+import string
+from scipy.sparse import csr_matrix
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+import wordbatch
+from wordbatch.extractors import WordBag
+from wordbatch.models import FTRL, FM_FTRL
 
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
+import gc
+from sklearn.metrics import roc_auc_score
 
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
-    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
-    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+cont_patterns = [
+    (b'US', b'United States'),
+    (b'IT', b'Information Technology'),
+    (b'(W|w)on\'t', b'will not'),
+    (b'(C|c)an\'t', b'can not'),
+    (b'(I|i)\'m', b'i am'),
+    (b'(A|a)in\'t', b'is not'),
+    (b'(\w+)\'ll', b'\g<1> will'),
+    (b'(\w+)n\'t', b'\g<1> not'),
+    (b'(\w+)\'ve', b'\g<1> have'),
+    (b'(\w+)\'s', b'\g<1> is'),
+    (b'(\w+)\'re', b'\g<1> are'),
+    (b'(\w+)\'d', b'\g<1> would'),
+]
+patterns = [(re.compile(regex), repl) for (regex, repl) in cont_patterns]
 
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
 
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+def prepare_for_char_n_gram(text):
+    """ Simple text clean up process"""
+    # 1. Go to lower case (only good for english)
+    # Go to bytes_strings as I had issues removing all \n in r""
+    clean = bytes(text.lower(), encoding="utf-8")
+    # 2. Drop \n and  \t
+    clean = clean.replace(b"\n", b" ")
+    clean = clean.replace(b"\t", b" ")
+    clean = clean.replace(b"\b", b" ")
+    clean = clean.replace(b"\r", b" ")
+    # 3. Replace english contractions
+    for (pattern, repl) in patterns:
+        clean = re.sub(pattern, repl, clean)
+    # 4. Drop puntuation
+    # I could have used regex package with regex.sub(b"\p{P}", " ")
+    exclude = re.compile(b'[%s]' % re.escape(bytes(string.punctuation, encoding='utf-8')))
+    clean = b" ".join([exclude.sub(b'', token) for token in clean.split()])
+    # 5. Drop numbers - as a scientist I don't think numbers are toxic ;-)
+    clean = re.sub(b"\d+", b" ", clean)
+    # 6. Remove extra spaces - At the end of previous operations we multiplied space accurences
+    clean = re.sub(b'\s+', b' ', clean)
+    # Remove ending space if any
+    clean = re.sub(b'\s+$', b'', clean)
+    # 7. Now replace words by words surrounded by # signs
+    # e.g. my name is bond would become #my# #name# #is# #bond#
+    # clean = re.sub(b"([a-z]+)", b"#\g<1>#", clean)
+    clean = re.sub(b" ", b"# #", clean)  # Replace space
+    clean = b"#" + clean + b"#"  # add leading and trailing #
 
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-# NEW FEATURES FROM Georgii Vyshnia
-stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
-stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
-lbl = preprocessing.LabelEncoder()
-for i in range(4):
-    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
-    stores['air_area_name' +str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    return str(clean, 'utf-8')
 
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
 
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+@contextmanager
+def timer(name):
+    """
+    Taken from Konstantin Lopuhin https://www.kaggle.com/lopuhin
+    in script named : Mercari Golf: 0.3875 CV in 75 LOC, 1900 s
+    https://www.kaggle.com/lopuhin/mercari-golf-0-3875-cv-in-75-loc-1900-s
+    """
+    t0 = time.time()
+    yield
+    print(f'[{name}] done in {time.time() - t0:.0f} s')
 
-train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
 
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+def count_regexp_occ(regexp="", text=None):
+    """ Simple way to get the number of occurence of a regex"""
+    return len(re.findall(regexp, text))
 
-train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
 
-train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
-train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
-train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
+def get_indicators_and_clean_comments(df):
+    """
+    Check all sorts of content as it may help find toxic comment
+    Though I'm not sure all of them improve scores
+    """
+    # Count number of \n
+    df["ant_slash_n"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\n", x))
+    # Get length in words and characters
+    df["raw_word_len"] = df["comment_text"].apply(lambda x: len(x.split()))
+    df["raw_char_len"] = df["comment_text"].apply(lambda x: len(x))
+    # Check number of upper case, if you're angry you may write in upper case
+    df["nb_upper"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[A-Z]", x))
+    # Number of F words - f..k contains folk, fork,
+    df["nb_fk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ff]\S{2}[Kk]", x))
+    # Number of S word
+    df["nb_sk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ss]\S{2}[Kk]", x))
+    # Number of D words
+    df["nb_dk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[dD]ick", x))
+    # Number of occurence of You, insulting someone usually needs someone called : you
+    df["nb_you"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\W[Yy]ou\W", x))
+    # Just to check you really refered to my mother ;-)
+    df["nb_mother"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wmother\W", x))
+    # Just checking for toxic 19th century vocabulary
+    df["nb_ng"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wnigger\W", x))
+    # Some Sentences start with a <:> so it may help
+    df["start_with_columns"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"^\:+", x))
+    # Check for time stamp
+    df["has_timestamp"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\d{2}|:\d{2}", x))
+    # Check for dates 18:44, 8 December 2010
+    df["has_date_long"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{2}:\d{2}, \d{1,2} \w+ \d{4}", x))
+    # Check for date short 8 December 2010
+    df["has_date_short"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{1,2} \w+ \d{4}", x))
+    # Check for http links
+    df["has_http"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"http[s]{0,1}://\S+", x))
+    # check for mail
+    df["has_mail"] = df["comment_text"].apply(
+        lambda x: count_regexp_occ(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', x)
+    )
+    # Looking for words surrounded by == word == or """" word """"
+    df["has_emphasize_equal"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\={2}.+\={2}", x))
+    df["has_emphasize_quotes"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\"{4}\S+\"{4}", x))
 
-test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
-test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
-test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
+    df["chick_count"] = df["comment_text"].apply(lambda x: x.count("!"))
+    df["qmark_count"] = df["comment_text"].apply(lambda x: x.count("?"))
 
-# NEW FEATURES FROM JMBULL
-train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
-train['var_max_lat'] = train['latitude'].max() - train['latitude']
-train['var_max_long'] = train['longitude'].max() - train['longitude']
-test['var_max_lat'] = test['latitude'].max() - test['latitude']
-test['var_max_long'] = test['longitude'].max() - test['longitude']
+    # Now clean comments
+    df["clean_comment"] = df["comment_text"].apply(lambda x: prepare_for_char_n_gram(x))
 
-# NEW FEATURES FROM Georgii Vyshnia
-train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
-test['lon_plus_lat'] = test['longitude'] + test['latitude']
+    # Get the new length in words and characters
+    df["clean_word_len"] = df["clean_comment"].apply(lambda x: len(x.split()))
+    df["clean_char_len"] = df["clean_comment"].apply(lambda x: len(x))
+    # Number of different characters used in a comment
+    # Using the f word only will reduce the number of letters required in the comment
+    df["clean_chars"] = df["clean_comment"].apply(lambda x: len(set(x)))
+    df["clean_chars_ratio"] = df["clean_comment"].apply(lambda x: len(set(x))) / df["clean_comment"].apply(
+        lambda x: 1 + min(99, len(x)))
 
-lbl = preprocessing.LabelEncoder()
-train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
-test['air_store_id2'] = lbl.transform(test['air_store_id'])
 
-train = train.fillna(-999)
-test = test.fillna(-999)
+def char_analyzer(text):
+    """
+    This is used to split strings in small lots
+    I saw this in an article (I can't find the link anymore)
+    so <talk> and <talking> would have <Tal> <alk> in common
+    """
+    tokens = text.split()
+    return [token[i: i + 3] for token in tokens for i in range(len(token) - 2)]
 
-train['visitors'] = np.log1p(train['visitors'].values)
+def clean_csr(csr_trn, csr_sub, min_df):
+    trn_min = np.where(csr_trn.getnnz(axis=0) >= min_df)[0]
+    sub_min = {x for x in np.where(csr_sub.getnnz(axis=0) >= min_df)[0]}
+    mask= [x for x in trn_min if x in sub_min]
+    return csr_trn[:, mask], csr_sub[:, mask]
 
-print('Pre-processing done!')
+def get_numerical_features(trn, sub):
+    """
+    As @bangda suggested FM_FTRL either needs to scaled output or dummies
+    So here we go for dummies
+    """
+    ohe = OneHotEncoder()
+    full_csr = ohe.fit_transform(np.vstack((trn.values, sub.values)))
+    csr_trn = full_csr[:trn.shape[0]]
+    csr_sub = full_csr[trn.shape[0]:]
+    del full_csr
+    gc.collect()
+    # Now remove features that don't have enough samples either in train or test
+    return clean_csr(csr_trn, csr_sub, 3)
 
-htrain = h2o.H2OFrame(train)
-htest = h2o.H2OFrame(test)
 
-htrain.drop(['id', 'air_store_id', 'visit_date'])
-htest.drop(['id', 'air_store_id', 'visit_date'])
+if __name__ == '__main__':
 
-x =htrain.columns
-y ='visitors'
-x.remove(y)
+    class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
 
-def RMSLE(y_, pred):
-    return metrics.mean_squared_error(y_, pred)**0.5
+    with timer("Reading input files"):
+        train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv').fillna(' ')
+        test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv').fillna(' ')
 
-print('Starting h2o autoML model!')  
+    with timer("Performing basic NLP"):
+        for df in [train, test]:
+            get_indicators_and_clean_comments(df)
 
-aml = H2OAutoML(max_runtime_secs = 3350)
-aml.train(x=x, y =y, training_frame=htrain, leaderboard_frame = htest)
+    train_text = train['clean_comment'].fillna("")
+    test_text = test['clean_comment'].fillna("")
+    all_text = pd.concat([train_text, test_text])
 
-print('Generate predictions...')
-htrain.drop(['visitors'])
-preds = aml.leader.predict(htrain)
-preds = preds.as_data_frame()
-print('RMSLE H2O automl leader: ', RMSLE(train['visitors'].values, preds))
+    with timer("Creating numerical features"):
+        num_features = [f_ for f_ in train.columns
+                        if f_ not in ["comment_text", "clean_comment", "id", "remaining_chars",
+                                      'has_ip_address'] + class_names]
 
-preds = aml.leader.predict(htest)
-preds = preds.as_data_frame()
+        # FM_FTRL likes categorical data
+        for f in num_features:
+            all_cut = pd.cut(pd.concat([train[f], test[f]], axis=0), bins=20, labels=False, retbins=False)
+            train[f] = all_cut.values[:train.shape[0]]
+            test[f] = all_cut.values[train.shape[0]:]
 
-test['visitors'] = preds
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
-del train; del data; del htrain; del htest;
+        train_num_features, test_num_features = get_numerical_features(train[num_features], test[num_features])
 
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
+    with timer("Tfidf on word"):
+        word_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            tokenizer=lambda x: re.findall(r'[^\p{P}\W]+', x),
+            analyzer='word',
+            token_pattern=None,
+            stop_words='english',
+            ngram_range=(1, 2), 
+            max_features=300000)
+        X = word_vectorizer.fit_transform(all_text)
+        train_word_features = X[:train.shape[0]]
+        test_word_features = X[train.shape[0]:]
+        del (X)
 
-for k, v in dfs.items(): locals()[k] = v
+    with timer("Tfidf on subword n_gram"):
+        subword_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            tokenizer=char_analyzer,
+            analyzer='word',
+            ngram_range=(1, 3),
+            max_features=60000)
+        X = subword_vectorizer.fit_transform(all_text)
+        train_subword_features = X[:train.shape[0]]
+        test_subword_features = X[train.shape[0]:]
+        del (X)
+        
+    with timer("Tfidf on char n_gram"):
+        char_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            analyzer='char',
+            ngram_range=(1, 3),
+            max_features=60000)
+        X = char_vectorizer.fit_transform(all_text)
+        train_char_features = X[:train.shape[0]]
+        test_char_features = X[train.shape[0]:]
+        del (X)
 
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+    with timer("Stacking matrices"):
+        train_features = hstack(
+            [
+                train_char_features,
+                train_word_features,
+                train_num_features,
+                train_subword_features
+            ]
+        ).tocsr()
+        del train_word_features, train_num_features, train_char_features,  train_subword_features
+        gc.collect()
 
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
+        test_features = hstack(
+            [
+                test_char_features,
+                test_word_features,
+                test_num_features,
+                test_subword_features
+            ]
+        ).tocsr()
+        del test_word_features, test_num_features, test_char_features, test_subword_features
+        gc.collect()
 
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
+    print("Shapes just to be sure : ", train_features.shape, test_features.shape) 
 
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+    #Correct for label imbalance with sample weights
+    class_weights= {'toxic':1.0, 'severe_toxic':0.2, 'obscene':1.0, 'threat':0.1, 'insult':0.8, 'identity_hate':0.2}
+    f_range = (1e-6, 1 - 1e-6)
+    with timer("Scoring LogisticRegression"):
+        folds = KFold(n_splits=4, shuffle=True, random_state=1)
+        losses = []
+        losses_per_folds = np.zeros(folds.n_splits)
+        submission = pd.DataFrame.from_dict({'id': test['id']})
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
-    how='left')['visitors_y'].values
+        for i_c, class_name in enumerate(class_names):
+            class_pred = np.zeros(len(train))
+            train_target = train[class_name].values
+            train_weight = np.array([1.0 if x==1 else class_weights[class_name] for x in train_target])
+            submission[class_name] = 0.0
+            cv_scores = []
+            for n_fold, (trn_idx, val_idx) in enumerate(folds.split(train_features)):
+                clf = FM_FTRL(
+                    alpha=0.02, beta=0.01, L1=0.00001, L2=30.0,
+                    D=train_features.shape[1], alpha_fm=0.1,
+                    L2_fm=0.5, init_fm=0.01, weight_fm= 50.0,
+                    D_fm=200, e_noise=0.0, iters=3,
+                    inv_link="identity", e_clip=1.0, threads=4, use_avx= 1, verbose=1
+                )
+                clf.fit(train_features[trn_idx], train_target[trn_idx], train_weight[trn_idx], reset=False)
+                class_pred[val_idx] = sigmoid(clf.predict(train_features[val_idx]))
+                score = roc_auc_score(train_target[val_idx], class_pred[val_idx])
+                cv_scores.append(score)
+                losses_per_folds[n_fold] += score / len(class_names)
+                submission[class_name] += sigmoid(clf.predict(test_features)) / folds.n_splits
 
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
-    on='air_store_id', how='left')['visitors_y'].values
+            #Classifier chain. Order of classes not optimized
+            train_features = csr_matrix(hstack([train_features, np.reshape(np.array(
+                [0 if x<0.5 else 1 for x in class_pred]), (train.shape[0], 1))]))
+            test_features = csr_matrix(hstack([test_features, np.reshape(np.array(
+                [0 if x<0.5 else 1 for x in submission[class_name]]), (test.shape[0], 1))]))
 
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+            cv_score = roc_auc_score(train_target, class_pred)
+            losses.append(cv_score)
+            train[class_name] = class_pred
+            print('CV score for class %-15s is full %.6f | mean %.6f+%.6f'
+                  % (class_name, cv_score, np.mean(cv_scores), np.std(cv_scores)))
+        print('Total CV score is %.6f+%.6f' % (np.mean(losses), np.std(losses_per_folds)))
 
-sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y']* 1.1)/2
-sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
+        train[["id"] + class_names + [f for f in class_names]].to_csv("lvl0_wordbatch_clean_oof.csv",
+                                                                               index=False,
+                                                                               float_format="%.8f")
 
-print('Leaderboard : ', aml.leaderboard)
-
-print(' H2O automl leader performace : ', aml.leader)
+submission.to_csv("lvl0_wordbatch_clean_sub.csv", index=False, float_format="%.8f")

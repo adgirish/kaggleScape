@@ -1,183 +1,102 @@
 
 # coding: utf-8
 
-# Hey guys!
+# This notebook is a reworked version of William Cukierski's kernel [here](https://www.kaggle.com/wcukierski/example-metric-implementation). It gives the same results.
 # 
-# In the subsequent kernel I am using the *PCA algorithm* in order to gain further insights into the various atom-configurations contained in the xyz-files. I hope that this might be a help for you in order to explore new features which advance you in the underlying problem statement. I like to add that I am not a domain expert in the chemistry field.
+# I wanted to use matrix multiplication for intersection and matrix maximum for union as this is easier to get my head around that the histogram approach. It will also help if I later code in C++ with binary maps. I also managed to simplify some of the formulae.
+# 
+# In the process, I noted that the evaluation method stipulates that the IOU score is based on the prediction masks, which is relevant where there is a mismatch between prediction and ground truth. Specifically if two true nuclei are fused together as one in the prediction or vice versa. So I think this code should work ok in the general case.
+# 
+# Hopefully this will help some of you. All comments welcome
+
+# This is an example notebook to demonstrate how the IoU metric works for a single image. Please note: this is not the official scoring implementation, but should work in the same manner.
 
 # In[ ]:
 
 
-# General libraries
-import pandas as pd
-import numpy as np
-
-# Plotting and Visualization Library
 get_ipython().run_line_magic('matplotlib', 'inline')
-from mpl_toolkits.mplot3d import Axes3D
+import numpy as np
+import skimage.io
 import matplotlib.pyplot as plt
+import skimage.segmentation
 
-# Math Libraries
-from sklearn.decomposition import PCA
-from scipy.spatial import ConvexHull
+# Load a single image and its associated masks
+id = '0a7d30b252359a10fd298b638b90cb9ada3acced4e0c0e5a3692013f432ee4e9'
+file = "../input/stage1_train/{}/images/{}.png".format(id,id)
+mfile = "../input/stage1_train/{}/masks/*.png".format(id)
+image = skimage.io.imread(file)
+masks = skimage.io.imread_collection(mfile).concatenate()
+height, width, _ = image.shape
+num_masks = masks.shape[0]
 
+# Make a ground truth array and summary label image
+y_true = np.zeros((num_masks, height, width), np.uint16)
+y_true[:,:,:] = masks[:,:,:] // 255  # Change ground truth mask to zeros and ones
 
-# In[ ]:
-
-
-# Load the main train and test data
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-
-train_id = train["id"]
-test_id = test["id"]
-label = train[["formation_energy_ev_natom", "bandgap_energy_ev"]]
-
-train = train.drop(["id", "formation_energy_ev_natom", "bandgap_energy_ev"], axis = 1)
-test = test.drop("id", axis = 1)
-
-
-# In[ ]:
-
-
-# Read and split of xyz-file
-# Adapted from Tony Y: https://www.kaggle.com/tonyyy
-
-def get_xyz_data(filename, ids):
+labels = np.zeros((height, width), np.uint16)
+labels[:,:] = np.sum(y_true, axis=0)  # Add up to plot all masks
     
-    A = pd.DataFrame(columns=list('ABCDE'))
-    B = pd.DataFrame(columns=list('ABCE'))
-    
-    with open(filename) as f:
-        for line in f.readlines():
-            x = line.split()
-            if x[0] == 'atom':
+# Show label images
+fig = plt.figure()
+plt.imshow(image)
+plt.title("Original image")
+fig = plt.figure()
+plt.imshow(y_true[3])
+plt.title("One example ground truth mask")
+fig = plt.figure()
+plt.imshow(labels)
+plt.title("All ground truth masks")
 
-                newrowA = pd.DataFrame([[x[1],x[2],x[3],x[4],ids]], columns=list('ABCDE'))
-                A = A.append(newrowA)
-                
-            elif x[0] == 'lattice_vector':
-                
-                newrowB = pd.DataFrame([[x[1],x[2],x[3],ids]], columns=list('ABCE'))
-                B = B.append(newrowB)
+# Simulate an imperfect submission
+offset = 2 # offset pixels
+y_pr1 = y_true[:19, offset:, offset:]  # To remove 'item 20' as per other kernel
+y_pr2 = y_true[20:, offset:, offset:]
+y_pred = np.concatenate((y_pr1, y_pr2), axis=0)
+y_pred = np.pad(y_pred, ((0,0), (0, offset), (0, offset)), mode="constant")
+#y_pred[y_pred == 20] = 0 # Remove one object
+#y_pred, _, _ = skimage.segmentation.relabel_sequential(y_pred) # Relabel objects
+yptot = np.sum(y_pred, axis=0)  # Sum individual predictions for plotting
 
-    return A, B
+# Show simulated predictions
+fig = plt.figure()
+plt.imshow(y_pred[3])
+plt.title("An example simulated imperfect submission")
+fig = plt.figure()
+plt.imshow(yptot)
+plt.title("All simulated imperfect submissions")
+plt.show()
 
+# Compute number of objects
+num_true = len(y_true)
+num_pred = len(y_pred)
+print("Number of true objects:", num_true)
+print("Number of predicted objects:", num_pred)
 
-# In[ ]:
+# Compute iou score for each prediction
+iou = []
+for pr in range(num_pred):
+    bol = 0  # best overlap
+    bun = 1e-9  # corresponding best union
+    for tr in range(num_true):
+        olap = y_pred[pr] * y_true[tr]  # Intersection points
+        osz = np.sum(olap)  # Add the intersection points to see size of overlap
+        if osz > bol:  # Choose the match with the biggest overlap
+            bol = osz
+            bun = np.sum(np.maximum(y_pred[pr], y_true[tr]))  # Union formed with sum of maxima
+    iou.append(bol / bun)
 
+# Loop over IoU thresholds
+p = 0
+print("Thresh\tTP\tFP\tFN\tPrec.")
+for t in np.arange(0.5, 1.0, 0.05):
+    matches = iou > t
+    tp = np.count_nonzero(matches)  # True positives
+    fp = num_pred - tp  # False positives
+    fn = num_true - tp  # False negatives
+    p += tp / (tp + fp + fn)
+    print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, tp / (tp + fp + fn)))
 
-# plot_pca performs pca on the atom configuration and plots it
-# Moreover, the convex hull of the projection is computed and also visualized in the plot
-
-def plot_pca(index):
-    
-    fn = "../input/train/{}/geometry.xyz".format(index)
-    train_xyz, train_lat = get_xyz_data(fn, index)
-    color_dict = { 'Ga':'black', 'Al':'blue', 'O':'red', 'In':'green' }
-    
-    matrix = train_xyz
-    colour = matrix["D"]
-    matrix = matrix[["A","B","C"]].as_matrix()
-    matrix = matrix.astype(float)
-    
-    pca = PCA(n_components=3)
-    X_r = pca.fit(matrix).transform(matrix)
-    df_ = pd.DataFrame(np.round(X_r,2))
-        
-    x = np.array(matrix[:,0])
-    y = np.array(matrix[:,1])
-    z = np.array(matrix[:,2])
-
-    fig = plt.figure(figsize=(20,20))
-
-    ax = fig.add_subplot(221, projection='3d')
-    ax.scatter(x,y,z, c=[ color_dict[i] for i in colour ], marker='o', s=70)
-    ax.set_xlabel('X Coordinate')
-    ax.set_ylabel('Y Coordinate')
-    ax.set_zlabel('Z Coordinate')
-    ax.set_title(label.loc[index])
-    
-    ax = fig.add_subplot(222)
-    plt.scatter(X_r[:, 0], X_r[:, 1], color=[color_dict[i] for i in colour], alpha=.8, lw=1, s=70)
-    hull = ConvexHull(X_r[:,[0,1]])
-    volume_1 = hull.volume
-    plt.plot(X_r[hull.vertices,0], X_r[hull.vertices,1], 'r--', lw=1)
-    plt.title(label.loc[index])
-    ax.set_xlabel('First Principal Component')
-    ax.set_ylabel('Second Principal Component')
-    ax.set_title(label.loc[index])
-    
-    ax = fig.add_subplot(223)
-    plt.scatter(X_r[:, 0], X_r[:, 2], color=[color_dict[i] for i in colour], alpha=.8, lw=1, s=70)
-    hull = ConvexHull(X_r[:,[0,2]])
-    volume_2 = hull.volume
-    plt.plot(X_r[hull.vertices,0], X_r[hull.vertices,2], 'r--', lw=1)
-    plt.title(label.loc[index])
-    ax.set_xlabel('First Principal Component')
-    ax.set_ylabel('Third Principal Component')
-    ax.set_title(label.loc[index])
-    
-    ax = fig.add_subplot(224)
-    plt.scatter(X_r[:, 1], X_r[:, 2], color=[color_dict[i] for i in colour], alpha=.8, lw=1, s=70)
-    hull = ConvexHull(X_r[:,[1,2]])
-    volume_3 = hull.volume
-    plt.plot(X_r[hull.vertices,1], X_r[hull.vertices,2], 'r--', lw=1)
-    plt.title(label.loc[index])
-    ax.set_xlabel('Second Principal Component')
-    ax.set_ylabel('Third Principal Component')
-    ax.set_title(label.loc[index])
-    
-    plt.show()
-    
-    print("On the first principle component are approx. " + str(len(df_[0].unique())) + " distinct coordinates with atoms")
-    print("On the second principle component are approx. " + str(len(df_[1].unique())) + " distinct coordinates with atoms")
-    print("On the third principle component are approx. " + str(len(df_[2].unique())) + " distinct coordinates with atoms")
-    print("")
-    print("Area covered by the first and second principal component: " + str(volume_1))
-    print("Area covered by the first and third principal component: " + str(volume_2))
-    print("Area covered by the second and third principal component: " + str(volume_3))
+print("AP\t-\t-\t-\t{:1.3f}".format(p / 10))
 
 
-# In[ ]:
-
-
-ind = 200
-plot_pca(index=ind)
-
-
-# **Interesting**
-# 
-# The projection on the first and second principal component reveals a (approx. symmetric) circular structure. I recognized that this isn't the only atom-configuration in which that structure occurs.
-
-# In[ ]:
-
-
-ind = 500
-plot_pca(index=ind)
-
-
-# **Interesting**
-# 
-# On the second principal component axis it suffies to have four coordinates order to explain the atom distribution on that axis.
-
-# In[ ]:
-
-
-ind = 2350
-plot_pca(index=ind)
-
-
-# **Interesting**
-# 
-# The projection on the second and third principal component reveals this very concentrated structure distributed to a few clusters. A pattern which also occured in several train/test samples.
-
-# So these are just some insights and measurements based on PCA. Further measurements could be
-# 
-# 1. Variance in the projection plane
-# 2. Measurement of symmetry in the projection plane
-# 3. Amount of Clusters in the projection plane
-# 
-# Personally I discovered some interesting patterns and correlations to the target. I hope this also helps you to gain further insights.
-# 
-# Best, Max
+# This matches the table in Willam Cukierski's kernel.

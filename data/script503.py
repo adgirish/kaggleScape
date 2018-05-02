@@ -1,247 +1,269 @@
 
 # coding: utf-8
 
-# # Data Exploration Starter
-# ## Data Exploration Titanic: Machine Learning from Disaster
-# ## Sergei Neviadomski
-
-# First thing I want to mention is that this notebook is intended to provide first glance on data and variables. You won't find here any analysis of features interrelation or feature engineering. I intentionally provide only charts that show feature related information (distribution, bar plots and etc) and feature - label relationship.
-# 
-# I appreciate any constructive criticism and hope my notebook will help you understand data little bit more.
-# 
-# Please upvote if you think my notebook deserves it.
-# 
-# Thanks.
-# 
-# P.S. I think the best way to use my notebook is to quickly read through it and then come back as soon as you need additional information related to any feature.
+# # EDA of the NCAA Women's Basketball Data
 
 # In[ ]:
 
 
-### Necessary libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from matplotlib import pyplot
 import seaborn as sns
+pyplot.style.use('ggplot')
 
-### Seaborn style
-sns.set_style("whitegrid")
+
+# ## Load all the data as pandas Dataframes
+
+# In[ ]:
+
+
+cities = pd.read_csv('../input/WCities.csv')
+gamecities = pd.read_csv('../input/WGameCities.csv')
+tourneycompactresults = pd.read_csv('../input/WNCAATourneyCompactResults.csv')
+tourneyseeds = pd.read_csv('../input/WNCAATourneySeeds.csv')
+tourneyslots = pd.read_csv('../input/WNCAATourneySlots.csv')
+regseasoncompactresults = pd.read_csv('../input/WRegularSeasonCompactResults.csv')
+seasons = pd.read_csv('../input/WSeasons.csv')
+teamspellings = pd.read_csv('../input/WTeamSpellings.csv', engine='python')
+teams = pd.read_csv('../input/WTeams.csv')
 
 
 # In[ ]:
 
 
-### Let's import our data
-train_data = pd.read_csv('../input/train.csv',index_col='PassengerId')
-### and test if everything OK
-train_data.head()
+# Convert Tourney Seed to a Number
+tourneyseeds['SeedNumber'] = tourneyseeds['Seed'].apply(lambda x: int(x[-2:]))
 
+# Credit much of the merge code to Teza (Thanks!)
+# https://www.kaggle.com/tejasrinivas/preprocessing-code-to-join-all-the-tables-eda
+tourneycompactresults['WSeed'] =     tourneycompactresults[['Season','WTeamID']].merge(tourneyseeds,
+                                                      left_on = ['Season','WTeamID'],
+                                                      right_on = ['Season','TeamID'],
+                                                      how='left')[['SeedNumber']]
+tourneycompactresults['LSeed'] =     tourneycompactresults[['Season','LTeamID']].merge(tourneyseeds,
+                                                      left_on = ['Season','LTeamID'],
+                                                      right_on = ['Season','TeamID'],
+                                                      how='left')[['SeedNumber']]
 
-# In[ ]:
+tourneycompactresults =     tourneycompactresults.merge(gamecities,
+                                how='left',
+                                on=['Season','DayNum','WTeamID','LTeamID'])
 
+regseasoncompactresults['WSeed'] =     regseasoncompactresults[['Season','WTeamID']].merge(tourneyseeds,
+                                                        left_on = ['Season','WTeamID'],
+                                                        right_on = ['Season','TeamID'],
+                                                        how='left')[['SeedNumber']]
+regseasoncompactresults['LSeed'] =     regseasoncompactresults[['Season','LTeamID']].merge(tourneyseeds,
+                                                        left_on = ['Season','LTeamID'],
+                                                        right_on = ['Season','TeamID'],
+                                                        how='left')[['SeedNumber']]
 
-### ... check for NAs in sense Pandas understands them
-train_data.isnull().sum()
+regseasoncompactresults =     regseasoncompactresults.merge(gamecities,
+                                  how='left',
+                                  on=['Season',
+                                      'DayNum',
+                                      'WTeamID',
+                                      'LTeamID'])
 
+# Add Season Results
+regseasoncompactresults = regseasoncompactresults.merge(seasons,
+                                                        how='left',
+                                                        on='Season')
+tourneycompactresults = tourneycompactresults.merge(seasons,
+                                                    how='left',
+                                                    on='Season')
 
-# In[ ]:
+# Add Team Names
+regseasoncompactresults['WTeamName'] =     regseasoncompactresults[['WTeamID']].merge(teams,
+                                               how='left',
+                                               left_on='WTeamID',
+                                               right_on='TeamID')[['TeamName']]
+regseasoncompactresults['LTeamName'] =     regseasoncompactresults[['LTeamID']].merge(teams,
+                                               how='left',
+                                               left_on='LTeamID',
+                                               right_on='TeamID')[['TeamName']]
 
-
-### Now let's prepare lists of numeric and categorical columns
-# Numeric Features
-numeric_features = ['Age', 'Fare']
-# Categorical Features
-ordinal_features = ['Pclass', 'SibSp', 'Parch']
-nominal_features = ['Sex', 'Embarked']
-
-
-# In[ ]:
-
-
-### Adding new column with beautiful target names
-train_data['target_name'] = train_data['Survived'].map({0: 'Not Survived', 1: 'Survived'})
-
-
-# ### Target Exploration
-
-# In[ ]:
-
-
-### Target variable exploration
-sns.countplot(train_data.target_name);
-plt.xlabel('Survived?');
-plt.ylabel('Number of occurrences');
-plt.show()
-
-
-# ### Corralation between features (variables)
-
-# In[ ]:
-
-
-### Corralation matrix heatmap
-# Getting correlation matrix
-cor_matrix = train_data[numeric_features + ordinal_features].corr().round(2)
-# Plotting heatmap 
-fig = plt.figure(figsize=(12,12));
-sns.heatmap(cor_matrix, annot=True, center=0, cmap = sns.diverging_palette(250, 10, as_cmap=True), ax=plt.subplot(111));
-plt.show()
-
-
-# ### Numeric Features Exploration
-
-# In[ ]:
-
-
-### Plotting Numeric Features
-# Looping through and Plotting Numeric features
-for column in numeric_features:    
-    # Figure initiation
-    fig = plt.figure(figsize=(18,12))
+tourneycompactresults['WTeamName'] =     tourneycompactresults[['WTeamID']].merge(teams,
+                                             how='left',
+                                             left_on='WTeamID',
+                                             right_on='TeamID')[['TeamName']]
+tourneycompactresults['LTeamName'] =     tourneycompactresults[['LTeamID']].merge(teams,
+                                             how='left',
+                                             left_on='LTeamID',
+                                             right_on='TeamID')[['TeamName']]
     
-    ### Distribution plot
-    sns.distplot(train_data[column].dropna(), ax=plt.subplot(221));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Density', fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
-    
-    ### Distribution per Survived / Not Survived Value
-    # Not Survived hist
-    sns.distplot(train_data.loc[train_data.Survived==0, column].dropna(),
-                 color='red', label='Not Survived', ax=plt.subplot(222));
-    # Survived hist
-    sns.distplot(train_data.loc[train_data.Survived==1, column].dropna(),
-                 color='blue', label='Survived', ax=plt.subplot(222));
-    # Adding Legend
-    plt.legend(loc='best')
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Density per Survived / Not Survived Value', fontsize=14);
-    
-    ### Average Column value per Survived / Not Survived Value
-    sns.barplot(x="target_name", y=column, data=train_data, ax=plt.subplot(223));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Average ' + column, fontsize=14);
-    
-    ### Boxplot of Column per Survived / Not Survived Value
-    sns.boxplot(x="target_name", y=column, data=train_data, ax=plt.subplot(224));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel(column, fontsize=14);
-    # Printing Chart
-    plt.show()
+tourneycompactresults['ScoreDiff'] = tourneycompactresults['WScore'] - tourneycompactresults['LScore'] 
 
 
-# ### Categorical (Ordinal) Features Exploration
+# # Start by Looking at Historic Tournament Seeds
 
 # In[ ]:
 
 
-### Plotting Categorical Features
-# Looping through and Plotting Categorical features
-for column in ordinal_features:
-    # Figure initiation
-    fig = plt.figure(figsize=(18,18))
+# Calculate the Average Team Seed
+averageseed = tourneyseeds.groupby(['TeamID']).agg(np.mean).sort_values('SeedNumber')
+averageseed = averageseed.merge(teams, left_index=True, right_on='TeamID') #Add Teamnname
+averageseed.head(20).plot(x='TeamName',
+                          y='SeedNumber',
+                          kind='bar',
+                          figsize=(15,5),
+                          title='Top 20 Average Tournament Seed',
+                          rot=45)
 
-    ### Average Column value per Survived / Not Survived Value
-    sns.barplot(x="target_name", y=column, data=train_data, ax=plt.subplot(321));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Average ' + column, fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
-
-    ### Boxplot of Column per Survived / Not Survived Value
-    sns.boxplot(x="target_name", y=column, data=train_data, ax=plt.subplot(322));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel(column, fontsize=14);
-
-    ### Number of occurrences per categoty - target pair
-    ax = sns.countplot(x=column, hue="target_name", data=train_data, ax = plt.subplot(312));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Number of occurrences', fontsize=14);
-    # Setting Legend location 
-    plt.legend(loc=1);
-
-    ### Adding percents over bars
-    # Getting heights of our bars
-    height = [p.get_height() if p.get_height()==p.get_height() else 0 for p in ax.patches]
-    # Counting number of bar groups 
-    ncol = int(len(height)/2)
-    # Counting total height of groups
-    total = [height[i] + height[i + ncol] for i in range(ncol)] * 2
-    # Looping through bars
-    for i, p in enumerate(ax.patches):    
-        # Adding percentages   
-        ax.text(p.get_x()+p.get_width()/2, height[i]*1.01 + 10,
-                '{:1.0%}'.format(height[i]/total[i]), ha="center", size=14) 
-
-    ### Survived percentage for every value of feature
-    sns.pointplot(x=column, y='Survived', data=train_data, ax = plt.subplot(313));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Survived Percentage', fontsize=14);
-    # Printing Chart
-    plt.show()
-
-
-# ### Categorical (Nominal) Features Exploration
 
 # In[ ]:
 
 
-### Plotting Categorical Features
-# Looping through and Plotting Categorical features
-for column in nominal_features:
-    # Figure initiation
-    fig = plt.figure(figsize=(18,12))
-    
-    ### Number of occurrences per categoty - target pair
-    ax = sns.countplot(x=column, hue="target_name", data=train_data, ax = plt.subplot(211));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Number of occurrences', fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
-    # Setting Legend location 
-    plt.legend(loc=1);
-    
-    ### Adding percents over bars
-    # Getting heights of our bars
-    height = [p.get_height() for p in ax.patches]
-    # Counting number of bar groups 
-    ncol = int(len(height)/2)
-    # Counting total height of groups
-    total = [height[i] + height[i + ncol] for i in range(ncol)] * 2
-    # Looping through bars
-    for i, p in enumerate(ax.patches):    
-        # Adding percentages
-        ax.text(p.get_x()+p.get_width()/2, height[i]*1.01 + 10,
-                '{:1.0%}'.format(height[i]/total[i]), ha="center", size=14) 
-
-    
-    ### Survived percentage for every value of feature
-    sns.pointplot(x=column, y='Survived', data=train_data, ax = plt.subplot(212));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Survived Percentage', fontsize=14);
-    # Printing Chart
-    plt.show()
+# Pairplot of the Tourney Seed and Scores
+sns.pairplot(tourneycompactresults[['WScore',
+                                    'LScore',
+                                    'ScoreDiff',
+                                    'WSeed',
+                                    'LSeed',
+                                    'Season']], hue='Season')
 
 
-# ### Please upvote if my notebook helped you in any way :)
+# ## Regular Season Games of Tourney Teams
+
+# In[ ]:
+
+
+# Pairplot of Regular Season Games
+# Only include teams who are both seeded in the tournament
+regseason_in_tourney = regseasoncompactresults.dropna(subset=['WSeed','LSeed'])
+sns.pairplot(data = regseason_in_tourney,
+             vars=['WScore','LScore','WSeed','LSeed'],
+             hue='WSeed')
+
+
+# > ## Winning Vs. Losing Score Distributions
+
+# In[ ]:
+
+
+regseason2017 = regseasoncompactresults.loc[regseasoncompactresults['Season'] == 2017]
+
+
+# In[ ]:
+
+
+bins = np.linspace(0, 120, 61)
+pyplot.figure(figsize=(15,5))
+pyplot.title('Distribution of Winning and Losing Scores 2017')
+pyplot.hist(regseason2017['WScore'], bins, alpha=0.5, label='Winning Score')
+pyplot.hist(regseason2017['LScore'], bins, alpha=0.5, label='Losing Score')
+pyplot.legend(loc='upper right')
+pyplot.show()
+
+
+# In[ ]:
+
+
+bins = np.linspace(0, 120, 61)
+pyplot.figure(figsize=(15,5))
+pyplot.title('Distribution of Winning and Losing Scores All Years')
+pyplot.hist(regseasoncompactresults['WScore'], bins, alpha=0.5, label='Winning Score')
+pyplot.hist(regseasoncompactresults['LScore'], bins, alpha=0.5, label='Losing Score')
+pyplot.legend(loc='upper right')
+pyplot.show()
+
+
+# > # Teams with the Most Wins and Losses since 1998
+
+# In[ ]:
+
+
+# Teams with the Most Losses
+count_of_losses = regseasoncompactresults.groupby('LTeamID')['LTeamID'].agg('count')
+count_of_losses = count_of_losses.sort_values(ascending=False)
+team_loss_count = pd.DataFrame(count_of_losses).merge(teams, left_index=True, right_on='TeamID')[['TeamName','LTeamID']]
+team_loss_count.rename(columns={'LTeamID':'Loss Count'}).head(10)
+
+# These teams aren't super great at basketball
+
+
+# In[ ]:
+
+
+# Teams with the Most Wins
+count_of_wins = regseasoncompactresults.groupby('WTeamID')['WTeamID'].agg('count')
+count_of_wins = count_of_wins.sort_values(ascending=False)
+team_wins_count = pd.DataFrame(count_of_wins).merge(teams, left_index=True, right_on='TeamID')[['TeamName','WTeamID']]
+team_wins_count.rename(columns={'WTeamID':'Win Count'}).head(10)
+# These teams are super good at basketball
+
+
+# In[ ]:
+
+
+winloss_since1998 = pd.merge(team_wins_count, team_loss_count, how='outer')
+
+
+# In[ ]:
+
+
+winloss_since1998.sort_values('WTeamID', ascending=False).head(20)
+
+
+# ## The Winningest Teams of the 2017 Season
+
+# In[ ]:
+
+
+# Teams with the Most Wins
+count_of_wins2017 = regseason2017.groupby('WTeamID')['WTeamID'].agg('count')
+count_of_wins2017 = count_of_wins2017.sort_values(ascending=False)
+team_wins_count2017 = pd.DataFrame(count_of_wins2017).merge(teams, left_index=True, right_on='TeamID')[['TeamName','WTeamID']]
+team_wins_count2017 = team_wins_count2017.rename(columns={'WTeamID':'Win Count'})
+
+count_of_losses2017 = regseason2017.groupby('LTeamID')['LTeamID'].agg('count')
+count_of_losses2017 = count_of_losses2017.sort_values(ascending=False)
+team_losses_count2017 = pd.DataFrame(count_of_losses2017).merge(teams, left_index=True, right_on='TeamID')[['TeamName','LTeamID']]
+team_losses_count2017 = team_losses_count2017.rename(columns={'LTeamID':'Loss Count'})
+
+winloss2017 = pd.merge(team_wins_count2017, team_losses_count2017, how='outer')
+winloss2017.sort_values('Win Count', ascending=False).head(26)
+winloss2017 = winloss2017.fillna(0)
+winloss2017.head(15)
+
+
+# # Distribution of Game Point Differential 
+# Point Differential (Winning Points - Losing Team Points)
+
+# In[ ]:
+
+
+regseasoncompactresults['ScoreDiff'] = regseasoncompactresults['WScore'] - regseasoncompactresults['LScore'] 
+
+
+# In[ ]:
+
+
+regseasoncompactresults['ScoreDiff'].hist(bins=30)
+
+
+# # Check out the Historic Tourney Results
+
+# In[ ]:
+
+
+# Point Differential when Home Team wins (favorite)
+# The Home Team is the favortie
+tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'H']['ScoreDiff'].hist()
+
+
+# In[ ]:
+
+
+# Point Differential when Away Team wins (favorite)
+# More close games
+tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'A']['ScoreDiff'].hist()
+
+
+# In[ ]:
+
+
+# Point Differential for neutral site games
+tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'N']['ScoreDiff'].hist()
+

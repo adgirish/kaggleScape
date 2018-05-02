@@ -1,350 +1,80 @@
 
 # coding: utf-8
 
-# 
-# 
-# <h1 style="font-size:30px;color:black;text-align:center; text-decoration:underline">                   An analysis of the most popular repos on Github[completed]</h1>
-# <img src="https://kanbanize.com/blog/wp-content/uploads/2014/11/GitHub.jpg" alt="github" width=50% height=50%>
-# <hr>
-# _Areas of focus include: Type of repo,Metrics of popularity, Languages used_
-# 
-# _Data Source: https://www.kaggle.com/chasewillden/topstarredopensourceprojects _
-# 
-# #### Objective of this analysis:
-# <br>
-# <ol>
-# <li>Learning how to read and analyse a dataset</li>
-# <li>Understanding the dominant languages used for popular GitHub projects and mapping them</li>
-# <li>Extracting the different domains of work done in these projects via the repositories tags</li>
-# <li>Deriving conclusions over the popularity of respective domains and languages</li>
-# </ol>
-# <hr>
-# **All text in blue represents a derived conclusion**
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'import numpy as np\nimport pandas as pd\nfrom sklearn import *\nimport lightgbm as lgb\nimport random\n\ntrain = pd.read_json("../input/statoil-iceberg-classifier-challenge/train.json").fillna(-1.0).replace(\'na\', -1.0)\ntest = pd.read_json("../input/statoil-iceberg-classifier-challenge/test.json").fillna(-1.0).replace(\'na\', -1.0)\ntrain[\'angle_l\'] = train[\'inc_angle\'].apply(lambda x: len(str(x))) <= 7\ntest[\'angle_l\'] = test[\'inc_angle\'].apply(lambda x: len(str(x))) <= 7\ntrain[\'null_angle\'] = (train[\'inc_angle\']==-1).values\ntest[\'null_angle\'] = (test[\'inc_angle\']==-1).values\nx1 = train[train[\'inc_angle\']!= -1.0]\nx2 = train[train[\'inc_angle\']== -1.0]\ndel train;\nprint(x1.values.shape, x2.values.shape)')
+
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
+get_ipython().run_cell_magic('time', '', 'pca_b1 = decomposition.PCA(n_components=50, whiten=False, random_state=12)\npca_b2 = decomposition.PCA(n_components=50, whiten=False, random_state=13)\netc = ensemble.ExtraTreesRegressor(n_estimators=200, max_depth=7, n_jobs=-1, random_state=14)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in x1["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in x1["band_2"]]\nband1 = pd.DataFrame(pca_b1.fit_transform(band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nfeatures = pd.concat((band1, band2), axis=1, ignore_index=True)\netc.fit(features, x1.inc_angle)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in x2["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in x2["band_2"]]\nband1 = pd.DataFrame(pca_b1.transform(band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nfeatures = pd.concat((band1, band2), axis=1, ignore_index=True)\nx2[\'inc_angle\'] = etc.predict(features)\n\ntrain = pd.concat((x1, x2), axis=0, ignore_index=True).reset_index(drop=True)\ndel x1; del x2;\nprint(train.values.shape)\ntrain.head()')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'pca_b1 = decomposition.PCA(n_components=50, whiten=True, random_state=15)\npca_b2 = decomposition.PCA(n_components=50, whiten=True, random_state=16)\npca_b3 = decomposition.PCA(n_components=50, whiten=True, random_state=17)\npca_b4 = decomposition.PCA(n_components=50, whiten=True, random_state=18)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in train["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in train["band_2"]]\npd_band1 = pd.DataFrame(band1)\npd_band2 = pd.DataFrame(band2)\npd_band3 = pd.DataFrame(np.dot(np.diag(train[\'inc_angle\'].values), ((pd_band1 + pd_band2) / 2)))\npd_band4 = pd.DataFrame(np.dot(np.diag(train[\'inc_angle\'].values), ((pd_band1 - pd_band2) / 2)))\nband1 = pd.DataFrame(pca_b1.fit_transform(pd_band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(pd_band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nband3 = pd.DataFrame(pca_b3.fit_transform(pd_band3.values))\nband3.columns = [str(c)+\'_3\' for c in band3.columns]\nband4 = pd.DataFrame(pca_b4.fit_transform(pd_band4.values))\nband4.columns = [str(c)+\'_4\' for c in band4.columns]\nfeatures = pd.concat((band1, band2, band3, band4), axis=1, ignore_index=True).reset_index(drop=True)\nfeatures[\'inc_angle\'] = train[\'inc_angle\']\nfeatures[\'angle_l\'] = train[\'angle_l\']\nfeatures[\'null_angle\'] = train[\'null_angle\']\nfeatures[\'band1_min\'] = pd_band1.min(axis=1, numeric_only=True)\nfeatures[\'band2_min\'] = pd_band2.min(axis=1, numeric_only=True)\nfeatures[\'band3_min\'] = pd_band3.min(axis=1, numeric_only=True)\nfeatures[\'band4_min\'] = pd_band4.min(axis=1, numeric_only=True)\nfeatures[\'band1_max\'] = pd_band1.max(axis=1, numeric_only=True)\nfeatures[\'band2_max\'] = pd_band2.max(axis=1, numeric_only=True)\nfeatures[\'band3_max\'] = pd_band3.max(axis=1, numeric_only=True)\nfeatures[\'band4_max\'] = pd_band4.max(axis=1, numeric_only=True)\nfeatures[\'band1_med\'] = pd_band1.median(axis=1, numeric_only=True)\nfeatures[\'band2_med\'] = pd_band2.median(axis=1, numeric_only=True)\nfeatures[\'band3_med\'] = pd_band3.median(axis=1, numeric_only=True)\nfeatures[\'band4_med\'] = pd_band4.median(axis=1, numeric_only=True)\nfeatures[\'band1_mea\'] = pd_band1.mean(axis=1, numeric_only=True)\nfeatures[\'band2_mea\'] = pd_band2.mean(axis=1, numeric_only=True)\nfeatures[\'band3_mea\'] = pd_band3.mean(axis=1, numeric_only=True)\nfeatures[\'band4_mea\'] = pd_band4.mean(axis=1, numeric_only=True)\ndel pd_band1; del pd_band2; del pd_band3; del pd_band4\nfeatures1 = features.copy()\nfeatures.tail()')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'band1 = [np.array(band).astype(np.float32).flatten() for band in test["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in test["band_2"]]\npd_band1 = pd.DataFrame(band1)\npd_band2 = pd.DataFrame(band2)\npd_band3 = pd.DataFrame(np.dot(np.diag(test[\'inc_angle\'].values), ((pd_band1 + pd_band2) / 2)))\npd_band4 = pd.DataFrame(np.dot(np.diag(test[\'inc_angle\'].values), ((pd_band1 - pd_band2) / 2)))\nband1 = pd.DataFrame(pca_b1.transform(pd_band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.transform(pd_band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nband3 = pd.DataFrame(pca_b3.transform(pd_band3.values))\nband3.columns = [str(c)+\'_3\' for c in band3.columns]\nband4 = pd.DataFrame(pca_b4.fit_transform(pd_band4.values))\nband4.columns = [str(c)+\'_4\' for c in band4.columns]\nfeatures = pd.concat((band1, band2, band3, band4), axis=1, ignore_index=True).reset_index(drop=True)\nfeatures[\'inc_angle\'] = test[\'inc_angle\']\nfeatures[\'angle_l\'] = test[\'angle_l\']\nfeatures[\'null_angle\'] = test[\'null_angle\']\nfeatures[\'band1_min\'] = pd_band1.min(axis=1, numeric_only=True)\nfeatures[\'band2_min\'] = pd_band2.min(axis=1, numeric_only=True)\nfeatures[\'band3_min\'] = pd_band3.min(axis=1, numeric_only=True)\nfeatures[\'band4_min\'] = pd_band4.min(axis=1, numeric_only=True)\nfeatures[\'band1_max\'] = pd_band1.max(axis=1, numeric_only=True)\nfeatures[\'band2_max\'] = pd_band2.max(axis=1, numeric_only=True)\nfeatures[\'band3_max\'] = pd_band3.max(axis=1, numeric_only=True)\nfeatures[\'band4_max\'] = pd_band4.max(axis=1, numeric_only=True)\nfeatures[\'band1_med\'] = pd_band1.median(axis=1, numeric_only=True)\nfeatures[\'band2_med\'] = pd_band2.median(axis=1, numeric_only=True)\nfeatures[\'band3_med\'] = pd_band3.median(axis=1, numeric_only=True)\nfeatures[\'band4_med\'] = pd_band4.median(axis=1, numeric_only=True)\nfeatures[\'band1_mea\'] = pd_band1.mean(axis=1, numeric_only=True)\nfeatures[\'band2_mea\'] = pd_band2.mean(axis=1, numeric_only=True)\nfeatures[\'band3_mea\'] = pd_band3.mean(axis=1, numeric_only=True)\nfeatures[\'band4_mea\'] = pd_band4.mean(axis=1, numeric_only=True)\ndel pd_band1; del pd_band2; del pd_band3\nfeatures2 = features.copy()\nfeatures.tail()')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', "\nlgb_models = []\n#xgb_models = []\ntest['is_iceberg'] = 0.\nfold = 5\nfor i in range(fold):\n    np.random.seed(i)\n    random.seed(i)\n    x1, x2, y1, y2 = model_selection.train_test_split(features1.astype(float), train['is_iceberg'].values, test_size=0.2, random_state=i)\n\n    #print('XGB...', i)\n    #params = {'eta': 0.02, 'max_depth': 4, 'objective': 'multi:softprob', 'eval_metric': 'mlogloss', 'num_class': 2, 'seed': i, 'silent': True}\n    #watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]\n    #xgb_models.append(xgb.train(params, xgb.DMatrix(x1, y1), 2000,  watchlist, verbose_eval=500, early_stopping_rounds=200))\n\n    print('LightGBM...', i)\n    params = {'learning_rate': 0.02, 'max_depth': 7, 'boosting_type': 'gbdt', 'objective': 'multiclass', 'metric' : 'multi_logloss', 'is_training_metric': True, 'num_class': 2, 'seed': i}\n    lgb_models.append(lgb.train(params, lgb.Dataset(x1, label=y1), 2000, lgb.Dataset(x2, label=y2), verbose_eval=500, early_stopping_rounds=200))\n    \n    #test['is_iceberg'] += xgb_models[i].predict(xgb.DMatrix(features2), ntree_limit=xgb_models[i].best_ntree_limit)[:, 1]\n    test['is_iceberg'] += lgb_models[i].predict(features2, num_iteration=lgb_models[i].best_iteration)[:, 1]")
+
+
+# In[ ]:
+
+
+test['is_iceberg'] = test['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+test[['id','is_iceberg']].to_csv("submission.csv", index=False)
+
+
+# In[ ]:
+
+
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud
 import seaborn as sns
-from ggplot import *
-plt.style.use('default')
+
+df = pd.DataFrame({'imp': lgb_models[0].feature_importance(importance_type='gain'), 'col':features2.columns})
+df = df.sort_values(['imp','col'], ascending=[True, False])[:30]
+_ = df.plot(kind='barh', x='col', y='imp', figsize=(7,12))
 
 
 # In[ ]:
 
 
-git_df = pd.read_csv("../input/TopStaredRepositories.csv", parse_dates=['Last Update Date'], dayfirst=True)
-git_df.head()
+df1 = pd.read_csv('submission.csv')
+df2 = pd.read_csv('../input/explore-stacking-another-hi-lo-and-clip-probs/stack_minmax_bestbase.csv')
+df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
+blend = pd.merge(df1, df2, how='left', on='id')
+for c in df1.columns:
+    if c != 'id':
+        blend[c] = (blend[c] * 0.5)  + (blend[c+'_'] * 0.5)
+blend = blend[df1.columns]
+blend['is_iceberg'] = blend['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+blend.to_csv('blend1.csv', index=False)
 
 
 # In[ ]:
 
 
-git_df.info()
-
-
-# <h2 style="text-decoration:underline">1. Popular Repositories</h2>
-# <br>
-# **Determining what constitutes a popular repository by extracting the range of maximum and minimum starred repositories**
-
-# <em>Converting the alphanumeric format of "Number of Stars" to numeric
-
-# In[ ]:
-
-
-git_df_max = git_df['Number of Stars'].str.contains('k').all()
-git_df_max
-
-
-# In[ ]:
-
-
-git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
-
-
-# ### 1.1 The top 5 repositories in the dataset [based on "Number of Stars"]
-
-# In[ ]:
-
-
-git_df.head()
-
-
-# ### 1.2 The bottom 5 repositories in the dataset
-
-# In[ ]:
-
-
-git_df.tail()
-
-
-# ### 1.3 Statistical analysis of the repositories
-
-# In[ ]:
-
-
-git_df['Number of Stars'].describe()
-
-
-# <h4 style="color:blue">Most popular repo- 290,000 stars</h4>
-# <h4 style="color:blue"> Least popular repo- 6400 stars</h4>
-# <h4 style="color:blue">Average rating of repos- 13,000 stars</h4>
-
-# ### 1.3 List of all repositories with stars > 13,000
-
-# In[ ]:
-
-
-popular_repos= git_df[git_df['Number of Stars'] > 13.0]
-len(popular_repos)
-
-
-# In[ ]:
-
-
-popular_repos.head(8)
-
-
-# In[ ]:
-
-
-popular_repos.tail(8)
-
-
-# 
-# <h3 style="color:blue"> Here we see that freeCodeCamp tops the list with 290,000 stars to its repository.</h3>
-# <hr>
-# ### The above list lists all repos that have > 13,000 stars [above average repositories]
-# #### A few more observations can be derived from this list:
-# <ol>
-# <li style="color:blue">5 of the most popular repos are frameworks</li>
-# <li style="color:blue">The third, sixth and eighth most popular repos are educational, and instructive in nature.</li>
-# </ol>
-
-# In[ ]:
-
-
-# classifying repositories according to the popularity
-classified_repos=[]
-for i in range(8,300,7):
-    x = git_df[(git_df['Number of Stars'] >= i) & (git_df['Number of Stars'] <(i+7.0))]
-    classified_repos.append(len(x))
-
-
-# In[ ]:
-
-
-indexes = []
-
-for i in range (8000,300000, 7000):
-    x = '[' + str(i) +','+ (str(i+7000)) + ')'
-    indexes.append(x)
-
-
-# In[ ]:
-
-
-divided_repos = pd.Series(data=classified_repos, index=indexes)
-divided_repos.plot(kind='bar', figsize=(15,10), color=['red'],legend=True, label='Number of repositories')
-
-
-# <h2 style="text-decoration:underline">2. Popular Languages</h2>
-# <br>
-# **Determining the popularity of a language based on the number of repositories using it.**
-
-# In[ ]:
-
-
-x=git_df['Language'].value_counts()
-x.head()
-#p = ggplot(aes(x='index',y='count'), data =x) + geom_point(color='coral') + geom_line(color='red')
-#print(p)
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.figure()
-x.plot(kind='barh',figsize=(15,10),grid=True, label='Number of repositories',legend='No of repos',title='No of repositories vs language used')
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-x[:5].plot.pie(label="Division of the top 5 languages",fontsize=10,figsize=(10,10),legend=True)
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-x[:20].plot.pie(label="Division of the top 20 languages",fontsize=10,figsize=(10,10),legend=True)
-
-
-# <h2 style="text-decoration:underline">3. Popular Domains</h2>
-# <br>
-# **Determining the popular domains by analysing the repository tags**
-
-# <em>Removing all the null-tags fields from the dataframe
-
-# In[ ]:
-
-
-#git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
-nonull_df = git_df[['Tags','Number of Stars']].dropna()
-tags_list = nonull_df['Tags'].str.split(',')
-
-
-# In[ ]:
-
-
-tags_list.head()
-
-
-# In[ ]:
-
-
-initial = nonull_df['Tags'].str.split(',')
-a = []
-for item in initial:
-       a = a+item
-wc_text = ' '.join(a)
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-wordcloud = WordCloud(background_color='black',width=800, height=400).generate(wc_text)
-plt.figure(figsize=(25,10), facecolor='k')
-plt.imshow(wordcloud, interpolation='bilinear')
-plt.tight_layout(pad=0)
-plt.axis("off")
-
-
-# In[ ]:
-
-
-web_dev_count = 0
-tags = ['javascript', 'css', 'html', 'nodejs', 'bootstrap','react', 'react-native', 'rest-api', 'rest', 'web-development','typescript','coffeescript']
-for item in tags_list:
-    if set(tags).intersection(item):
-        web_dev_count+=1
-web_dev_count
-
-
-# In[ ]:
-
-
-machine_data_count=0
-mach=[]
-tags=['machine-learning', 'jupyter','jupter-notebook', 'tensorflow','data-science','data-analytics']
-for item in tags_list:
-    if set(tags).intersection(item):
-        machine_data_count+=1
-        mach.append(item)
-machine_data_count
-
-
-# In[ ]:
-
-
-mobile_dev_count=0
-tags=['android','sdk','ios','swift','mobile','react','macos','windows']
-for item in tags_list:
-    if set(tags).intersection(item):
-        mobile_dev_count+=1
-mobile_dev_count
-
-
-# In[ ]:
-
-
-linux_dev_count=0
-linux=[]
-tags=['linux','unix','bash','shell','cli','bsd']
-for item in tags_list:
-    if set(tags).intersection(item):
-        linux_dev_count+=1
-        linux.append(item)
-linux_dev_count
-
-
-# In[ ]:
-
-
-hardware_dev_count=0
-hardware=[]
-tags=['hardware','iot','smart','system','system-architecture','cloud']
-for item in tags_list:
-    if set(tags).intersection(item):
-        hardware.append(item)
-        hardware_dev_count+=1
-hardware_dev_count
-
-
-# In[ ]:
-
-
-domain_series=pd.Series(index=['Web Development','Data Science and Machine Learning','Mobile Development','Linux and Shell Programming','System hardware and IOT'],
-                        data=[web_dev_count,machine_data_count,mobile_dev_count,linux_dev_count,hardware_dev_count])
-
-
-# In[ ]:
-
-
-domain_series
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-fig_domain=domain_series.plot(lw=2,kind='barh',figsize=(20,10),color=['green'],grid=True,title='Domain-wise repository analysis',
-                              )
-fig_domain.set(xlabel="Number of repositories", ylabel="Domain Name")
-
-
-# <h2 style="text-decoration:underline">3. Determing the correlation between Number of Tags and Number of Stars</h2>
-
-# In[ ]:
-
-
-nonull_df['CountTag']=0
-for i in range(0,489,1):
-    nonull_df['CountTag'].iloc[i] = len(list(nonull_df['Tags'].iloc[i].split(',')))
-
-
-# In[ ]:
-
-
-nonull_df['CountTag'].corr(nonull_df['Number of Stars'])
-
-
-# <hr>
-# <h2 style="text-decoration:underline">4. Conclusion</h2>
-# <br>
-# **Inferences from the analysis**
-# <hr>
-# <ol>
-# <li>The most popular repository on GitHub is freeCodeCamp, with 290,000 stars</li>
-# <li>In the top 8 repositories in the dataset, 3 are instructional and educational</li>
-# <li>JavaScript is the most popularly used language, and constitutes <b>38.5 %</b> of the total languages in these repositories</li> 
-# <li>Frameworks are the most popular type of projects across GitHub</li>
-# <li>In domains, Web Development is the most popular domain of work, followed by Mobile (android, iOS, macOS, Windows) development</li>
-# <li>There is no determinable correlation between the number of tags and the number of stars. The correlation coefficient is a weak 0.04646</li>
-
-# ### [Extra] Popular python based projects 
-
-# In[ ]:
-
-
-python_tags = git_df[git_df['Language'] == 'Python'][['Username', 'Repository Name', 'Description', 'Tags']]
-
-
-# In[ ]:
-
-
-python_tags
+df1 = pd.read_csv('blend1.csv')
+df2 = pd.read_csv('../input/explore-stacking-another-hi-lo-and-clip-probs/stack_minmax_bestbase.csv')
+df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
+blend = pd.merge(df1, df2, how='left', on='id')
+for c in df1.columns:
+    if c != 'id':
+        blend[c] = (blend[c]  + blend[c+'_'])/2 + np.sqrt(blend[c] * blend[c+'_'])
+blend = blend[df1.columns]
+blend['is_iceberg'] = blend['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+blend.to_csv('blend2.csv', index=False)
 

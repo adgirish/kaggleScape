@@ -1,358 +1,768 @@
 
 # coding: utf-8
 
-# ## Objective 
-# Learn various types of clustering algorithms as available in sklearn, We will use "World Happiness Report data" as dataset for clustering algorithms.
-# 
-# **List of Clustering methods **
-# 
-# **1. K-Means
-# 2. Mean Shift
-# 3. Mini Batch K-Means
-# 4. Spectral Clustering 
-# 5. DBSCAN
-# 6. Affinity Propagation
-# 7. Birch
-# 8. Gaussian Mixture Modeling**
-# 
-# ### Import Libraries
-# 
+# Explore the dataset and try some classification algorithm.
+# ----------------------------------------------------------
 
-# In[17]:
+# In[ ]:
 
 
-import numpy as np                   # Data manipulation
-import pandas as pd                  # DataFrame manipulation
-import time                          # To time processes 
-import warnings                      # To suppress warnings
-import matplotlib.pyplot as plt      # For Graphics
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+import warnings
+warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
+
 import seaborn as sns
-from sklearn import cluster, mixture # For clustering 
+import matplotlib.pyplot as plt
+plt.style.use("ggplot")
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+bird = pd.read_csv(
+    "../input/bird.csv", 
+    dtype={"id": "str"}
+).dropna(axis=0, how="any")
+
+bird.shape
+
+
+# Summary of the data.
+
+# In[ ]:
+
+
+bird.describe()
+
+
+# Check the number of specimens in each ecological group.
+
+# In[ ]:
+
+
+size_of_each_group = bird.groupby("type").size().sort_values(ascending=False)
+
+ax = size_of_each_group.plot(
+    kind="bar", 
+    color="#00304e",
+    figsize=((6, 4)),
+    rot=0
+)
+
+ax.set_title("Number of Specimens in Each Ecological Group", fontsize=10)
+ax.set_xlabel("")
+
+for x, y in zip(np.arange(0, len(size_of_each_group)), size_of_each_group):
+    ax.annotate("{:d}".format(y), xy=(x-(0.14 if len(str(y)) == 3 else 0.1), y-6), fontsize=10, color="#eeeeee")
+
+
+# In[ ]:
+
+
 from sklearn.preprocessing import StandardScaler
 
-import plotly.graph_objs as go
-from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-init_notebook_mode(connected=True)
-get_ipython().run_line_magic('matplotlib', 'inline')
-warnings.filterwarnings('ignore')
+scaler = StandardScaler(with_mean=False) # Do not centralize the features, keep them positive.
+
+bird_raw = bird.copy() # Make a copy of original data.
+
+feature_columns = ['huml', 'humw', 'ulnal', 'ulnaw', 'feml', 'femw', 'tibl', 'tibw', 'tarl', 'tarw'] # numeric feature columns.
+
+bird[feature_columns] = scaler.fit_transform(bird_raw[feature_columns]) # standardlize the numeric features.
 
 
-# ### Read Data From File 
-
-# In[18]:
-
-
-#os.chdir("E:/Big_Data/Code/Python/exercise/Clustering_Algorithms")
-WHR_data = pd.read_csv("../input/2017.csv", header = 0)
-
-#To play with "World Happiness Report" Data set, we will create a copy 
-WHR_data_copy = WHR_data.copy(deep = True)
-
-# preview Data
-print(WHR_data.info())
-WHR_data.shape
-WHR_data.head()
-WHR_data.sample(15)
-
-
-
-# In[19]:
-
-
-WHR_data.columns
-plt.figure(figsize=(12,8))
-sns.heatmap(WHR_data.corr())
-
+# Draw Andrews Curves and RadViz.
 
 # In[ ]:
 
 
+_, ax = plt.subplots(nrows=1, ncols=2, figsize=(9, 4))
+pd.tools.plotting.andrews_curves(bird[feature_columns+['type']], 'type', ax=ax[0])
+ax[0].grid()
 
-sns.pairplot(WHR_data[['Country', 'Happiness.Rank', 'Happiness.Score', 'Whisker.high','Whisker.low', 'Economy..GDP.per.Capita.', 'Family']]);
-
-
-# In[ ]:
-
-
-from plotly import __version__
-from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-# For offline use
-import cufflinks as cf
-
-cf.go_offline()
-WHR_data[['Happiness.Score','Whisker.high','Family','Freedom','Dystopia.Residual']].iplot(kind='spread')
+_ = pd.tools.plotting.radviz(bird[feature_columns+['type']], 'type', ax=ax[1])
 
 
-# ### Explore & Scale
-
-# In[20]:
-
-
-
-
-#Ignore Country and Happiness_Rank Columns
-
-WHR_data = WHR_data.iloc[:,2:]
-
-print("\n \n Dimenstion of dataset  : WHR_data.shape")
-WHR_data.shape
-
-WHR_data.dtypes
-
-
-# ### Normalize Dataset
-# Normalize dataset for easier parameter selection, 
-# 
-# Creating Object of StandardScaler with default parameters
-#  :- class sklearn.preprocessing.StandardScaler(copy=True, with_mean=True, with_std=True)
-# 
-# fit_transform(X[, y])	Fit to data, then transform it. 
-# fit_transform to X and y with optional parameters fit_params and returns a transformed version of X.
-# 
-
-# In[21]:
-
-
-# Instantiate Scaler Object 
-ss = StandardScaler()
-# Fit and transform 
-ss.fit_transform(WHR_data)
-WHR_data.sample(20)
-
-
-# ## Begin Clustering 
-# 
-# We are performing clustering of unlabeled data thorugh sklearn.cluster module .
-# 
-# List of Clustering methods 
-# 
-# 1. K-Means
-# 2. Mean Shift
-# 3. Mini Batch K-Means
-# 4. Spectral Clustering 
-# 5. DBSCAN
-# 6. Affinity Propagation
-# 7. Birch
-# 8. Gaussian Mixture Modeling 
-# 
-# 
-# Each Clustering algorithm comes in two variants, A class that implements the fit method to learn the clusters on train data, and a function , that given the train data, returns an arrays of integer labels corresponding to the different clusters. For the class, the labels over the training data can be found in the labels_attribute
-
-# ##### K-Means
-# The k-means algorithm divides a set of N samples X into K disjoint clusters C, each described by the mean \mu_j of the samples in the cluster. The means are commonly called the cluster “centroids”; note that they are not, in general, points from X, although they live in the same space. The K-means algorithm aims to choose centroids that minimise the inertia, or within-cluster sum of squared criterion:
-# 
-# ![alt_text](http://scikit-learn.org/stable/_images/math/1886f2c69775746ac7b6c1cdd88c53c676839015.png)
-
-# ##### Mean Shift
-# MeanShift clustering aims to discover blobs in a smooth density of samples. It is a centroid based algorithm, which works by updating candidates for centroids to be the mean of the points within a given region. These candidates are then filtered in a post-processing stage to eliminate near-duplicates to form the final set of centroids.
-# 
-# Given a candidate centroid x_i for iteration t, the candidate is updated according to the following equation:
-# 
-# ![alt_text](http://scikit-learn.org/stable/_images/math/df67cad6c90923bd6d5dd1ba1cc98b73ba772bd8.png)
-# 
-# Where N(x_i) is the neighborhood of samples within a given distance around x_i and m is the mean shift vector that is computed for each centroid that points towards a region of the maximum increase in the density of points. This is computed using the following equation, effectively updating a centroid to be the mean of the samples within its neighborhood:
-# 
-# ![alt_text](http://scikit-learn.org/stable/_images/math/64f9e995cea2b11641d37f2ec1cfcf1d590d2797.png)
-# 
-
-# ##### Mini Batch K-Means
-# 
-# The MiniBatchKMeans is a variant of the KMeans algorithm which uses mini-batches to reduce the computation time, while still attempting to optimise the same objective function. Mini-batches are subsets of the input data, randomly sampled in each training iteration. These mini-batches drastically reduce the amount of computation required to converge to a local solution. In contrast to other algorithms that reduce the convergence time of k-means, mini-batch k-means produces results that are generally only slightly worse than the standard algorithm.
-# 
-# MiniBatchKMeans converges faster than KMeans, but the quality of the results is reduced. In practice this difference in quality can be quite small
-
-# 
-# ##### Spectral Clustering
-# 
-# SpectralClustering does a low-dimension embedding of the affinity matrix between samples, followed by a KMeans in the low dimensional space. It is especially efficient if the affinity matrix is sparse and the pyamg module is installed. SpectralClustering requires the number of clusters to be specified. It works well for a small number of clusters but is not advised when using many clusters.
-
-# ##### DBSCAN
-# The DBSCAN algorithm views clusters as areas of high density separated by areas of low density. Due to this rather generic view, clusters found by DBSCAN can be any shape, as opposed to k-means which assumes that clusters are convex shaped
-
-# ##### Affinity Propagation
-# AffinityPropagation creates clusters by sending messages between pairs of samples until convergence. A dataset is then described using a small number of exemplars, which are identified as those most representative of other samples. The messages sent between pairs represent the suitability for one sample to be the exemplar of the other, which is updated in response to the values from other pairs. This updating happens iteratively until convergence, at which point the final exemplars are chosen, and hence the final clustering is given.
-
-# ##### Birch
-# The Birch builds a tree called the Characteristic Feature Tree (CFT) for the given data. The data is essentially lossy compressed to a set of Characteristic Feature nodes (CF Nodes). The CF Nodes have a number of subclusters called Characteristic Feature subclusters (CF Subclusters) and these CF Subclusters located in the non-terminal CF Nodes can have CF Nodes as children.
-
-# ##### Gaussian Mixture Modeling
-# 
-# A Gaussian mixture model is a probabilistic model that assumes all the data points are generated from a mixture of a finite number of Gaussian distributions with unknown parameters. One can think of mixture models as generalizing k-means clustering to incorporate information about the covariance structure of the data as well as the centers of the latent Gaussians.
-# 
-
-# 
-# ### Define Cluster Class
-# 
+# The correlation matrix of 10 features.
 
 # In[ ]:
 
 
+corr = bird_raw[feature_columns].corr()
 
-# Define CluserMethod class : which returns the clustering result based on input 
+_, ax = plt.subplots(figsize=(5, 5))
 
-class ClusterMethodList(object) :
-    def get_cluster_instance(self, argument,input_data,X):
-        method_name = str(argument).lower()+ '_cluster'
-        method = getattr(self,method_name,lambda : "Invalid Clustering method")
-        return method(input_data,X)
+sns.heatmap(
+    corr, 
+    cmap=sns.light_palette("#00304e", as_cmap=True), 
+    square=True, 
+    cbar=False, 
+    ax=ax, 
+    annot=True, 
+    annot_kws={"fontsize": 8}
+)
+
+_ = ax.set_title("Correlation Matrix", fontsize=10)
+
+
+# We can see that these features are highly correlated. That's natural: big birds have longer and thicker bones than small birds no matter what kinds of birds they are.
+# 
+# Draw scatter plots of 10 features.
+
+# In[ ]:
+
+
+_ = sns.pairplot(
+    data=bird_raw, 
+    kind="scatter", 
+    vars=feature_columns, 
+    hue="type", 
+    diag_kind="hist", 
+    palette=sns.color_palette("Set1", n_colors=6, desat=.5),
+)
+
+
+# Most feature-pairs present strong linear relationship. 
+
+# The box-plots of each kind of bones.
+
+# In[ ]:
+
+
+_, axes = plt.subplots(nrows=5, ncols=2, figsize=(8, 20))
+
+for f, ax in zip(feature_columns, axes.ravel()):
+    _ = sns.boxplot(
+        data=bird_raw, 
+        y=f, 
+        x='type', 
+        ax=ax, 
+        palette=sns.color_palette("Set1", n_colors=6, desat=.5)
+    )
     
-    def kmeans_cluster(self,input_data,X):
-        km = cluster.KMeans(n_clusters =input_data['n_clusters'] )
-        return km.fit_predict(X)
-   
-    def meanshift_cluster(self,input_data,X):
-        ms = cluster.MeanShift(bandwidth=input_data['bandwidth'])
-        return  ms.fit_predict(X)
+    ax.set_xlabel("")
+
+
+# Compute the ratios of limbs and hinds of all birds, and plot them.
+
+# In[ ]:
+
+
+limb_hind_ratio = pd.DataFrame(
+    {"ratio": (bird_raw.huml + bird_raw.ulnal) / (bird_raw.feml + bird_raw.tibl + bird_raw.tarl), 
+     "type": bird_raw.type})
+
+_, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 5))
+sns.boxplot(
+    data=limb_hind_ratio, 
+    y="ratio", 
+    x="type", 
+    palette=sns.color_palette("Set1", n_colors=6, desat=.5)
+)
+
+ax.set_xlabel("Ecological Group", fontsize=8)
+ax.set_ylabel("Ratio of Limb and Hind", fontsize=8)
+_ = ax.set_title("Boxplot of Ratio of Limb and Hind for Each Ecological Group", fontsize=10)
+
+
+# ## Principle Components Analysis ##
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA
+
+pca = PCA()
+pca.fit(bird[feature_columns])
+
+explained_variance = pd.DataFrame({"evr": pca.explained_variance_ratio_, "evrc": pca.explained_variance_ratio_.cumsum()}, 
+                                  index=pd.Index(["pc{:d}".format(i) for i in np.arange(1, len(feature_columns) + 1)], name="principle components"))
+
+
+# In[ ]:
+
+
+_, ax = plt.subplots(figsize=(8, 4))
+explained_variance.evrc.plot(kind="line", color="#ee7621", ax=ax, linestyle="-", marker="h")
+explained_variance.evr.plot(kind="bar", ax=ax, color="#00304e", alpha=0.8, rot=0)
+ax.set_title("Explained Variance Ratio of Principle Components", fontsize=10)
+ax.set_ylim([0.0, 1.1])
+
+for x, y in zip(np.arange(0, len(explained_variance.evrc)), explained_variance.evrc):
+    ax.annotate("{:.1f}%".format(y * 100.0), xy=(x-0.2, y+0.03), fontsize=7)
+
+for x, y in zip(np.arange(1, len(explained_variance.evr)), explained_variance.evr[1:]):
+    ax.annotate("{:.1f}%".format(y * 100.0), xy=(x-0.15, y+0.02), fontsize=7)
+
+
+# We see that first principle component take almost all variance. This means our dataset is nearly 1-dimension. Not surprising, birds are all "bird-shaped", size of all their bones change almost synchronously.
+
+# KDE plots of 1st principle component for each ecological group.
+
+# In[ ]:
+
+
+pcs = pca.transform(bird[feature_columns])
+
+pc1 = pd.DataFrame({"pc1": pcs[:,0], "ecological_group": bird.type})
+
+_, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+for g in pc1.ecological_group.unique():
+    tmp = pc1[pc1.ecological_group == g]["pc1"].to_frame()
+    tmp.columns=[g]
+    tmp.plot(kind="kde", ax=ax)
     
-    def minibatchkmeans_cluster(self,input_data,X):
-        two_means = cluster.MiniBatchKMeans(n_clusters=input_data['n_clusters'])
-        return two_means.fit_predict(X)
-   
-    def dbscan_cluster(self,input_data,X):
-        db = cluster.DBSCAN(eps=input_data['eps'])
-        return db.fit_predict(X)
+_ = ax.set_title("KDE plots of 1st principle component for each ecological group", fontsize=10)
+
+
+# Let's define the robustness of a bone is the ratio of its diameter and length.
+
+# In[ ]:
+
+
+robust = pd.DataFrame({
+        "humr": bird_raw.humw / bird_raw.huml, 
+        "ulnar": bird_raw.ulnaw / bird_raw.ulnal,
+        "femr": bird_raw.femw / bird_raw.feml,
+        "tibr": bird_raw.tibw / bird_raw.tibl,
+        "tarr": bird_raw.tarw / bird_raw.tarl,
+        "type": bird_raw.type}
+)
+
+_, axes = plt.subplots(nrows=3, ncols=2, figsize=(8, 12))
+
+for f, ax in zip(["humr", "ulnar", "femr", "tibr", "tarr"], axes.ravel()):
+    sns.boxplot(
+        data=robust, 
+        y=f, 
+        x='type', 
+        ax=ax, 
+        palette=sns.color_palette("Set1", n_colors=6, desat=.5)
+    )
     
-    def spectral_cluster(self,input_data,X):
-        sp = cluster.SpectralClustering(n_clusters=input_data['n_clusters'])
-        return sp.fit_predict(X)
-   
-    def affinitypropagation_cluster(self,input_data,X):
-        affinity_propagation =  cluster.AffinityPropagation(damping=input_data['damping'], preference=input_data['preference'])
-        affinity_propagation.fit(X)
-        return affinity_propagation.predict(X)
-       
+    ax.set_xlabel("")
     
-    def birch_cluster(self,input_data,X):
-        birch = cluster.Birch(n_clusters=input_data['n_clusters'])
-        return birch.fit_predict(X)
-   
-    def gaussian_mixture_cluster(self,input_data,X):
-        gmm = mixture.GaussianMixture( n_components=input_data['n_clusters'], covariance_type='full')
-        gmm.fit(X)
-        return  gmm.predict(X)
+    if f == "tibr":
+        ax.set_ylim((0.0, 0.1))
 
+_ = axes[2, 1].annotate("No Data", xy=(.42, .5), fontsize=8)
+
+
+# Add these new features to original dataset.
+
+# In[ ]:
+
+
+bird_extended = pd.concat([bird_raw, robust[["humr", "ulnar", "femr", "tibr", "tarr"]], limb_hind_ratio["ratio"]], axis=1)
+
+feature_columns_extended = ["huml", "humw", "ulnal", "ulnaw", "feml", "femw", "tibl", "tibw", "tarl", "tarw", "humr", "ulnar", "femr", "tibr", "tarr", "ratio"]
+
+bird_extended[feature_columns_extended] = scaler.fit_transform(bird_extended[feature_columns_extended])
+
+
+# Now compute features' chi2 significances.
+
+# In[ ]:
+
+
+from sklearn.feature_selection import chi2
+
+chi2_result = chi2(bird_extended[feature_columns_extended], bird_extended.type)
+chi2_result = pd.DataFrame({"feature": feature_columns_extended, "chi2_statics": chi2_result[0], "p_values": chi2_result[1]})
+chi2_result.sort_values(by="p_values", ascending=False, inplace=True)
+chi2_result.set_index(keys="feature", inplace=True)
+
+ax = chi2_result["p_values"].plot(kind="barh", logx=True, color="#00304e")
+
+ax.annotate("{:3.2f}".format(chi2_result.chi2_statics[chi2_result.shape[0] - 1]), xy=(chi2_result.p_values[chi2_result.shape[0] - 1], len(feature_columns_extended) - 1), xytext=(0, -3), textcoords="offset pixels", fontsize=8, color="#00304e")
+for y, x, c in zip(np.arange(0, len(feature_columns_extended) - 1), chi2_result.p_values[:-1], chi2_result.chi2_statics[:-1]):
+    ax.annotate("{:3.2f}".format(c), xy=(x, y), xytext=(-35, -3), textcoords="offset pixels", fontsize=8, color="#eeeeee")
+
+ax.set_xlabel("p-value (chi2 value)")
+_ = ax.set_title("chi2 values and p-values of features", fontsize=10)
+
+
+# More large the chi2 value (*more small the p-value*), more significant the feature (*to be different in different groups*)
+
+# Try classification
+# ------------------
+
+# In[ ]:
+
+
+def draw_confusion_matrix(cm):
+    """
+    define a function to draw confusion matrix.
+    """
+    _, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 4))
+    sns.heatmap(
+        cm, 
+        square=True, 
+        xticklabels=["P", "R", "SO", "SW", "T", "W"], 
+        annot=True, 
+        annot_kws={"fontsize": 8}, 
+        yticklabels=["P", "R", "SO", "SW", "T", "W"], 
+        cbar=False, 
+        cmap=sns.light_palette("#00304e", as_cmap=True),
+        ax=ax
+    )
+
+    ax.set_xlabel("predicted ecological group", fontsize=8)
+    ax.set_ylabel("real ecological group", fontsize=8)
+    ax.set_title("Confusion Matrix", fontsize=10)
+    
 
 
 # In[ ]:
 
 
-# Define Clustering Prcoess
+from sklearn.model_selection import train_test_split
 
-def startClusteringProcess(list_cluster_method,input_data,no_columns,data_set):
-    fig,ax = plt.subplots(no_rows,no_columns, figsize=(10,10)) 
-    cluster_list = ClusterMethodList()
-    i = 0
-    j=0
-    for cl in list_cluster_method :
-        cluster_result = cluster_list.get_cluster_instance(cl,input_data,data_set)
-        #convert cluster result array to DataFrame
-        data_set[cl] = pd.DataFrame(cluster_result)
-        ax[i,j].scatter(data_set.iloc[:, 4], data_set.iloc[:, 5],  c=cluster_result)
-        ax[i,j].set_title(cl+" Cluster Result")
-        j=j+1
-        if( j % no_columns == 0) :
-            j= 0
-            i=i+1
-    plt.subplots_adjust(bottom=-0.5, top=1.5)
-    plt.show()
-
-
-
-# #### Initialize Input Parameters for Clustering 
-
-# In[ ]:
-
-
-list_cluster_method = ['KMeans',"MeanShift","MiniBatchKmeans","DBScan","Spectral","AffinityPropagation","Birch","Gaussian_Mixture"]
-# For Graph display 
-no_columns = 2
-no_rows = 4
-# NOT all algorithms require this parameter
-n_clusters= 3
-bandwidth = 0.1 
-# eps for DBSCAN
-eps = 0.3
-## Damping and perference for Affinity Propagation clustering method
-damping = 0.9
-preference = -200
-input_data = {'n_clusters' :  n_clusters, 'eps' : eps,'bandwidth' : bandwidth, 'damping' : damping, 'preference' : preference}
-
-
-# #### Plot Graph
-
-# In[ ]:
-
-
-# Start Clustering Process
-startClusteringProcess(list_cluster_method,input_data,no_columns,WHR_data)
+train_f, test_f, train_l, test_l = train_test_split(bird_extended[feature_columns_extended], bird_extended.type, train_size=0.6)
 
 
 # In[ ]:
 
 
-WHR_data.insert(0,'Country',WHR_data_copy.iloc[:,0])
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV
+
+
+lr = LogisticRegression()
+params = {
+    "penalty": ["l1", "l2"],
+    "C": [0.1, 1.0, 5.0, 10.0],
+    "class_weight": [None, "balanced"]
+}
+
+gs = GridSearchCV(estimator=lr, param_grid=params, scoring="accuracy", cv=5, refit=True)
+_ = gs.fit(train_f, train_l)
+
+
+# Best params found by grid search.
+
+# In[ ]:
+
+
+print('\nBest parameters:')
+for param_name, param_value in gs.best_params_.items():
+    print('{}:\t{}'.format(param_name, str(param_value)))
+
+print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
+
+
+# Classification metrics.
+
+# In[ ]:
+
+
+from sklearn.metrics import confusion_matrix, classification_report
+predict_l = gs.predict(test_f)
+
+print(classification_report(test_l, predict_l))
 
 
 # In[ ]:
 
 
-WHR_data.iloc[:,[0,11,12,13,14,15,16,17,18]]
+draw_confusion_matrix(confusion_matrix(test_l, predict_l))
 
-
-# ### Gaussian Mixture Clustering Visualization
 
 # In[ ]:
 
 
+from sklearn.metrics import accuracy_score
+
+print("Accuracy: {:.3f}".format(accuracy_score(y_true=test_l, y_pred=predict_l)))
 
 
-data = dict(type = 'choropleth', 
-           locations = WHR_data['Country'],
-           locationmode = 'country names',
-           z = WHR_data['Gaussian_Mixture'], 
-           text = WHR_data['Country'],
-           colorbar = {'title':'Cluster Group'})
-layout = dict(title = 'Gaussian Mixture Clustering Visualization', 
-             geo = dict(showframe = False, 
-                       projection = {'type': 'Mercator'}))
-choromap3 = go.Figure(data = [data], layout=layout)
-iplot(choromap3)
-
-
-
-# ### K-Means Clustering Visualization
+# Features' weights (*absolute values*).
 
 # In[ ]:
 
 
-data = dict(type = 'choropleth', 
-           locations = WHR_data['Country'],
-           locationmode = 'country names',
-           z = WHR_data['KMeans'], 
-           text = WHR_data['Country'],
-           colorbar = {'title':'Cluster Group'})
-layout = dict(title = 'K-Means Clustering Visualization', 
-             geo = dict(showframe = False, 
-                       projection = {'type': 'Mercator'}))
-choromap3 = go.Figure(data = [data], layout=layout)
-iplot(choromap3)
+_, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+sns.heatmap(
+    abs(gs.best_estimator_.coef_), 
+    ax=ax, 
+    square=True, 
+    xticklabels=feature_columns_extended, 
+    annot=True, 
+    annot_kws={"fontsize": 8}, 
+    yticklabels=gs.best_estimator_.classes_, 
+    cbar=False,
+    cmap=sns.light_palette("#00304e", as_cmap=True)
+)
+
+ax.set_xlabel("Features", fontsize=8)
+ax.set_ylabel("Ecological Group", fontsize=8) 
+_ = ax.set_title("Absolute Feature Weights", fontsize=10)
 
 
-# ### Global Happiness Score Map
+# Try random forest algorithm.
 
 # In[ ]:
 
 
+from sklearn.ensemble import RandomForestClassifier
 
-data = dict(type = 'choropleth', 
-           locations = WHR_data['Country'],
-           locationmode = 'country names',
-           z = WHR_data['Happiness.Score'], 
-           text = WHR_data['Country'],
-           colorbar = {'title':'Happiness'})
-layout = dict(title = 'Global Happiness Score', 
-             geo = dict(showframe = False, 
-                       projection = {'type': 'Mercator'}))
-choromap3 = go.Figure(data = [data], layout=layout)
-iplot(choromap3)
+rfc = RandomForestClassifier()
 
+params = {
+    "n_estimators": [10, 50, 100, 200],
+    "criterion": ["gini", "entropy"],
+    "max_depth": [10, 15, 20],
+    "class_weight": [None, "balanced"]
+}
+
+rfc_gs = GridSearchCV(estimator=rfc, param_grid=params, scoring="accuracy", cv=5, refit=True)
+_ = rfc_gs.fit(train_f, train_l)
+
+
+# In[ ]:
+
+
+print('\nBest parameters:')
+for param_name, param_value in rfc_gs.best_params_.items():
+    print('{}:\t{}'.format(param_name, str(param_value)))
+
+print('\nBest score (accuracy): {:.3f}'.format(rfc_gs.best_score_))
+
+
+# Metrics.
+
+# In[ ]:
+
+
+predict_l = rfc_gs.predict(test_f)
+
+print(classification_report(test_l, predict_l))
+
+
+# In[ ]:
+
+
+draw_confusion_matrix(confusion_matrix(test_l, predict_l))
+
+
+# Accuracy.
+
+# In[ ]:
+
+
+print("Accuracy: {:.3f}".format(accuracy_score(y_true=test_l, y_pred=predict_l)))
+
+
+# Features' importances
+
+# In[ ]:
+
+
+feature_importances = pd.DataFrame(
+    {
+        "importance": rfc_gs.best_estimator_.feature_importances_
+    }, 
+    index=pd.Index(feature_columns_extended, name="feature")
+).sort_values(by="importance")
+
+ax = feature_importances.plot(kind="barh", legend=False, color="#00304e")
+
+for y, x in zip(np.arange(0, feature_importances.shape[0]), feature_importances.importance):
+    _ = ax.annotate("{:.3f}".format(x), xy=(x-0.008, y-0.1), fontsize=8, color="#eeeeee")
+
+
+_ = ax.set_xlabel("importance")
+
+
+# The two classifiers perform poorly on wading birds. The recall is low. From charts (scatter/box-plot)  we see that wading birds is difficult to tell from other kids of birds. 
+# 
+# We try to use a support vector machine to tell wading birds from others.
+
+# In[ ]:
+
+
+from sklearn.svm import SVC
+from sklearn.metrics import roc_curve, accuracy_score, precision_score, recall_score, auc, precision_recall_curve
+
+# use extended feature set.
+bird_extended["is_w"] = (bird_extended.type == "W").astype("int32")
+
+# parameter grid
+params = {
+    'C': [1, 10, 100],
+    'kernel': ['poly', 'rbf'],
+    'degree': [2, 4, 6],
+    'gamma': ['auto', 1, 5, 10]
+}
+
+# SVM for separate ghoul from others.
+svc = SVC(probability=True)
+
+# split the train and test set.
+train_features, test_features, train_labels, test_labels = train_test_split(bird_extended[feature_columns_extended], bird_extended.is_w,
+                                                                            train_size=0.6)
+# grid search.
+gs = GridSearchCV(estimator=svc, param_grid=params, cv=3, refit=True, scoring='accuracy')
+gs.fit(train_features, train_labels)
+svc = gs.best_estimator_
+
+print('\nBest parameters:')
+for param_name, param_value in gs.best_params_.items():
+    print('{}:\t{}'.format(param_name, str(param_value)))
+
+print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
+
+
+# In[ ]:
+
+
+# merics.
+predict_labels = gs.predict(test_features)
+predict_proba = gs.predict_proba(test_features)
+fpr, rc, th = roc_curve(test_labels, predict_proba[:, 1])
+precision, recall, threshold = precision_recall_curve(test_labels, predict_proba[:, 1])
+roc_auc = auc(fpr, rc)
+
+print("\nMetrics: Accuracy: {:.3f}, Precision: {:.3f}, Recall: {:.3f}, AUC: {:.3f}".format(accuracy_score(test_labels, predict_labels), precision_score(test_labels, predict_labels), recall_score(test_labels, predict_labels), roc_auc))
+print("\nClassification Report:")
+print(classification_report(test_labels, predict_labels, target_names=["no wading birds", "wading birds"]))
+
+# ROC curve.
+fig = plt.figure(figsize=(12, 3))
+ax = fig.add_subplot(131)
+ax.set_xlabel("False Positive Rate")
+ax.set_ylabel("Recall")
+ax.set_title("ROC Curve")
+ax.plot(fpr, rc, color="#00304e", linewidth=1.0)
+ax.fill_between(fpr, [0.0] * len(rc), rc, facecolor="#00304e", alpha=0.3)
+ax.plot([0.0, 1.0], [0.0, 1.0], "--", color="#ee7621", alpha=0.6, linewidth=1.0)
+ax.text(0.75, 0.05, "auc: {:.2f}".format(roc_auc))
+
+# Precision & recall change with response to threshold.
+ax = fig.add_subplot(132)
+ax.set_xlabel("Threshold")
+ax.set_ylabel("Precision & Recall")
+ax.set_title("Precsion & Recall")
+ax.set_xlim([threshold.min(), threshold.max()])
+ax.set_ylim([0.0, 1.0])
+ax.plot(threshold, precision[:-1], "#00304e", label="Precision", linewidth=1.0)
+ax.plot(threshold, recall[:-1], "#ee7621", label="Recall", linewidth=1.0)
+ax.legend(loc="best")
+
+# Accuracy changes with response to threshold.
+ts = np.arange(0, 1.02, 0.02)
+accuracy = []
+for t in ts:
+    predict_label = (predict_proba[:, 1] >= t).astype(np.int)
+    accuracy_score(test_labels, predict_label)
+    accuracy.append(accuracy_score(test_labels, predict_label))
+
+ax = fig.add_subplot(133)
+ax.set_xlabel("Threshold")
+ax.set_ylabel("Accuracy")
+ax.set_ylim([0.0, 1.0])
+ax.set_title('Accuracy')
+ax.plot([0.0, 1.0], [0.5, 0.5], '--', color="#ee7621", alpha=0.6, linewidth=1.0)
+
+positive_fraction = test_labels.sum() / len(test_labels)
+ax.plot([0.0, 1.0], [positive_fraction, positive_fraction], '--', color="#006400", alpha=0.6, linewidth=1.0)
+ax.plot([0.0, 1.0], [1.0 - positive_fraction, 1.0 - positive_fraction], '--', color="#006400", alpha=0.6, linewidth=1.0)
+ax.fill_between(ts, [1.0 - positive_fraction] * len(ts), accuracy, facecolor="#00304e", alpha=0.3)
+ax.plot(ts, accuracy, color='#00304e', linewidth=1.0)
+
+_ = ax.annotate(
+    "max accuracy: {:.2f}".format(max(accuracy)), 
+    xy=[ts[accuracy.index(max(accuracy))], max(accuracy)],
+    xytext=[0.4, 0.6],
+    # textcoords="offset points",
+    arrowprops={"width": 1.5, "headwidth": 6.0}
+)
+
+
+# Because the number of positive instances and negative instances are unequal (*64:349*), high accuracy is not as good a news as we may think. 
+# 
+# Now we train a SVM first to tell wading birds from others and then train a LR to distinguish other 5 groups of birds.
+
+# In[ ]:
+
+
+svc = SVC(
+    C=100,
+    kernel="rbf"
+)
+
+lr = LogisticRegression(
+    penalty="l1",
+    C=5.0
+)
+
+train_features, test_features, train_labels, test_labels = train_test_split(bird_extended, bird_extended.type,
+                                                                            train_size=0.6)
+
+svc.fit(train_features[feature_columns_extended], train_features.is_w)
+_ = lr.fit(train_features.loc[train_features.is_w == 0, feature_columns_extended], train_features[train_features.is_w == 0].type)
+
+
+# In[ ]:
+
+
+predict_is_wading = svc.predict(test_features[feature_columns_extended])
+predict_type = lr.predict(test_features[feature_columns_extended])
+predict_type[predict_is_wading == 1] = "W"
+
+
+# In[ ]:
+
+
+print(classification_report(test_labels, predict_type))
+
+
+# In[ ]:
+
+
+draw_confusion_matrix(confusion_matrix(test_labels, predict_type))
+
+
+# Multi classification by an one-vs-one way using SVM.
+
+# In[ ]:
+
+
+params = {
+    'C': [1, 10, 100],
+    'kernel': ['poly', 'rbf'],
+    'degree': [2, 4, 6],
+    'gamma': ['auto', 1, 5, 10]
+}
+
+# SVM for separate ghoul from others.
+svc = SVC()
+
+# split the train and test set.
+train_features, test_features, train_labels, test_labels = train_test_split(
+    bird_extended[feature_columns_extended], bird_extended.type,
+    train_size=0.6
+)
+
+# grid search.
+gs = GridSearchCV(estimator=svc, param_grid=params, cv=3, refit=True, scoring='accuracy')
+gs.fit(train_features, train_labels)
+svc = gs.best_estimator_
+
+print('\nBest parameters:')
+for param_name, param_value in gs.best_params_.items():
+    print('{}:\t{}'.format(param_name, str(param_value)))
+
+print('\nBest score (accuracy): {:.3f}'.format(gs.best_score_))
+
+
+# In[ ]:
+
+
+predict_labels = svc.predict(test_features)
+
+print(classification_report(test_labels, predict_labels))
+
+
+# In[ ]:
+
+
+draw_confusion_matrix(confusion_matrix(test_labels, predict_labels))
+
+
+# Try a simple multi-layer full-connected back-propagation neural network.
+# ------------------------------------------------------------------------
+
+# In[ ]:
+
+
+from keras.models import Sequential 
+
+
+# In[ ]:
+
+
+from keras.layers import Dense, Activation
+from keras.optimizers import SGD
+from keras.utils.np_utils import to_categorical
+
+
+# In[ ]:
+
+
+model = Sequential()
+
+# input layer, , 100 neurons, input dimension is 16 (number of features).
+model.add(Dense(100, input_dim=16, init='uniform'))
+model.add(Activation('sigmoid'))
+
+# hidden layers, 100 neurons.
+model.add(Dense(100, init='uniform'))
+model.add(Activation('sigmoid'))
+
+# output layer, 6 neurons (6 ecological classes).
+model.add(Dense(6, init='uniform'))
+model.add(Activation('softmax'))
+
+# optimazor: stochastic gradient descent.
+# sgd = SGD(lr=0.1, decay=1e-6, momentum=0.9, nesterov=True)
+model.compile(loss='mse', optimizer="rmsprop", metrics=['accuracy'])
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+
+train_features, test_features, train_labels, test_labels = train_test_split(
+    bird_extended[feature_columns_extended], bird_extended.type,
+    train_size=0.6
+)
+
+le = LabelEncoder()
+train_labels_encode = le.fit_transform(train_labels)
+test_labels_encode = le.transform(test_labels)
+
+
+# In[ ]:
+
+
+train_labels_categorial = to_categorical(train_labels_encode)
+
+# batch size 32, 100 epoches.
+_ = model.fit(train_features.values, train_labels_categorial, batch_size=32, nb_epoch=1000, verbose=0)
+
+
+# In[ ]:
+
+
+predict_labels = le.inverse_transform(model.predict_classes(test_features.values, verbose=0))
+
+
+# In[ ]:
+
+
+print(classification_report(test_labels, predict_labels))
+
+
+# In[ ]:
+
+
+draw_confusion_matrix(confusion_matrix(test_labels, predict_labels))
+
+
+# To Be Continued ...
+# -------------------

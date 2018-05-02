@@ -1,13 +1,15 @@
 """
 This is an upgraded version of Ceshine's LGBM starter script, simply adding more
-average features and weekly average features on it.
+average features and weekly average features on it. It also replaces LGBM with XGB. 
+There is still room for improvement, but the current version is the best that can 
+run in a kernel.
 """
 from datetime import date, timedelta
 
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_squared_error
-import lightgbm as lgb
+from catboost import CatBoostRegressor
 
 df_train = pd.read_csv(
     '../input/train.csv', usecols=[1, 2, 3, 4, 5],
@@ -96,47 +98,27 @@ X_val, y_val = prepare_dataset(date(2017, 7, 26))
 X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
 
 print("Training and predicting models...")
-params = {
-    'num_leaves': 31,
-    'objective': 'regression',
-    'min_data_in_leaf': 200,
-    'learning_rate': 0.02,
-    'feature_fraction': 0.8,
-    'bagging_fraction': 0.7,
-    'bagging_freq': 1,
-    'metric': 'l2',
-    'num_threads': 4
-}
 
-MAX_ROUNDS = 3000
+
+MAX_ROUNDS = 280
 val_pred = []
 test_pred = []
 cate_vars = []
+
 for i in range(16):
     print("=" * 50)
     print("Step %d" % (i+1))
     print("=" * 50)
-    dtrain = lgb.Dataset(
-        X_train, label=y_train[:, i],
-        categorical_feature=cate_vars,
-        weight=pd.concat([items["perishable"]] * 6) * 0.25 + 1
-    )
-    dval = lgb.Dataset(
-        X_val, label=y_val[:, i], reference=dtrain,
-        weight=items["perishable"] * 0.25 + 1,
-        categorical_feature=cate_vars)
-    bst = lgb.train(
-        params, dtrain, num_boost_round=MAX_ROUNDS,
-        valid_sets=[dtrain, dval], early_stopping_rounds=125, verbose_eval=500
-    )
-    print("\n".join(("%s: %.2f" % x) for x in sorted(
-        zip(X_train.columns, bst.feature_importance("gain")),
-        key=lambda x: x[1], reverse=True
-    )))
-    val_pred.append(bst.predict(
-        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
-    test_pred.append(bst.predict(
-        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
+    model = CatBoostRegressor(
+        iterations=MAX_ROUNDS, learning_rate=0.5,
+        depth=4)
+        
+    model.fit(
+        X_train, y_train[:, i],
+        cat_features=cate_vars)
+    
+    val_pred.append(model.predict(X_val))
+    test_pred.append(model.predict(X_test))
 
 print("Validation mse:", mean_squared_error(
     y_val, np.array(val_pred).transpose()))
@@ -151,4 +133,4 @@ df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
 submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
 submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
-submission.to_csv('lgb.csv', float_format='%.4f', index=None)
+submission.to_csv('cat1.csv', float_format='%.4f', index=None)

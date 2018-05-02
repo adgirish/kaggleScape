@@ -1,128 +1,91 @@
-#!/usr/bin/env python2
-# -*- coding: utf-8 -*-
 """
-modified from Vladimir Iglovikov tilii7 and extremin
+Beating the Benchmark
+West Nile Virus Prediction @ Kaggle
+__author__ : Abhihsek
 """
-
-
 
 import pandas as pd
 import numpy as np
-import xgboost as xgb
-from sklearn.cross_validation import KFold
-from sklearn.metrics import mean_absolute_error
+from sklearn import ensemble, preprocessing
 
-train = pd.read_csv('input/train.csv')
-test = pd.read_csv('input/test.csv')
+# Load dataset 
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+sample = pd.read_csv('../input/sampleSubmission.csv')
+weather = pd.read_csv('../input/weather.csv')
 
-test['loss'] = np.nan
-joined = pd.concat([train, test])
+# Get labels
+labels = train.WnvPresent.values
 
-def logregobj(preds, dtrain):
-    labels = dtrain.get_label()
-    con = 2
-    x =preds-labels
-    grad =con*x / (np.abs(x)+con)
-    hess =con**2 / (np.abs(x)+con)**2
-    return grad, hess 
+# Not using codesum for this benchmark
+weather = weather.drop('CodeSum', axis=1)
 
-def evalerror(preds, dtrain):
-    labels = dtrain.get_label()
-    return 'mae', mean_absolute_error(np.exp(preds), np.exp(labels))
+# Split station 1 and 2 and join horizontally
+weather_stn1 = weather[weather['Station']==1]
+weather_stn2 = weather[weather['Station']==2]
+weather_stn1 = weather_stn1.drop('Station', axis=1)
+weather_stn2 = weather_stn2.drop('Station', axis=1)
+weather = weather_stn1.merge(weather_stn2, on='Date')
 
+# replace some missing values and T with -1
+weather = weather.replace('M', -1)
+weather = weather.replace('-', -1)
+weather = weather.replace('T', -1)
+weather = weather.replace(' T', -1)
+weather = weather.replace('  T', -1)
 
-cat_feature = [n for n in joined.columns if n.startswith('cat')]    
-cont_feature = [n for n in joined.columns if n.startswith('cont')] 
-             
-               
-if __name__ == '__main__':
-    
-    
-    for column in cat_feature:
-        joined[column] = pd.factorize(joined[column].values, sort=True)[0]
+# Functions to extract month and day from dataset
+# You can also use parse_dates of Pandas.
+def create_month(x):
+    return x.split('-')[1]
 
-    
-    train = joined[joined['loss'].notnull()]
-    test = joined[joined['loss'].isnull()]
+def create_day(x):
+    return x.split('-')[2]
 
-    shift = 200
-    y = np.log(train['loss'] + shift)
-    ids = test['id']
-    X = train.drop(['loss', 'id'], 1)
-    X_test = test.drop(['loss', 'id'], 1)
-    
-    #X = X.sample(frac=0.1)
-    #y = y .iloc[X.index.values]
-    
-    n_folds  = 5
-    kf = KFold(X.shape[0], n_folds=n_folds)
-    prediction = np.zeros(ids.shape)
-    
-    final_fold_prediction= []
-    final_fold_real = []
+train['month'] = train.Date.apply(create_month)
+train['day'] = train.Date.apply(create_day)
+test['month'] = test.Date.apply(create_month)
+test['day'] = test.Date.apply(create_day)
 
-    partial_evalutaion = open('temp_scores.txt','w')
-    for i, (train_index, test_index) in enumerate(kf):
-        print('\n Fold %d' % (i + 1))
-        X_train, X_val = X.iloc[train_index], X.iloc[test_index]
-        y_train, y_val = y.iloc[train_index], y.iloc[test_index]    
-        
-        RANDOM_STATE = 2016
-        params = {
-            'min_child_weight': 1,
-            'eta': 0.001,
-            'colsample_bytree': 0.5,
-            'max_depth': 12,
-            'subsample': 0.8,
-            'alpha': 1,
-            'gamma': 1,
-            'silent': 1,
-            'verbose_eval': True,
-            'seed': RANDOM_STATE
-        }
-    
-        xgtrain = xgb.DMatrix(X_train, label=y_train)
-        xgtrain_2 = xgb.DMatrix(X_val, label=y_val)
-        
-        xgtest = xgb.DMatrix(X_test)   
-        
-        
-        watchlist = [(xgtrain, 'train'), (xgtrain_2, 'eval')]
-                     
-        
-                     
-        model = xgb.train(params, xgtrain, 100000, watchlist, obj=logregobj, feval=evalerror, early_stopping_rounds=300)        
-        prediction += np.exp(model.predict(xgtest)) - shift
+# Add integer latitude/longitude columns
+train['Lat_int'] = train.Latitude.apply(int)
+train['Long_int'] = train.Longitude.apply(int)
+test['Lat_int'] = test.Latitude.apply(int)
+test['Long_int'] = test.Longitude.apply(int)
 
-        X_val = xgb.DMatrix(X_val) 
-        temp_serises = pd.Series(np.exp(model.predict(X_val))-shift)
-        final_fold_prediction.append( temp_serises )
-        temp_serises = np.exp(y_val) -shift
-        final_fold_real.append(temp_serises )
-        
-        temp_cv_score = mean_absolute_error(np.exp(model.predict(X_val))-shift, np.exp(y_val) -shift)
-        
-        partial_evalutaion.write('fold '+str(i)+' '+str(temp_cv_score)+'\n')
-        partial_evalutaion.flush()
-                
+# drop address columns
+train = train.drop(['Address', 'AddressNumberAndStreet','WnvPresent', 'NumMosquitos'], axis = 1)
+test = test.drop(['Id', 'Address', 'AddressNumberAndStreet'], axis = 1)
 
-    
-    prediction = prediction/n_folds
-    submission = pd.DataFrame()
-    submission['id'] = ids    
-    submission['loss'] = prediction
+# Merge with weather data
+train = train.merge(weather, on='Date')
+test = test.merge(weather, on='Date')
+train = train.drop(['Date'], axis = 1)
+test = test.drop(['Date'], axis = 1)
 
-    submission.to_csv('sub_v_5_long2.csv', index=False)
-    
-    final_fold_prediction = pd.concat(final_fold_prediction,ignore_index=True)
-    final_fold_real = pd.concat(final_fold_real,ignore_index=True)
-    
-    cv_score = mean_absolute_error(final_fold_prediction, final_fold_real)
-    print cv_score
-    
-      
-        
-        
-        
-        
-        
+# Convert categorical data to numbers
+lbl = preprocessing.LabelEncoder()
+lbl.fit(list(train['Species'].values) + list(test['Species'].values))
+train['Species'] = lbl.transform(train['Species'].values)
+test['Species'] = lbl.transform(test['Species'].values)
+
+lbl.fit(list(train['Street'].values) + list(test['Street'].values))
+train['Street'] = lbl.transform(train['Street'].values)
+test['Street'] = lbl.transform(test['Street'].values)
+
+lbl.fit(list(train['Trap'].values) + list(test['Trap'].values))
+train['Trap'] = lbl.transform(train['Trap'].values)
+test['Trap'] = lbl.transform(test['Trap'].values)
+
+# drop columns with -1s
+train = train.ix[:,(train != -1).any(axis=0)]
+test = test.ix[:,(test != -1).any(axis=0)]
+
+# Random Forest Classifier 
+clf = ensemble.RandomForestClassifier(n_jobs=-1, n_estimators=1000, min_samples_split=1)
+clf.fit(train, labels)
+
+# create predictions and submission file
+predictions = clf.predict_proba(test)[:,1]
+sample['WnvPresent'] = predictions
+sample.to_csv('beat_the_benchmark.csv', index=False)

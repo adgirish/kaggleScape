@@ -1,492 +1,250 @@
 
 # coding: utf-8
 
+# ## Preface
+# I found the [topic](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43384) started by [Yang Yu](https://www.kaggle.com/popyy0101) doubting about the significance of small improvement in Gini score. **Yang Yu** wrote that:
+# 
+# > Several years ago, one of my tutors told me that "any improvement within 0.001 level is just noise", which means it was just randomly switching 1 label out of 1000 samples in evaluation set (roughly).
+# 
+# The question is very interesting at least for **Yang Yu** and me so I decided to investigate that. Since I'm not a statistician but a software engineer I decided to use my programming skills to make Gini scoring on simulated data and answer the next very specific questions:
+# - How much samples it is needed to be correct to improve Gini from *0.286* to *0.287*?
+# - What is the probability to get from *0.286* to *0.287* by just random guessing?
+# 
+# Also I got a bit excited what I can do and played with public/private scoring. It's cool when you can simulate 0.290! :D
+# 
+# I would like to repeat that I'm not a statistician and I do not pretend on ultimate truth. The experiment I provide may be wrong and contain some things I am missing. Any criticism, suggestions, hints are very welcomed. The more I'm writing the more I'm doubting whether it's not a trash :)
+
+# ## Assumptions
+# We assume the next things:
+# - Imbalance of positive and negative classes in the test set is the same as in the training set.
+# - Our model outputs uniformly distributed probabilities.
+# - Public and private leaderboard scores are independent from each other. 
+
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-# Imports
-
-# pandas
 import pandas as pd
-from pandas import Series,DataFrame
+train = pd.read_csv("../input/train.csv")
+counts = train.target.value_counts()
+print("Class distribution:")
+counts / counts.sum()
 
-# numpy, matplotlib, seaborn
+
+# Appoximately 96.4% of the data are negative class labels. Let's create perfect submission(oh, here we can!) and target vector that correspond to the test data size. 
+
+# In[ ]:
+
+
 import numpy as np
+test = pd.read_csv("../input/train.csv")
+length = len(test)
+np.random.seed(287)
+perfect_sub = np.random.rand(length)
+target = (perfect_sub > 0.963552).astype(dtype=int)
+print("Perfect submission looks like: ", perfect_sub)
+print("Target vector looks like: ", target)
+print("Target vector class distibution: ")
+counts = pd.Series(target).value_counts()
+counts / counts.sum()
+
+
+# Almost the same imbalance we have in the training set.
+# Now let's define Normalized Gini Score. [Sklearn](http://scikit-learn.org/stable/index.html) package has [roc_auc_score](http://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html) and we are going to compute Normalized Gini with *AUC* using the next formula:
+# \begin{align}
+# Gini & = 2 * AUC - 1
+# \end{align}
+# Let's see how our perfect submission is evaluated by Gini. Hold your breath!
+# 
+
+# In[ ]:
+
+
+from sklearn.metrics import roc_auc_score
+def gini(y_target, y_score):
+    return 2 * roc_auc_score(y_target, y_score) - 1
+print(f"Gini on perfect submission: {gini(target, perfect_sub):0.5f}")
+
+
+# Amazing! This is the highest score we can get from Gini and probably will never see on the leaderboard. Let's  also define completely random submission and test it.
+
+# In[ ]:
+
+
+np.random.seed(8888)
+random_sub = np.random.rand(length)
+print(f"Gini on random submission: {gini(target, random_sub):0.5f}")
+
+
+# Almost zero. That's what we expect from Gini when we have no idea about the data and use guessing.
+# 
+# We know that the public leaderboard is calculated on approximately 30% of the test data. So we should create private and public sets. Our generated answers are randomly distributed and we can just subset first 30% for public dataset and the rest 70% for private dataset. We also create function that evaluates public and private score.
+
+# In[ ]:
+
+
+first30percent = int(length * 0.3)
+target_pub = target[:first30percent]
+target_prv = target[first30percent:]
+
+def evaluate(submission):
+    return gini(target_pub, submission[:first30percent]),        gini(target_prv, submission[first30percent:])
+
+
+# Let's define **spoiler** function. It fills our perfect submission with *n* randomly distributed random answers i.e. imputes the error in the result. Also we will spoil our perfect submission an look how Gini changes. The calculations take some time, let's respect Kaggle for calculating our sometimes trashy submissions.
+
+# In[ ]:
+
+
+def spoiler(n, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+    tospoil = np.random.choice(range(length), size=n, replace=False)
+    submission = perfect_sub.copy()
+    submission[tospoil] = np.random.rand()
+    return submission
+
+submissions = []
+for spoil_n in range(0, length, 5000):
+    score_pub, score_priv = evaluate(spoiler(spoil_n, spoil_n))
+    submissions.append((spoil_n, score_pub, score_priv))
+submissions = pd.DataFrame(submissions, columns = ["n", "public_score", "private_score"])
+submissions.head()
+
+
+# The chart showing dependence between number of spoiled samples and Gini is the following:
+
+# In[ ]:
+
+
 import matplotlib.pyplot as plt
+plt.figure(figsize=(11,6))
+plt.plot(submissions["n"], submissions["public_score"], label="Public")
+plt.plot(submissions["n"], submissions["private_score"], label = "Private")
+plt.xlabel("Samples spoiled")
+plt.ylabel("Gini Score")
+_ = plt.legend()
+
+
+# Let's plot the distribution of difference between public score and private score.
+
+# In[ ]:
+
+
 import seaborn as sns
-sns.set_style('whitegrid')
-get_ipython().run_line_magic('matplotlib', 'inline')
+pub_prv_diff = submissions["public_score"] - submissions["private_score"]
+_ = sns.distplot(pub_prv_diff, hist=True)
+_ = plt.xlabel("Public-Private Difference")
+_ = plt.ylabel("Density")
+pub_prv_diff.describe()
 
-# machine learning
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-import xgboost as xgb
 
+# Public score seems to be usually higher than a private score(slightly left-skewed distribution).
+# Let's see inverse cumulative plot of absolute difference.
 
 # In[ ]:
 
 
-# get rossmann, store, & test csv files as a DataFrame
-rossmann_df  = pd.read_csv("../input/train.csv")
-store_df     = pd.read_csv("../input/store.csv")
-test_df      = pd.read_csv("../input/test.csv")
-
-# preview the data
-rossmann_df.head()
+_ = sns.distplot(abs(pub_prv_diff), bins=20,
+             hist_kws=dict(cumulative=-1),
+             kde_kws=dict(cumulative=True), kde=False, norm_hist=True)
+_ = plt.xlabel("Public-Private Absolute Difference")
+_ = plt.ylabel("Frequency")
 
 
-# In[ ]:
-
-
-rossmann_df.info()
-print("----------------------------")
-store_df.info()
-print("----------------------------")
-test_df.info()
-
+# It says the absolute difference more than *0.005* appears in every third case. It is a lot!
+# But this has nothing to do with guessing. It just tells us we should expect difference in public-private outcome.
+# I manually found the submission where the public Gini score is close to *0.286*. It required predicting more that *170000* samples like in the perfect submission.
 
 # In[ ]:
 
 
-# Open
-fig, (axis1) = plt.subplots(1,1,figsize=(15,4))
-sns.countplot(x='Open',hue='DayOfWeek', data=rossmann_df,palette="husl", ax=axis1)
-
-# fill NaN values in test_df with Open=1 if DayOfWeek != 7
-test_df["Open"][test_df["Open"] != test_df["Open"]] = (test_df["DayOfWeek"] != 7).astype(int)
-
-# Drop Open column
-# rossmann_df.drop("Open", axis=1, inplace=True)
-# test_df.drop("Open", axis=1, inplace=True)
+np.random.seed(123)
+correct = 172560
+index = np.random.choice(range(length), size=(length-correct), replace=False)
+submission286 = perfect_sub.copy()
+spoiled_samples = np.random.rand(length-correct)
+submission286[index] = spoiled_samples
+public, private = evaluate(submission286)
+print(f"Public score: {public:0.4f}\nPrivate score: {private:0.4f}")
 
 
-# In[ ]:
-
-
-# Date
-
-# Create Year and Month columns
-rossmann_df['Year']  = rossmann_df['Date'].apply(lambda x: int(str(x)[:4]))
-rossmann_df['Month'] = rossmann_df['Date'].apply(lambda x: int(str(x)[5:7]))
-
-test_df['Year']  = test_df['Date'].apply(lambda x: int(str(x)[:4]))
-test_df['Month'] = test_df['Date'].apply(lambda x: int(str(x)[5:7]))
-
-# Assign Date column to Date(Year-Month) instead of (Year-Month-Day)
-# this column will be useful in analysis and visualization
-rossmann_df['Date'] = rossmann_df['Date'].apply(lambda x: (str(x)[:7]))
-test_df['Date']     = test_df['Date'].apply(lambda x: (str(x)[:7]))
-
-# group by date and get average sales, and precent change
-average_sales    = rossmann_df.groupby('Date')["Sales"].mean()
-pct_change_sales = rossmann_df.groupby('Date')["Sales"].sum().pct_change()
-
-fig, (axis1,axis2) = plt.subplots(2,1,sharex=True,figsize=(15,8))
-
-# plot average sales over time(year-month)
-ax1 = average_sales.plot(legend=True,ax=axis1,marker='o',title="Average Sales")
-ax1.set_xticks(range(len(average_sales)))
-ax1.set_xticklabels(average_sales.index.tolist(), rotation=90)
-
-# plot precent change for sales over time(year-month)
-ax2 = pct_change_sales.plot(legend=True,ax=axis2,marker='o',rot=90,colormap="summer",title="Sales Percent Change")
-# ax2.set_xticks(range(len(pct_change_sales)))
-# ax2.set_xticklabels(pct_change_sales.index.tolist(), rotation=90)
-
+# We should steadily add correct samples to our *submission286* in order to get 0.287. Sounds easy, doesn't it?
+# We will steadily increase number of correct answers from 5 to infinity with step 5 and give 30 tries for each addition because our correct samples are selected in a random order. We will stop when we reach 0.287.
 
 # In[ ]:
 
 
-# .... contiune with Date
+tries, fix = 30, 0
+found = False
+np.random.seed(10)
+while not found:
+    fix += 5
+    print(f"Fixing {fix} samples")
+    for t in range(tries):
+        new_submission = submission286.copy()
+        improve_index = np.random.choice(index, size=fix, replace=False)
+        new_submission[improve_index] = perfect_sub[improve_index]
+        public, _ = evaluate(new_submission)
+        if public >= 0.287:
+            print("0.287 reached!")
+            found = True
+            break
 
-# Plot average sales & customers for every year
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
 
-sns.barplot(x='Year', y='Sales', data=rossmann_df, ax=axis1)
-sns.barplot(x='Year', y='Customers', data=rossmann_df, ax=axis2)
-
-# Drop Date column
-# rossmann_df.drop(['Date'], axis=1,inplace=True)
-# test_df.drop(['Date'], axis=1,inplace=True)
-
-
-# In[ ]:
-
-
-# Customers
-
-fig, (axis1,axis2) = plt.subplots(2,1,figsize=(15,8))
-
-# Plot max, min values, & 2nd, 3rd quartile
-sns.boxplot([rossmann_df["Customers"]], whis=np.inf, ax=axis1)
-
-# group by date and get average customers, and precent change
-average_customers      = rossmann_df.groupby('Date')["Customers"].mean()
-# pct_change_customers = rossmann_df.groupby('Date')["Customers"].sum().pct_change()
-
-# Plot average customers over the time
-# it should be correlated with the average sales over time
-ax = average_customers.plot(legend=True,marker='o', ax=axis2)
-ax.set_xticks(range(len(average_customers)))
-xlabels = ax.set_xticklabels(average_customers.index.tolist(), rotation=90)
-
+# **It takes at least 85 samples to predict correctly to reach 0.287 in my dataset**. Now let's see if it is hard to predict 85 samples correctly by simple guessing. However guessing exactly *that* 85 samples may be a hard work if we don't know indexes. So it would be more fair to make guesses with variable number of samples. Since it is a time-consuming operation I decided to check only some certain number of samples to guess.
 
 # In[ ]:
 
 
-# DayOfWeek
-# In both cases where the store is closed and opened
+# fix_samples contains number of samples to guess
+fix_samples = [85, 100, 150, 200, 250, 500, 1000, 2000, 3000, 4000, 
+               6000, 7000, 10000, 20000, 30000, 40000, 50000, 60000,
+              100000, 200000, 300000, 500000]
+# Number of tries for each group of samples
+tries = 300
+scores, types = [], []
+np.random.seed(888)
+for fix in fix_samples:
+    goal_counter = 0
+    # Let's guess and repeat!
+    for i in range(tries):
+        new_submission = submission286.copy()
+        guess = np.random.choice(range(length), size=fix, replace=False)
+        new_submission[guess] = np.random.rand()
+        public, _ = evaluate(new_submission)
+        if public >= 0.287:
+            goal_counter += 1
+        scores.append(public)
+        types.append(fix)
+    print(f"Frequency(score>=0.287 | Guessed={fix} samples, Tries={tries} times) = " + 
+          f"{goal_counter/tries:0.3f}")
+try_history = pd.DataFrame({"type": types, "score": scores})
+print("Done!")
 
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
 
-sns.barplot(x='DayOfWeek', y='Sales', data=rossmann_df, order=[1,2,3,4,5,6,7], ax=axis1)
-sns.barplot(x='DayOfWeek', y='Customers', data=rossmann_df, order=[1,2,3,4,5,6,7], ax=axis2)
-
-
-# In[ ]:
-
-
-# Promo
-
-# Plot average sales & customers with/without promo
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='Promo', y='Sales', data=rossmann_df, ax=axis1)
-sns.barplot(x='Promo', y='Customers', data=rossmann_df, ax=axis2)
-
-
-# In[ ]:
-
-
-# StateHoliday
-
-# StateHoliday column has values 0 & "0", So, we need to merge values with 0 to "0"
-rossmann_df["StateHoliday"].loc[rossmann_df["StateHoliday"] == 0] = "0"
-# test_df["StateHoliday"].loc[test_df["StateHoliday"] == 0] = "0"
-
-# Plot
-sns.countplot(x='StateHoliday', data=rossmann_df)
-
-# Before
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='StateHoliday', y='Sales', data=rossmann_df, ax=axis1)
-
-mask = (rossmann_df["StateHoliday"] != "0") & (rossmann_df["Sales"] > 0)
-sns.barplot(x='StateHoliday', y='Sales', data=rossmann_df[mask], ax=axis2)
-
+# Well, we see that **guessing sometimes works in order to get +0.001**! But it works extremely rarely. The best performance on guessing we achieved when our guesses touched ~2K-6K samples. For example, when we guessed 6K samples - we got 10 hits of 0.287 out of 300 tries. Is it feasable to achieve this when probing the leaderboard by the crowd? I believe yes. 
+# 
+# Now let's see the results on the plot.
 
 # In[ ]:
 
 
-# .... continue with StateHoliday
-
-# After
-rossmann_df["StateHoliday"] = rossmann_df["StateHoliday"].map({0: 0, "0": 0, "a": 1, "b": 1, "c": 1})
-test_df["StateHoliday"]     = test_df["StateHoliday"].map({0: 0, "0": 0, "a": 1, "b": 1, "c": 1})
-
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='StateHoliday', y='Sales', data=rossmann_df, ax=axis1)
-sns.barplot(x='StateHoliday', y='Customers', data=rossmann_df, ax=axis2)
-
-
-# In[ ]:
-
-
-# SchoolHoliday
-
-# Plot
-sns.countplot(x='SchoolHoliday', data=rossmann_df)
-
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='SchoolHoliday', y='Sales', data=rossmann_df, ax=axis1)
-sns.barplot(x='SchoolHoliday', y='Customers', data=rossmann_df, ax=axis2)
-
-
-# In[ ]:
-
-
-# Sales
-
-fig, (axis1,axis2) = plt.subplots(2,1,figsize=(15,8))
-
-# Plot max, min values, & 2nd, 3rd quartile
-sns.boxplot([rossmann_df["Customers"]], whis=np.inf, ax=axis1)
-
-# Plot sales values 
-# Notice that values with 0 is mostly because the store was closed
-rossmann_df["Sales"].plot(kind='hist',bins=70,xlim=(0,15000),ax=axis2)
-
-
-# In[ ]:
-
-
-# Using store_df
-
-# Merge store_df with average store sales & customers
-average_sales_customers = rossmann_df.groupby('Store')[["Sales", "Customers"]].mean()
-sales_customers_df = DataFrame({'Store':average_sales_customers.index,
-                      'Sales':average_sales_customers["Sales"], 'Customers': average_sales_customers["Customers"]}, 
-                      columns=['Store', 'Sales', 'Customers'])
-store_df = pd.merge(sales_customers_df, store_df, on='Store')
-
-store_df.head()
-
-
-# In[ ]:
-
-
-# StoreType 
-
-# Plot StoreType, & StoreType Vs average sales and customers
-
-sns.countplot(x='StoreType', data=store_df, order=['a','b','c', 'd'])
-
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='StoreType', y='Sales', data=store_df, order=['a','b','c', 'd'],ax=axis1)
-sns.barplot(x='StoreType', y='Customers', data=store_df, order=['a','b','c', 'd'], ax=axis2)
-
-
-# In[ ]:
-
-
-# Assortment 
-
-# Plot Assortment, & Assortment Vs average sales and customers
-
-sns.countplot(x='Assortment', data=store_df, order=['a','b','c'])
-
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='Assortment', y='Sales', data=store_df, order=['a','b','c'], ax=axis1)
-sns.barplot(x='Assortment', y='Customers', data=store_df, order=['a','b','c'], ax=axis2)
-
-
-# In[ ]:
-
-
-# Promo2
-
-# Plot Promo2, & Promo2 Vs average sales and customers
-
-sns.countplot(x='Promo2', data=store_df)
-
-fig, (axis1,axis2) = plt.subplots(1,2,figsize=(15,4))
-
-sns.barplot(x='Promo2', y='Sales', data=store_df, ax=axis1)
-sns.barplot(x='Promo2', y='Customers', data=store_df, ax=axis2)
-
-
-# In[ ]:
-
-
-# CompetitionDistance
-
-# fill NaN values
-store_df["CompetitionDistance"].fillna(store_df["CompetitionDistance"].median())
-
-# Plot CompetitionDistance Vs Sales
-store_df.plot(kind='scatter',x='CompetitionDistance',y='Sales',figsize=(15,4))
-store_df.plot(kind='kde',x='CompetitionDistance',y='Sales',figsize=(15,4))
-
-
-# In[ ]:
-
-
-# What happened to the average sales of a store over time when competition started?
-# Example: the average sales for store_id = 6 has dramatically decreased since the competition started
-
-store_id = 6
-store_data = rossmann_df[rossmann_df["Store"] == store_id]
-
-average_store_sales = store_data.groupby('Date')["Sales"].mean()
-
-# Get year, and month when Competition started
-y = store_df["CompetitionOpenSinceYear"].loc[store_df["Store"]  == store_id].values[0]
-m = store_df["CompetitionOpenSinceMonth"].loc[store_df["Store"] == store_id].values[0]
-
-# Plot 
-ax = average_store_sales.plot(legend=True,figsize=(15,4),marker='o')
-ax.set_xticks(range(len(average_store_sales)))
-ax.set_xticklabels(average_store_sales.index.tolist(), rotation=90)
-
-# Since all data of store sales given in rossmann_df starts with year=2013 till 2015,
-# So, we need to check if year>=2013 and y & m aren't NaN values.
-if y >= 2013 and y == y and m == m:
-    plt.axvline(x=((y-2013) * 12) + (m - 1), linewidth=3, color='grey')
-
-
-# In[ ]:
-
-
-# Risk Analysis
-# Analyze the risk of a store; Risk(std) Vs Expected(mean)
-
-# .... countiue using store_data
-store_average = store_data["Sales"].mean()
-store_std     = store_data["Sales"].std()
-
-# Plot
-plt.scatter(store_average, store_std,alpha = 0.5,s =np.pi*20)
-
-# Get min & max mean and std of store sales
-# Remember that store_df["Sales"] has the average sales for a store
-std_sales = rossmann_df.groupby('Store')["Sales"].std()
-
-min_average = store_df["Sales"].min()
-max_average = store_df["Sales"].max()
-min_std     = std_sales.min()
-max_std     = std_sales.max()
-
-# Set the x and y limits of the plot
-plt.ylim([min_std, max_std])
-plt.xlim([min_average, max_average])
-
-# Set the plot axis titles
-plt.xlabel('Expected Sales')
-plt.ylabel('Risk')
-
-# Set label
-label, x, y = "Store {}".format(store_id), store_average, store_std
-plt.annotate(
-        label, 
-        xy = (x, y), xytext = (50, 50),
-        textcoords = 'offset points', ha = 'right', va = 'bottom',
-        arrowprops = dict(arrowstyle = '-', connectionstyle = 'arc3,rad=-0.3'))
-
-
-# In[ ]:
-
-
-# Correlation
-# Visualize the Correlation between stores
-
-store_piv       = pd.pivot_table(rossmann_df,values='Sales', index='Date', columns=['Store'],aggfunc='sum')
-store_pct_chage = store_piv.pct_change().dropna()
-store_piv.head()
-
-
-# In[ ]:
-
-
-# .... continue Correlation
-
-# Plot correlation between range of stores
-start_store = 1
-end_store   = 5
-
-fig, (axis1) = plt.subplots(1,1,figsize=(15,5))
-
-# using summation of sales values for each store 
-sns.heatmap(store_piv[list(range(start_store, end_store+1))].corr(),annot=True,linewidths=2)
-
-# using percent change for each store
-# sns.heatmap(store_pct_chage[list(range(start_store, end_store+1))].corr(),annot=True,linewidths=2)
-
-
-# In[ ]:
-
-
-# Notice that test_df has only year=2015, and months 8 & 9
-
-# drop Year and Month
-rossmann_df.drop(["Year", "Month"], axis=1, inplace=True)
-test_df.drop(["Year", "Month"], axis=1, inplace=True)
-
-# Create dummy varibales for DayOfWeek
-day_dummies_rossmann  = pd.get_dummies(rossmann_df['DayOfWeek'], prefix='Day')
-day_dummies_rossmann.drop(['Day_7'], axis=1, inplace=True)
-
-day_dummies_test  = pd.get_dummies(test_df['DayOfWeek'],prefix='Day')
-day_dummies_test.drop(['Day_7'], axis=1, inplace=True)
-
-rossmann_df = rossmann_df.join(day_dummies_rossmann)
-test_df     = test_df.join(day_dummies_test)
-
-rossmann_df.drop(['DayOfWeek'], axis=1,inplace=True)
-test_df.drop(['DayOfWeek'], axis=1,inplace=True)
-
-
-# In[ ]:
-
-
-# remove all rows(store,date) that were closed
-rossmann_df = rossmann_df[rossmann_df["Open"] != 0]
-
-# drop unnecessary columns, these columns won't be useful in prediction
-rossmann_df.drop(["Open","Customers", "Date"], axis=1, inplace=True)
-
-
-# In[ ]:
-
-
-# save ids of closed stores, because we will assign their sales value to 0 later(see below)
-closed_store_ids = test_df["Id"][test_df["Open"] == 0].values
-
-# remove all rows(store,date) that were closed
-test_df = test_df[test_df["Open"] != 0]
-
-# drop unnecessary columns, these columns won't be useful in prediction
-test_df.drop(['Open', 'Date'], axis=1,inplace=True)
-
-
-# In[ ]:
-
-
-# Loop through each store, 
-# train the model using the data of current store, and predict it's sales values.
-
-rossmann_dic = dict(list(rossmann_df.groupby('Store')))
-test_dic     = dict(list(test_df.groupby('Store')))
-submission   = Series()
-scores       = []
-
-for i in test_dic:
-    
-    # current store
-    store = rossmann_dic[i]
-    
-    # define training and testing sets
-    X_train = store.drop(["Sales","Store"],axis=1)
-    Y_train = store["Sales"]
-    X_test  = test_dic[i].copy()
-    
-    store_ids = X_test["Id"]
-    X_test.drop(["Id","Store"], axis=1,inplace=True)
-    
-    # Linear Regression
-    lreg = LinearRegression()
-    lreg.fit(X_train, Y_train)
-    Y_pred = lreg.predict(X_test)
-    scores.append(lreg.score(X_train, Y_train))
-
-    # Xgboost
-    # params = {"objective": "reg:linear",  "max_depth": 10}
-    # T_train_xgb = xgb.DMatrix(X_train, Y_train)
-    # X_test_xgb  = xgb.DMatrix(X_test)
-    # gbm = xgb.train(params, T_train_xgb, 100)
-    # Y_pred = gbm.predict(X_test_xgb)
-    
-    # append predicted values of current store to submission
-    submission = submission.append(Series(Y_pred, index=store_ids))
-
-# append rows(store,date) that were closed, and assign their sales value to 0
-submission = submission.append(Series(0, index=closed_store_ids))
-
-# save to csv file
-submission = pd.DataFrame({ "Id": submission.index, "Sales": submission.values})
-submission.to_csv('rossmann.csv', index=False)
-
+sns.set(font_scale=0.9)
+plt.figure(figsize=(15, 10))
+ax = sns.stripplot(x="type", y="score", data=try_history, jitter=True, size=9, color="blue", alpha=.5)
+ax.set_ylim(0.280, 0.288)
+plt.axhline(0.2862, label="baseline", color="blue", linestyle="dashed")
+plt.axhline(0.287, label="goal", color="orange", linestyle="dashed")
+# Draw means for each group
+mean = try_history.groupby("type")["score"].agg(["mean"])["mean"]
+plt.plot(range(len(fix_samples)), mean, color="red")
+plt.legend()
+plt.grid()
+
+
+# The more samples we guess - the less our expected score and the larger the variance of our results. I would recommend to stay at 6K - the optimal number :-)
+
+# # Instead of a Smart Conclusion
+# Please do not consider the analysis as exactly applicable to the current leaderboard. This is just a testing of the particular random example.
+# 
+# I learned something... and you?

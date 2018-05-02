@@ -1,150 +1,164 @@
 
 # coding: utf-8
 
-# $$
-# \huge\text{Visualizing iMaterialist Data}\\
-# \large\text{March 2018}\\
-# \text{Andrew Riberio @ https://github.com/Andrewnetwork}
-# $$
-# <img width="700" height="300" src="https://i.imgur.com/HcJJmzj.jpg" />
-# In this notebook we will visualize data from the Kaggle challenge *iMaterialist Challenge (Furniture) at FGVC5*. 
+# In[ ]:
+
+
+MAX_ROUNDS = 650
+OPTIMIZE_ROUNDS = False
+LEARNING_RATE = 0.05
+
+
+# I recommend initially setting <code>MAX_ROUNDS</code> fairly high and using <code>OPTIMIZE_ROUNDS</code> to get an idea of the appropriate number of rounds (which, in my judgment, should be close to the maximum value of the optimized <code>tree_count</code> among all folds, maybe even a bit higher if your model is adequately regularized...or maybe not:  it's also a good idea to uncomment <code>verbose=True</code> sometimes and look at the pattern of validation scores for each fold to see what values might work well for all folds).  For a submission run I would turn off <code>OPTIMIZE_ROUNDS</code> and set <code>MAX_ROUNDS</code> to the appropraite number of total rounds.  The problem with "early stopping" by choosing the best round for each fold is that it overfits to the validation data.   It's therefore liable not to produce the optimal model for predicting test data, and if it's used to produce validation data for stacking/ensembling with other models, it would cause this one to have too much weight in the ensemble.
 # 
-# **NOTE**: In order for the interactive componnents of this kernel to function, you must either fork this kernel or download it to your local machine which has the required environment and dependencies. The simplest method is to fork the kernel here on kaggle. 
+# Also, CatBoost is notoriously slow.  If you want to run it in Kaggle's environment, you need to set a fairly high learning rate so that it will get to a decent fit reasonably quickly.  If you want to use it to do well in this competition, you need to set a lower learning rate and run it for a long time (higher <code>MAX_ROUNDS</code>).  That means you either need to run it overnight or run it on a fast computer with multiple cores (or both).
 
-# In[6]:
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import json
-
-# Libraries for displying the data. 
-from IPython.core.display import HTML 
-from ipywidgets import interact
-from IPython.display import display
-
-get_ipython().run_line_magic('matplotlib', 'inline')
+# In[ ]:
 
 
-# ## Loading the data
-
-# We use the json library to load the data into python dictionary objects. 
-
-# In[7]:
-
-
-training   = json.load(open("../input/train.json"))
-test       = json.load(open("../input/test.json"))
-validation = json.load(open("../input/validation.json"))
+import numpy as np
+import pandas as pd
+from catboost import CatBoostClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
+from numba import jit
 
 
-# We itterate over the json dictionaries loaded in above and produce a pandas dataframe for the training, validation, and test data. 
-
-# In[8]:
+# In[ ]:
 
 
-# A function to be mapped over the json dictionary. 
-def joinFn(dat):
-    return [dat[0]["url"][0], dat[1]["label_id"]]
+# Compute gini
 
-trainingDF   = pd.DataFrame(list(map(joinFn, zip(training["images"],training["annotations"]))),columns=["url","label"])
-validationDF = pd.DataFrame(list(map(joinFn, zip(validation["images"],validation["annotations"]))),columns=["url","label"])
-testDF       = pd.DataFrame(list(map(lambda x: x["url"],test["images"])),columns=["url"])
-
-
-# In[12]:
-
-
-trainingDF
-
-
-# In[10]:
-
-
-validationDF.head()
-
-
-# In[11]:
+# from CPMP's kernel https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
+@jit
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
 
-testDF.head()
+# In[ ]:
 
 
-# ## Basic Visualization 
-
-# In[13]:
-
-
-print("Number of classes: {0}".format(len( trainingDF["label"].unique())))
+# Read data
+train_df = pd.read_csv('../input/train.csv', na_values="-1") # .iloc[0:200,:]
+test_df = pd.read_csv('../input/test.csv', na_values="-1")
 
 
-# In[14]:
+# In[ ]:
 
 
-trainingDF["label"].value_counts().plot(kind='bar',figsize=(40,10),title="Number of Training Examples Versus Class").title.set_size(40)
+# Process data
+id_test = test_df['id'].values
+id_train = train_df['id'].values
 
+train_df = train_df.fillna(999)
+test_df = test_df.fillna(999)
 
-# In the above chart we can see that we have a heavily skewed dataset in respect the the number of training examples per class. Class 20 has about 4,000 examples where class 83 has less than 500. 
-# 
-# We use the next funciton to view examples of each class in the training data. The overlayed number is the class label. 
+col_to_drop = train_df.columns[train_df.columns.str.startswith('ps_calc_')]
+train_df = train_df.drop(col_to_drop, axis=1)  
+test_df = test_df.drop(col_to_drop, axis=1)  
 
-# In[15]:
-
-
-def displayExamples(exampleIndex=0):
-    outHTML = "<div>"
-    for label in range(1,129):
-        img_style = "width: 180px;height:180px; margin: 0px; float: left; border: 1px solid black;"
-        captionDiv = "<div style='position:absolute;right:30px;color:red;font-size:30px;background-color:grey;padding:5px;opacity:0.5'>"+str(label)+"</div>"
-        outHTML += "<div style='position:relative;display:inline-block'><img style='"+img_style+"' src='"+trainingDF[trainingDF.label == label].iloc[exampleIndex][0]+"'/>"+captionDiv+"</div>"
-    outHTML += "</div>"
-    display(HTML(outHTML))
-
-displayExamples()
-
-
-# We can use the following function to view examples for a particular category/class. 
-
-# In[16]:
-
-
-def displayCategoryExamples(category=0,nExamples=20):
-    outHTML = "<div>"
-    for idx in range(0,nExamples):
-        img_style = "width: 180px;height:180px; margin: 0px; float: left; border: 1px solid black;"
-        outHTML += "<div style='position:relative;display:inline-block'><img style='"+img_style+"' src='"+trainingDF[trainingDF.label == category].iloc[idx][0]+"'/></div>"
-    outHTML += "</div>"
-    display(HTML(outHTML))
+for c in train_df.select_dtypes(include=['float64']).columns:
+    train_df[c]=train_df[c].astype(np.float32)
+    test_df[c]=test_df[c].astype(np.float32)
+for c in train_df.select_dtypes(include=['int64']).columns[2:]:
+    train_df[c]=train_df[c].astype(np.int8)
+    test_df[c]=test_df[c].astype(np.int8)
     
-displayCategoryExamples(7)
+y = train_df['target']
+X = train_df.drop(['target', 'id'], axis=1)
+y_valid_pred = 0*y
+X_test = test_df.drop(['id'], axis=1)
+y_test_pred = 0
 
 
-# Just from looking at examples in class 7, TVs, we can note a few things: 
-# * Some are natural images with the TVs included in their surroundings. 
-# * Some are artifical images of cartoon TVs. 
-# * Some images have digital artifacts overlayed upon the image ( like the date of the image ). 
-# * There are different angles provided. 
-# 
-# Let's look at another category to see if this type of variablity is consistent across the classes. 
-# 
-
-# In[17]:
+# In[ ]:
 
 
-displayCategoryExamples(24)
+# Set up folds
+K = 5
+kf = KFold(n_splits = K, random_state = 1, shuffle = True)
 
 
-# It does seem like there is a huge variablity within each class. In the next section you will be able to interactively pan around the dataset. This requires you to be running this notebook as a fork, as a static rendering will not include interactive elements. There is no preloading done here, so it may take some time for all the images to load. 
-
-# In[18]:
+# In[ ]:
 
 
-def visCat(cat=1):
-    displayCategoryExamples(cat,40)
+# Set up classifier
+model = CatBoostClassifier(
+    learning_rate=LEARNING_RATE, 
+    depth=6, 
+    l2_leaf_reg = 14, 
+    iterations = MAX_ROUNDS,
+#    verbose = True,
+    loss_function='Logloss'
+)
+
+
+# In[ ]:
+
+
+# Run CV
+
+for i, (train_index, test_index) in enumerate(kf.split(train_df)):
     
-interact(visCat, cat=(1,128))
+    # Create data for this fold
+    y_train, y_valid = y.iloc[train_index], y.iloc[test_index]
+    X_train, X_valid = X.iloc[train_index,:], X.iloc[test_index,:]
+    print( "\nFold ", i)
+    
+    # Run model for this fold
+    if OPTIMIZE_ROUNDS:
+        fit_model = model.fit( X_train, y_train, 
+                               eval_set=[X_valid, y_valid],
+                               use_best_model=True
+                             )
+        print( "  N trees = ", model.tree_count_ )
+    else:
+        fit_model = model.fit( X_train, y_train )
+        
+    # Generate validation predictions for this fold
+    pred = fit_model.predict_proba(X_valid)[:,1]
+    print( "  Gini = ", eval_gini(y_valid, pred) )
+    y_valid_pred.iloc[test_index] = pred
+    
+    # Accumulate test set predictions
+    y_test_pred += fit_model.predict_proba(X_test)[:,1]
+    
+y_test_pred /= K  # Average test set predictions
+
+print( "\nGini for full training set:" )
+eval_gini(y, y_valid_pred)
 
 
-# ## Next Steps
-# For futher visualization we would need to download the images which we are unable to do in a contained Kaggle kernel. There are a few download scripts available in the kernels section. It would be nice if someone could download the images and upload a partial set of the training, validation, and test data so we can do more analysis in these notebooks. 
-# 
+# In[ ]:
+
+
+# Save validation predictions for stacking/ensembling
+val = pd.DataFrame()
+val['id'] = id_train
+val['target'] = y_valid_pred.values
+val.to_csv('cat_valid.csv', float_format='%.6f', index=False)
+
+
+# In[ ]:
+
+
+# Create submission file
+sub = pd.DataFrame()
+sub['id'] = id_test
+sub['target'] = y_test_pred
+sub.to_csv('cat_submit.csv', float_format='%.6f', index=False)
+
+
+# CV scores certainly seem to be correlated with public LB scores, but the correlation is not nearly as strong as one might hope. The difference so far ranges from .0019 to .0032 for this script without <code>OPTIMIZE_ROUNDS</code> and can be higher when <code>OPTIMIZE_ROUNDS</code> is set (which is to be expected, since that parameter causes the fit to select on each fold for the best CV performance without generally achieving a comparable improvement in LB performance).  Versions 17 through 20 (substantively identical) have slightly better public LB performance than earlier versions, when I sort my submissions by score.  (If one wants to be optimistic about the less significant digits of the LB score, maybe a difference of .0019 is really .0024, and a difference of .0032 is really .0027, so maybe the CV is working better than it first appears.)

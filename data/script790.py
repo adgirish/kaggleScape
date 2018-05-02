@@ -1,490 +1,162 @@
 
 # coding: utf-8
 
-# Jason ([here][1]) and SaeedAzarshab ([here][2]) have popularized a script that uses housing price index data that luckyzhou (see [here][3]) found on Global Property Guide.  But since it includes data from the test period, I'm pretty sure it qualifies as "external data...substantially related to the ground truth of the competition."  However, if you're willing to use magic numbers, you can get the same exact result without explicitly referencing the price index during the test period.  (This is because, in the version that got copied, luckyzhou effectively ignores the test period index data except for the last data point, which is just one number and presumably no more suspect than any other magic number.)
-# 
-# So this notebook purges all the test-period index data and just uses a magic number.  And the number is pretty arbitrary, since there are magic numbers all over the place, including elsewhere in the script.  If you decide magic numbers are OK in general, I don't think you can object to this one just because of its history.  It could just as well have been produced by trial and error (and indeed, you can probably get a better one by trial and error) rather than being taken from ground truth-related data.
-# 
-# 
-#   [1]: https://www.kaggle.com/jasonpeng/latest-iteration-in-this-silly-game
-#   [2]: https://www.kaggle.com/saeedt2977/latest-iteration-in-this-silly-game-lb-0-31039
-#   [3]: https://www.kaggle.com/luckyzhou/lzhou-test/comments
-
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-from sklearn import model_selection, preprocessing
-import xgboost as xgb
-
-
-# ## First Model (the one that I've plugged up)
-
-# #### Initial set up
-
-# In[ ]:
-
-
-#load files
-train = pd.read_csv('../input/train.csv', parse_dates=['timestamp'])
-test = pd.read_csv('../input/test.csv', parse_dates=['timestamp'])
-id_test = test.id
-
-#clean data
-bad_index = train[train.life_sq > train.full_sq].index
-train.loc[bad_index, "life_sq"] = np.NaN
-equal_index = [601,1896,2791]
-test.loc[equal_index, "life_sq"] = test.loc[equal_index, "full_sq"]
-bad_index = test[test.life_sq > test.full_sq].index
-test.loc[bad_index, "life_sq"] = np.NaN
-bad_index = train[train.life_sq < 5].index
-train.loc[bad_index, "life_sq"] = np.NaN
-bad_index = test[test.life_sq < 5].index
-test.loc[bad_index, "life_sq"] = np.NaN
-bad_index = train[train.full_sq < 5].index
-train.loc[bad_index, "full_sq"] = np.NaN
-bad_index = test[test.full_sq < 5].index
-test.loc[bad_index, "full_sq"] = np.NaN
-kitch_is_build_year = [13117]
-train.loc[kitch_is_build_year, "build_year"] = train.loc[kitch_is_build_year, "kitch_sq"]
-bad_index = train[train.kitch_sq >= train.life_sq].index
-train.loc[bad_index, "kitch_sq"] = np.NaN
-bad_index = test[test.kitch_sq >= test.life_sq].index
-test.loc[bad_index, "kitch_sq"] = np.NaN
-bad_index = train[(train.kitch_sq == 0).values + (train.kitch_sq == 1).values].index
-train.loc[bad_index, "kitch_sq"] = np.NaN
-bad_index = test[(test.kitch_sq == 0).values + (test.kitch_sq == 1).values].index
-test.loc[bad_index, "kitch_sq"] = np.NaN
-bad_index = train[(train.full_sq > 210) & (train.life_sq / train.full_sq < 0.3)].index
-train.loc[bad_index, "full_sq"] = np.NaN
-bad_index = test[(test.full_sq > 150) & (test.life_sq / test.full_sq < 0.3)].index
-test.loc[bad_index, "full_sq"] = np.NaN
-bad_index = train[train.life_sq > 300].index
-train.loc[bad_index, ["life_sq", "full_sq"]] = np.NaN
-bad_index = test[test.life_sq > 200].index
-test.loc[bad_index, ["life_sq", "full_sq"]] = np.NaN
-train.product_type.value_counts(normalize= True)
-test.product_type.value_counts(normalize= True)
-bad_index = train[train.build_year < 1500].index
-train.loc[bad_index, "build_year"] = np.NaN
-bad_index = test[test.build_year < 1500].index
-test.loc[bad_index, "build_year"] = np.NaN
-bad_index = train[train.num_room == 0].index
-train.loc[bad_index, "num_room"] = np.NaN
-bad_index = test[test.num_room == 0].index
-test.loc[bad_index, "num_room"] = np.NaN
-bad_index = [10076, 11621, 17764, 19390, 24007, 26713, 29172]
-train.loc[bad_index, "num_room"] = np.NaN
-bad_index = [3174, 7313]
-test.loc[bad_index, "num_room"] = np.NaN
-bad_index = train[(train.floor == 0).values * (train.max_floor == 0).values].index
-train.loc[bad_index, ["max_floor", "floor"]] = np.NaN
-bad_index = train[train.floor == 0].index
-train.loc[bad_index, "floor"] = np.NaN
-bad_index = train[train.max_floor == 0].index
-train.loc[bad_index, "max_floor"] = np.NaN
-bad_index = test[test.max_floor == 0].index
-test.loc[bad_index, "max_floor"] = np.NaN
-bad_index = train[train.floor > train.max_floor].index
-train.loc[bad_index, "max_floor"] = np.NaN
-bad_index = test[test.floor > test.max_floor].index
-test.loc[bad_index, "max_floor"] = np.NaN
-train.floor.describe(percentiles= [0.9999])
-bad_index = [23584]
-train.loc[bad_index, "floor"] = np.NaN
-train.material.value_counts()
-test.material.value_counts()
-train.state.value_counts()
-bad_index = train[train.state == 33].index
-train.loc[bad_index, "state"] = np.NaN
-test.state.value_counts()
-
-# brings error down a lot by removing extreme price per sqm
-train.loc[train.full_sq == 0, 'full_sq'] = 50
-train = train[train.price_doc/train.full_sq <= 600000]
-train = train[train.price_doc/train.full_sq >= 10000]
-
-# Add month-year
-month_year = (train.timestamp.dt.month + train.timestamp.dt.year * 100)
-month_year_cnt_map = month_year.value_counts().to_dict()
-train['month_year_cnt'] = month_year.map(month_year_cnt_map)
-
-month_year = (test.timestamp.dt.month + test.timestamp.dt.year * 100)
-month_year_cnt_map = month_year.value_counts().to_dict()
-test['month_year_cnt'] = month_year.map(month_year_cnt_map)
-
-# Add week-year count
-week_year = (train.timestamp.dt.weekofyear + train.timestamp.dt.year * 100)
-week_year_cnt_map = week_year.value_counts().to_dict()
-train['week_year_cnt'] = week_year.map(week_year_cnt_map)
-
-week_year = (test.timestamp.dt.weekofyear + test.timestamp.dt.year * 100)
-week_year_cnt_map = week_year.value_counts().to_dict()
-test['week_year_cnt'] = week_year.map(week_year_cnt_map)
-
-# Add month and day-of-week
-train['month'] = train.timestamp.dt.month
-train['dow'] = train.timestamp.dt.dayofweek
-
-test['month'] = test.timestamp.dt.month
-test['dow'] = test.timestamp.dt.dayofweek
-
-# Other feature engineering
-train['rel_floor'] = train['floor'] / train['max_floor'].astype(float)
-train['rel_kitch_sq'] = train['kitch_sq'] / train['full_sq'].astype(float)
-
-test['rel_floor'] = test['floor'] / test['max_floor'].astype(float)
-test['rel_kitch_sq'] = test['kitch_sq'] / test['full_sq'].astype(float)
-
-train.apartment_name=train.sub_area + train['metro_km_avto'].astype(str)
-test.apartment_name=test.sub_area + train['metro_km_avto'].astype(str)
-
-train['room_size'] = train['life_sq'] / train['num_room'].astype(float)
-test['room_size'] = test['life_sq'] / test['num_room'].astype(float)
-
-
-# #### Normalize by the housing price index
-
-# In[ ]:
-
-
-# Aggreagte house price data derived from 
-# http://www.globalpropertyguide.com/real-estate-house-prices/R#russia
-# by luckyzhou
-# See https://www.kaggle.com/luckyzhou/lzhou-test/comments
-
-rate_2015_q2 = 1
-rate_2015_q1 = rate_2015_q2 / .9932
-rate_2014_q4 = rate_2015_q1 / 1.0112
-rate_2014_q3 = rate_2014_q4 / 1.0169
-rate_2014_q2 = rate_2014_q3 / 1.0086
-rate_2014_q1 = rate_2014_q2 / 1.0126
-rate_2013_q4 = rate_2014_q1 / 0.9902
-rate_2013_q3 = rate_2013_q4 / 1.0041
-rate_2013_q2 = rate_2013_q3 / 1.0044
-rate_2013_q1 = rate_2013_q2 / 1.0104  # This is 1.002 (relative to mult), close to 1:
-rate_2012_q4 = rate_2013_q1 / 0.9832  #     maybe use 2013q1 as a base quarter and get rid of mult?
-rate_2012_q3 = rate_2012_q4 / 1.0277
-rate_2012_q2 = rate_2012_q3 / 1.0279
-rate_2012_q1 = rate_2012_q2 / 1.0279
-rate_2011_q4 = rate_2012_q1 / 1.076
-rate_2011_q3 = rate_2011_q4 / 1.0236
-rate_2011_q2 = rate_2011_q3 / 1
-rate_2011_q1 = rate_2011_q2 / 1.011
-
-
-# train 2015
-train['average_q_price'] = 1
-
-train_2015_q2_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
-train.loc[train_2015_q2_index, 'average_q_price'] = rate_2015_q2
-
-train_2015_q1_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
-train.loc[train_2015_q1_index, 'average_q_price'] = rate_2015_q1
-
-
-# train 2014
-train_2014_q4_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
-train.loc[train_2014_q4_index, 'average_q_price'] = rate_2014_q4
-
-train_2014_q3_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
-train.loc[train_2014_q3_index, 'average_q_price'] = rate_2014_q3
-
-train_2014_q2_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
-train.loc[train_2014_q2_index, 'average_q_price'] = rate_2014_q2
-
-train_2014_q1_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
-train.loc[train_2014_q1_index, 'average_q_price'] = rate_2014_q1
-
-
-# train 2013
-train_2013_q4_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
-train.loc[train_2013_q4_index, 'average_q_price'] = rate_2013_q4
-
-train_2013_q3_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
-train.loc[train_2013_q3_index, 'average_q_price'] = rate_2013_q3
-
-train_2013_q2_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
-train.loc[train_2013_q2_index, 'average_q_price'] = rate_2013_q2
-
-train_2013_q1_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
-train.loc[train_2013_q1_index, 'average_q_price'] = rate_2013_q1
-
-
-# train 2012
-train_2012_q4_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
-train.loc[train_2012_q4_index, 'average_q_price'] = rate_2012_q4
-
-train_2012_q3_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
-train.loc[train_2012_q3_index, 'average_q_price'] = rate_2012_q3
-
-train_2012_q2_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
-train.loc[train_2012_q2_index, 'average_q_price'] = rate_2012_q2
-
-train_2012_q1_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
-train.loc[train_2012_q1_index, 'average_q_price'] = rate_2012_q1
-
-
-# train 2011
-train_2011_q4_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
-train.loc[train_2011_q4_index, 'average_q_price'] = rate_2011_q4
-
-train_2011_q3_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
-train.loc[train_2011_q3_index, 'average_q_price'] = rate_2011_q3
-
-train_2011_q2_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
-train.loc[train_2011_q2_index, 'average_q_price'] = rate_2011_q2
-
-train_2011_q1_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
-train.loc[train_2011_q1_index, 'average_q_price'] = rate_2011_q1
-
-train['price_doc'] = train['price_doc'] * train['average_q_price']
-
-
-
-# #### Apply a multiplier
-
-# In[ ]:
-
-
-mult = 1.054880504
-train['price_doc'] = train['price_doc'] * mult
-y_train = train["price_doc"]
-
-
-# #### Run the model
-
-# In[ ]:
-
-
-x_train = train.drop(["id", "timestamp", "price_doc", "average_q_price"], axis=1)
-#x_test = test.drop(["id", "timestamp", "average_q_price"], axis=1)
-x_test = test.drop(["id", "timestamp"], axis=1)
-
-num_train = len(x_train)
-x_all = pd.concat([x_train, x_test])
-
-for c in x_all.columns:
-    if x_all[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_all[c].values))
-        x_all[c] = lbl.transform(list(x_all[c].values))
-
-x_train = x_all[:num_train]
-x_test = x_all[num_train:]
-
-
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 6,
-    'subsample': 0.6,
-    'colsample_bytree': 1,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
-
-
-num_boost_rounds = 422
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
-
-
-y_predict = model.predict(dtest)
-gunja_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
-
-
-# ## Second Model
-
-# In[ ]:
-
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-id_test = test.id
-
-mult = .969
-
-y_train = train["price_doc"] * mult + 10
-x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
-x_test = test.drop(["id", "timestamp"], axis=1)
-
-for c in x_train.columns:
-    if x_train[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_train[c].values))
-        x_train[c] = lbl.transform(list(x_train[c].values))
-
-for c in x_test.columns:
-    if x_test[c].dtype == 'object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(x_test[c].values))
-        x_test[c] = lbl.transform(list(x_test[c].values))
-
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 5,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
-
-num_boost_rounds = 385  # This was the CV output, as earlier version shows
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round= num_boost_rounds)
-
-y_predict = model.predict(dtest)
-output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
-
-
-# ## Third Model
-
-# In[ ]:
-
-
-df_train = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
-df_test = pd.read_csv("../input/test.csv", parse_dates=['timestamp'])
-df_macro = pd.read_csv("../input/macro.csv", parse_dates=['timestamp'])
-
-df_train.drop(df_train[df_train["life_sq"] > 7000].index, inplace=True)
-
-mult = 0.969
-y_train = df_train['price_doc'].values * mult + 10
-id_test = df_test['id']
-
-df_train.drop(['id', 'price_doc'], axis=1, inplace=True)
-df_test.drop(['id'], axis=1, inplace=True)
-
-num_train = len(df_train)
-df_all = pd.concat([df_train, df_test])
-# Next line just adds a lot of NA columns (becuase "join" only works on indexes)
-# but somewhow it seems to affect the result
-df_all = df_all.join(df_macro, on='timestamp', rsuffix='_macro')
-print(df_all.shape)
-
-# Add month-year
-month_year = (df_all.timestamp.dt.month + df_all.timestamp.dt.year * 100)
-month_year_cnt_map = month_year.value_counts().to_dict()
-df_all['month_year_cnt'] = month_year.map(month_year_cnt_map)
-
-# Add week-year count
-week_year = (df_all.timestamp.dt.weekofyear + df_all.timestamp.dt.year * 100)
-week_year_cnt_map = week_year.value_counts().to_dict()
-df_all['week_year_cnt'] = week_year.map(week_year_cnt_map)
-
-# Add month and day-of-week
-df_all['month'] = df_all.timestamp.dt.month
-df_all['dow'] = df_all.timestamp.dt.dayofweek
-
-# Other feature engineering
-df_all['rel_floor'] = df_all['floor'] / df_all['max_floor'].astype(float)
-df_all['rel_kitch_sq'] = df_all['kitch_sq'] / df_all['full_sq'].astype(float)
-
-train['building_name'] = pd.factorize(train.sub_area + train['metro_km_avto'].astype(str))[0]
-test['building_name'] = pd.factorize(test.sub_area + test['metro_km_avto'].astype(str))[0]
-
-def add_time_features(col):
-   col_month_year = pd.Series(pd.factorize(train[col].astype(str) + month_year.astype(str))[0])
-   train[col + '_month_year_cnt'] = col_month_year.map(col_month_year.value_counts())
-
-   col_week_year = pd.Series(pd.factorize(train[col].astype(str) + week_year.astype(str))[0])
-   train[col + '_week_year_cnt'] = col_week_year.map(col_week_year.value_counts())
-
-add_time_features('building_name')
-add_time_features('sub_area')
-
-def add_time_features(col):
-   col_month_year = pd.Series(pd.factorize(test[col].astype(str) + month_year.astype(str))[0])
-   test[col + '_month_year_cnt'] = col_month_year.map(col_month_year.value_counts())
-
-   col_week_year = pd.Series(pd.factorize(test[col].astype(str) + week_year.astype(str))[0])
-   test[col + '_week_year_cnt'] = col_week_year.map(col_week_year.value_counts())
-
-add_time_features('building_name')
-add_time_features('sub_area')
-
-
-# Remove timestamp column (may overfit the model in train)
-df_all.drop(['timestamp', 'timestamp_macro'], axis=1, inplace=True)
-
-
-factorize = lambda t: pd.factorize(t[1])[0]
-
-df_obj = df_all.select_dtypes(include=['object'])
-
-X_all = np.c_[
-    df_all.select_dtypes(exclude=['object']).values,
-    np.array(list(map(factorize, df_obj.iteritems()))).T
-]
-print(X_all.shape)
-
-X_train = X_all[:num_train]
-X_test = X_all[num_train:]
-
-
-# Deal with categorical values
-df_numeric = df_all.select_dtypes(exclude=['object'])
-df_obj = df_all.select_dtypes(include=['object']).copy()
-
-for c in df_obj:
-    df_obj[c] = pd.factorize(df_obj[c])[0]
-
-df_values = pd.concat([df_numeric, df_obj], axis=1)
-
-
-# Convert to numpy values
-X_all = df_values.values
-print(X_all.shape)
-
-X_train = X_all[:num_train]
-X_test = X_all[num_train:]
-
-df_columns = df_values.columns
-
-
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 5,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(X_train, y_train, feature_names=df_columns)
-dtest = xgb.DMatrix(X_test, feature_names=df_columns)
-
-num_boost_rounds = 420  # From Bruno's original CV, I think
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
-
-y_pred = model.predict(dtest)
-
-df_sub = pd.DataFrame({'id': id_test, 'price_doc': y_pred})
-
-
-# ## Combine
-
-# In[ ]:
-
-
-first_result = output.merge(df_sub, on="id", suffixes=['_louis','_bruno'])
-first_result["price_doc"] = np.exp( .714*np.log(first_result.price_doc_louis) +
-                                    .286*np.log(first_result.price_doc_bruno) ) 
-result = first_result.merge(gunja_output, on="id", suffixes=['_follow','_gunja'])
-
-result["price_doc"] = np.exp( .78*np.log(result.price_doc_follow) +
-                              .22*np.log(result.price_doc_gunja) )
-                              
-result["price_doc"] =result["price_doc"] *0.9915        
-result.drop(["price_doc_louis","price_doc_bruno","price_doc_follow","price_doc_gunja"],axis=1,inplace=True)
-result.head()
-result.to_csv('same_result.csv', index=False)
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import seaborn as sns
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+from skimage import io
+from scipy import ndimage
+from skimage.transform import resize
+import sys
+#reload(sys)
+#sys.setdefaultencoding("utf-8")
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+menu = pd.read_csv('../input/menu.csv')
+#Breakfast = io.imread('D:/Mcdonalds/Breakfast.png')
+#Beef_and_Pork = io.imread('D:/Mcdonalds/Beef & Pork.png')
+#Chicken_and_Fish = io.imread('D:/Mcdonalds/Chicken & Fish.png')
+#Coffee_and_Tea = io.imread('D:/Mcdonalds/Coffee & Tea.png')
+#Salads = io.imread('D:/Mcdonalds/Salads.png')
+#Smoothies_and_Shakes = io.imread('D:/Mcdonalds/Smoothies & Shakes.png')
+#Snacks_and_Sides = io.imread('D:/Mcdonalds/Snacks & Sides.png')
+#Beverages = io.imread('D:/Mcdonalds/Beverages.png')
+#Desserts = io.imread('D:/Mcdonalds/Desserts.png')
+#images = [Breakfast,Beef_and_Pork,Chicken_and_Fish,Coffee_and_Tea,Salads,Smoothies_and_Shakes,Snacks_and_Sides,Beverages,Desserts]
+x1 = menu['Category'].values
+x2 = menu['Item'].values
+x3 = menu['Calories'].values
+x4 = menu['Calories from Fat'].values
+x5 = menu['Trans Fat'].values
+x6 = menu['Sugars'].values
+x7 = menu['Protein'].values
+
+x8 = menu['Total Fat (% Daily Value)'].values
+x9 = menu['Saturated Fat (% Daily Value)'].values
+x10 = menu['Cholesterol (% Daily Value)'].values
+x11 = menu['Sodium (% Daily Value)'].values
+x12 = menu['Carbohydrates (% Daily Value)'].values
+
+x13 = menu['Dietary Fiber (% Daily Value)'].values
+x14 = menu['Vitamin A (% Daily Value)'].values
+x15 = menu['Vitamin C (% Daily Value)'].values
+x16 = menu['Calcium (% Daily Value)'].values
+x17 = menu['Iron (% Daily Value)'].values
+x = np.vstack((x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13,x14,x15,x16,x17))
+print(x.shape)
+r = 26
+p_max = 10
+for p in range(p_max):
+    plt.figure(figsize=(18.5, r*0.5+2.5),facecolor='#be0c0c')
+    plt.subplots_adjust(bottom=0, left=.01, right=1.4, top=0.9, hspace=.35)
+    plt.subplot(1, 1, 1)
+    plt.title('McDonald\'s Menu - Comparative Nutrition Values - Page '+str(p+1),fontsize=26,fontweight='bold',color='#ffd600')
+    plt.ylim([r+0.2,-6])
+    plt.xlim([-14,16])
+
+    plt.scatter(-12.5,-3, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+    plt.text(-11.75,-3, 'Daily Limit',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-12.75,-2.3, '2000',fontweight='bold',verticalalignment='center',fontsize=11,color='darkorange', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-11.75,-2.3, 'calories a day is used for general nutrition advice,',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-11.75,-1.8, 'but calorie needs vary.',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(0.5,-5, 'Calories',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(2,-5, 'Calories from Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(3,-5, 'Trans Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(4,-5, 'Sugars',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(5,-5, 'Protein',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(6,-5, 'Total Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(7,-5, 'Saturated Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(8,-5, 'Cholesterol',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(9,-5, 'Sodium',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(10,-5, 'Carbohydrates',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(11,-5, 'Dietary Fiber',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(12,-5, 'Vitamin A',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(13,-5, 'Vitamin C',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(14,-5, 'Calcium',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(15,-5, 'Iron',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    j = 0
+    for i in range(p*r,p*r+r):
+        if x1[i] == 'Breakfast':
+            k = 0
+        if x1[i] == 'Beef & Pork':
+            k = 1
+        if x1[i] == 'Chicken & Fish':
+            k = 2
+        if x1[i] == 'Coffee & Tea':
+            k = 3
+        if x1[i] == 'Salads':
+            k = 4
+        if x1[i] == 'Smoothies & Shakes':
+            k = 5
+        if x1[i] == 'Snacks & Sides':
+            k = 6  
+        if x1[i] == 'Beverages':
+            k = 7  
+        if x1[i] == 'Desserts':
+            k = 8  
+        #plt.imshow(ndimage.rotate(images[k], 180), extent=[-13.5,-12.75,j-0.5,j+0.25],aspect= 1,cmap=plt.cm.gray,interpolation = 'none',zorder=0)
+        plt.text(-12.25, j, str(x2[i]), fontsize=13,color='black', alpha=1,zorder=1)
+        if x3[i] > 0:
+            plt.text(0.5,j, x3[i], horizontalalignment='right',fontsize=13,color='darkorange', alpha=1,zorder=1)
+        else:
+            plt.text(0.5, j, '-', horizontalalignment='center',fontsize=13,color='darkorange', alpha=1,zorder=1)
+        if x4[i] > 0:
+            plt.text(2,j, x4[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(2, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+        if x5[i] > 0:
+            plt.text(3, j, x5[i], horizontalalignment='right',fontsize=13,color='crimson', alpha=1,zorder=1)
+        else:
+            plt.text(3, j, '-', horizontalalignment='center',fontsize=13,color='crimson', alpha=1,zorder=1)
+        if x6[i] > 0:
+            plt.text(4, j, x6[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(4, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+        if x7[i] > 0:
+            plt.text(5, j, x7[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(5, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+       
+        plt.scatter(6,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(7,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(8,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(9,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(10,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+    
+        plt.scatter(11,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(12,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(13,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(14,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(15,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        
+        plt.scatter(6,j, s=int(x8[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(7,j, s=int(x9[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(8,j, s=int(x10[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(9,j, s=int(x11[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(10,j, s=int(x12[i])*3, c='crimson', alpha=0.8,zorder=2)
+    
+        plt.scatter(11,j, s=int(x13[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(12,j, s=int(x14[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(13,j, s=int(x15[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(14,j, s=int(x16[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(15,j, s=int(x17[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        j = j + 1
+    plt.xticks([])
+    plt.yticks([])
+    plt.legend()
+    plt.savefig('McDonald_Nutrition_'+str(p+1)+'.png',bbox_inches='tight',facecolor='#be0c0c',dpi=200)
+    plt.show()
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 

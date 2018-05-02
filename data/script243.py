@@ -1,273 +1,323 @@
 
 # coding: utf-8
 
-# In[ ]:
+# You may visit gist for better rendering results:
+# 
+# https://gist.github.com/chenyuntc/554876374e4ccf70fe2d3fe7bec98743
+
+# In[1]:
 
 
+import os
 import numpy as np
 import pandas as pd
-import os
 import matplotlib.pyplot as plt
-import seaborn as sns 
-from mpl_toolkits.basemap import Basemap
+from tqdm import tqdm
+
+import torch as t
+from torch.utils import data
+from torchvision import transforms as tsf
+
+TRAIN_PATH = './train.pth'
+TEST_PATH = './test.tph'
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ### This is just a small script to plot some of the lat/lon data.
+# ## Data Preprocessing
+# Preprocess data and save it to disk
 
-# In[ ]:
-
-
-df_events = pd.read_csv("../input/events.csv", dtype={'device_id': np.str})
-df_events.head()
+# In[3]:
 
 
-# ### Plot a bunch of different maps showing the locations of the events
-
-# In[ ]:
-
-
-# Set up plot
-df_events_sample = df_events.sample(n=100000)
-plt.figure(1, figsize=(12,6))
-
-# Mercator of World
-m1 = Basemap(projection='merc',
-             llcrnrlat=-60,
-             urcrnrlat=65,
-             llcrnrlon=-180,
-             urcrnrlon=180,
-             lat_ts=0,
-             resolution='c')
-
-m1.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m1.drawmapboundary(fill_color='#000000')                # black background
-m1.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m1(df_events_sample["longitude"].tolist(), df_events_sample["latitude"].tolist())
-m1.scatter(mxy[0], mxy[1], s=3, c="#1292db", lw=0, alpha=1, zorder=5)
-
-plt.title("Global view of events")
-plt.show()
+import os
+from pathlib import Path
+from PIL import Image
+from skimage import io
+import numpy as np
+from tqdm import tqdm
+import torch as t
 
 
-# Not surprisingly, most of the events are geo-located in China. We also see a few sporadic ones around the globe, most which look real (e.g., Austalia-Sydney/Melbourne/Perth).
-# 
-# One interesting thing is there are a number of events at (lat,lon) = (0,0), and also around that area where there is not much land.
+def process(file_path, has_mask=True):
+    file_path = Path(file_path)
+    files = sorted(list(Path(file_path).iterdir()))
+    datas = []
 
-# In[ ]:
+    for file in tqdm(files):
+        item = {}
+        imgs = []
+        for image in (file/'images').iterdir():
+            img = io.imread(image)
+            imgs.append(img)
+        assert len(imgs)==1
+        if img.shape[2]>3:
+            assert(img[:,:,3]!=255).sum()==0
+        img = img[:,:,:3]
 
+        if has_mask:
+            mask_files = list((file/'masks').iterdir())
+            masks = None
+            for ii,mask in enumerate(mask_files):
+                mask = io.imread(mask)
+                assert (mask[(mask!=0)]==255).all()
+                if masks is None:
+                    H,W = mask.shape
+                    masks = np.zeros((len(mask_files),H,W))
+                masks[ii] = mask
+            tmp_mask = masks.sum(0)
+            assert (tmp_mask[tmp_mask!=0] == 255).all()
+            for ii,mask in enumerate(masks):
+                masks[ii] = mask/255 * (ii+1)
+            mask = masks.sum(0)
+            item['mask'] = t.from_numpy(mask)
+        item['name'] = str(file).split('/')[-1]
+        item['img'] = t.from_numpy(img)
+        datas.append(item)
+    return datas
 
-df_at0 = df_events[(df_events["longitude"]==0) & (df_events["latitude"]==0)]
-df_near0 = df_events[(df_events["longitude"]>-1) &                     (df_events["longitude"]<1) &                     (df_events["latitude"]>-1) &                     (df_events["latitude"]<1)]
-
-print("# events:", len(df_events))
-print("# at (0,0)", len(df_at0))
-print("# near (0,0)", len(df_near0))
-
-
-# Plot another mercator plot, but zooming in on China
-
-# In[ ]:
-
-
-# Sample it down to only the China region
-lon_min, lon_max = 75, 135
-lat_min, lat_max = 15, 55
-
-idx_china = (df_events["longitude"]>lon_min) &            (df_events["longitude"]<lon_max) &            (df_events["latitude"]>lat_min) &            (df_events["latitude"]<lat_max)
-
-df_events_china = df_events[idx_china].sample(n=100000)
-
-# Mercator of China
-plt.figure(2, figsize=(12,6))
-
-m2 = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='i')
-
-m2.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m2.drawmapboundary(fill_color='#000000')                # black background
-m2.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m2(df_events_china["longitude"].tolist(), df_events_china["latitude"].tolist())
-m2.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.05, zorder=5)
-
-plt.title("China view of events")
-plt.show()
+# You can skip this if you have alreadly done it.
+test = process('../input/stage1_test/',False)
+t.save(test, TEST_PATH)
+train_data = process('../input/stage1_train/')
+# t.save(train_data, TRAIN_PATH)
 
 
-# This is more interesting to visualise, and roughly matches what you'd expect from the population density in China, see e.g.
-# 
-# http://www.china-food-security.org/images/maps/pop/pop_2_h.jpg
-# 
-# 
+# ## Data Loader
+# Wrap it with pytorch `Dataset` and `DataLoader` 
 
-# In[ ]:
+# In[10]:
 
 
-# Sample it down to only the Beijing region
-lon_min, lon_max = 116, 117
-lat_min, lat_max = 39.75, 40.25
-
-idx_beijing = (df_events["longitude"]>lon_min) &              (df_events["longitude"]<lon_max) &              (df_events["latitude"]>lat_min) &              (df_events["latitude"]<lat_max)
-
-df_events_beijing = df_events[idx_beijing]
-
-# Mercator of Beijing
-plt.figure(3, figsize=(12,6))
-
-m3 = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-
-m3.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m3.drawmapboundary(fill_color='#000000')                # black background
-m3.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m3(df_events_beijing["longitude"].tolist(), df_events_beijing["latitude"].tolist())
-m3.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
-
-plt.title("Beijing view of events")
-plt.show()
-
-
-# At this scale, you can actually see the finite resolution of the lat/lon values.
-# 
-# ### Now we can try plotting the same for male/female, and show average age per grid
-
-# In[ ]:
+import PIL
+class Dataset():
+    def __init__(self,data,source_transform,target_transform):
+        self.datas = data
+#         self.datas = train_data
+        self.s_transform = source_transform
+        self.t_transform = target_transform
+    def __getitem__(self, index):
+        data = self.datas[index]
+        img = data['img'].numpy()
+        mask = data['mask'][:,:,None].byte().numpy()
+        img = self.s_transform(img)
+        mask = self.t_transform(mask)
+        return img, mask
+    def __len__(self):
+        return len(self.datas)
+s_trans = tsf.Compose([
+    tsf.ToPILImage(),
+    tsf.Resize((128,128)),
+    tsf.ToTensor(),
+    tsf.Normalize(mean = [0.5,0.5,0.5],std = [0.5,0.5,0.5])
+]
+)
+t_trans = tsf.Compose([
+    tsf.ToPILImage(),
+    tsf.Resize((128,128),interpolation=PIL.Image.NEAREST),
+    tsf.ToTensor(),]
+)
+dataset = Dataset(train_data,s_trans,t_trans)
+dataloader = t.utils.data.DataLoader(dataset,num_workers=2,batch_size=4)
 
 
-# Load the train data and join on the events
-df_train = pd.read_csv("../input/gender_age_train.csv", dtype={'device_id': np.str})
-
-df_plot = pd.merge(df_train, df_events_beijing, on="device_id", how="inner")
-
-df_m = df_plot[df_plot["gender"]=="M"]
-df_f = df_plot[df_plot["gender"]=="F"]
+# In[5]:
 
 
-# In[ ]:
-
-
-# Male/female plot
-plt.figure(4, figsize=(12,6))
-
+img,mask = dataset[12]
 plt.subplot(121)
-m4a = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-m4a.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m4a.drawmapboundary(fill_color='#000000')                # black background
-m4a.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-mxy = m4a(df_m["longitude"].tolist(), df_m["latitude"].tolist())
-m4a.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
-plt.title("Male events in Beijing")
-
+plt.imshow(img.permute(1,2,0).numpy()*0.5+0.5)
 plt.subplot(122)
-m4b = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-m4b.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m4b.drawmapboundary(fill_color='#000000')                # black background
-m4b.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-mxy = m4b(df_f["longitude"].tolist(), df_f["latitude"].tolist())
-m4b.scatter(mxy[0], mxy[1], s=5, c="#fd3096", lw=0, alpha=0.1, zorder=5)
-plt.title("Female events in Beijing")
-
-plt.show()
+plt.imshow(mask[0].numpy())
 
 
-# Clearly some different patterns emerging, though it's not immediately clear whether or not this is just because there are different amounts of data for M/F.
+# ## Model: UNet
 
-# In[ ]:
-
-
-print("# M obs:", len(df_m))
-print("# F obs:", len(df_f))
+# In[6]:
 
 
-# In[ ]:
+# sub-parts of the U-Net model
+
+from torch import nn
+import torch.nn.functional as F
 
 
-# Make a pivot table showing average age per area of a grid, also store the counts
-df_plot["lon_round"] = df_plot["longitude"].round(decimals=2)
-df_plot["lat_round"] = df_plot["latitude"].round(decimals=2)
+class double_conv(nn.Module):
+    '''(conv => BN => ReLU) * 2'''
+    def __init__(self, in_ch, out_ch):
+        super(double_conv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True)
+        )
 
-df_age = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc=np.mean)
-
-df_cnt = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc="count")
-
-
-# In[ ]:
+    def forward(self, x):
+        x = self.conv(x)
+        return x
 
 
-# Age plot
-plt.figure(5, figsize=(12,6))
+class inconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(inconv, self).__init__()
+        self.conv = double_conv(in_ch, out_ch)
 
-# Plot avg age per grid
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+
+class down(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(down, self).__init__()
+        self.mpconv = nn.Sequential(
+            nn.MaxPool2d(2),
+            double_conv(in_ch, out_ch)
+        )
+
+    def forward(self, x):
+        x = self.mpconv(x)
+        return x
+
+
+class up(nn.Module):
+    def __init__(self, in_ch, out_ch, bilinear=True):
+        super(up, self).__init__()
+
+        #  would be a nice idea if the upsampling could be learned too,
+        #  but my machine do not have enough memory to handle all those weights
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2)
+        else:
+            self.up = nn.ConvTranspose2d(in_ch, out_ch, 2, stride=2)
+
+        self.conv = double_conv(in_ch, out_ch)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        diffX = x1.size()[2] - x2.size()[2]
+        diffY = x1.size()[3] - x2.size()[3]
+        x2 = F.pad(x2, (diffX // 2, int(diffX / 2),
+                        diffY // 2, int(diffY / 2)))
+        x = t.cat([x2, x1], dim=1)
+        x = self.conv(x)
+        return x
+
+
+class outconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(outconv, self).__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, 1)
+
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+
+class UNet(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super(UNet, self).__init__()
+        self.inc = inconv(n_channels, 64)
+        self.down1 = down(64, 128)
+        self.down2 = down(128, 256)
+        self.down3 = down(256, 512)
+        self.down4 = down(512, 512)
+        self.up1 = up(1024, 256)
+        self.up2 = up(512, 128)
+        self.up3 = up(256, 64)
+        self.up4 = up(128, 64)
+        self.outc = outconv(64, n_classes)
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        x = self.outc(x)
+        x = t.nn.functional.sigmoid(x)
+        return x
+
+
+# ## Loss definition
+# Use Soft Dice Loss
+
+# In[7]:
+
+
+def soft_dice_loss(inputs, targets):
+        num = targets.size(0)
+        m1  = inputs.view(num,-1)
+        m2  = targets.view(num,-1)
+        intersection = (m1 * m2)
+        score = 2. * (intersection.sum(1)+1) / (m1.sum(1) + m2.sum(1)+1)
+        score = 1 - score.sum()/num
+        return score
+
+
+# ## Train
+# Train it within **1 minutes** with GPU
+
+# In[11]:
+
+
+model = UNet(3,1)#.cuda()
+optimizer = t.optim.Adam(model.parameters(),lr = 1e-3)
+
+for epoch in range(2):
+    for x_train, y_train  in tqdm(dataloader):
+        x_train = t.autograd.Variable(x_train)#.cuda())
+        y_train = t.autograd.Variable(y_train)#.cuda())
+        optimizer.zero_grad()
+        o = model(x_train)
+        loss = soft_dice_loss(o, y_train)
+        loss.backward()
+        optimizer.step()
+
+
+# ## Test
+
+# In[16]:
+
+
+class TestDataset():
+    def __init__(self,path,source_transform):
+        self.datas = t.load(path)
+        self.s_transform = source_transform
+    def __getitem__(self, index):
+        data = self.datas[index]
+        img = data['img'].numpy()
+        img = self.s_transform(img)
+        return img
+    def __len__(self):
+        return len(self.datas)
+
+testset = TestDataset(TEST_PATH, s_trans)
+testdataloader = t.utils.data.DataLoader(testset,num_workers=2,batch_size=2)
+
+
+# In[17]:
+
+
+model = model.eval()
+for data in testdataloader:
+    data = t.autograd.Variable(data, volatile=True)#.cuda())
+    o = model(data)
+    break
+
+
+# In[18]:
+
+
+tm=o[1][0].data.cpu().numpy()
 plt.subplot(121)
-m5a = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')      
-# Construct a heatmap
-lons = df_age.index.values
-lats = df_age.columns.values
-x, y = np.meshgrid(lons, lats) 
-px, py = m5a(x, y) 
-data_values = df_age.values
-masked_data = np.ma.masked_invalid(data_values.T)
-cmap = plt.cm.viridis
-cmap.set_bad(color="#191919")
-# Plot the heatmap
-m5a.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
-m5a.colorbar().set_label("average age")
-plt.title("Average age per grid area in Beijing")
-
-# Plot count per grid
+plt.imshow(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
 plt.subplot(122)
-m5b = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')      
-# Construct a heatmap 
-data_values = df_cnt.values
-masked_data = np.ma.masked_invalid(data_values.T)
-cmap = plt.cm.viridis
-cmap.set_bad(color="#191919")
-# Plot the heatmap
-m5b.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
-m5b.colorbar().set_label("count")
-plt.title("Event count per grid area in Beijing")
+plt.imshow(tm)
 
-plt.show()
-
-
-# Again, clearly some potentially interesting patterns.

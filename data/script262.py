@@ -1,832 +1,402 @@
 
 # coding: utf-8
 
-# Imports
-# -------
+# # Overview
+# 
+# The new model CapsuleNet proposed by Sara Sabour (and Geoffry Hinton) claims to deliver state of the art results on [MNIST](https://arxiv.org/abs/1710.09829). The kernel aims to create and train the model using a more difficult Kaggle Dataset (numbers are easy, clothes are hard) and then make a submission to see where it actually ends up. Given the constraint of using a Kaggle Kernel means it can't be trained as long as we would like or with GPU's but IMHO if a model can't be reasonably well trained in an hour on a 28x28 dataset, that model probably won't be too useful in the immediate future.
+# 
+# ## Implementation Details
+# 
+# * Keras implementation of CapsNet in Hinton's paper Dynamic Routing Between Capsules.
+# * Code adapted from https://github.com/XifengGuo/CapsNet-Keras/blob/master/capsulenet.py
+# *  Author: Xifeng Guo, E-mail: `guoxifeng1990@163.com`, Github: `https://github.com/XifengGuo/CapsNet-Keras`
+# *     The current version maybe only works for TensorFlow backend. Actually it will be straightforward to re-write to TF code.
+# *     Adopting to other backends should be easy, but I have not tested this. 
+# 
+# Result:
+#     Validation accuracy > 99.5% after 20 epochs. Still under-fitting.
+#     About 110 seconds per epoch on a single GTX1070 GPU card
+#     
+# 
 
 # In[ ]:
 
-
-import matplotlib
-from matplotlib import pyplot as plt
-matplotlib.style.use('ggplot')
-get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn as sns
 
 import numpy as np
+import os
 import pandas as pd
-pd.options.display.max_columns = 100
-pd.options.display.max_rows = 100
-
-from sklearn.pipeline import make_pipeline
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import SelectFromModel
-from sklearn.feature_selection import SelectKBest
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.grid_search import GridSearchCV
-from sklearn.ensemble.gradient_boosting import GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn import preprocessing
-from sklearn.cross_validation import cross_val_score
+from keras.preprocessing.image import ImageDataGenerator
+from keras import callbacks
+from keras.utils.vis_utils import plot_model
 
 
-# Data Loading
-# ------------
+# # Capsule Layers 
+# Here is the implementation of the necessary layers for the CapsuleNet
 
 # In[ ]:
 
 
-base_folder = '../input/'
-data = pd.read_csv(base_folder + 'train.csv')
+import keras.backend as K
+import tensorflow as tf
+from keras import initializers, layers
+
+class Length(layers.Layer):
+    """
+    Compute the length of vectors. This is used to compute a Tensor that has the same shape with y_true in margin_loss
+    inputs: shape=[dim_1, ..., dim_{n-1}, dim_n]
+    output: shape=[dim_1, ..., dim_{n-1}]
+    """
+    def call(self, inputs, **kwargs):
+        return K.sqrt(K.sum(K.square(inputs), -1))
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:-1]
+
+class Mask(layers.Layer):
+    """
+    Mask a Tensor with shape=[None, d1, d2] by the max value in axis=1.
+    Output shape: [None, d2]
+    """
+    def call(self, inputs, **kwargs):
+        # use true label to select target capsule, shape=[batch_size, num_capsule]
+        if type(inputs) is list:  # true label is provided with shape = [batch_size, n_classes], i.e. one-hot code.
+            assert len(inputs) == 2
+            inputs, mask = inputs
+        else:  # if no true label, mask by the max length of vectors of capsules
+            x = inputs
+            # Enlarge the range of values in x to make max(new_x)=1 and others < 0
+            x = (x - K.max(x, 1, True)) / K.epsilon() + 1
+            mask = K.clip(x, 0, 1)  # the max value in x clipped to 1 and other to 0
+
+        # masked inputs, shape = [batch_size, dim_vector]
+        inputs_masked = K.batch_dot(inputs, mask, [1, 1])
+        return inputs_masked
+
+    def compute_output_shape(self, input_shape):
+        if type(input_shape[0]) is tuple:  # true label provided
+            return tuple([None, input_shape[0][-1]])
+        else:
+            return tuple([None, input_shape[-1]])
 
 
-# In[ ]:
+def squash(vectors, axis=-1):
+    """
+    The non-linear activation used in Capsule. It drives the length of a large vector to near 1 and small vector to 0
+    :param vectors: some vectors to be squashed, N-dim tensor
+    :param axis: the axis to squash
+    :return: a Tensor with same shape as input vectors
+    """
+    s_squared_norm = K.sum(K.square(vectors), axis, keepdims=True)
+    scale = s_squared_norm / (1 + s_squared_norm) / K.sqrt(s_squared_norm)
+    return scale * vectors
 
 
-data.head()
-
-
-# ## Categorical/String variables:
-# * Name
-# * Sex
-# * Ticket
-# * Cabin
-# * Embarked
-# 
-# ## Numerical variables:
-# * PassengerId
-# * Pclass
-# * Age
-# * SibSp
-# * Parch
-# * Fare
-
-# In[ ]:
-
-
-data.describe()
-
-
-# * From all the numerical variables Age has missing values in training set
-
-# # Sensible Value Imputation
-
-# * There are many ways for filling missing values, just filling in the median of the values for now.
-
-# In[ ]:
-
-
-# filled the empty age with median value of age
-data['Age'].fillna(data['Age'].median(), inplace=True)
-
-
-# # Explore Data
-
-# ### Sex versus survival
-
-# In[ ]:
-
-
-survived_sex = data[data['Survived']==1]['Sex'].value_counts()
-dead_sex = data[data['Survived']==0]['Sex'].value_counts()
-#plot the survived male , female and dead male,female
-df = pd.DataFrame([survived_sex,dead_sex])
-df.index = ['Survived','Dead']
-df.plot(kind='bar', figsize=(15,8))
-
-
-# * Can be clearly seen from the above plot, males did not stand much of a chance :)
-# * % of male survival seems much less than female survival
-
-# ### Age versus survival
-
-# In[ ]:
-
-
-# dead and survived based on age of people
-figure = plt.figure(figsize=(15,8))
-plt.hist([data[data['Survived']==1]['Age'],data[data['Survived']==0]['Age']], color = ['g','r'],
-         bins = 10,label = ['Survived','Dead'])
-plt.xlabel('Age')
-plt.ylabel('Number of passengers')
-plt.legend()
-
-
-# * Those in the range 20-40 are more likely to be dead.
-# * Those in the range 70-80 are almost always dead.
-# * 0-20 there is not much diff i think
-# * Making these as features would be a good idea?
-
-# ### Fare versus survival
-
-# In[ ]:
-
-
-# plotting number of survivors based on the fare they gave
-figure = plt.figure(figsize=(15,8))
-plt.hist([data[data['Survived']==1]['Fare'],data[data['Survived']==0]['Fare']], color = ['g','r'],
-         bins = 10,label = ['Survived','Dead'])
-plt.xlabel('Fare')
-plt.ylabel('Number of passengers')
-plt.legend()
-
-
-# * Not exactly sure whether making <50 a feature will be a good idea? Although people less than 50 have high death rate!!
-# * But over the complete data set we cannot say anything from the fare alone
-
-# ### Age versus Fare
-# * Survived
-# * Not Survied
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,8))
-ax = plt.subplot()
-ax.scatter(data[data['Survived']==1]['Age'],data[data['Survived']==1]['Fare'],c='green',s=40, alpha=0.4)
-ax.scatter(data[data['Survived']==0]['Age'],data[data['Survived']==0]['Fare'],c='red',s=40,  alpha=0.4)
-ax.set_xlabel('Age')
-ax.set_ylabel('Fare')
-ax.legend(('survived','dead'),scatterpoints=1,loc='upper right',fontsize=20,)
-
-
-# * Now i know that individually age between 20-40 are killed more.
-# * Also i know individually those with lower fares are also killed more.
-
-# ### Pclass versus survival
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,8))
-ax = plt.subplot()
-ax.set_ylabel('Survived')
-ax.set_xlabel('Pclass')
-ax.hist([data[data['Survived']==1]['Pclass'],data[data['Survived']==0]['Pclass']],color = ['g','r'],)
-
-
-# * So from the above we see pclass3 is mostly dead. Class might correspond to the status here!?
-# * That we can check from the fare they paid for a particular class!
-
-# ### Pclass versus fare
-
-# In[ ]:
-
-
-# Plotting how fares versus pclass goes?
-ax = plt.subplot()
-ax.set_ylabel('Average fare')
-# we are plotting the mean cause the mean would show overall co-relation 
-#rather than indivisual data points which may be unclear
-data.groupby('Pclass').mean()['Fare'].plot(kind='bar',figsize=(15,8), ax = ax)
-
-
-# ### Embarkment versus survival
-
-# In[ ]:
-
-
-survived_embark = data[data['Survived']==1]['Embarked'].value_counts()
-dead_embark = data[data['Survived']==0]['Embarked'].value_counts()
-df = pd.DataFrame([survived_embark,dead_embark])
-df.index = ['Survived','Dead']
-df.plot(kind='bar',stacked=True, figsize=(15,8))
-
-
-# # Feature Engineering
-
-# In[ ]:
-
-
-# Combining both the test and trainig data so that all the manipulations which are done
-# happen on both the data sets.
-# Also if test set has any missing values, it will easily come to notice here
-def get_combined_data():
-    train = pd.read_csv(base_folder + 'train.csv')
-    test = pd.read_csv(base_folder + 'test.csv')
-    # extracting and then removing the targets from the training data 
-    targets = train.Survived
-    train.drop('Survived',1,inplace=True)
+class CapsuleLayer(layers.Layer):
+    """
+    The capsule layer. It is similar to Dense layer. Dense layer has `in_num` inputs, each is a scalar, the output of the 
+    neuron from the former layer, and it has `out_num` output neurons. CapsuleLayer just expand the output of the neuron
+    from scalar to vector. So its input shape = [None, input_num_capsule, input_dim_vector] and output shape = \
+    [None, num_capsule, dim_vector]. For Dense Layer, input_dim_vector = dim_vector = 1.
     
-    combined = train.append(test)
-    combined.reset_index(inplace=True)
-    combined.drop('index',inplace=True,axis=1)
-    return combined
-combined = get_combined_data()
-
-
-# In[ ]:
-
-
-combined.info()
-
-
-# * We can see some variables have missing values
-#   * Fare
-#   * Cabin
-#   * Embarked
-#   * Age
-
-# # Sensible Value Imputation
-
-# * Filling missing values in both the test and the train data from those calculated from the training data
-
-# In[ ]:
-
-
-combined.Cabin.fillna('U',inplace=True)
-combined.Embarked.fillna('S',inplace=True)
-combined.Fare.fillna(data.Fare.mean(),inplace=True)
-combined.Age.fillna(data.Age.median(), inplace=True)
-
-
-# ### Family Size feature
-
-# In[ ]:
-
-
-# The size of families (including the passenger)
-combined['FamilySize'] = combined['Parch'] + combined['SibSp'] + 1
-# Introducing other features based on the family size
-combined['Alone'] = combined['FamilySize'].map(lambda s : 1 if s == 1 else 0)
-combined['Small'] = combined['FamilySize'].map(lambda s : 1 if 2<=s<=4 else 0)
-combined['Large'] = combined['FamilySize'].map(lambda s : 1 if 5<=s else 0)
-
-
-# In[ ]:
-
-
-# The size of families on the training set
-data['FamilySize'] = data['Parch'] + data['SibSp'] + 1
-plt.figure(figsize=(15,8))
-ax = plt.subplot()
-ax.set_ylabel('Survived')
-ax.set_xlabel('FamilySize')
-ax.hist([data[data['Survived']==1]['FamilySize'],data[data['Survived']==0]['FamilySize']],color = ['g','r'],)
-
-
-# * Seems like.. if you are alone: you are dead!
-
-# ### Title feature
-
-# In[ ]:
-
-
-if 'Title' not in combined.columns:
-    combined['Title'] = combined['Name'].map(lambda name:name.split(',')[1].split('.')[0].strip())
-    Title_Dictionary = {
-                        "Capt":       "Officer",
-                        "Col":        "Officer",
-                        "Major":      "Officer",
-                        "Jonkheer":   "Royalty",
-                        "Don":        "Royalty",
-                        "Sir" :       "Royalty",
-                        "Dr":         "Officer",
-                        "Rev":        "Officer",
-                        "the Countess":"Royalty",
-                        "Dona":       "Royalty",
-                        "Mme":        "Mrs",
-                        "Mlle":       "Miss",
-                        "Ms":         "Mrs",
-                        "Mr" :        "Mr",
-                        "Mrs" :       "Mrs",
-                        "Miss" :      "Miss",
-                        "Master" :    "Master",
-                        "Lady" :      "Royalty"
-
-                        }
-    combined['Title'] = combined.Title.map(Title_Dictionary)
-    combined.drop('Name',axis=1,inplace=True)
-    titles_dummies = pd.get_dummies(combined['Title'],prefix='Title')
-    combined.drop('Title',axis=1,inplace=True)
-    combined = pd.concat([combined,titles_dummies],axis=1)
-
-
-# In[ ]:
-
-
-data['Title'] = data['Name'].map(lambda name:name.split(',')[1].split('.')[0].strip())
-data['Title'] = data.Title.map(Title_Dictionary)
-data = pd.concat([data,pd.get_dummies(data['Title'],prefix='Title')],axis=1)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,8))
-ax = plt.subplot()
-ax.set_ylabel('Survived')
-ax.set_xlabel('Titles')
-ax.hist([data[data['Survived']==1]['Title_Officer'],
-         data[data['Survived']==0]['Title_Officer']
-        ],color = ['g','r'],)
-
-
-# * It can be seen that people with better titles survived more! This may be a good feature.
-
-# ### Adding some categorical features
-
-# In[ ]:
-
-
-# new columns m planning to create are age ranges
-# 10-20, 20-30 something like that
-combined['20-40'] = combined['Age'].apply(lambda x: 1 if x>=20 and x<=40 else 0)
-combined['70-80'] = combined['Age'].apply(lambda x: 1 if x>=70 and x<=80 else 0)
-combined['below-80'] = combined['Fare'].apply(lambda x: 1 if x<80 else 0)
-
-
-# ### Categorical to one-hot encoding
-
-# In[ ]:
-
-
-def get_one_hot_encoding(dt, features):
-    for feature in features:
-        if feature in dt.columns:
-            dummies = pd.get_dummies(dt[feature],prefix=feature)
-            dt = pd.concat([dt,dummies],axis=1)
-    return dt
-
-
-# In[ ]:
-
-
-combined = get_one_hot_encoding(combined,['Embarked','Cabin','Pclass','Embarked','Title'])
-combined['Sex'] = combined['Sex'].map({'male':0,'female':1})
-combined.drop(['Embarked','Cabin','Pclass','Embarked','Title'],inplace=True,axis=1)
-
-
-# ### Ticket feature extraction
-
-# In[ ]:
-
-
-def cleanTicket(ticket):
-        ticket = ticket.replace('.','')
-        ticket = ticket.replace('/','')
-        ticket = ticket.split()
-        ticket = map(lambda t : t.strip() , ticket)
-        ticket = filter(lambda t : not t.isdigit(), ticket)
-        ticket = list(ticket)
-        if (len(ticket)) > 0:
-            return ticket[0]
-        else: 
-            return 'XXX'
-
-combined['Ticket'] = combined['Ticket'].map(cleanTicket)
-
-
-# In[ ]:
-
-
-combined = get_one_hot_encoding(combined,'Ticket')
-combined.drop('Ticket',axis=1,inplace=True)
-
-
-# # Normalise
-
-# In[ ]:
-
-
-columns = combined.columns
-combined_new = pd.DataFrame(preprocessing.normalize(combined, axis=0, copy=True), columns=columns)
-combined_new['PassengerId'] = combined['PassengerId']
-combined = combined_new
-
-
-# In[ ]:
-
-
-combined.head()
-
-
-# # Recover
-
-# In[ ]:
-
-
-train0 = pd.read_csv(base_folder + 'train.csv')
-targets = train0.Survived
-train = combined[0:891]
-test = combined[891:]
-
-
-# # Feature Selection
-
-# In[ ]:
-
-
-clf = ExtraTreesClassifier(n_estimators=200)
-clf = clf.fit(train, targets)
-features = pd.DataFrame()
-features['feature'] = train.columns
-features['importance'] = clf.feature_importances_
-cols =  features.sort(['importance'],ascending=False)['feature']
-model = SelectFromModel(clf, prefit=True)
-train_new = model.transform(train)
-test_new = model.transform(test)
-
-
-# In[ ]:
-
-
-cols
-
-
-# In[ ]:
-
-
-train_new.shape
-
-
-# # Models
-
-# In[ ]:
-
-
-forest = RandomForestClassifier(max_features='sqrt')
-
-parameter_grid = {
-                 'max_depth' : [4,5,6,7,8,9],
-                 'n_estimators': [100, 200,210,240,250],
-                 'criterion': ['gini','entropy']
-                 }
-
-cross_validation = StratifiedKFold(targets, n_folds=5)
-
-grid_search = GridSearchCV(forest,
-                           param_grid=parameter_grid,
-                           cv=cross_validation)
-
-grid_search.fit(train_new, targets)
-
-print('Best score: {}'.format(grid_search.best_score_))
-print('Best parameters: {}'.format(grid_search.best_params_))
-
-
-# In[ ]:
-
-
-ext = ExtraTreesClassifier()
-
-parameter_grid = {
-                 'max_depth' : [4,5,6,7,8,9],
-                 'n_estimators': [100, 200,210,240,250],
-                 'criterion': ['gini','entropy']
-                 }
-
-cross_validation = StratifiedKFold(targets, n_folds=5)
-
-grid_search = GridSearchCV(ext,
-                           param_grid=parameter_grid,
-                           cv=cross_validation)
-
-grid_search.fit(train_new, targets)
-
-print('Best score: {}'.format(grid_search.best_score_))
-print('Best parameters: {}'.format(grid_search.best_params_))
-
-
-# In[ ]:
-
-
-lr = LogisticRegression(penalty='l2')
-
-parameter_grid = {
-                 'tol' : [0.1,0.01,0.001,10,1],
-                 'max_iter': [100, 200,210,240,250],
-                 }
-
-cross_validation = StratifiedKFold(targets, n_folds=5)
-
-grid_search = GridSearchCV(lr,
-                           param_grid=parameter_grid,
-                           cv=cross_validation)
-
-grid_search.fit(train_new, targets)
-
-print('Best score: {}'.format(grid_search.best_score_))
-print('Best parameters: {}'.format(grid_search.best_params_))
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import AdaBoostClassifier
-adaboost = AdaBoostClassifier(n_estimators=100)
-
-cross_validation = StratifiedKFold(targets, n_folds=5)
-adaboost.fit(train_new, targets)
-
-print('Best score: {}'.format(cross_val_score(adaboost,train_new,targets,cv=10)))
-
-
-# # Voting 
-
-# In[ ]:
-
-
-from sklearn.ensemble import VotingClassifier
-eclf1 = VotingClassifier(estimators=[
-        ('rf', forest),('etc',ext),('lr', lr), ('adb', adaboost)], voting='soft',
-                        weights=[2,1,1,1])
-eclf1 = eclf1.fit(train_new, targets)
-predictions=eclf1.predict(test_new)
-predictions
-
-test_predictions=eclf1.predict(test_new)
-test_predictions=test_predictions.astype(int)
-
-
-# In[ ]:
-
-
-test_predictions = eclf1.predict(test_new)
-df_output = pd.DataFrame()
-df_output['PassengerId'] = test['PassengerId']
-df_output['Survived'] = test_predictions
-df_output[['PassengerId','Survived']].to_csv('output.csv',index=False)
-
-
-# # Ensembling and Stacking
-
-# In[ ]:
-
-
-# Put in our parameters for said classifiers
-# Random Forest parameters
-rf_params = {
-    'n_jobs': -1,
-    'n_estimators': 500,
-     'warm_start': True, 
-     #'max_features': 0.2,
-    'max_depth': 6,
-    'min_samples_leaf': 2,
-    'max_features' : 'sqrt',
-    'verbose': 0
-}
-
-# Extra Trees Parameters
-et_params = {
-    'n_jobs': -1,
-    'n_estimators':500,
-    #'max_features': 0.5,
-    'max_depth': 8,
-    'min_samples_leaf': 2,
-    'verbose': 0
-}
-
-# AdaBoost parameters
-ada_params = {
-    'n_estimators': 500,
-    'learning_rate' : 0.75
-}
-
-# Gradient Boosting parameters
-gb_params = {
-    'n_estimators': 500,
-     #'max_features': 0.2,
-    'max_depth': 5,
-    'min_samples_leaf': 2,
-    'verbose': 0
-}
-
-# Support Vector Classifier parameters 
-svc_params = {
-    'kernel' : 'linear',
-    'C' : 0.025
-    }
-
-
-# In[ ]:
-
-
-NFOLDS = 5
-kf = StratifiedKFold(targets,n_folds= NFOLDS)
-
-# Class to extend the Sklearn classifier
-class SklearnHelper(object):
-    def __init__(self, clf, seed=0, params=None):
-        params['random_state'] = seed
-        self.clf = clf(**params)
-
-    def train(self, x_train, y_train):
-        self.clf.fit(x_train, y_train)
-
-    def predict(self, x):
-        return self.clf.predict(x)
-    
-    def fit(self,x,y):
-        return self.clf.fit(x,y)
-    
-    def feature_importances(self,x,y):
-        return self.clf.fit(x,y).feature_importances_
-
-
-# In[ ]:
-
-
-# Create 5 objects that represent our 4 models
-SEED=0
-
-rf = SklearnHelper(clf=RandomForestClassifier, seed=SEED, params=rf_params)
-et = SklearnHelper(clf=ExtraTreesClassifier, seed=SEED, params=et_params)
-ada = SklearnHelper(clf=AdaBoostClassifier, seed=SEED, params=ada_params)
-gb = SklearnHelper(clf=GradientBoostingClassifier, seed=SEED, params=gb_params)
-svc = SklearnHelper(clf=SVC, seed=SEED, params=svc_params)
-
-
-# ### Out of fold predictions
-# * First of all.. enumerate(kf). What does this do?
-# * This function returns indices of the 90%train and 10%test set which it generated from each fold of the same training set data.
-# * Using that data we can split the overall training data itself in to traing and test set for each fold... and  then utilize it for generating our k fold results if required.
-# 
-# * calculates mean predicts over the i folds in the test set
-# * calculates predictions over all folds of the training set
-# * finally returns both the predictions
-
-# In[ ]:
-
-
-def get_oof(clf, x_train, y_train, x_test):
-    ntrain = train.shape[0]
-    ntest = test.shape[0]
-    oof_train = np.zeros((ntrain,))
-    oof_test = np.zeros((ntest,))
-    oof_test_skf = np.empty((NFOLDS, ntest))
-
-    for i, (train_index, test_index) in enumerate(kf):
-        # get the training of fold number i from training set
-        x_tr = train_new[train_index]
-        # get the targets of fold i from training set
-        y_tr = targets[train_index]
-        # get the remaining 10% test set from the ith fold 
-        x_te = train_new[test_index]
-
-        # train the classifier on the training set
-        clf.train(x_tr, y_tr)
+    :param num_capsule: number of capsules in this layer
+    :param dim_vector: dimension of the output vectors of the capsules in this layer
+    :param num_routings: number of iterations for the routing algorithm
+    """
+    def __init__(self, num_capsule, dim_vector, num_routing=3,
+                 kernel_initializer='glorot_uniform',
+                 bias_initializer='zeros',
+                 **kwargs):
+        super(CapsuleLayer, self).__init__(**kwargs)
+        self.num_capsule = num_capsule
+        self.dim_vector = dim_vector
+        self.num_routing = num_routing
+        self.kernel_initializer = initializers.get(kernel_initializer)
+        self.bias_initializer = initializers.get(bias_initializer)
+
+    def build(self, input_shape):
+        assert len(input_shape) >= 3, "The input Tensor should have shape=[None, input_num_capsule, input_dim_vector]"
+        self.input_num_capsule = input_shape[1]
+        self.input_dim_vector = input_shape[2]
+
+        # Transform matrix
+        self.W = self.add_weight(shape=[self.input_num_capsule, self.num_capsule, self.input_dim_vector, self.dim_vector],
+                                 initializer=self.kernel_initializer,
+                                 name='W')
+
+        # Coupling coefficient. The redundant dimensions are just to facilitate subsequent matrix calculation.
+        self.bias = self.add_weight(shape=[1, self.input_num_capsule, self.num_capsule, 1, 1],
+                                    initializer=self.bias_initializer,
+                                    name='bias',
+                                    trainable=False)
+        self.built = True
+
+    def call(self, inputs, training=None):
+        # inputs.shape=[None, input_num_capsule, input_dim_vector]
+        # Expand dims to [None, input_num_capsule, 1, 1, input_dim_vector]
+        inputs_expand = K.expand_dims(K.expand_dims(inputs, 2), 2)
+
+        # Replicate num_capsule dimension to prepare being multiplied by W
+        # Now it has shape = [None, input_num_capsule, num_capsule, 1, input_dim_vector]
+        inputs_tiled = K.tile(inputs_expand, [1, 1, self.num_capsule, 1, 1])
+
+        """  
+        # Compute `inputs * W` by expanding the first dim of W. More time-consuming and need batch_size.
+        # Now W has shape  = [batch_size, input_num_capsule, num_capsule, input_dim_vector, dim_vector]
+        w_tiled = K.tile(K.expand_dims(self.W, 0), [self.batch_size, 1, 1, 1, 1])
         
-        # store results of predictions over the ith test set at proper locations
-        # oof_train will contain all the predictions over the test set once all n_fold iterations are over
-        oof_train[test_index] = clf.predict(x_te)
-        # over the complete test set classifier trained so far will predict
-        # ith entry of oof_test_skf will contain predictions from classifier trained till ith fold
-        oof_test_skf[i, :] = clf.predict(x_test)
+        # Transformed vectors, inputs_hat.shape = [None, input_num_capsule, num_capsule, 1, dim_vector]
+        inputs_hat = K.batch_dot(inputs_tiled, w_tiled, [4, 3])
+        """
+        # Compute `inputs * W` by scanning inputs_tiled on dimension 0. This is faster but requires Tensorflow.
+        # inputs_hat.shape = [None, input_num_capsule, num_capsule, 1, dim_vector]
+        inputs_hat = tf.scan(lambda ac, x: K.batch_dot(x, self.W, [3, 2]),
+                             elems=inputs_tiled,
+                             initializer=K.zeros([self.input_num_capsule, self.num_capsule, 1, self.dim_vector]))
+        """
+        # Routing algorithm V1. Use tf.while_loop in a dynamic way.
+        def body(i, b, outputs):
+            c = tf.nn.softmax(self.bias, dim=2)  # dim=2 is the num_capsule dimension
+            outputs = squash(K.sum(c * inputs_hat, 1, keepdims=True))
+            b = b + K.sum(inputs_hat * outputs, -1, keepdims=True)
+            return [i-1, b, outputs]
 
-    # calculate mean of all the predictions done in the i folds and store them as final results in oof_test
-    oof_test[:] = oof_test_skf.mean(axis=0)
-    # predictions on training set, mean predictions on the test set
-    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
+        cond = lambda i, b, inputs_hat: i > 0
+        loop_vars = [K.constant(self.num_routing), self.bias, K.sum(inputs_hat, 1, keepdims=True)]
+        _, _, outputs = tf.while_loop(cond, body, loop_vars)
+        """
+        # Routing algorithm V2. Use iteration. V2 and V1 both work without much difference on performance
+        assert self.num_routing > 0, 'The num_routing should be > 0.'
+        for i in range(self.num_routing):
+            c = tf.nn.softmax(self.bias, dim=2)  # dim=2 is the num_capsule dimension
+            # outputs.shape=[None, 1, num_capsule, 1, dim_vector]
+            outputs = squash(K.sum(c * inputs_hat, 1, keepdims=True))
+
+            # last iteration needs not compute bias which will not be passed to the graph any more anyway.
+            if i != self.num_routing - 1:
+                # self.bias = K.update_add(self.bias, K.sum(inputs_hat * outputs, [0, -1], keepdims=True))
+                self.bias += K.sum(inputs_hat * outputs, -1, keepdims=True)
+            # tf.summary.histogram('BigBee', self.bias)  # for debugging
+        return K.reshape(outputs, [-1, self.num_capsule, self.dim_vector])
+
+    def compute_output_shape(self, input_shape):
+        return tuple([None, self.num_capsule, self.dim_vector])
+
+
+def PrimaryCap(inputs, dim_vector, n_channels, kernel_size, strides, padding):
+    """
+    Apply Conv2D `n_channels` times and concatenate all capsules
+    :param inputs: 4D tensor, shape=[None, width, height, channels]
+    :param dim_vector: the dim of the output vector of capsule
+    :param n_channels: the number of types of capsules
+    :return: output tensor, shape=[None, num_capsule, dim_vector]
+    """
+    output = layers.Conv2D(filters=dim_vector*n_channels, kernel_size=kernel_size, strides=strides, padding=padding)(inputs)
+    outputs = layers.Reshape(target_shape=[-1, dim_vector])(output)
+    return layers.Lambda(squash)(outputs)
+
+
+# # Build the Model
+# Here we use the layers to build up the model
+
+# In[ ]:
+
+
+from keras import layers, models
+from keras import backend as K
+from keras.utils import to_categorical
+def CapsNet(input_shape, n_class, num_routing):
+    """
+    A Capsule Network on MNIST.
+    :param input_shape: data shape, 4d, [None, width, height, channels]
+    :param n_class: number of classes
+    :param num_routing: number of routing iterations
+    :return: A Keras Model with 2 inputs and 2 outputs
+    """
+    x = layers.Input(shape=input_shape)
+
+    # Layer 1: Just a conventional Conv2D layer
+    conv1 = layers.Conv2D(filters=256, kernel_size=9, strides=1, padding='valid', activation='relu', name='conv1')(x)
+
+    # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_capsule, dim_vector]
+    primarycaps = PrimaryCap(conv1, dim_vector=8, n_channels=32, kernel_size=9, strides=2, padding='valid')
+
+    # Layer 3: Capsule layer. Routing algorithm works here.
+    digitcaps = CapsuleLayer(num_capsule=n_class, dim_vector=16, num_routing=num_routing, name='digitcaps')(primarycaps)
+
+    # Layer 4: This is an auxiliary layer to replace each capsule with its length. Just to match the true label's shape.
+    # If using tensorflow, this will not be necessary. :)
+    out_caps = Length(name='out_caps')(digitcaps)
+
+    # Decoder network.
+    y = layers.Input(shape=(n_class,))
+    masked = Mask()([digitcaps, y])  # The true label is used to mask the output of capsule layer.
+    x_recon = layers.Dense(512, activation='relu')(masked)
+    x_recon = layers.Dense(1024, activation='relu')(x_recon)
+    x_recon = layers.Dense(784, activation='sigmoid')(x_recon)
+    x_recon = layers.Reshape(target_shape=[28, 28, 1], name='out_recon')(x_recon)
+
+    # two-input-two-output keras Model
+    return models.Model([x, y], [out_caps, x_recon])
 
 
 # In[ ]:
 
 
-# Create our OOF train and test predictions. These base results will be used as new features
-et_oof_train, et_oof_test = get_oof(et, train_new, targets, test_new) # Extra Trees
-rf_oof_train, rf_oof_test = get_oof(rf,train_new, targets, test_new) # Random Forest
-ada_oof_train, ada_oof_test = get_oof(ada, train_new, targets, test_new) # AdaBoost 
-gb_oof_train, gb_oof_test = get_oof(gb,train_new, targets, test_new) # Gradient Boost
-svc_oof_train, svc_oof_test = get_oof(svc,train_new, targets, test_new) # Support Vector Classifier
+def margin_loss(y_true, y_pred):
+    """
+    Margin loss for Eq.(4). When y_true[i, :] contains not just one `1`, this loss should work too. Not test it.
+    :param y_true: [None, n_classes]
+    :param y_pred: [None, num_capsule]
+    :return: a scalar loss value.
+    """
+    L = y_true * K.square(K.maximum(0., 0.9 - y_pred)) +         0.5 * (1 - y_true) * K.square(K.maximum(0., y_pred - 0.1))
 
-print("Training is complete")
-
-
-# ### Feature Importances
-
-# In[ ]:
-
-
-rf_feature = rf.feature_importances(train_new,targets)
-et_feature = et.feature_importances(train_new, targets)
-ada_feature = ada.feature_importances(train_new, targets)
-gb_feature = gb.feature_importances(train_new,targets)
-
-
-# ### Second Level Dataframe
-
-# In[ ]:
-
-
-cols_new = cols.values[0:25]
+    return K.mean(K.sum(L, 1))
 
 
 # In[ ]:
 
 
-# Create a dataframe with features
-feature_dataframe = pd.DataFrame( {'features': cols_new,
-     'Random Forest feature importances': rf_feature,
-     'Extra Trees  feature importances': et_feature,
-      'AdaBoost feature importances': ada_feature,
-    'Gradient Boost feature importances': gb_feature
-    })
+# define model
+model = CapsNet(input_shape=[28, 28, 1],
+                n_class=10,
+                num_routing=3)
+model.summary()
+try:
+    plot_model(model, to_file='model.png', show_shapes=True)
+except Exception as e:
+    print('No fancy plot {}'.format(e))
+
+
+# # Load MNIST Data
+# Here we load and reformat the Kaggle contest data
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+data_train = pd.read_csv('../input/fashion-mnist_train.csv')
+X_full = data_train.iloc[:,1:]
+y_full = data_train.iloc[:,:1]
+x_train, x_test, y_train, y_test = train_test_split(X_full, y_full, test_size = 0.3)
 
 
 # In[ ]:
 
 
-# The final dataframe
-feature_dataframe.head()
-
-
-# * stored the predictions on training set of various classifiers into flattened array
-
-# In[ ]:
-
-
-base_predictions_train = pd.DataFrame( {'RandomForest': rf_oof_train.ravel(),
-     'ExtraTrees': et_oof_train.ravel(),
-     'AdaBoost': ada_oof_train.ravel(),
-      'GradientBoost': gb_oof_train.ravel()
-    })
-base_predictions_train.head()
-
-
-# ### Visualise co-relation between classifiers
-# * It has been seen that, lesser the co-relation, better the predictions from second level predictor
-
-# In[ ]:
-
-
-import plotly.graph_objs as go
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-data = [
-    go.Heatmap(
-        z= base_predictions_train.astype(float).corr().values ,
-        x=base_predictions_train.columns.values,
-        y= base_predictions_train.columns.values,
-          colorscale='Portland',
-            showscale=True,
-            reversescale = True
-    )
-]
-py.iplot(data, filename='labelled-heatmap')
-
-
-# ### Setup level 2
-
-# In[ ]:
-
-
-#converted into a single array of training set(891) X 4 columns(number of classifiers)
-x_train = np.concatenate(( et_oof_train, rf_oof_train, ada_oof_train, gb_oof_train, svc_oof_train), axis=1)
-x_test = np.concatenate(( et_oof_test, rf_oof_test, ada_oof_test, gb_oof_test, svc_oof_test), axis=1)
-
-
-# #### FYI
-# * x_train will contain predictions from all the classifiers
-# * features for training for decision tree below is predictions of various classifiers
-# * x_test contains the predictions on the test set 
-
-# ### Stack predictor
-
-# In[ ]:
-
-
-from sklearn import tree
-clf = tree.DecisionTreeClassifier(max_depth=10,max_features='sqrt').fit(x_train, targets)
-predictions = clf.predict(x_test)
+x_train = x_train.values.reshape(-1, 28, 28, 1).astype('float32') / 255.
+x_test = x_test.values.reshape(-1, 28, 28, 1).astype('float32') / 255.
+y_train = to_categorical(y_train.astype('float32'))
+y_test = to_categorical(y_test.astype('float32'))
+print('Training', x_train.shape, x_train.max())
+print('Testing', x_test.shape, x_test.max())
 
 
 # In[ ]:
 
 
-# Just throw these to kaggle output :)
-predictions
+def train(model, data, epoch_size_frac=1.0):
+    """
+    Training a CapsuleNet
+    :param model: the CapsuleNet model
+    :param data: a tuple containing training and testing data, like `((x_train, y_train), (x_test, y_test))`
+    :param args: arguments
+    :return: The trained model
+    """
+    # unpacking the data
+    (x_train, y_train), (x_test, y_test) = data
 
+    # callbacks
+    log = callbacks.CSVLogger('log.csv')
+    checkpoint = callbacks.ModelCheckpoint('weights-{epoch:02d}.h5',
+                                           save_best_only=True, save_weights_only=True, verbose=1)
+    lr_decay = callbacks.LearningRateScheduler(schedule=lambda epoch: 0.001 * np.exp(-epoch / 10.))
 
-# # Output!!
+    # compile the model
+    model.compile(optimizer='adam',
+                  loss=[margin_loss, 'mse'],
+                  loss_weights=[1., 0.0005],
+                  metrics={'out_caps': 'accuracy'})
+
+    """
+    # Training without data augmentation:
+    model.fit([x_train, y_train], [y_train, x_train], batch_size=args.batch_size, epochs=args.epochs,
+              validation_data=[[x_test, y_test], [y_test, x_test]], callbacks=[log, tb, checkpoint])
+    """
+
+    # -----------------------------------Begin: Training with data augmentation -----------------------------------#
+    def train_generator(x, y, batch_size, shift_fraction=0.):
+        train_datagen = ImageDataGenerator(width_shift_range=shift_fraction,
+                                           height_shift_range=shift_fraction)  # shift up to 2 pixel for MNIST
+        generator = train_datagen.flow(x, y, batch_size=batch_size)
+        while 1:
+            x_batch, y_batch = generator.next()
+            yield ([x_batch, y_batch], [y_batch, x_batch])
+
+    # Training with data augmentation. If shift_fraction=0., also no augmentation.
+    model.fit_generator(generator=train_generator(x_train, y_train, 64, 0.1),
+                        steps_per_epoch=int(epoch_size_frac*y_train.shape[0] / 64),
+                        epochs=1,
+                        validation_data=[[x_test, y_test], [y_test, x_test]],
+                        callbacks=[log, checkpoint, lr_decay])
+    # -----------------------------------End: Training with data augmentation -----------------------------------#
+
+    model.save_weights('trained_model.h5')
+    print('Trained model saved to \'trained_model.h5\'')
+
+    return model
+
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('bash', '', 'kg submit output.csv -c titanic -u sp4658@nyu.edu -p **** -m "voting classifier"')
+train(model=model, data=((x_train, y_train), (x_test[:60], y_test[:60])), 
+      epoch_size_frac = 0.6) # do 10% of an epoch (takes too long)
 
 
-# # Improvements
+# In[ ]:
 
-# * A lot can be done in Missing Value Imputation
-# * Wanted to try blending and other cool stuff!!
-# * This is my first Kernel, i wanted to learn and try out many different stuff. Please advice with improvements.
 
-# # References
-# * [Blending][1]
-# * [Stacking][2]
-# * [Ensembling][3]
-# * [Voting][4]
-# * [Stacking/Ensembling guide][5]
-# * [Random Forest][6]
-# * Lot more of them....
-# 
-# 
-#   [1]: https://github.com/emanuele/kaggle_pbr/blob/master/blend.py
-#   [2]: http://blog.kaggle.com/2016/12/27/a-kagglers-guide-to-model-stacking-in-practice
-#   [3]: http://mlwave.com/kaggle-ensembling-guide/
-#   [4]: https://www.kaggle.com/poonaml/titanic/titanic-survival-prediction-end-to-end-ml-pipeline
-#   [5]: https://www.kaggle.com/shivendra91/titanic/introduction-to-ensembling-stacking-in-python/editnb
-#   [6]: https://www.kaggle.com/benhamner/titanic/random-forest-benchmark-r/code
+def combine_images(generated_images):
+    num = generated_images.shape[0]
+    width = int(np.sqrt(num))
+    height = int(np.ceil(float(num)/width))
+    shape = generated_images.shape[1:3]
+    image = np.zeros((height*shape[0], width*shape[1]),
+                     dtype=generated_images.dtype)
+    for index, img in enumerate(generated_images):
+        i = int(index/width)
+        j = index % width
+        image[i*shape[0]:(i+1)*shape[0], j*shape[1]:(j+1)*shape[1]] =             img[:, :, 0]
+    return image
+
+def test(model, data):
+    x_test, y_test = data
+    y_pred, x_recon = model.predict([x_test, y_test], batch_size=100)
+    print('-'*50)
+    print('Test acc:', np.sum(np.argmax(y_pred, 1) == np.argmax(y_test, 1))/y_test.shape[0])
+
+    import matplotlib.pyplot as plt
+    from PIL import Image
+
+    img = combine_images(np.concatenate([x_test[:50],x_recon[:50]]))
+    image = img * 255
+    Image.fromarray(image.astype(np.uint8)).save("real_and_recon.png")
+    print()
+    print('Reconstructed images are saved to ./real_and_recon.png')
+    print('-'*50)
+    plt.imshow(plt.imread("real_and_recon.png", ))
+    plt.show()
+
+
+# # Apply Model to the Competition Data
+# Here we apply the model to the compitition data
+
+# In[ ]:
+
+
+test_df = pd.read_csv('../input/fashion-mnist_train.csv')
+data_test = test_df.iloc[:,1:].values.reshape(-1, 28, 28, 1).astype('float32') / 255.
+data_test_y = to_categorical(test_df.iloc[:,:1])
+test(model=model, data=(data_test[:250], data_test_y[:250]))
+

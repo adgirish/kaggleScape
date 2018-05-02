@@ -1,76 +1,112 @@
-import numpy as np
-import pandas as pd
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-# Is access information for landing page of ad click in page_views.csv?
-df_test = pd.read_csv('../input/clicks_test.csv')
-df_ad = pd.read_csv('../input/promoted_content.csv',
-    usecols  = ('ad_id','document_id'),
-    dtype={'ad_id': np.int, 'uuid': np.str, 'document_id': np.str})
-df_events = pd.read_csv('../input/events.csv',
-    usecols  = ('display_id','uuid','timestamp'),
-    dtype={'display_id': np.int, 'uuid': np.str, 'timestamp': np.int})
-df_test = pd.merge(df_test, df_ad, on='ad_id', how='left')
-df_test = pd.merge(df_test, df_events, on='display_id', how='left')
-df_test['usr_doc'] = df_test['uuid'] + '_' + df_test['document_id']
-df_test = df_test.set_index('usr_doc')
-time_dict = df_test[['timestamp']].to_dict()['timestamp']
-f = open("../input/page_views.csv", "r")
-line = f.readline().strip()
-head_arr = line.split(",")
-fld_index = dict(zip(head_arr,range(0,len(head_arr))))
-total = 0
-found = 0
-while 1:
-    line = f.readline().strip()
-    total += 1
-    if total % 100000000 == 0:
-        print('Read {} lines, found {}'.format(total,found))
-    if line == '':
-        break
-    arr = line.split(",")
-    usr_doc = arr[fld_index['uuid']] + '_' + arr[fld_index['document_id']]
-    if usr_doc in time_dict:
-        #don't use timestamp yet.
-        #time_diff = time_dict[usr_doc] - int(arr[fld_index['timestamp']])
-        #if abs(time_diff) < 600:
-            time_dict[usr_doc] = -1
-            found += 1
-print(found)
-# found (total access found in page_views.csv) would be 271994
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import cv2
+from shapely.wkt import loads as wkt_loads
+import tifffile as tiff
 
-df_test=df_test.reset_index()
-df_test['fixed_timestamp'] = df_test['usr_doc'].apply(lambda x: time_dict[x])
 
-# following code is  based on clustifier's BTB scripts
-train = pd.read_csv("../input/clicks_train.csv")
-cnt = train[train.clicked==1].ad_id.value_counts()
-cntall = train.ad_id.value_counts()
-ave_ctr = np.sum(cnt)/float(np.sum(cntall))
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-def get_prob(x):
-    if x[0] < 0:
-        return 1
-    k = x[1]
-    if k in cnt:
-        return cnt[k] / (float(cntall[k]) + 10)
-    else:
-        if k in cntall:
-            # use -imps for 0 click penalty
-            return -1 * cntall[k]
-        else:
-            # use average value for no imp ad
-            return ave_ctr
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-def agg2arr(x):
-    return list(x)
+# Any results you write to the current directory are saved as output.
 
-def val_sort(x):
-    id_dict = dict(zip(x[0], x[1]))
-    id_list_sorted =  [k for k,v in sorted(id_dict.items(), key=lambda x:x[1], reverse=True)]
-    return " ".join(map(str,id_list_sorted))
+# The code is for python 2.7. Parts of it are taken from other posts/kernels.
+# Good luck!
 
-df_test['prob'] = df_test[['fixed_timestamp','ad_id']].apply(lambda x: get_prob(x),axis=1)
-subm = df_test.groupby("display_id").agg({'ad_id': agg2arr, 'prob': agg2arr})
-subm['ad_id'] = subm[['ad_id','prob']].apply(lambda x: val_sort(x),axis=1)
-del subm['prob']
-subm.to_csv("subm_leak.csv")
+
+def _get_image_names(base_path, imageId):
+    '''
+    Get the names of the tiff files
+    '''
+    d = {'3': path.join(base_path,'three_band/{}.tif'.format(imageId)),             # (3, 3348, 3403)
+         'A': path.join(base_path,'sixteen_band/{}_A.tif'.format(imageId)),         # (8, 134, 137)
+         'M': path.join(base_path,'sixteen_band/{}_M.tif'.format(imageId)),         # (8, 837, 851)
+         'P': path.join(base_path,'sixteen_band/{}_P.tif'.format(imageId)),         # (3348, 3403)
+         }
+    return d
+
+
+def _convert_coordinates_to_raster(coords, img_size, xymax):
+    Xmax,Ymax = xymax
+    H,W = img_size
+    W1 = 1.0*W*W/(W+1)
+    H1 = 1.0*H*H/(H+1)
+    xf = W1/Xmax
+    yf = H1/Ymax
+    coords[:,1] *= yf
+    coords[:,0] *= xf
+    coords_int = np.round(coords).astype(np.int32)
+    return coords_int
+
+
+def _get_xmax_ymin(grid_sizes_panda, imageId):
+    xmax, ymin = grid_sizes_panda[grid_sizes_panda.ImageId == imageId].iloc[0,1:].astype(float)
+    return (xmax,ymin)
+
+
+def _get_polygon_list(wkt_list_pandas, imageId, cType):
+    df_image = wkt_list_pandas[wkt_list_pandas.ImageId == imageId]
+    multipoly_def = df_image[df_image.ClassType == cType].MultipolygonWKT
+    polygonList = None
+    if len(multipoly_def) > 0:
+        assert len(multipoly_def) == 1
+        polygonList = wkt_loads(multipoly_def.values[0])
+    return polygonList
+
+
+def _get_and_convert_contours(polygonList, raster_img_size, xymax):
+    perim_list = []
+    interior_list = []
+    if polygonList is None:
+        return None
+    for k in range(len(polygonList)):
+        poly = polygonList[k]
+        perim = np.array(list(poly.exterior.coords))
+        perim_c = _convert_coordinates_to_raster(perim, raster_img_size, xymax)
+        perim_list.append(perim_c)
+        for pi in poly.interiors:
+            interior = np.array(list(pi.coords))
+            interior_c = _convert_coordinates_to_raster(interior, raster_img_size, xymax)
+            interior_list.append(interior_c)
+    return perim_list,interior_list
+
+
+def _plot_mask_from_contours(raster_img_size, contours, class_value = 1):
+    img_mask = np.zeros(raster_img_size,np.uint8)
+    if contours is None:
+        return img_mask
+    perim_list,interior_list = contours
+    cv2.fillPoly(img_mask,perim_list,class_value)
+    cv2.fillPoly(img_mask,interior_list,0)
+    return img_mask
+
+
+def generate_mask_for_image_and_class(raster_size, imageId, class_type, grid_sizes_panda,
+                                     wkt_list_pandas):
+    xymax = _get_xmax_ymin(grid_sizes_panda,imageId)
+    polygon_list = _get_polygon_list(wkt_list_pandas,imageId,class_type)
+    contours = _get_and_convert_contours(polygon_list,raster_size,xymax)
+    mask = _plot_mask_from_contours(raster_size,contours,1)
+    return mask
+
+
+inDir = '../input'
+
+
+# read the training data from train_wkt_v4.csv
+df = pd.read_csv(inDir + '/train_wkt_v4.csv')
+
+# grid size will also be needed later..
+gs = pd.read_csv(inDir + '/grid_sizes.csv', names=['ImageId', 'Xmax', 'Ymin'], skiprows=1)
+
+mask = generate_mask_for_image_and_class((500,500),"6120_2_2",4,gs,df)
+cv2.imwrite("mask.png",mask*255)
+
+

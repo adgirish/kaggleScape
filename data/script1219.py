@@ -1,539 +1,228 @@
 
 # coding: utf-8
 
+# # Mercedes-Benz Greener Manufacturing
+# 
+# Welcome to a new competition! This time from Mercedes-Benz - our job is to predict how long a car on a production line will take to pass the testing phase. This is a classical regression problem, and we're evaluated with the R2 metric. Let's take a look at the data we're given:
+
 # In[ ]:
 
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
 import os
-print(os.listdir("../input"))
+import gc
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Any results you write to the current directory are saved as output.
+pal = sns.color_palette()
 
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from scipy.sparse import hstack
-import regex as re
-import regex
+print('# File sizes')
+for f in os.listdir('../input'):
+    if 'zip' not in f:
+        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
 
-import lightgbm as lgb
+
+# So, a much smaller dataset than what we've been used to recently. No images here! :)
+# We're given a single train and test csv, indicating that the data should also be pretty simple to play with.
+# 
+# Time to load it into memory!
+# ## Training set
+
+# In[ ]:
+
+
+df_train = pd.read_csv('../input/train.csv')
+print('Size of training set: {} rows and {} columns'.format(*df_train.shape))
+df_train.head()
+
+
+# Just from this, we can see that our training data is made up of just 4000 rows, but has 400 seemingly anonymised features inside. As well as this, we are given an ID (which is not equal to the row number, this could be significant) and the target value, which is the number of seconds taken.
+# 
+# Let's start off by looking at the distribution of the target value:
+
+# In[ ]:
+
+
+y_train = df_train['y'].values
+plt.figure(figsize=(15, 5))
+plt.hist(y_train, bins=20)
+plt.xlabel('Target value in seconds')
+plt.ylabel('Occurences')
+plt.title('Distribution of the target value')
+
+print('min: {} max: {} mean: {} std: {}'.format(min(y_train), max(y_train), y_train.mean(), y_train.std()))
+print('Count of values above 180: {}'.format(np.sum(y_train > 200)))
+
+
+# So we have a pretty standard distribution here, which is centred around almost exactly 100. Nothing special to note here, except there is a single outlier at 265 seconds where every other value is below 180.
+# 
+# The fact that our ID is not equal to the row ID seems to suggest that the train and test sets were randomly sampled from the same dataset, which could have some special order to it, for example a time series. Let's take a look at how this target value changes over time in order to understand whether we're given time series data.
+# 
+
+# In[ ]:
+
+
+plt.figure(figsize=(15, 5))
+plt.plot(y_train)
+plt.xlabel('Row ID')
+plt.ylabel('Target value')
+plt.title('Change in target value over the dataset')
+plt.show()
+
+plt.figure(figsize=(15, 5))
+plt.plot(y_train[:100])
+plt.xlabel('Row ID')
+plt.ylabel('Target value')
+plt.title('Change in target value over the dataset (first 100 samples)')
+print()
+
+
+# At first glance, there doesn't seem to be anything overly suspicious here - looks like how a random sort would. I might take a closer look later but for now let's move on to the features.
+# 
+# ## Feature analysis
+
+# In[ ]:
+
+
+cols = [c for c in df_train.columns if 'X' in c]
+print('Number of features: {}'.format(len(cols)))
+
+print('Feature types:')
+df_train[cols].dtypes.value_counts()
+
+
+# So out of all our features, we are given 8 object (likely a string) variables, 368 integer variables. What about the cardinality of our features?
+
+# In[ ]:
+
+
+counts = [[], [], []]
+for c in cols:
+    typ = df_train[c].dtype
+    uniq = len(np.unique(df_train[c]))
+    if uniq == 1: counts[0].append(c)
+    elif uniq == 2 and typ == np.int64: counts[1].append(c)
+    else: counts[2].append(c)
+
+print('Constant features: {} Binary features: {} Categorical features: {}\n'.format(*[len(c) for c in counts]))
+
+print('Constant features:', counts[0])
+print('Categorical features:', counts[2])
+
+
+# Interestingly, we have 12 features which only have a single value in them - these are pretty useless for supervised algorithms, and should probably be dropped (unless you want to use them for anomaly detection in case a different value appears in the test set)
+# 
+# The rest of our dataset is made up of many binary features, and a few categorical features.
+
+# In[ ]:
+
+
+binary_means = [np.mean(df_train[c]) for c in counts[1]]
+binary_names = np.array(counts[1])[np.argsort(binary_means)]
+binary_means = np.sort(binary_means)
+
+fig, ax = plt.subplots(1, 3, figsize=(12,30))
+ax[0].set_ylabel('Feature name')
+ax[1].set_title('Mean values of binary variables')
+for i in range(3):
+    names, means = binary_names[i*119:(i+1)*119], binary_means[i*119:(i+1)*119]
+    ax[i].barh(range(len(means)), means, color=pal[2])
+    ax[i].set_xlabel('Mean value')
+    ax[i].set_yticks(range(len(means)))
+    ax[i].set_yticklabels(names, rotation='horizontal')
+plt.show()
 
 
 # In[ ]:
 
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+for c in counts[2]:
+    value_counts = df_train[c].value_counts()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    plt.title('Categorical feature {} - Cardinality {}'.format(c, len(np.unique(df_train[c]))))
+    plt.xlabel('Feature value')
+    plt.ylabel('Occurences')
+    plt.bar(range(len(value_counts)), value_counts.values, color=pal[1])
+    ax.set_xticks(range(len(value_counts)))
+    ax.set_xticklabels(value_counts.index, rotation='vertical')
+    plt.show()
 
-train = pd.read_csv('../input/train.csv').fillna(' ')
-test = pd.read_csv('../input/test.csv').fillna(' ')
+
+# ## XGBoost Starter
+# Now that we know the outline of what the data's made up of, we can make a simple model on it. Time to bring out XGBoost!
+
+# In[ ]:
+
+
+df_test = pd.read_csv('../input/test.csv')
+
+usable_columns = list(set(df_train.columns) - set(['ID', 'y']))
+
+y_train = df_train['y'].values
+id_test = df_test['ID'].values
+
+x_train = df_train[usable_columns]
+x_test = df_test[usable_columns]
+
+for column in usable_columns:
+    cardinality = len(np.unique(x_train[column]))
+    if cardinality == 1:
+        x_train.drop(column, axis=1) # Column with only one value is useless so we drop it
+        x_test.drop(column, axis=1)
+    if cardinality > 2: # Column is categorical
+        mapper = lambda x: sum([ord(digit) for digit in x])
+        x_train[column] = x_train[column].apply(mapper)
+        x_test[column] = x_test[column].apply(mapper)
+        
+x_train.head()
 
 
 # In[ ]:
 
 
-train_links = train["comment_text"].apply(lambda x: len(re.findall("(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(:[0-9]{1,5})?(\/.*)?",str(x)))).values.reshape(len(train), 1)
-test_links = test["comment_text"].apply(lambda x: len(re.findall("(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}(:[0-9]{1,5})?(\/.*)?",str(x)))).values.reshape(len(test), 1)
+import xgboost as xgb
+from sklearn.metrics import r2_score
+from sklearn.model_selection import train_test_split
 
+x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=4242)
 
-links_n = np.append(train_links, test_links)
-linksmean = train_links.mean()
-linksstd = test_links.std()
+d_train = xgb.DMatrix(x_train, label=y_train)
+d_valid = xgb.DMatrix(x_valid, label=y_valid)
+d_test = xgb.DMatrix(x_test)
 
-train_links_n = (train_links - linksmean) / linksstd
-test_links_n = (test_links - linksmean) / linksstd
+params = {}
+params['objective'] = 'reg:linear'
+params['eta'] = 0.02
+params['max_depth'] = 4
 
+def xgb_r2_score(preds, dtrain):
+    labels = dtrain.get_label()
+    return 'r2', r2_score(labels, preds)
 
-# In[ ]:
+watchlist = [(d_train, 'train'), (d_valid, 'valid')]
 
-
-repl = {
-    "yay!": " good ",
-    "yay": " good ",
-    "yaay": " good ",
-    "yaaay": " good ",
-    "yaaaay": " good ",
-    "yaaaaay": " good ",
-    ":/": " bad ",
-    ":&gt;": " sad ",
-    ":')": " sad ",
-    ":-(": " frown ",
-    ":(": " frown ",
-    ":s": " frown ",
-    ":-s": " frown ",
-    "&lt;3": " heart ",
-    ":d": " smile ",
-    ":p": " smile ",
-    ":dd": " smile ",
-    "8)": " smile ",
-    ":-)": " smile ",
-    ":)": " smile ",
-    ";)": " smile ",
-    "(-:": " smile ",
-    "(:": " smile ",
-    ":/": " worry ",
-    ":&gt;": " angry ",
-    ":')": " sad ",
-    ":-(": " sad ",
-    ":(": " sad ",
-    ":s": " sad ",
-    ":-s": " sad ",
-    r"\br\b": "are",
-    r"\bu\b": "you",
-    r"\bhaha\b": "ha",
-    r"\bhahaha\b": "ha",
-    r"\bdon't\b": "do not",
-    r"\bdoesn't\b": "does not",
-    r"\bdidn't\b": "did not",
-    r"\bhasn't\b": "has not",
-    r"\bhaven't\b": "have not",
-    r"\bhadn't\b": "had not",
-    r"\bwon't\b": "will not",
-    r"\bwouldn't\b": "would not",
-    r"\bcan't\b": "can not",
-    r"\bcannot\b": "can not",
-    r"\bi'm\b": "i am",
-    "m": "am",
-    "r": "are",
-    "u": "you",
-    "haha": "ha",
-    "hahaha": "ha",
-    "don't": "do not",
-    "doesn't": "does not",
-    "didn't": "did not",
-    "hasn't": "has not",
-    "haven't": "have not",
-    "hadn't": "had not",
-    "won't": "will not",
-    "wouldn't": "would not",
-    "can't": "can not",
-    "cannot": "can not",
-    "i'm": "i am",
-    "m": "am",
-    "i'll" : "i will",
-    "its" : "it is",
-    "it's" : "it is",
-    "'s" : " is",
-    "that's" : "that is",
-    "weren't" : "were not",
-}
-
-keys = [i for i in repl.keys()]
-
-new_train_data = []
-new_test_data = []
-ltr = train["comment_text"].tolist()
-lte = test["comment_text"].tolist()
-for i in ltr:
-    arr = str(i).split()
-    xx = ""
-    for j in arr:
-        j = str(j).lower()
-        if j[:4] == 'http' or j[:3] == 'www':
-            continue
-        if j in keys:
-            # print("inn")
-            j = repl[j]
-        xx += j + " "
-    new_train_data.append(xx)
-for i in lte:
-    arr = str(i).split()
-    xx = ""
-    for j in arr:
-        j = str(j).lower()
-        if j[:4] == 'http' or j[:3] == 'www':
-            continue
-        if j in keys:
-            # print("inn")
-            j = repl[j]
-        xx += j + " "
-    new_test_data.append(xx)
-train["new_comment_text"] = new_train_data
-test["new_comment_text"] = new_test_data
-
-trate = train["new_comment_text"].tolist()
-tete = test["new_comment_text"].tolist()
-for i, c in enumerate(trate):
-    trate[i] = re.sub('[^a-zA-Z ?!]+', '', str(trate[i]).lower())
-for i, c in enumerate(tete):
-    tete[i] = re.sub('[^a-zA-Z ?!]+', '', tete[i])
-train["comment_text"] = trate
-test["comment_text"] = tete
-del trate, tete
-train.drop(["new_comment_text"], axis=1, inplace=True)
-test.drop(["new_comment_text"], axis=1, inplace=True)
+clf = xgb.train(params, d_train, 1000, watchlist, early_stopping_rounds=50, feval=xgb_r2_score, maximize=True, verbose_eval=10)
 
 
 # In[ ]:
 
 
-train_text = train['comment_text']
-test_text = test['comment_text']
-all_text = pd.concat([train_text, test_text])
+p_test = clf.predict(d_test)
+
+sub = pd.DataFrame()
+sub['ID'] = id_test
+sub['y'] = p_test
+sub.to_csv('xgb.csv', index=False)
 
 
 # In[ ]:
 
 
-import re, string
-re_tok = re.compile(f'([{string.punctuation}“”¨«»®´·º½¾¿¡§£₤‘’])')
-def tokenize(s): return re_tok.sub(r' \1 ', s).split()
+sub.head()
 
 
-# In[ ]:
-
-
-# train_word_n = train['comment_text'].apply(lambda x: len(x.split(' '))).values.reshape(len(train), 1)
-# test_word_n = test['comment_text'].apply(lambda x: len(x.split(' '))).values.reshape(len(test), 1)
-
-# word_n = np.append(train_word_n, test_word_n)
-# wnmean = word_n.mean()
-# wnstd = word_n.std()
-
-# train_word_nn = (train_word_n - wnmean) / wnstd
-# test_word_nn = (test_word_n - wnmean) / wnstd
-
-
-# In[ ]:
-
-
-cont_patterns = [
-        (b'US', b'United States'),
-        (b'IT', b'Information Technology'),
-        (b'(W|w)on\'t', b'will not'),
-        (b'(C|c)an\'t', b'can not'),
-        (b'(I|i)\'m', b'i am'),
-        (b'(A|a)in\'t', b'is not'),
-        (b'(\w+)\'ll', b'\g<1> will'),
-        (b'(\w+)n\'t', b'\g<1> not'),
-        (b'(\w+)\'ve', b'\g<1> have'),
-        (b'(\w+)\'s', b'\g<1> is'),
-        (b'(\w+)\'re', b'\g<1> are'),
-        (b'(\w+)\'d', b'\g<1> would'),
-    ]
-patterns = [(re.compile(regex), repl) for (regex, repl) in cont_patterns]
-
-
-def prepare_for_char_n_gram(text):
-    """ Simple text clean up process"""
-    # 1. Go to lower case (only good for english)
-    # Go to bytes_strings as I had issues removing all \n in r""
-    clean = bytes(text.lower(), encoding="utf-8")
-    # 2. Drop \n and  \t
-    clean = clean.replace(b"\n", b" ")
-    clean = clean.replace(b"\t", b" ")
-    clean = clean.replace(b"\b", b" ")
-    clean = clean.replace(b"\r", b" ")
-    # 3. Replace english contractions
-    for (pattern, repl) in patterns:
-        clean = re.sub(pattern, repl, clean)
-    # 4. Drop puntuation
-    # I could have used regex package with regex.sub(b"\p{P}", " ")
-    exclude = re.compile(b'[%s]' % re.escape(bytes(string.punctuation, encoding='utf-8')))
-    clean = b" ".join([exclude.sub(b'', token) for token in clean.split()])
-    # 5. Drop numbers - as a scientist I don't think numbers are toxic ;-)
-    clean = re.sub(b"\d+", b" ", clean)
-    # 6. Remove extra spaces - At the end of previous operations we multiplied space accurences
-    clean = re.sub(b'\s+', b' ', clean)
-    # Remove ending space if any
-    clean = re.sub(b'\s+$', b'', clean)
-    # 7. Now replace words by words surrounded by # signs
-    # e.g. my name is bond would become #my# #name# #is# #bond#
-    # clean = re.sub(b"([a-z]+)", b"#\g<1>#", clean)
-    clean = re.sub(b" ", b"# #", clean)  # Replace space
-    clean = b"#" + clean + b"#"  # add leading and trailing #
-
-    return str(clean, 'utf-8')
-
-def count_regexp_occ(regexp="", text=None):
-    """ Simple way to get the number of occurence of a regex"""
-    return len(re.findall(regexp, text))
-
-
-# In[ ]:
-
-
-def get_indicators_and_clean_comments(df):
-    """
-    Check all sorts of content as it may help find toxic comment
-    Though I'm not sure all of them improve scores
-    """
-    # Count number of \n
-#     df["ant_slash_n"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\n", x))
-    # Get length in words and characters
-    df["raw_word_len"] = df["comment_text"].apply(lambda x: len(x.split()))
-    df["raw_char_len"] = df["comment_text"].apply(lambda x: len(x))
-    # TODO chars per row
-    # Check number of upper case, if you're angry you may write in upper case
-    df["nb_upper"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[A-Z]", x))
-    # Number of F words - f..k contains folk, fork,
-    df["nb_fk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ff]\S{2}[Kk]", x))
-    # Number of S word
-    df["nb_sk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ss]\S{2}[Kk]", x))
-    # Number of D words
-    df["nb_dk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[dD]ick", x))
-    # Number of occurence of You, insulting someone usually needs someone called : you
-    df["nb_you"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\W[Yy]ou\W", x))
-    # Just to check you really refered to my mother ;-)
-    df["nb_mother"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wmother\W", x))
-    # Just checking for toxic 19th century vocabulary
-    df["nb_ng"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wnigger\W", x))
-    # Some Sentences start with a <:> so it may help
-    df["start_with_columns"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"^\:+", x))
-    # Check for time stamp
-    df["has_timestamp"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\d{2}|:\d{2}", x))
-    # Check for dates 18:44, 8 December 2010
-    df["has_date_long"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{2}:\d{2}, \d{1,2} \w+ \d{4}", x))
-    # Check for date short 8 December 2010
-    df["has_date_short"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{1,2} \w+ \d{4}", x))
-    # Check for http links
-#     df["has_http"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"http[s]{0,1}://\S+", x))
-    # check for mail
-    df["has_mail"] = df["comment_text"].apply(
-        lambda x: count_regexp_occ(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', x)
-    )
-    # Looking for words surrounded by == word == or """" word """"
-    df["has_emphasize_equal"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\={2}.+\={2}", x))
-    df["has_emphasize_quotes"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\"{4}\S+\"{4}", x))
-
-    # Now clean comments
-    df["clean_comment"] = df["comment_text"].apply(lambda x: prepare_for_char_n_gram(x))
-
-    # Get the new length in words and characters
-    df["clean_word_len"] = df["clean_comment"].apply(lambda x: len(x.split()))
-    df["clean_char_len"] = df["clean_comment"].apply(lambda x: len(x))
-    # Number of different characters used in a comment
-    # Using the f word only will reduce the number of letters required in the comment
-    df["clean_chars"] = df["clean_comment"].apply(lambda x: len(set(x)))
-    df["clean_chars_ratio"] = df["clean_comment"].apply(lambda x: len(set(x))) / df["clean_comment"].apply(
-        lambda x: 1 + min(99, len(x)))
-
-
-# In[ ]:
-
-
-for df in [train, test]:
-   get_indicators_and_clean_comments(df)
-
-
-# In[ ]:
-
-
-num_features = [f_ for f_ in train.columns
-                if f_ not in ["comment_text", "clean_comment", "id", "remaining_chars", 'has_ip_address'] + class_names]
-
-# TODO: normalize
-for f in num_features:
-    all_cut = pd.cut(pd.concat([train[f], test[f]], axis=0), bins=20, labels=False, retbins=False)
-    train[f] = all_cut.values[:train.shape[0]]
-    test[f] = all_cut.values[train.shape[0]:]
-
-train_num_features = train[num_features].values
-test_num_features = test[num_features].values
-
-
-# In[ ]:
-
-
-train_text = train['clean_comment'].fillna("")
-test_text = test['clean_comment'].fillna("")
-all_text = pd.concat([train_text, test_text])
-
-
-# In[ ]:
-
-
-word_vectorizer = TfidfVectorizer(
-        sublinear_tf=True,
-        strip_accents='unicode',
-        tokenizer=lambda x: regex.findall(r'[^\p{P}\W]+', x),
-        analyzer='word',
-        token_pattern=None,
-        min_df=5,
-        ngram_range=(1, 2),
-        max_features=60000) # TODO: maybe more
-
-# word_vectorizer = TfidfVectorizer(sublinear_tf=True,
-#                                   strip_accents='unicode',
-#                                   analyzer='word',
-#                                   token_pattern=r'\w{1,}',
-#                                   ngram_range=(1,2),
-#                                   max_features=30000)
-
-# word_vectorizer = TfidfVectorizer(ngram_range=(1,2), tokenizer=tokenize,
-#                min_df=3, max_df=0.9, strip_accents='unicode', use_idf=1,
-#                smooth_idf=1, sublinear_tf=1 )
-
-
-# In[ ]:
-
-
-word_vectorizer.fit(all_text)
-
-
-# In[ ]:
-
-
-train_word_features = word_vectorizer.transform(train_text)
-test_word_features = word_vectorizer.transform(test_text)
-
-
-# In[ ]:
-
-
-# def char_analyzer(text):
-#     """
-#     This is used to split strings in small lots
-#     I saw this in an article (I can't find the link anymore)
-#     so <talk> and <talking> would have <Tal> <alk> in common
-#     """
-#     tokens = text.split()
-#     return [token[i: i + 3] for token in tokens for i in range(len(token) - 2)]
-
-
-# In[ ]:
-
-
-# char_vectorizer = TfidfVectorizer(
-#         sublinear_tf=True,
-#         strip_accents='unicode',
-#         tokenizer=char_analyzer,
-#         analyzer='word',
-#         ngram_range=(1, 3),
-#         max_df=0.9,
-#         max_features=60000) #50k
-# char_vectorizer.fit(all_text)
-# train_char_features = char_vectorizer.transform(train_text)
-# test_char_features = char_vectorizer.transform(test_text)
-
-
-# In[ ]:
-
-
-train_features = hstack([train_word_features, train_links_n, train_num_features]).tocsr() # train_char_features, 
-test_features = hstack([test_word_features, test_links_n, test_num_features]).tocsr() # test_char_features,
-
-
-# In[ ]:
-
-
-print(train_features.shape)
-print(test_features.shape)
-
-
-# In[ ]:
-
-
-X_train, X_test, y_train, y_test = train_test_split(train_features, train['toxic'], test_size=0.3, random_state=42)
-
-
-# In[ ]:
-
-
-lgb_train = lgb.Dataset(X_train , y_train)
-lgb_eval = lgb.Dataset(X_test, y_test, reference=lgb_train)
-
-# specify your configurations as a dict
-params = {
-    'task': 'train',
-    'boosting_type': 'gbdt',
-    'objective':'binary',
-    'metric': {'auc'},
-    'nthread': -1,
-    'feature_fraction': 0.4,
-    'num_leaves': 50,
-    'verbose': 0
-}
-
-print('Start training...')
-# train
-gbm = lgb.train(params,
-                lgb_train,
-                num_boost_round=200,
-                valid_sets=lgb_eval,
-                early_stopping_rounds=20)
-
-
-# -----
-
-# In[ ]:
-
-
-all_parameters = {
-                  'C'             : [1.048113, 0.1930, 0.596362, 0.25595, 0.449843, 0.25595],
-                  'tol'           : [0.1, 0.1, 0.046416, 0.0215443, 0.1, 0.01],
-                  'solver'        : ['lbfgs', 'newton-cg', 'lbfgs', 'newton-cg', 'newton-cg', 'lbfgs'],
-                  'fit_intercept' : [True, True, True, True, True, True],
-                  'penalty'       : ['l2', 'l2', 'l2', 'l2', 'l2', 'l2'],
-                  'class_weight'  : [None, 'balanced', 'balanced', 'balanced', 'balanced', 'balanced'],
-                 }
-
-
-# In[ ]:
-
-
-# scores= []
-
-# for j, class_name in enumerate(class_names):
-#     classifier = LogisticRegression(
-#         C=all_parameters['C'][j],
-#         max_iter=200,
-#         tol=all_parameters['tol'][j],
-#         solver=all_parameters['solver'][j],
-#         fit_intercept=all_parameters['fit_intercept'][j],
-#         penalty=all_parameters['penalty'][j],
-#         dual=False,
-#         class_weight=all_parameters['class_weight'][j],
-#         verbose=0)
-
-#     train_target = train[class_name]
-
-#     cv_score = np.mean(cross_val_score(classifier, train_features, train_target, scoring='roc_auc'))
-    
-#     print('CV score for class {} is {}'.format(class_name, cv_score))
-#     scores.append(cv_score)
-
-# print('Total score is {}'.format(np.mean(scores)))
-
-
-# In[ ]:
-
-
-submission = pd.DataFrame.from_dict({'id': test['id']})
-
-
-# In[ ]:
-
-
-for j, class_name in enumerate(class_names):
-    classifier = LogisticRegression(
-        C=all_parameters['C'][j],
-        max_iter=200,
-        tol=all_parameters['tol'][j],
-        solver=all_parameters['solver'][j],
-        fit_intercept=all_parameters['fit_intercept'][j],
-        penalty=all_parameters['penalty'][j],
-        dual=False,
-        class_weight=all_parameters['class_weight'][j],
-        verbose=0)
-
-    train_target = train[class_name]
-    classifier.fit(train_features, train_target)
-    submission[class_name] = classifier.predict_proba(test_features)[:, 1]
-    print(class_name)
-
-
-# In[ ]:
-
-
-submission.to_csv('submission.csv', index=False)
-
+# Thanks for reading my EDA! :)
+# 
+# **If you have any questions or suggestions feel free to leave a comment - and please upvote if this helped you!**

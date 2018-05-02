@@ -1,1007 +1,805 @@
 
 # coding: utf-8
 
-# Introduction
-# ====
-# **Natural Language Processing ** (NLP) is the task of making computers understand and produce human languages. 
+# This notebook shows a way to obtain atomic coordinates from xyz files. We can calculate bond lengths, bond angles, coordination numbers, and so on from atomic coordinates. Some of them might be able to be used as good features. 
 # 
-# And it always starts with the **corpus** i.e. *a body of text*. 
+# ![monoclinic_and_hexagonal](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/monoclinic_and_hexagonal.png?raw=true)
 # 
+# 1. Reading geometry files
+# 2. Reduced coordinates
+# 3. Geometrical properties
 
+# # Reading geometry files
 # 
-# What is a Corpus?
-# ====
+# [Jmol](http://jmol.sourceforge.net) is an open source molecular viewer. Jmol can load xyz geometry files directly.
 # 
-# There are many corpora (*plural of corpus*) available in NLTK, lets start with an English one call the **Brown corpus**.
+# ![train 1 geometry](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/geometry.jpg?raw=true)
 # 
-# When using a new corpus in NLTK for the first time, downloads the corpus with the `nltk.download()` function, e.g. 
-# 
-# ```python
-# import nltk
-# nltk.download('brown')
-# ```
-
-# After its downloaded, you can import it as such:
-
-# In[ ]:
-
-
-from nltk.corpus import brown
-
-
-# In[ ]:
-
-
-brown.words() # Returns a list of strings
-
-
-# In[ ]:
-
-
-len(brown.words()) # No. of words in the corpus
-
-
-# In[ ]:
-
-
-brown.sents() # Returns a list of list of strings 
-
-
-# In[ ]:
-
-
-brown.sents(fileids='ca01') # You can access a specific file with `fileids` argument.
-
-
-# 
-# **Fast Facts:**
-# 
-# > The Brown Corpus of Standard American English was the first of the modern, computer readable, general corpora. It was compiled by W.N. Francis and H. Kucera, Brown University, Providence, RI. The corpus consists of one million words of American English texts printed in 1961.
-# 
-# (Source: [University of Essex Corpus Linguistics site](  https://www1.essex.ac.uk/linguistics/external/clmt/w3c/corpus_ling/content/corpora/list/private/brown/brown.html))
-# 
-# >  This corpus contains text from 500 sources, and the sources have been categorized by genre, such as news, editorial, and so on ... (for a complete list, see http://icame.uib.no/brown/bcm-los.html).
-# 
-# ![](http://)(Source: [NLTK book, Chapter 2.1.3](http://www.nltk.org/book/ch02.html))
-
-# The actual `brown` corpus data is **packaged as raw text files**.  And you can find their IDs with: 
-
-# In[ ]:
-
-
-len(brown.fileids()) # 500 sources, each file is a source.
-
-
-# In[ ]:
-
-
-print(brown.fileids()[:100]) # First 100 sources.
-
-
-# You can access the raw files with:
-
-# In[ ]:
-
-
-print(brown.raw('cb01').strip()[:1000]) # First 1000 characters.
-
-
-# <br>
-# You will see that **each word comes with a slash and a label** and unlike normal text, we see that **punctuations are separated from the word that comes before it**, e.g. 
-# 
-# > The/at General/jj-tl Assembly/nn-tl ,/, which/wdt adjourns/vbz today/nr ,/, has/hvz performed/vbn in/in an/at atmosphere/nn of/in crisis/nn and/cc struggle/nn from/in the/at day/nn it/pps convened/vbd ./.
-# 
-# <br>
-# And we also see that the **each sentence is separated by a newline**:
-# 
-# > There/ex followed/vbd the/at historic/jj appropriations/nns and/cc budget/nn fight/nn ,/, in/in which/wdt the/at General/jj-tl Assembly/nn-tl decided/vbd to/to tackle/vb executive/nn powers/nns ./.
-# > 
-# > The/at final/jj decision/nn went/vbd to/in the/at executive/nn but/cc a/at way/nn has/hvz been/ben opened/vbn for/in strengthening/vbg budgeting/vbg procedures/nns and/cc to/to provide/vb legislators/nns information/nn they/ppss need/vb ./.
-# 
-# <br>
-# That brings us to the next point on **sentence tokenization** and **word tokenization**.
-
-# Tokenization
-# ====
-# 
-# **Sentence tokenization** is the process of  *splitting up strings into “sentences”*
-# 
-# **Word tokenization** is the process of  *splitting up “sentences” into “words”*
-# 
-# Lets play around with some interesting texts,  the `singles.txt` from `webtext` corpus. <br>
-# They were some  **singles ads** from  http://search.classifieds.news.com.au/
-# 
-# First, downoad the data with `nltk.download()`:
-# 
-# ```python
-# nltk.download('webtext')
-# ```
-# 
-# Then you can import with:
-
-# In[ ]:
-
-
-from nltk.corpus import webtext
-
-
-# In[ ]:
-
-
-webtext.fileids()
-
-
-# In[ ]:
-
-
-# Each line is one advertisement.
-for i, line in enumerate(webtext.raw('singles.txt').split('\n')):
-    if i > 10: # Lets take a look at the first 10 ads.
-        break
-    print(str(i) + ':\t' + line)
-
-
-# # Lets zoom in on candidate no. 8
-
-# In[ ]:
-
-
-single_no8 = webtext.raw('singles.txt').split('\n')[8]
-print(single_no8)
-
-
-# # Sentence Tokenization
-# <br>
-# In NLTK, `sent_tokenize()` the default tokenizer function that you can use to split strings into "*sentences*". 
-# <br>
-# 
-# It is using the [**Punkt algortihm** from Kiss and Strunk (2006)](http://www.mitpressjournals.org/doi/abs/10.1162/coli.2006.32.4.485).
-
-# In[ ]:
-
-
-from nltk import sent_tokenize, word_tokenize
-
-
-# In[ ]:
-
-
-sent_tokenize(single_no8)
-
-
-# In[ ]:
-
-
-for sent in sent_tokenize(single_no8):
-    print(word_tokenize(sent))
-
-
-# # Lowercasing
-# 
-# The CAPS in the texts are RATHER irritating although we KNOW the guy is trying to EMPHASIZE on something ;P
-# 
-# We can simply **lowercase them after we do `sent_tokenize()` and `word_tokenize()`**. <br>
-# The tokenizers uses the capitalization as cues to know when to split so removing them before the calling the functions would be sub-optimal.
-
-# In[ ]:
-
-
-sent_tokenize(single_no8)
-
-
-# In[ ]:
-
-
-for sent in sent_tokenize(single_no8):
-    # It's a little in efficient to loop through each word,
-    # after but sometimes it helps to get better tokens.
-    print([word.lower() for word in word_tokenize(sent)])
-    # Alternatively:
-    #print(list(map(str.lower, word_tokenize(sent))))
-
-
-# In[ ]:
-
-
-print(word_tokenize(single_no8))  # Treats the whole line as one document.
-
-
-# # Tangential Note
-# 
-# Punkt is a statistical model so it applies the knowledge it has learnt from previous data. <br>
-# Generally, it **works for most cases on well-formed texts** but if your data is  different e.g. user-generated noisy texts, you might have to retrain a new model. 
-# ![](http://)
-# E.g. if we look at candidate no. 9, we see that it's splitting on `y.o.` (its thinking that its the end of the sentnence) and not splitting on `&c.` (its thinking that its an abbreviation, e.g. `Mr.`, `Inc.`).
-
-# In[ ]:
-
-
-single_no9 = webtext.raw('singles.txt').split('\n')[9]
-sent_tokenize(single_no9)
-
-
-# Stopwords
-# ====
-# 
-# **Stopwords** are non-content words that primarily has only grammatical function
-# 
-# In NLTK, you can access them as follows:
-
-# In[ ]:
-
-
-from nltk.corpus import stopwords
-
-stopwords_en = stopwords.words('english')
-print(stopwords_en)
-
-
-# # Often we want to remove stopwords when we want to keep the "gist" of the document/sentence.
-# 
-# For instance, lets go back to the our `single_no8`
-
-# In[ ]:
-
-
-# Treat the multiple sentences as one document (no need to sent_tokenize)
-# Tokenize and lowercase
-single_no8_tokenized_lowered = list(map(str.lower, word_tokenize(single_no8)))
-print(single_no8_tokenized_lowered)
-
-
-# # Let's try to remove the stopwords using the English stopwords list in NLTK
-
-# In[ ]:
-
-
-stopwords_en = set(stopwords.words('english')) # Set checking is faster in Python than list.
-
-# List comprehension.
-print([word for word in single_no8_tokenized_lowered if word not in stopwords_en])
-
-
-# # Often, we want to remove the punctuations from the documents too.
-# 
-# Since Python comes with "batteries included", we have string.punctuation
-
-# In[ ]:
-
-
-from string import punctuation
-# It's a string so we have to them into a set type
-print('From string.punctuation:', type(punctuation), punctuation)
-
-
-# # Combining the punctuation with the stopwords from NLTK.
-
-# In[ ]:
-
-
-stopwords_en_withpunct = stopwords_en.union(set(punctuation))
-print(stopwords_en_withpunct)
-
-
-# # Removing stopwords with punctuations from Single no. 8
-
-# In[ ]:
-
-
-print([word for word in single_no8_tokenized_lowered if word not in stopwords_en_withpunct])
-
-
-# # Using a stronger/longer list of stopwords
-# 
-# From the previous output, we have still dangly model verbs (i.e. 'could', 'wont', etc.).
-# 
-# We can combine the stopwords we have in NLTK with other stopwords list we find online.
-# 
-# Personally, I like to use `stopword-json` because it has stopwrds in 50 languages =) <br>
-# https://github.com/6/stopwords-json
-
-# In[ ]:
-
-
-# Stopwords from stopwords-json
-stopwords_json = {"en":["a","a's","able","about","above","according","accordingly","across","actually","after","afterwards","again","against","ain't","all","allow","allows","almost","alone","along","already","also","although","always","am","among","amongst","an","and","another","any","anybody","anyhow","anyone","anything","anyway","anyways","anywhere","apart","appear","appreciate","appropriate","are","aren't","around","as","aside","ask","asking","associated","at","available","away","awfully","b","be","became","because","become","becomes","becoming","been","before","beforehand","behind","being","believe","below","beside","besides","best","better","between","beyond","both","brief","but","by","c","c'mon","c's","came","can","can't","cannot","cant","cause","causes","certain","certainly","changes","clearly","co","com","come","comes","concerning","consequently","consider","considering","contain","containing","contains","corresponding","could","couldn't","course","currently","d","definitely","described","despite","did","didn't","different","do","does","doesn't","doing","don't","done","down","downwards","during","e","each","edu","eg","eight","either","else","elsewhere","enough","entirely","especially","et","etc","even","ever","every","everybody","everyone","everything","everywhere","ex","exactly","example","except","f","far","few","fifth","first","five","followed","following","follows","for","former","formerly","forth","four","from","further","furthermore","g","get","gets","getting","given","gives","go","goes","going","gone","got","gotten","greetings","h","had","hadn't","happens","hardly","has","hasn't","have","haven't","having","he","he's","hello","help","hence","her","here","here's","hereafter","hereby","herein","hereupon","hers","herself","hi","him","himself","his","hither","hopefully","how","howbeit","however","i","i'd","i'll","i'm","i've","ie","if","ignored","immediate","in","inasmuch","inc","indeed","indicate","indicated","indicates","inner","insofar","instead","into","inward","is","isn't","it","it'd","it'll","it's","its","itself","j","just","k","keep","keeps","kept","know","known","knows","l","last","lately","later","latter","latterly","least","less","lest","let","let's","like","liked","likely","little","look","looking","looks","ltd","m","mainly","many","may","maybe","me","mean","meanwhile","merely","might","more","moreover","most","mostly","much","must","my","myself","n","name","namely","nd","near","nearly","necessary","need","needs","neither","never","nevertheless","new","next","nine","no","nobody","non","none","noone","nor","normally","not","nothing","novel","now","nowhere","o","obviously","of","off","often","oh","ok","okay","old","on","once","one","ones","only","onto","or","other","others","otherwise","ought","our","ours","ourselves","out","outside","over","overall","own","p","particular","particularly","per","perhaps","placed","please","plus","possible","presumably","probably","provides","q","que","quite","qv","r","rather","rd","re","really","reasonably","regarding","regardless","regards","relatively","respectively","right","s","said","same","saw","say","saying","says","second","secondly","see","seeing","seem","seemed","seeming","seems","seen","self","selves","sensible","sent","serious","seriously","seven","several","shall","she","should","shouldn't","since","six","so","some","somebody","somehow","someone","something","sometime","sometimes","somewhat","somewhere","soon","sorry","specified","specify","specifying","still","sub","such","sup","sure","t","t's","take","taken","tell","tends","th","than","thank","thanks","thanx","that","that's","thats","the","their","theirs","them","themselves","then","thence","there","there's","thereafter","thereby","therefore","therein","theres","thereupon","these","they","they'd","they'll","they're","they've","think","third","this","thorough","thoroughly","those","though","three","through","throughout","thru","thus","to","together","too","took","toward","towards","tried","tries","truly","try","trying","twice","two","u","un","under","unfortunately","unless","unlikely","until","unto","up","upon","us","use","used","useful","uses","using","usually","uucp","v","value","various","very","via","viz","vs","w","want","wants","was","wasn't","way","we","we'd","we'll","we're","we've","welcome","well","went","were","weren't","what","what's","whatever","when","whence","whenever","where","where's","whereafter","whereas","whereby","wherein","whereupon","wherever","whether","which","while","whither","who","who's","whoever","whole","whom","whose","why","will","willing","wish","with","within","without","won't","wonder","would","wouldn't","x","y","yes","yet","you","you'd","you'll","you're","you've","your","yours","yourself","yourselves","z","zero"]}
-stopwords_json_en = set(stopwords_json['en'])
-stopwords_nltk_en = set(stopwords.words('english'))
-stopwords_punct = set(punctuation)
-# Combine the stopwords. Its a lot longer so I'm not printing it out...
-stoplist_combined = set.union(stopwords_json_en, stopwords_nltk_en, stopwords_punct)
-
-# Remove the stopwords from `single_no8`.
-print('With combined stopwords:')
-print([word for word in single_no8_tokenized_lowered if word not in stoplist_combined])
-
-
-# # Stemming and Lemmatization
-# 
-# Often we want to map the different forms of the same word to the same root word, e.g. "walks", "walking", "walked" should all be the same as "walk".
-# 
-# The stemming and lemmatization process are hand-written regex rules written find the root word.
-# 
-#  - **Stemming**: Trying to shorten a word with simple regex rules
-# 
-#  - **Lemmatization**: Trying to find the root word with linguistics rules (with the use of regexes)
-# 
-# (See also: [Stemmers vs Lemmatizers](https://stackoverflow.com/q/17317418/610569) question on StackOverflow)
-# 
-# There are various stemmers and one lemmatizer in NLTK, the most common being:
-# 
-#  - **Porter Stemmer** from [Porter (1980)](https://tartarus.org/martin/PorterStemmer/index.html)
-#  - **Wordnet Lemmatizer** (port of the Morphy: https://wordnet.princeton.edu/man/morphy.7WN.html)
-
-# In[ ]:
-
-
-from nltk.stem import PorterStemmer
-porter = PorterStemmer()
-
-for word in ['walking', 'walks', 'walked']:
-    print(porter.stem(word))
-
-
-# In[ ]:
-
-
-from nltk.stem import WordNetLemmatizer
-wnl = WordNetLemmatizer()
-
-for word in ['walking', 'walks', 'walked']:
-    print(wnl.lemmatize(word))
-
-
-# # Gotcha! The lemmatizer is actually pretty complicated, it needs Parts of Speech (POS) tags.
-# 
-# 
-# We won't cover what's POS today so I'll just show you how to "whip" the lemmatizer to do what you need.
-# 
-# By default, the WordNetLemmatizer.lemmatize() function will assume that the word is a Noun if there's no explict POS tag in the input.
-# 
-# First you need the pos_tag function to tag a sentence and using the tag convert it into WordNet tagsets and then put it through to the WordNetLemmatizer.
-# 
-# **Note:** Lemmatization won't really work on single words alone without context or knowledge of its POS tag (i.e. we need to know whether the word is a noun, verb, adjective, adverb)
+# This figure is a visualization example of **train/1/gemometry.xyz**.
 # 
 
-# In[ ]:
+# In[1]:
 
 
-from nltk import pos_tag
-from nltk.stem import WordNetLemmatizer
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
 
-wnl = WordNetLemmatizer()
 
-def penn2morphy(penntag):
-    """ Converts Penn Treebank tags to WordNet. """
-    morphy_tag = {'NN':'n', 'JJ':'a',
-                  'VB':'v', 'RB':'r'}
-    try:
-        return morphy_tag[penntag[:2]]
-    except:
-        return 'n' # if mapping isn't found, fall back to Noun.
+# In[2]:
+
+
+df_train = pd.read_csv("../input/train.csv")
+df_train["dataset"] = "train"
+df_test = pd.read_csv("../input/test.csv")
+df_test["dataset"] = "test"
+df_crystals = pd.concat([df_train, df_test], ignore_index=True)
+
+
+# In[3]:
+
+
+df_crystals.head()
+
+
+# In[4]:
+
+
+df_crystals.tail()
+
+
+# In[5]:
+
+
+# Orthorhombic (kappa-Al2O3 type)
+row_id = 0
+
+# Monoclinic (beta-Ga2O3 type)
+#row_id = 19
+
+# Hexagonal (hcp type)
+#row_id = 660
+
+# The first row in the test dataset
+#row_id = len(df_train)
+
+row_id
+
+
+# In[6]:
+
+
+lattice_columns = ["lattice_vector_1_ang", "lattice_vector_2_ang", "lattice_vector_3_ang", "lattice_angle_alpha_degree", "lattice_angle_beta_degree", "lattice_angle_gamma_degree"]
+df_crystals.loc[row_id, lattice_columns]
+
+
+# You can see the lattice constants $a$, $b$, $c$, $\alpha$, $\beta$, and $\gamma$ in the above visualization equal to ones in the CSV file. 
+
+# In[7]:
+
+
+def get_xyz_data(filename):
+    pos_data = []
+    lat_data = []
+    with open(filename) as f:
+        for line in f.readlines():
+            x = line.split()
+            if x[0] == 'atom':
+                pos_data.append([np.array(x[1:4], dtype=np.float),x[4]])
+            elif x[0] == 'lattice_vector':
+                lat_data.append(np.array(x[1:4], dtype=np.float))
+    return pos_data, np.array(lat_data)
+
+
+# In[8]:
+
+
+idx = df_crystals.id.values[row_id]
+dataset = df_crystals.dataset.values[row_id]
+fn = "../input/{}/{}/geometry.xyz".format(dataset, idx)
+crystal_xyz, crystal_lat = get_xyz_data(fn)
+
+
+# In[9]:
+
+
+crystal_xyz
+
+
+# This list conatins pairs of the position vector $(X, Y, Z)$ and the element symbol.
+
+# In[10]:
+
+
+crystal_lat
+
+
+# This matirx is $(\textbf{a}_1, \textbf{a}_2, \textbf{a}_3)^t$ where $\textbf{a}_i$ is $i$-th lattice vector.
+
+# In[11]:
+
+
+def length(v):
+    return np.linalg.norm(v)
+
+def unit_vector(vector):
+    return vector / length(vector)
+
+def angle_between(v1, v2):
+    v1_u = unit_vector(v1)
+    v2_u = unit_vector(v2)
+    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+
+def angle_deg_between(v1, v2):
+    return np.degrees(angle_between(v1, v2))
+
+def get_lattice_constants(lattice_vectors):
+    lat_const_series = pd.Series()
+    for i in range(3):
+        lat_const_series["lattice_vector_"+str(i+1)+"_ang"] = length(lattice_vectors[i])
+    lat_const_series["lattice_angle_alpha_degree"] = angle_deg_between(lattice_vectors[1],lattice_vectors[2])
+    lat_const_series["lattice_angle_beta_degree"] = angle_deg_between(lattice_vectors[2],lattice_vectors[0])
+    lat_const_series["lattice_angle_gamma_degree"] = angle_deg_between(lattice_vectors[0],lattice_vectors[1])
+    return lat_const_series
+
+
+# In[12]:
+
+
+get_lattice_constants(crystal_lat)
+
+
+# You can see the lattice constants again.
+
+# # Reduced coordinates
+
+# When the reduced coordinate is donated as $\textbf{r} = (x, y, z)^t$, the position vector $\textbf{R}$ is expressed using the lattice vectors $\textbf{a}_i$ as following:
+# 
+# $\textbf{R} = (X, Y, Z)^t = x \textbf{a}_1 + y \textbf{a}_2 + z \textbf{a}_3 = A \textbf{r}$
+# 
+# where $A =(\textbf{a}_1, \textbf{a}_2, \textbf{a}_3)$. The reduced coordinate is obtained from:
+# 
+# $\textbf{r} = A^{-1} \textbf{R}$.
+# 
+# $B = A^{-1} =(\textbf{b}_1, \textbf{b}_2, \textbf{b}_3)^t$ where $\textbf{b}_i$ is the $i$-th reciprocal lattice vector.
+
+# In[13]:
+
+
+A = np.transpose(crystal_lat)
+R = crystal_xyz[0][0]
+print("The lattice vectors:")
+print(A)
+print("The position vector:")
+print(R)
+
+
+# In[14]:
+
+
+from numpy.linalg import inv
+B = inv(A)
+print("The reciprocal lattice vectors:")
+print(B)
+
+
+# In[15]:
+
+
+r = np.matmul(B, R)
+print("The reduced coordinate vector:")
+print(r)
+
+
+# # Geometrical properties
+
+# Crystalline materials are made of periodic cells. Therefore, geometrical properties must be calculated with consideration for the periodicity. The vector between two atoms $i$ and $j$ is expressed as:
+# 
+# $\textbf{r}_{ij} =  \textbf{r}_{i} - \textbf{r}_{j} + (l, m, n)^t$
+# 
+# where $l$, $m$, and $n$ are any integer value. The real-space vector of the atom pair is
+# 
+# $\textbf{R}_{ij} = A \textbf{r}_{ij}$.
+# 
+# ## Spatial distance
+# 
+# $d_{ij} = \min_{l,m,n} \mid \textbf{R}_{ij} \mid$
+
+# In[16]:
+
+
+def get_shortest_distances(reduced_coords, amat):
+    natom = len(reduced_coords)
+    dists = np.zeros((natom, natom))
+    Rij_min = np.zeros((natom, natom, 3))
+
+    for i in range(natom):
+        for j in range(i):
+            rij = reduced_coords[i][0] - reduced_coords[j][0]
+            d_min = np.inf
+            R_min = np.zeros(3)
+            for l in range(-1, 2):
+                for m in range(-1, 2):
+                    for n in range(-1, 2):
+                        r = rij + np.array([l, m, n])
+                        R = np.matmul(amat, r)
+                        d = length(R)
+                        if d < d_min:
+                            d_min = d
+                            R_min = R
+            dists[i, j] = d_min
+            dists[j, i] = dists[i, j]
+            Rij_min[i, j] = R_min
+            Rij_min[j, i] = -Rij_min[i, j]
+    return dists, Rij_min
+
+
+# In[17]:
+
+
+crystal_red = [[np.matmul(B, R), symbol] for (R, symbol) in crystal_xyz]
+crystal_dist, crystal_Rij = get_shortest_distances(crystal_red, A)
+crystal_dist
+
+
+# In[18]:
+
+
+import seaborn as sns
+sns.heatmap(crystal_dist)
+
+
+# In[19]:
+
+
+def get_min_length(distances, A_atoms, B_atoms):
+    A_B_length = np.inf
+    for i in A_atoms:
+        for j in B_atoms:
+            d = distances[i, j]
+            if d > 1e-8 and d < A_B_length:
+                A_B_length = d
     
-# `pos_tag` takes the tokenized sentence as input, i.e. list of string,
-# and returns a tuple of (word, tg), i.e. list of tuples of strings
-# so we need to get the tag from the 2nd element.
-
-walking_tagged = pos_tag(word_tokenize('He is walking to school'))
-print(walking_tagged)
+    return A_B_length
 
 
-# In[ ]:
+# In[20]:
 
 
-[wnl.lemmatize(word.lower(), pos=penn2morphy(tag)) for word, tag in walking_tagged]
+natom = len(crystal_red)
+al_atoms = [i for i in range(natom) if crystal_red[i][1] == 'Al']
+ga_atoms = [i for i in range(natom) if crystal_red[i][1] == 'Ga']
+in_atoms = [i for i in range(natom) if crystal_red[i][1] == 'In']
+o_atoms = [i for i in range(natom) if crystal_red[i][1] == 'O']
 
 
-# # Now, lets create a new lemmatization function for sentences given what we learnt above.
-
-# In[ ]:
+# In[21]:
 
 
-from nltk import pos_tag
-from nltk.stem import WordNetLemmatizer
+if len(al_atoms):
+    print("Al-O min length:", get_min_length(crystal_dist, al_atoms, o_atoms))
+if len(ga_atoms):
+    print("Ga-O min length:", get_min_length(crystal_dist, ga_atoms, o_atoms))
+if len(in_atoms):
+    print("In-O min length:", get_min_length(crystal_dist, in_atoms, o_atoms))
 
-wnl = WordNetLemmatizer()
 
-def penn2morphy(penntag):
-    """ Converts Penn Treebank tags to WordNet. """
-    morphy_tag = {'NN':'n', 'JJ':'a',
-                  'VB':'v', 'RB':'r'}
-    try:
-        return morphy_tag[penntag[:2]]
-    except:
-        return 'n' 
+# ~~The minimun lengths between metal and oxygen atoms can be used for estimating the threshold of connections in the crystal graph.  However, the current version of this notebook does not use the suggested method yet.~~ (I introduced the function get_factor which appears below.)
+
+# ## Histogram of distances
+
+# In[22]:
+
+
+hist_dist = plt.hist(crystal_dist.flatten(), bins=100)
+_ = plt.title("Histogram of the shortest distances")
+
+
+# In[23]:
+
+
+def get_distances(r, amat, l_max=3, m_max=3, n_max=3, R_max=20.0):
+    distances = []
+    for l in range(-l_max, l_max+1):
+        for m in range(-m_max, m_max+1):
+            for n in range(-n_max, n_max+1):
+                R = np.matmul(amat, r + np.array([l, m, n]))
+                d = length(R)
+                if d < R_max:
+                    distances.append(d)
+                    
+    return distances
+
+
+# Note that optimal values of `l_max`, `m_max`, and `n_max` depend on both the maximum radius `R_max` and the lattice matrix `amat`. A larger `R_max` or a smaller cell requires larger `l_max`, `m_max`, and `n_max`. You can simply estimate them from $l_{\rm max} > R_{\rm max} / a$ where $a$ is the lattice constant. In general, $l_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_1\mid$, $m_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_2\mid$, and $n_{\rm max} >  R_{\rm max} \cdot \mid{\bf b}_3\mid$ where ${\bf b }_i$ is the $i$-th reciprocal lattice vector.
+
+# In[24]:
+
+
+def get_optimal_lmn(bmat, R_max=20.0):
+    lmn = dict()
+    lmn["l_max"] = int(length(bmat[0]) * R_max) + 1
+    lmn["m_max"] = int(length(bmat[1]) * R_max) + 1
+    lmn["n_max"] = int(length(bmat[2]) * R_max) + 1
+    lmn["R_max"] = R_max
+
+    return lmn
+
+
+# In[25]:
+
+
+opt_lmn = get_optimal_lmn(B)
+
+print(opt_lmn)
+
+
+# In[26]:
+
+
+natom = len(crystal_red)
+m_atoms = [i for i in range(natom) if crystal_red[i][1] != 'O']
+o_atoms = [i for i in range(natom) if crystal_red[i][1] == 'O']
+
+m_o_distances = []
+for i in m_atoms:
+    for j in o_atoms:
+        rij = np.matmul(B, crystal_Rij[i, j])
+        m_o_distances += get_distances(rij, A, **opt_lmn)
+
+
+# In[27]:
+
+
+m_m_distances = []
+for i in m_atoms:
+    for j in m_atoms:
+        rij = np.matmul(B, crystal_Rij[i, j])
+        m_m_distances += get_distances(rij, A, **opt_lmn)
+
+
+# In[28]:
+
+
+o_o_distances = []
+for i in o_atoms:
+    for j in o_atoms:
+        rij = np.matmul(B, crystal_Rij[i, j])
+        o_o_distances += get_distances(rij, A, **opt_lmn)
+
+
+# In[29]:
+
+
+plt.figure(figsize=(6,12))
+
+ax1 = plt.subplot(311)
+hist_m_o_dist = plt.hist(m_o_distances, bins=100, range=(0, 20))
+plt.text(0.1, 0.9, "Metal-Oxygen", fontsize=12, transform=ax1.transAxes)
+
+plt.title("Histogram of distances")
+
+ax2 = plt.subplot(312)
+hist_m_m_dist = plt.hist(m_m_distances, bins=100, range=(0, 20))
+plt.text(0.1, 0.9, "Metal-Metal", fontsize=12, transform=ax2.transAxes)
+
+ax3 = plt.subplot(313)
+hist_o_o_dist = plt.hist(o_o_distances, bins=100, range=(0, 20))
+plt.xlabel("Radius (Å)", fontsize=12)
+_ = plt.text(0.1, 0.9, "Oxygen-Oxygen", fontsize=12, transform=ax3.transAxes)
+
+
+# ## Radiral distribution function
+# 
+# You can find the definition at Wikipedia: [Radial distribution function](https://en.wikipedia.org/wiki/Radial_distribution_function) and [Pair distribution function](https://en.wikipedia.org/wiki/Pair_distribution_function).
+
+# In[30]:
+
+
+def get_rdf(hist_x, hist_r, density, natom):
+    dr = hist_r[1] - hist_r[0]
+    factor = 1.0 / ( 4 * np.pi * dr * density * natom)
+    rad = []
+    rdf = []
+    for i in range(len(hist_x)):
+        r = (hist_r[i] + hist_r[i+1])/2
+        rad.append(r)
+        v = factor * hist_x[i] / r**2
+        rdf.append(v)
     
-def lemmatize_sent(text): 
-    # Text input is string, returns lowercased strings.
-    return [wnl.lemmatize(word.lower(), pos=penn2morphy(tag)) 
-            for word, tag in pos_tag(word_tokenize(text))]
+    return rad, rdf
 
-lemmatize_sent('He is walking to school')
 
+# In[31]:
 
-# # Lets try the `lemmatize_sent()` and remove stopwords from Single no. 8
 
-# In[ ]:
+vol = np.linalg.det(A)
+print("Volume:", vol)
+m_count = len(m_atoms)
+m_density = m_count/vol
+print("Metal count and density:", m_count, m_density)
+o_count = len(o_atoms)
+o_density = o_count/vol
+print("Oxygen count and density:", o_count, o_density)
 
+m_o_hist_x, m_o_hist_r, _ = hist_m_o_dist
+m_o_rad, m_o_rdf = get_rdf(m_o_hist_x, m_o_hist_r, o_density, m_count)
 
-print('Original Single no. 8:')
-print(single_no8, '\n')
-print('Lemmatized and removed stopwords:')
-print([word for word in lemmatize_sent(single_no8) 
-       if word not in stoplist_combined
-       and not word.isdigit() ])
+m_m_hist_x, m_m_hist_r, _ = hist_m_m_dist
+m_m_hist_x[0] = 0
+m_m_rad, m_m_rdf = get_rdf(m_m_hist_x, m_m_hist_r, m_density, m_count)
 
+o_o_hist_x, o_o_hist_r, _ = hist_o_o_dist
+o_o_hist_x[0] = 0
+o_o_rad, o_o_rdf = get_rdf(o_o_hist_x, o_o_hist_r, o_density, o_count)
 
-# # Combining what we know about removing stopwords and lemmatization
 
-# In[ ]:
+# In[32]:
 
 
-def preprocess_text(text):
-    # Input: str, i.e. document/sentence
-    # Output: list(str) , i.e. list of lemmas
-    return [word for word in lemmatize_sent(text) 
-            if word not in stoplist_combined
-            and not word.isdigit()]
+plt.hlines(1, 0, 20)
+plt.plot(m_o_rad, m_o_rdf, label="M-O")
+plt.plot(m_m_rad, m_m_rdf, label="M-M")
+plt.plot(o_o_rad, o_o_rdf, label="O-O")
+plt.xlim(0, 20)
+plt.ylim(0, 6)
+plt.legend()
+plt.xlabel("Radius (Å)", fontsize=12)
+_ = plt.title("Radial Distribution Functions")
 
 
-# # Tangential Note on Lemmatization
-# 
-# In English, a root word / lemma can manifest in different forms. 
-# 
-# | <img src="https://media1.giphy.com/media/xHHsXH7WJsWK4/giphy.gif" align="left" height="200" width="200"> | <img src="https://media1.giphy.com/media/xHHsXH7WJsWK4/giphy.gif" align="left" height="200" width="200"><img src="https://media1.giphy.com/media/xHHsXH7WJsWK4/giphy.gif" align="left" height="200" width="200"> |
-# |:-------------:|:-------------:|
-# | 1 cat  | 2 cats  |
-# | 1 cat  | 2 cats  |
-# 
-# For instance, we use “cat” to refer to a single “cat” and we attach an “-s”  suffix to refer to more than one cat, e.g. “two cats”. 
-# 
-# | <img src="https://68.media.tumblr.com/b0755247c8f32f79413d34b0410ccff1/tumblr_o3q8wlGi9v1u9ia8fo1_500.gif" align="left" height="200" width="400"> | 
-# |:-------------:| 
-# | cats walk / cats (are) walking | 
-# 
-# <!-- | <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/ModelsCatwalk.jpg/440px-ModelsCatwalk.jpg" align="left" height="200" width="400"> | 
-# |:-------------:| 
-# | cat walk(s) / catwalk(s) |  --> 
-# 
-# 
-# Another example, the word “walk” has different forms, e.g. “walking” and “walked” indicate the time and/or progress of the walking motion. <!-- ~~Additionally, “walk” can also refer to the act of walking which is different from the walking motion, e.g. "John went for a walk" (act of walking) vs "John wanted to walk to the park" (the walking action/motion).~~ --> We refer to these root words as ***word types*** (e.g. “cat” and “walk”) and their different forms as ***word tokens*** (e.g. “cats”, “walk”, “walking”, “walked”, “walks”). 
-# 
-# Linguists further distinguish words between their lemmas or word families. A lemma refers to the canonical root word used as a dictionary entry. A word family refers to a group of lemmas which are derived from a single root word. Even though "walkable" would be a separate entry in a dictionary from "walk", "walkable" can be grouped under the word family of "walk" together with "walking, walked, walks".
-# 
-# The distinction is subtle yet linguists go into great length to argue for what counts as a type, token, lemmas or word family. 
-
-# # From Strings to Vectors
-# 
-# **Vector** is an array of numbers
-# 
-# **Vector Space Model** is conceptualizing language as a whole lot of numbers
-# 
-# **Bag-of-Words (BoW)**: Counting each document/sentence as a vector of numbers, with each number representing the count of a word in the corpus
-# 
-# To count, we can use the Python `collections.Counter`
-
-# In[ ]:
-
-
-from collections import Counter
-
-sent1 = "The quick brown fox jumps over the lazy brown dog."
-sent2 = "Mr brown jumps over the lazy fox."
-
-# Lemmatize and remove stopwords
-processed_sent1 = preprocess_text(sent1)
-processed_sent2 = preprocess_text(sent2)
-
-
-# In[ ]:
-
-
-print('Processed sentence:')
-print(processed_sent1)
-print()
-print('Word counts:')
-print(Counter(processed_sent1))
-
-
-# In[ ]:
-
-
-print('Processed sentence:')
-print(processed_sent2)
-print()
-print('Word counts:')
-print(Counter(processed_sent2))
-
-
-# # Vectorization
-# 
-# Let's put the words and counts into a nice table:
-# 
-# | | brown | quick | fox | jump | lazy | dog | mr | 
-# |:---- |:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
-# | Sent1 | 2 | 1 | 1 | 1 | 1 | 1 | 0 |  
-# | Sent2 | 1 | 0 | 1 | 1 | 1 | 0 | 1 | 
-# 
-# 
-# If we fix the positions of the vocabulary i.e. 
-# 
-# ```
-# [brown, quick, fox, jump, lazy, dog, mr]
-# ```
-# 
-# and we do the counts for each word in each sentence, we get the sentence vectors (i.e. list of numbers to represent each sentence):
-# 
-# ```
-# sent1 = [2,1,1,1,1,1,0]
-# sent2 = [1,0,1,1,1,0,1]
-# ```
-
-# # Vectorization with sklearn 
-# 
-# In `scikit-learn`, there're pre-built functions to do the preprocessing and vectorization that we've been doing using the `CountVectorizer` object. 
-# 
-# It will be the object that contains the vocabulary (i.e. the first row of our table above) and has the function to convert any sentence into the counts vectors we see as above.
-# 
-# The input that `CountVectorizer` is a textfile, so we've to do some hacking to put let it accept the string outputs.
-# 
-# We can "fake it to make it" using `io.StringIO` where we can convert any string to work like a file, e.g. 
-
-# In[ ]:
-
-
-from io import StringIO
-from sklearn.feature_extraction.text import CountVectorizer
-
-sent1 = "The quick brown fox jumps over the lazy brown dog."
-sent2 = "Mr brown jumps over the lazy fox."
-
-with StringIO('\n'.join([sent1, sent2])) as fin:
-    # Create the vectorizer
-    count_vect = CountVectorizer()
-    count_vect.fit_transform(fin)
-
-
-# In[ ]:
-
-
-# We can check the vocabulary in our vectorizer
-# It's a dictionary where the words are the keys and 
-# The values are the IDs given to each word. 
-count_vect.vocabulary_
-
-
-# **Note:** We haven't counted anything yet just initializing our vectorizer object with the vocabulary. 
-
-# # ちょっと待ってください ... (Wait a minute)
-# 
-# I didn't tell the vectorizer to remove punctuation and tokenize and lowercase, how did they do it?
-# 
-# Also, `the` is in the vocabulary, it's a stopword, we want it gone... <br>
-# And `jumps` isn't stemmed or lemmatized!
-
-# If we look at the documentation of the [`CountVectorizer`](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.CountVectorizer.html) in `sklearn`, we see:
-# 
-# 
-# ```python
-# CountVectorizer(
-#     input=’content’, encoding=’utf-8’, 
-#     decode_error=’strict’, strip_accents=None, 
-#     lowercase=True, preprocessor=None, 
-#     tokenizer=None, stop_words=None, 
-#     token_pattern=’(?u)\b\w\w+\b’, ngram_range=(1, 1), 
-#     analyzer=’word’, max_df=1.0, min_df=1, 
-#     max_features=None, vocabulary=None, 
-#     binary=False, dtype=<class ‘numpy.int64’>)[source]
-# ```
-# 
-# And more specifically:
-# 
-# > **analyzer** : string, {‘word’, ‘char’, ‘char_wb’} or callable
-# > 
-# > Whether the feature should be made of word or character n-grams. Option ‘char_wb’ creates character n-grams only from text inside word boundaries; n-grams at the edges of words are padded with space.
-# > If a callable is passed it is used to extract the sequence of features out of the raw, unprocessed input.
-# 
-#  
-# > **preprocessor** : callable or None (default)
-# > 
-# > Override the preprocessing (string transformation) stage while preserving the tokenizing and n-grams generation steps.
-# 
-# > **tokenizer** : callable or None (default)
-# > 
-# > Override the string tokenization step while preserving the preprocessing and n-grams generation steps. Only applies if analyzer == 'word'.
-# 
-# > **stop_words** : string {‘english’}, list, or None (default)
-# > 
-# > If ‘english’, a built-in stop word list for English is used.
-# > If a list, that list is assumed to contain stop words, all of which will be removed from the resulting tokens. Only applies if analyzer == 'word'.
-# If None, no stop words will be used. 
-# 
-# > **lowercase** : boolean, True by default
-# > 
-# > Convert all characters to lowercase before tokenizing.
-
-# # Achso, we can override these arguments with the functions we have learnt before.
-
-# We can **override the tokenizer and stop_words**:
-
-# In[ ]:
-
-
-from io import StringIO
-from sklearn.feature_extraction.text import CountVectorizer
-
-sent1 = "The quick brown fox jumps over the lazy brown dog."
-sent2 = "Mr brown jumps over the lazy fox."
-
-with StringIO('\n'.join([sent1, sent2])) as fin:
-    # Override the analyzer totally with our preprocess text
-    count_vect = CountVectorizer(stop_words=stoplist_combined,
-                                 tokenizer=word_tokenize)
-    count_vect.fit_transform(fin)
-count_vect.vocabulary_
-
-
-# Or just **override the analyzer** totally with our preprocess text:
-
-# In[ ]:
+# You can see RDFs converge on 1 upon the increase of the radius.
 
-
-from io import StringIO
-from sklearn.feature_extraction.text import CountVectorizer
-
-sent1 = "The quick brown fox jumps over the lazy brown dog."
-sent2 = "Mr brown jumps over the lazy fox."
-
-with StringIO('\n'.join([sent1, sent2])) as fin:
-    # Override the analyzer totally with our preprocess text
-    count_vect = CountVectorizer(analyzer=preprocess_text)
-    count_vect.fit_transform(fin)
-count_vect.vocabulary_ 
-
-
-# # To vectorize any new sentences, we use  `CountVectorizer.transform()` 
-# 
-# The function  will return a sparse matrix.
-
-# In[ ]:
-
-
-count_vect.transform([sent1, sent2])
-
-
-# # To view the matrix, you can output it to an array
-
-# In[ ]:
-
-
-from operator import itemgetter
-
-# Print the words sorted by their index
-words_sorted_by_index, _ = zip(*sorted(count_vect.vocabulary_.items(), key=itemgetter(1)))
-
-print(preprocess_text(sent1))
-print(preprocess_text(sent2))
-print()
-print('Vocab:', words_sorted_by_index)
-print()
-print('Matrix/Vectors:\n', count_vect.transform([sent1, sent2]).toarray())
-
-
-# Naive Bayes 
-# ====
+# ## Crystal graph
 # 
-# 
-# 
-# 
-# Classification
-# ====
-# 
-# Classification simply means putting our data points into bins/box. You can also think of it as assigning label to our data points, e.g. given box of fruits, sort them in apples, oranges and others. 
-# 
-# Okay, the explanation could be more complex than that but `import this` says:
-# 
-# > **Simple is better than complex.**
-
-# # Now that we learnt some basic NLP and vectorization, lets apply it to a fun task.
-
-# [Random Acts of Pizza](https://www.kaggle.com/c/random-acts-of-pizza)
-# =====
-# 
-# In machine learning, it is often said there are [no free lunches](). How wrong we were.
-# 
-# This competition contains a dataset with 5671 textual requests for pizza from the Reddit community Random Acts of Pizza together with their outcome (successful/unsuccessful) and meta-data. 
-# 
-# ![](https://kaggle2.blob.core.windows.net/competitions/kaggle/3949/media/pizzas.png)
-# 
-# The task is to create an algorithm capable of predicting which requests will garner a cheesy (but sincere!) act of kindness.
-# 
-
-# # Lets take a look at the training data
-
-# In[ ]:
-
-
-import json
-
-with open('../input/random-acts-of-pizza/train.json') as fin:
-    trainjson = json.load(fin)
-
-
-# In[ ]:
-
-
-trainjson[0]
-
-
-# We're only interested in the text fields:
+# If you are in a hurry, please read the paper about the crytal graph: https://arxiv.org/abs/1710.10324
 # 
-# **Input**:
-#  - `request_id`: unique identifier for the request 
-#  - `request_title`: title of the reddit post for pizza request
-#  - `request_text_edit_aware`: expository to request for pizza
-#  
-# **Output**:
-#  - `requester_recieved_pizza`: whether requester gets his/her pizza
-#  
-# For our purpose, lets only use the `request_text` as the input to build our Naive Bayes classifier and the output is the `requester_recieved_pizza` field.
+# When at least one of the cell edges is smaller than double the minumun distance between metal and oxygen atoms, the crytal graph becomes unpreferable. In such cases, this notebook uses [the supercell method][a].
 # 
-# **Note:** The `request_id` is only used for mapping purpose when we're submitting the results to the Kaggle task.
-
-# In[ ]:
-
-
-print('UID:\t', trainjson[0]['request_id'], '\n')
-print('Title:\t', trainjson[0]['request_title'], '\n')
-print('Text:\t', trainjson[0]['request_text_edit_aware'], '\n')
-print('Tag:\t', trainjson[0]['requester_received_pizza'], end='\n')
+# [a]: https://en.wikipedia.org/wiki/Supercell_(crystal)
 
+# In[33]:
 
-# # Here's a neat trick to convert json to pandas DataFrame
 
-# In[ ]:
+def get_supercell(reduced_coords, amat, l_max, m_max, n_max):
+    sc_indeces = np.array([l_max, m_max, n_max])
+    sc_amat = amat * sc_indeces
+    sc_red = []
+    for l in range(l_max):
+        for m in range(m_max):
+            for n in range(n_max):
+                for rc in reduced_coords:
+                    x = rc[0] + np.array([l, m, n])
+                    x /= sc_indeces
+                    sc_red.append([x, rc[1]])
 
+    return sc_red, sc_amat
 
-import pandas as pd
-df = pd.io.json.json_normalize(trainjson) # Pandas magic... 
-df_train = df[['request_id', 'request_title', 
-               'request_text_edit_aware', 
-               'requester_received_pizza']]
-df_train.head()
 
+# In[34]:
 
-# # Lets take a look at the test data
 
-# In[ ]:
+sc_lmn = get_optimal_lmn(B, R_max=3.6)
+print("Supercell:", sc_lmn)
 
+del sc_lmn["R_max"]
+sc_red, sc_A = get_supercell(crystal_red, A, **sc_lmn)
 
-import json
+sc_dist, sc_Rij = get_shortest_distances(sc_red, sc_A)
 
-with open('../input/random-acts-of-pizza/test.json') as fin:
-    testjson = json.load(fin)
+natom = len(sc_red)
+m_atoms = [i for i in range(natom) if sc_red[i][1] != 'O']
+o_atoms = [i for i in range(natom) if sc_red[i][1] == 'O']
 
 
-# In[ ]:
+# In[35]:
 
 
-print('UID:\t', testjson[0]['request_id'], '\n')
-print('Title:\t', testjson[0]['request_title'], '\n')
-print('Text:\t', testjson[0]['request_text_edit_aware'], '\n')
-print('Tag:\t', testjson[0]['requester_received_pizza'], end='\n')
+import networkx as nx
+#
+# Database of Ionic Radii
+# http://abulafia.mt.ic.ac.uk/shannon/ptable.php
+#
+# Coordination IV
+R_O = 1.35
+#
+# Coordination VI
+R_Al = 0.535
+R_Ga = 0.62
+R_In = 0.8
+#
+R_ionic = { "O" : R_O, "Al" : R_Al, "Ga" : R_Ga, "In" : R_In }
+
+def get_crytal_graph(reduced_coords, dists, factor=1.5):
+    natom = len(reduced_coords)
+    G = nx.Graph()
+    for i in range(natom):
+        symbol_i = reduced_coords[i][1]
+        for j in range(i):
+            symbol_j = reduced_coords[j][1]
+            if (symbol_i == "O" and symbol_j != "O") or (symbol_i != "O" and symbol_j == "O"):
+                node_i = symbol_i + "_" + str(i)
+                node_j = symbol_j + "_" + str(j)
+                R_max = (R_ionic[symbol_i] + R_ionic[symbol_j]) * factor
+                if dists[i, j] < R_max:
+                    G.add_edge(node_i, node_j)
+    
+    return G
+
+
+# If you find lack or excess of connections, you shoud adjust `factor`. Maybe, close-packed lattices require a lower value than the defalut value. For a hcp-like lattice, I used `factor=1.2`.
+# 
+# I recommend the factor that depends on the spacegroup and the gamma:
+
+# In[36]:
+
+
+def get_factor(spacegroup, gamma):
+    if spacegroup == 12:
+        return 1.4
+    elif spacegroup == 33:
+        return 1.4
+    elif spacegroup == 167:
+        return 1.5
+    elif spacegroup == 194:
+        return 1.3
+    elif spacegroup == 206:
+        return 1.5
+    elif spacegroup == 227:
+        if gamma < 60:
+            return 1.4
+        else:
+            return 1.5
+    else:
+        raise NameError('get_factor does not support the spacegroup: {}'.format(spacegroup))
+
+
+# In[39]:
+
+
+spacegroup = df_crystals.spacegroup.values[row_id]
+angle_gamma = df_crystals.lattice_angle_gamma_degree.values[row_id]
+cg_factor = get_factor(spacegroup, angle_gamma)
+G = get_crytal_graph(sc_red, sc_dist, factor=cg_factor)
+
+print("Node count:", G.number_of_nodes())
+print("Edge count:", G.number_of_edges())
+
+for i in range(natom):
+    symbol_i = sc_red[i][1]
+    node_i = symbol_i + "_" + str(i)
+    crdn_i = list(G.neighbors(node_i))
+    print(node_i, len(crdn_i), crdn_i)
+
+
+# There are 4, 6-coordinated Al and Ga atoms, and 3, 4, 5-coordinated O atoms.
+
+# In[40]:
 
 
-# # Gotcha again! 
-# 
-# In the test data, our label (i.e. `requester_received_pizza`) **won't be known** to us since that's the thing that our classifier is predicting.
-# 
-# **Note:** Whatever features that we're going to train our classifier with, we should have them in our test set too. In our case we need to make sure that the test set has `request_text_edit_aware` field.
-
-# # Lets put the test data into a pandas DataFrame too
-
-# In[ ]:
+plt.figure(figsize=(10,10)) 
+nx.draw_spring(G, with_labels=True, node_size=800, font_size=8)
 
 
-import pandas as pd
-df = pd.io.json.json_normalize(testjson) # Pandas magic... 
-df_test = df[['request_id', 'request_title', 
-               'request_text_edit_aware']]
-df_test.head()
-
-
-# # Split training data before vectorization
-# 
-# The first thing to do is to split our training data into 2 parts:
-# 
-#  - **training**: Use for training our model
-#  - **validation**: Use to check the "soundness" of our model
-#  
-# **Note:** 
-# 
-#  - Splitting the data into 2 parts and holding out one part to check the model is one of method to validate the "soundness" of our model. It's call the **hold-out** validation. 
+# All edges of the crystal graph are imported as bonds in the below gemometry figure.
+# ![Crystal graph to Jmol viewer](https://github.com/Tony-Y/MaterialsAreSimilarToDocuments/blob/master/geometry_add2.jpg?raw=true)
 # 
-#  - Another popular validation method is **cross-validation**, it's out of scope here but you can take a look at `crossvalidation` in `scikit-learn`. 
-#  
+# You can generate the bonds for Jmol using the following script:  
 
-# In[ ]:
+# In[41]:
 
 
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.model_selection import train_test_split 
+def generate_jmol_bonds(G, xyz_coords, reduced_coords, amat,
+                        jmol_bonds_fn="./jmol_bonds.spt",
+                        jmol_xyz_fn = "./jmol_geometry.xyz"):
+    add_atoms = []
+    na = len(reduced_coords)
+    with open(jmol_bonds_fn, "w") as f:
+        f.write("set autobond off\n")
+        f.write("load \"{}\"\n".format(jmol_xyz_fn))
+        f.write("background [x0000cc]\n")
+        f.write("set bondradiusmilliangstroms 100\n")
+        f.write("set perspectiveDepth true\n")
+        for e in G.edges():
+            e1 = e[0].split("_")
+            e2 = e[1].split("_")
+            i = int(e1[1])
+            j = int(e2[1])
+            red = reduced_coords[i][0] - reduced_coords[j][0]
+            if np.sum(np.abs(red) > 0.5) > 0:
+                sign_vec = [0] * 3
+                for k in range(3):
+                    if red[k] > 0.5:
+                        sign_vec[k] = 1
+                    elif red[k] < -0.5:
+                        sign_vec[k] = -1
+                lat_vec = np.matmul(amat, sign_vec)
+                xyz_i = xyz_coords[i][0] - lat_vec
+                ii = na
+                na += 1
+                add_atoms.append([xyz_i, e1[0]])
+                xyz_j = xyz_coords[j][0] + lat_vec
+                jj = na
+                na += 1
+                add_atoms.append([xyz_j, e2[0]])
+                atom1 = e1[0]+str(i+1)
+                atom2 = e2[0]+str(jj+1)
+                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
+                atom1 = e1[0]+str(ii+1)
+                atom2 = e2[0]+str(j+1)
+                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
+            else:
+                atom1 = e1[0]+str(i+1)
+                atom2 = e2[0]+str(j+1)
+                f.write("connect ({}) ({}) single\n".format(atom1, atom2))
 
-# It doesn't really matter what the function name is called
-# but the `train_test_split` is splitting up the data into 
-# 2 parts according to the `test_size` argument you've set.
+    with open(jmol_xyz_fn, "w") as f:
+        f.write("#=================================\n")
+        f.write("#Created using the Crystal Graph\n")
+        f.write("#=================================\n")
+        for i in range(3):
+            f.write("lattice_vector {} {} {}\n".format(amat[0,i], amat[1,i], amat[2,i]))
+        for atom in xyz_coords:
+            f.write("atom {} {} {} {}\n".format(atom[0][0], atom[0][1], atom[0][2], atom[1]))
+        for atom in add_atoms:
+            f.write("atom {} {} {} {}\n".format(atom[0][0], atom[0][1], atom[0][2], atom[1]))
 
-# When we're splitting up the training data, we're spltting up 
-# into train, valid split. The function name is just a name =)
-train, valid = train_test_split(df_train, test_size=0.2)
 
+# In[42]:
 
-# # Vectorize the train and validation set
 
-# In[ ]:
+sc_xyz = [ [np.matmul(sc_A, atom[0]), atom[1]] for atom in sc_red]
+generate_jmol_bonds(G, sc_xyz, sc_red, sc_A)
 
 
-# Initialize the vectorizer and 
-# override the analyzer totally with the preprocess_text().
-# Note: the vectorizer is just an 'empty' object now.
-count_vect = CountVectorizer(analyzer=preprocess_text)
+# In[43]:
 
-# When we use `CounterVectorizer.fit_transform`,
-# we essentially create the dictionary and 
-# vectorize our input text at the same time.
-train_set = count_vect.fit_transform(train['request_text_edit_aware'])
-train_tags = train['requester_received_pizza']
 
-# When vectorizing the validation data, we use `CountVectorizer.transform()`.
-valid_set = count_vect.transform(valid['request_text_edit_aware'])
-valid_tags = valid['requester_received_pizza']
+# Please see `Output` of this notebook or uncomment the following two lines.
+#with open("jmol_bonds.spt") as f:
+#    print(f.read())
 
 
-# # Now, we need to vectorize the test data too
-# 
-# After we vectorize our data, the input to train the classifier would be the vectorized text. 
-# <br>When we predict the label with the trained mdoel, our input needs to be vectorized too.
-# 
+# In[44]:
 
-# In[ ]:
 
+# Please see `Output` of this notebook or uncomment the following two lines.
+#with open("jmol_geometry.xyz") as f:
+#    print(f.read())
 
-# When vectorizing the test data, we use `CountVectorizer.transform()`.
-test_set = count_vect.transform(df_test['request_text_edit_aware'])
 
-
-# # Naive Bayes classifier in sklearn
+# Put the two files, **jmol_bonds.spt** and **jmol_geometry.xyz** on the same directory, and run Jmol as:
 # 
-# There are different variants of Naive Bayes (NB) classifier in `sklearn`. <br>
-# For simplicity, lets just use the `MultinomialNB`.
+# `java -Xmx512m -jar /your/installed/directory/Jmol.jar jmol_bonds.spt`
 # 
-# **Multinomial** is a big word but it just means many classes/categories/bins/boxes that needs to be classified. 
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import MultinomialNB
-clf = MultinomialNB() 
-
-# To train the classifier, simple do 
-clf.fit(train_set, train_tags) 
-
-
-# # Before we test our classifier on the test set, we get a sense of how good it is on the validation set.
+# Note that `/your/installed/directory` is different for each person.
 
-# In[ ]:
+# ## Graph distance
 
+# In[45]:
 
-from sklearn.metrics import accuracy_score
 
-# To predict our tags (i.e. whether requesters get their pizza), 
-# we feed the vectorized `test_set` to .predict()
-predictions_valid = clf.predict(valid_set)
+path_lengths = np.ones((natom, natom), dtype=np.int)
+for i in range(natom):
+    atom_i = sc_red[i][1] + "_" + str(i)
+    for j in range(i):
+        atom_j = sc_red[j][1] + "_" + str(j)
+        path_lengths[i, j] = nx.shortest_path_length(G, atom_i, atom_j)
+        path_lengths[j, i] = path_lengths[i, j]
+path_lengths
 
-print('Pizza reception accuracy = {}'.format(
-        accuracy_score(predictions_valid, valid_tags) * 100)
-     )
 
+# In[46]:
 
-# # Now lets use the full training data set and re-vectorize and retrain the classifier
-# 
-# More data == better model (in most cases)
-
-# In[ ]:
-
-
-count_vect = CountVectorizer(analyzer=preprocess_text)
-
-full_train_set = count_vect.fit_transform(df_train['request_text_edit_aware'])
-full_tags = df_train['requester_received_pizza']
 
-# Note: We have to re-vectorize the test set since
-#       now our vectorizer is different using the full 
-#       training set.
-test_set = count_vect.transform(df_test['request_text_edit_aware'])
+import seaborn as sns
+sns.heatmap(path_lengths)
 
-# To train the classifier
-clf = MultinomialNB() 
-clf.fit(full_train_set, full_tags) 
 
+# ## Histogram of angles
 
-# # Finally, we use the classifier to predict on the test set
+# In[49]:
 
-# In[ ]:
 
+def get_angles(G, Rij, atom1):
+    angles = []
+    crdn1 = list(G.neighbors(atom1))
+    crdn1_indeces = [int(atom.split("_")[1]) for atom in crdn1]
+    i1 = int(atom1.split("_")[1])
+    for i in range(len(crdn1)):
+        i2 = crdn1_indeces[i]
+        v2 = Rij[i2, i1]
+        for j in range(i):
+            i3 = crdn1_indeces[j]
+            v3 = Rij[i3, i1]
+            angle = angle_deg_between(v2, v3)
+            angles.append(angle)
+            #print(atom1, crdn1[i], crdn1[j], angle, length(v2), length(v3))
+    return angles       
 
-# To predict our tags (i.e. whether requesters get their pizza), 
-# we feed the vectorized `test_set` to .predict()
-predictions = clf.predict(test_set)
 
+# In[50]:
 
-# **Note:** Since we don't have the `requester_received_pizza` field in test data, we can't measure accuracy. But we can do some exploration as shown below.
 
-# # From the training data, we had 24% pizza giving rate
+o_m_o_angles = []
+for i in m_atoms:
+    atom = sc_red[i][1] + "_" + str(i)
+    o_m_o_angles += get_angles(G, sc_Rij, atom)
 
-# In[ ]:
+m_o_m_angles = []
+for i in o_atoms:
+    atom = sc_red[i][1] + "_" + str(i)
+    m_o_m_angles += get_angles(G, sc_Rij, atom)
 
 
-success_rate = sum(df_train['requester_received_pizza']) / len(df_train) * 100
-print(str('Of {} requests, only {} gets their pizzas,'
-          ' {}% success rate...'.format(len(df_train), 
-                                        sum(df_train['requester_received_pizza']), 
-                                       success_rate)
-         )
-     )
+# In[51]:
 
 
-# # Lolz, our classifier is rather stingy...
+plt.figure(figsize=(6,8))
 
-# In[ ]:
+ax1 = plt.subplot(211)
+hist_m_angle = plt.hist(o_m_o_angles, bins=100, range=(60,180))
+plt.text(0.55, 0.9, "Oxygen-Metal-Oxygen", fontsize=12, transform=ax1.transAxes)
+plt.title("Histogram of angles")
 
+ax2 = plt.subplot(212)
+hist_o_angle = plt.hist(m_o_m_angles, bins=100, range=(60,180))
+plt.text(0.55, 0.9, "Metal-Oxygen-Metal", fontsize=12, transform=ax2.transAxes)
+_ = plt.xlabel("θ (degree)", fontsize=12)
 
-success_rate = sum(predictions) / len(predictions) * 100
-print(str('Of {} requests, only {} gets their pizzas,'
-          ' {}% success rate...'.format(len(predictions), 
-                                        sum(predictions), 
-                                       success_rate)
-         )
-     )
 
-
-# # How accurate is our count vectorization naive bayes classifier on the test data?
-# 
-# Since we don't have the `requester_received_pizza` field in the test data, we have to check that with an oracle (i.e. the person that knows). 
+# ## Histogram of dihedral angles
 # 
-# On Kaggle, **checking with the oracle** means uploading the file in the correct format and their script will process the scores and tell you how you did.
-# 
-# **Note:** Different tasks will use different metrics but in most cases getting as many correct predictions as possible is the thing to aim for. We won't get into the details of how classifiers are evaluated but for a start, please see [precision, recall and F1-scores](https://en.wikipedia.org/wiki/Precision_and_recall) 
-# 
-
-# # Finally, lets take a look at what format the oracle expects and create the output file for our predictions accordingly
+# You can find the definition at Wikipedia: [Dihedral_angle](https://en.wikipedia.org/wiki/Dihedral_angle)
 
-# In[ ]:
+# In[52]:
 
 
-df_sample_submission = pd.read_csv('../input/patching-pizzas/sampleSubmission.csv')
-df_sample_submission.head()
+def get_dihedral_angles(G, Rij, atom1, atom2):
+    dihedral_angles = []
+    crdn1 = list(G.neighbors(atom1))
+    crdn2 = list(G.neighbors(atom2))
+    crdn1.remove(atom2)
+    crdn2.remove(atom1)
+    for c1 in crdn1:
+        for c2 in crdn2:
+            if c1 == c2: continue
+            j1 = int(atom1.split("_")[1])
+            j2 = int(atom2.split("_")[1])
+            i1 = int(c1.split("_")[1])
+            i2 = int(c2.split("_")[1])
+            v0 = Rij[i1, i2]
+            v1 = Rij[i1, j1]
+            v2 = Rij[i2, j2]
+            uv0 = unit_vector(v0)
+            w1 = v1 - np.dot(v1, uv0) * uv0
+            w2 = v2 - np.dot(v2, uv0) * uv0
+            if length(w1) < 1e-8 or length(w2) < 1e-8: continue
+            angle = angle_deg_between(w1, w2)
+            dihedral_angles.append(angle)
+            #print(atom1, atom2, c1, c2, angle, length(v0), length(v1), length(v2), length(w1), length(w2))
+    
+    return dihedral_angles
 
 
-# In[ ]:
+# In[53]:
 
 
-# We've kept the `request_id` previous in the `df_test` dataframe.
-# We can simply merge that column with our predictions.
-df_output = pd.DataFrame({'request_id': list(df_test['request_id']), 
-                          'requester_received_pizza': list(predictions)}
-                        )
-# Convert the predictions from boolean to integer.
-df_output['requester_received_pizza'] = df_output['requester_received_pizza'].astype(int)
-df_output.head()
+train_dihedral = []
+for i in m_atoms:
+    atom1 = sc_red[i][1] + "_" + str(i)
+    for atom2 in G.neighbors(atom1):
+        train_dihedral += get_dihedral_angles(G, sc_Rij, atom1, atom2)
 
 
-# In[ ]:
+# In[54]:
 
 
-# Create the csv file.
-df_output.to_csv('basic-nlp-submission.csv')
+hist_dihedral = plt.hist(train_dihedral, bins=100)
+ax = plt.axes()
+plt.text(0.45, 0.9, "Metal-Oxygen-Metal-Oxygen", fontsize=12, transform=ax.transAxes)
+_ = plt.title("Histogram of dihedral angles")
+_ = plt.xlabel("φ (degree)", fontsize=12)
 

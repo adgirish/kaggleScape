@@ -1,329 +1,302 @@
 
 # coding: utf-8
 
-# # Transfer learning with pretrained Keras models
+# ![](https://www.listchallenges.com/f/lists/6c536c33-489b-4bee-b259-00074fa53a0d.jpg)
+
+# # More To Come. Stay Tuned. !!
+# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
 # 
-# Although Kernel resources were increased recently we still can not train useful CNNs without GPU. The original ImageNet set has quite a few different dog classes so we can reuse CNNs with pretrained ImageNet weights. Fortunately prediction is much faster (<1s/image) making it possible to run meaningful experiments with Kaggle Kernels.
+# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!.** If you like it or it helps you , you can upvote and/or leave a comment :).**
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import numpy as np
-import pandas as pd
-import datetime as dt
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import ImageGrid
-from os import listdir, makedirs
-from os.path import join, exists, expanduser
-from tqdm import tqdm
-from sklearn.metrics import log_loss, accuracy_score
-from keras.preprocessing import image
-from keras.applications.vgg16 import VGG16
-from keras.applications.resnet50 import ResNet50
-from keras.applications import xception
-from keras.applications import inception_v3
-from keras.applications.vgg16 import preprocess_input, decode_predictions
-from sklearn.linear_model import LogisticRegression
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+
+
+# # More is coming Soon
+
+# In[ ]:
+
+
+train_data = pd.read_csv('../input/train.csv')
+test_data = pd.read_csv('../input/test.csv')
+submission = pd.read_csv("../input/sample_submission.csv")
 
 
 # In[ ]:
 
 
-start = dt.datetime.now()
-
-
-# # Use Keras Pretrained Models dataset
-# 
-# Kernels can't use network connection to download pretrained keras model weights.
-# This dataset helps you to apply your favorite pretrained model in the Kaggle Kernel environment. 
-# You can find more details [here](https://www.kaggle.com/gaborfodor/keras-pretrained-models).
-# 
-# We have to copy the pretrained models to the cache directory (~/.keras/models) where keras is looking for them.
-# 
-
-# In[ ]:
-
-
-get_ipython().system('ls ../input/keras-pretrained-models/')
+print("Training data size",train_data.shape)
+print("test data size",test_data.shape)
+submission.head()
 
 
 # In[ ]:
 
 
-cache_dir = expanduser(join('~', '.keras'))
-if not exists(cache_dir):
-    makedirs(cache_dir)
-models_dir = join(cache_dir, 'models')
-if not exists(models_dir):
-    makedirs(models_dir)
+train_data.head()
 
 
 # In[ ]:
 
 
-get_ipython().system('cp ../input/keras-pretrained-models/*notop* ~/.keras/models/')
-get_ipython().system('cp ../input/keras-pretrained-models/imagenet_class_index.json ~/.keras/models/')
-get_ipython().system('cp ../input/keras-pretrained-models/resnet50* ~/.keras/models/')
+test_data.head()
 
 
 # In[ ]:
 
 
-get_ipython().system('ls ~/.keras/models')
+# now open the URL
+temp = 4444
+print('id', train_data['id'][temp])
+print('url:', train_data['url'][temp])
+print('landmark id:', train_data['landmark_id'][temp])
 
 
 # In[ ]:
 
 
-get_ipython().system('ls ../input/dog-breed-identification')
-
-
-# # Use top 16 classes
-# Using all the images would take more than the 1 hour kernel limit. Let's focus on the most frequent 16 breeds.
-
-# In[ ]:
-
-
-INPUT_SIZE = 224
-NUM_CLASSES = 16
-SEED = 1987
-data_dir = '../input/dog-breed-identification'
-labels = pd.read_csv(join(data_dir, 'labels.csv'))
-sample_submission = pd.read_csv(join(data_dir, 'sample_submission.csv'))
-print(len(listdir(join(data_dir, 'train'))), len(labels))
-print(len(listdir(join(data_dir, 'test'))), len(sample_submission))
+train_data['landmark_id'].value_counts().hist()
 
 
 # In[ ]:
 
 
-selected_breed_list = list(labels.groupby('breed').count().sort_values(by='id', ascending=False).head(NUM_CLASSES).index)
-labels = labels[labels['breed'].isin(selected_breed_list)]
-labels['target'] = 1
-labels['rank'] = labels.groupby('breed').rank()['id']
-labels_pivot = labels.pivot('id', 'breed', 'target').reset_index().fillna(0)
-np.random.seed(seed=SEED)
-rnd = np.random.random(len(labels))
-train_idx = rnd < 0.8
-valid_idx = rnd >= 0.8
-y_train = labels_pivot[selected_breed_list].values
-ytr = y_train[train_idx]
-yv = y_train[valid_idx]
+# missing data in training data 
+total = train_data.isnull().sum().sort_values(ascending = False)
+percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
+missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_train_data.head()
 
 
 # In[ ]:
 
 
-def read_img(img_id, train_or_test, size):
-    """Read and resize image.
-    # Arguments
-        img_id: string
-        train_or_test: string 'train' or 'test'.
-        size: resize the original image.
-    # Returns
-        Image as numpy array.
-    """
-    img = image.load_img(join(data_dir, train_or_test, '%s.jpg' % img_id), target_size=size)
-    img = image.img_to_array(img)
-    return img
+# missing data in test data 
+total = test_data.isnull().sum().sort_values(ascending = False)
+percent = (test_data.isnull().sum()/test_data.isnull().count()).sort_values(ascending = False)
+missing_test_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_test_data.head()
 
 
-# # ResNet50 class predictions for example images
+# ## We can see there is no missing data
+# ## Now Lets see most frequent Landmarks
 
 # In[ ]:
 
 
-model = ResNet50(weights='imagenet')
-j = int(np.sqrt(NUM_CLASSES))
-i = int(np.ceil(1. * NUM_CLASSES / j))
-fig = plt.figure(1, figsize=(16, 16))
-grid = ImageGrid(fig, 111, nrows_ncols=(i, j), axes_pad=0.05)
-for i, (img_id, breed) in enumerate(labels.loc[labels['rank'] == 1, ['id', 'breed']].values):
-    ax = grid[i]
-    img = read_img(img_id, 'train', (224, 224))
-    ax.imshow(img / 255.)
-    x = preprocess_input(np.expand_dims(img.copy(), axis=0))
-    preds = model.predict(x)
-    _, imagenet_class_name, prob = decode_predictions(preds, top=1)[0][0]
-    ax.text(10, 180, 'ResNet50: %s (%.2f)' % (imagenet_class_name , prob), color='w', backgroundcolor='k', alpha=0.8)
-    ax.text(10, 200, 'LABEL: %s' % breed, color='k', backgroundcolor='w', alpha=0.8)
-    ax.axis('off')
+# Occurance of landmark_id in decreasing order(Top categories)
+temp = pd.DataFrame(train_data.landmark_id.value_counts().head(8))
+temp.reset_index(inplace=True)
+temp.columns = ['landmark_id','count']
+temp
+
+
+#  ### The most frequent landmark_id is 9633  and the count is 50337.
+
+# In[ ]:
+
+
+# Plot the most frequent landmark_ids
+plt.figure(figsize = (9, 8))
+plt.title('Most frequent landmarks')
+sns.set_color_codes("pastel")
+sns.barplot(x="landmark_id", y="count", data=temp,
+            label="Count")
 plt.show()
 
 
-# Preprocessing and prediction seems to be working. 75% accuracy on these 16 images.
-
-# # Extract VGG16 bottleneck features
+# ## Lets see least frequent landmarks
 
 # In[ ]:
 
 
-INPUT_SIZE = 224
-POOLING = 'avg'
-x_train = np.zeros((len(labels), INPUT_SIZE, INPUT_SIZE, 3), dtype='float32')
-for i, img_id in tqdm(enumerate(labels['id'])):
-    img = read_img(img_id, 'train', (INPUT_SIZE, INPUT_SIZE))
-    x = preprocess_input(np.expand_dims(img.copy(), axis=0))
-    x_train[i] = x
-print('Train Images shape: {} size: {:,}'.format(x_train.shape, x_train.size))
+# Occurance of landmark_id in increasing order
+temp = pd.DataFrame(train_data.landmark_id.value_counts().tail(8))
+temp.reset_index(inplace=True)
+temp.columns = ['landmark_id','count']
+temp
 
 
-# In[ ]:
-
-
-Xtr = x_train[train_idx]
-Xv = x_train[valid_idx]
-print((Xtr.shape, Xv.shape, ytr.shape, yv.shape))
-vgg_bottleneck = VGG16(weights='imagenet', include_top=False, pooling=POOLING)
-train_vgg_bf = vgg_bottleneck.predict(Xtr, batch_size=32, verbose=1)
-valid_vgg_bf = vgg_bottleneck.predict(Xv, batch_size=32, verbose=1)
-print('VGG train bottleneck features shape: {} size: {:,}'.format(train_vgg_bf.shape, train_vgg_bf.size))
-print('VGG valid bottleneck features shape: {} size: {:,}'.format(valid_vgg_bf.shape, valid_vgg_bf.size))
-
-
-# # LogReg on VGG bottleneck features
+# ### There are many least frequent landmarks whose count is 1
 
 # In[ ]:
 
 
-logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=SEED)
-logreg.fit(train_vgg_bf, (ytr * range(NUM_CLASSES)).sum(axis=1))
-valid_probs = logreg.predict_proba(valid_vgg_bf)
-valid_preds = logreg.predict(valid_vgg_bf)
+# Plot the least frequent landmark_ids
+plt.figure(figsize = (9, 8))
+plt.title('Least frequent landmarks')
+sns.set_color_codes("pastel")
+sns.barplot(x="landmark_id", y="count", data=temp,
+            label="Count")
+plt.show()
+
+
+# ## lets see unique URLs
+
+# In[ ]:
+
+
+# Unique URL's
+train_data.nunique()
 
 
 # In[ ]:
 
 
-print('Validation VGG LogLoss {}'.format(log_loss(yv, valid_probs)))
-print('Validation VGG Accuracy {}'.format(accuracy_score((yv * range(NUM_CLASSES)).sum(axis=1), valid_preds)))
+#Class distribution
+plt.figure(figsize = (10, 8))
+plt.title('Category Distribuition')
+sns.distplot(train_data['landmark_id'])
 
-
-# Not bad, 90% accuracy for the top 16 classes. The multiclass classification with 120 classes is more difficult so these LogLoss/Accuracy scores does not translate to LB.
-
-# # Extract Xception bottleneck features
-
-# In[ ]:
-
-
-INPUT_SIZE = 299
-POOLING = 'avg'
-x_train = np.zeros((len(labels), INPUT_SIZE, INPUT_SIZE, 3), dtype='float32')
-for i, img_id in tqdm(enumerate(labels['id'])):
-    img = read_img(img_id, 'train', (INPUT_SIZE, INPUT_SIZE))
-    x = xception.preprocess_input(np.expand_dims(img.copy(), axis=0))
-    x_train[i] = x
-print('Train Images shape: {} size: {:,}'.format(x_train.shape, x_train.size))
+plt.show()
 
 
 # In[ ]:
 
 
-Xtr = x_train[train_idx]
-Xv = x_train[valid_idx]
-print((Xtr.shape, Xv.shape, ytr.shape, yv.shape))
-xception_bottleneck = xception.Xception(weights='imagenet', include_top=False, pooling=POOLING)
-train_x_bf = xception_bottleneck.predict(Xtr, batch_size=32, verbose=1)
-valid_x_bf = xception_bottleneck.predict(Xv, batch_size=32, verbose=1)
-print('Xception train bottleneck features shape: {} size: {:,}'.format(train_x_bf.shape, train_x_bf.size))
-print('Xception valid bottleneck features shape: {} size: {:,}'.format(valid_x_bf.shape, valid_x_bf.size))
+print("Number of classes under 20 occurences",(train_data['landmark_id'].value_counts() <= 20).sum(),'out of total number of categories',len(train_data['landmark_id'].unique()))
 
 
-# # LogReg on Xception bottleneck features
+# ## Lets display some images from URLs / Some URLs Visulization 
+
+# In[ ]:
+
+
+from IPython.display import Image
+from IPython.core.display import HTML 
+
+def display_category(urls, category_name):
+    img_style = "width: 180px; margin: 0px; float: left; border: 1px solid black;"
+    images_list = ''.join([f"<img style='{img_style}' src='{u}' />" for _, u in urls.head(12).iteritems()])
+
+    display(HTML(images_list))
+
+
+# In[ ]:
+
+
+category = train_data['landmark_id'].value_counts().keys()[0]
+urls = train_data[train_data['landmark_id'] == category]['url']
+display_category(urls, "")
+
+
+# In[ ]:
+
+
+category = train_data['landmark_id'].value_counts().keys()[1]
+urls = train_data[train_data['landmark_id'] == category]['url']
+display_category(urls, "")
+
+
+# # Now Lets extract the website name and see their occurances
+
+# In[ ]:
+
+
+# Extract site_names for train data
+temp_list = list()
+for path in train_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+train_data['site_name'] = temp_list
+# Extract site_names for test data
+temp_list = list()
+for path in test_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+test_data['site_name'] = temp_list
+
+
+# ### We have added one new column "site_name". lets see
+
+# In[ ]:
+
+
+print("Training data size",train_data.shape)
+print("test data size",test_data.shape)
+
+
+# In[ ]:
+
+
+train_data.head(8)
+
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# ## occurances of sites in train_data
+
+# In[ ]:
+
+
+# Occurance of site in decreasing order(Top categories)
+temp = pd.DataFrame(train_data.site_name.value_counts())
+temp.reset_index(inplace=True)
+temp.columns = ['site_name','count']
+temp
+
+
+# ### As we can see there are total 16 unique sites.
+
+# In[ ]:
+
+
+# Plot the Sites with their count
+plt.figure(figsize = (9, 8))
+plt.title('Sites with their count')
+sns.set_color_codes("pastel")
+sns.barplot(x="site_name", y="count", data=temp,
+            label="Count")
+locs, labels = plt.xticks()
+plt.setp(labels, rotation=90)
+plt.show()
+
+
+# ## occurances of sites in test_data
+
+# In[ ]:
+
+
+# Occurance of site in decreasing order(Top categories)
+temp = pd.DataFrame(test_data.site_name.value_counts())
+temp.reset_index(inplace=True)
+temp.columns = ['site_name','count']
+temp
+
+
+# ### Total unique sites are 25 in test data and some are different from train_data
 # 
 
 # In[ ]:
 
 
-logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=SEED)
-logreg.fit(train_x_bf, (ytr * range(NUM_CLASSES)).sum(axis=1))
-valid_probs = logreg.predict_proba(valid_x_bf)
-valid_preds = logreg.predict(valid_x_bf)
-print('Validation Xception LogLoss {}'.format(log_loss(yv, valid_probs)))
-print('Validation Xception Accuracy {}'.format(accuracy_score((yv * range(NUM_CLASSES)).sum(axis=1), valid_preds)))
+# Plot the Sites with their count
+plt.figure(figsize = (9, 8))
+plt.title('Sites with their count')
+sns.set_color_codes("pastel")
+sns.barplot(x="site_name", y="count", data=temp,
+            label="Count")
+locs, labels = plt.xticks()
+plt.setp(labels, rotation=90)
+plt.show()
 
 
-# ![](https://pics.me.me/such-wow-much-awesome-many-cool-bestest-thug-life-19337110.png)
-# 
-# Much better! 98% accuracy 0.07 LogLoss.
+# ### As we can see that most of the images are taken from one site only.
 
-# # Extract Inception bottleneck features
-
-# In[ ]:
-
-
-Xtr = x_train[train_idx]
-Xv = x_train[valid_idx]
-print((Xtr.shape, Xv.shape, ytr.shape, yv.shape))
-inception_bottleneck = inception_v3.InceptionV3(weights='imagenet', include_top=False, pooling=POOLING)
-train_i_bf = inception_bottleneck.predict(Xtr, batch_size=32, verbose=1)
-valid_i_bf = inception_bottleneck.predict(Xv, batch_size=32, verbose=1)
-print('InceptionV3 train bottleneck features shape: {} size: {:,}'.format(train_i_bf.shape, train_i_bf.size))
-print('InceptionV3 valid bottleneck features shape: {} size: {:,}'.format(valid_i_bf.shape, valid_i_bf.size))
-
-
-# # LogReg on Inception bottleneck features
-
-# In[ ]:
-
-
-logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=SEED)
-logreg.fit(train_i_bf, (ytr * range(NUM_CLASSES)).sum(axis=1))
-valid_probs = logreg.predict_proba(valid_i_bf)
-valid_preds = logreg.predict(valid_i_bf)
-
-
-# In[ ]:
-
-
-print('Validation Inception LogLoss {}'.format(log_loss(yv, valid_probs)))
-print('Validation Inception Accuracy {}'.format(accuracy_score((yv * range(NUM_CLASSES)).sum(axis=1), valid_preds)))
-
-
-# # LogReg on all bottleneck features
-
-# In[ ]:
-
-
-X = np.hstack([train_x_bf, train_i_bf])
-V = np.hstack([valid_x_bf, valid_i_bf])
-print('Full train bottleneck features shape: {} size: {:,}'.format(X.shape, X.size))
-print('Full valid bottleneck features shape: {} size: {:,}'.format(V.shape, V.size))
-logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', random_state=SEED)
-logreg.fit(X, (ytr * range(NUM_CLASSES)).sum(axis=1))
-valid_probs = logreg.predict_proba(V)
-valid_preds = logreg.predict(V)
-print('Validation Xception + Inception LogLoss {}'.format(log_loss(yv, valid_probs)))
-print('Validation Xception + Inception Accuracy {}'.format(accuracy_score((yv * range(NUM_CLASSES)).sum(axis=1), valid_preds)))
-
-
-# Training this model on the full dataset would give 0.3 LogLoss on LB.
-
-# # Check errors
-# We still have a few misclassification errors.
-
-# In[ ]:
-
-
-valid_breeds = (yv * range(NUM_CLASSES)).sum(axis=1)
-error_idx = (valid_breeds != valid_preds)
-for img_id, breed, pred in zip(labels.loc[valid_idx, 'id'].values[error_idx],
-                                [selected_breed_list[int(b)] for b in valid_preds[error_idx]],
-                                [selected_breed_list[int(b)] for b in valid_breeds[error_idx]]):
-    fig, ax = plt.subplots(figsize=(5,5))
-    img = read_img(img_id, 'train', (299, 299))
-    ax.imshow(img / 255.)
-    ax.text(10, 250, 'Prediction: %s' % pred, color='w', backgroundcolor='r', alpha=0.8)
-    ax.text(10, 270, 'LABEL: %s' % breed, color='k', backgroundcolor='g', alpha=0.8)
-    ax.axis('off')
-    plt.show()                                                    
-
-
-# In[ ]:
-
-
-end = dt.datetime.now()
-print('Total time {} s.'.format((end - start).seconds))
-print('We almost used the one hour time limit.')
-
+# ##### Referances :
+#  * https://www.kaggle.com/mxdbld/yadv-simple-exploration-of-google-recognition 
+#  * https://www.kaggle.com/gpreda/google-landmark-recognition-challenge-eda

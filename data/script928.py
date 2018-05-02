@@ -1,443 +1,623 @@
 
 # coding: utf-8
 
-# # **Categorizing actors (_hands on plotly_)**
-# *Fabien Daniel (August 2017)*
-# ___
-
-# In this notebook, I will try to get some insight on the habits of actors and the way they are perceived by spectators. I will not discuss the content of the current dataframe since this was done in many other notebooks (as, picking one up randomly, [this one](https://www.kaggle.com/fabiendaniel/film-recommendation-engine/)).
-# ____
-# **Acknowledgements:** many thanks to [Tianyi Wang](https://www.kaggle.com/tianyiwang/neighborhood-interaction-with-network-graph) whose kernel gave me the idea to write this notebook, and to [Stéphane Rappeneau](https://www.kaggle.com/stephanerappeneau) for the insights on Plotly's limits. The original dataset from which this kernel was built was originaly updated in September 2017 and [Sohier Dane](https://www.kaggle.com/sohier) made a [guide](https://www.kaggle.com/sohier/getting-imdb-kernels-working-with-tmdb-data) to adapt the old kernels to the new data structure. Many thanks to Sohier for this work !
-# ___
-# **1. Preparing the data** <br>
-# **2. Actors overview** <br>
-# **3. A close look at actors  ** <br>
-# **4. Actors network ** <br>
+# # *Women and kids first! (c) Titanic*
 # 
-# <font color='red'> Warning: currently, the objectives of Section 3 can't be fulfilled due to the developpement progress of the Plotly's package regarding polar charts. For further details, you can have a look at the tickets posted on github (the links are given below). </font>
 
-# ___
-# ## 1. Preparing the data
+# ![Titanic](https://www.usnews.com/dims4/USNEWS/4f3cd50/2147483647/thumbnail/970x647/quality/85/?url=http%3A%2F%2Fmedia.beam.usnews.com%2F0e%2Fe187dd2f8f1fe5be9058fa8eef419e%2F7018FE_DA_080929titanic.jpg)
+
+# # Visualization of titanic dataset
+# This notebook presents a profound exploratory analysis of the dataset in order to provide understanding of the dependencies and interesting facts. Simple Logistic regression was used to perform classification.
 # 
-# First, I introduce some functions taken from [Sohier's code](https://www.kaggle.com/sohier/getting-imdb-kernels-working-with-tmdb-data) to interface the kernel with the new data structure:
+# Four ML techniques are used to do prediction: RandomForest, LogisticRegression, KNeighbours and the Ensemble.
+# 
+# Logistic Regression performed the best with a score of 0.80383.
+# 
+# 
+# 
+# *****************
+# **I will happy to hear some remarks or suggestions and feel free to upvote if you like it :)**
+# 
+# **Have fun with the data!**
+# *****************
 
 # In[ ]:
 
 
-#__________________
-import json
 import pandas as pd
-#__________________
-def load_tmdb_movies(path):
-    df = pd.read_csv(path)
-    df['release_date'] = pd.to_datetime(df['release_date']).apply(lambda x: x.date())
-    json_columns = ['genres', 'keywords', 'production_countries', 'production_companies', 'spoken_languages']
-    for column in json_columns:
-        df[column] = df[column].apply(json.loads)
-    return df
-#____________________________
-def load_tmdb_credits(path):
-    df = pd.read_csv(path)
-    json_columns = ['cast', 'crew']
-    for column in json_columns:
-        df[column] = df[column].apply(json.loads)
-    return df
-#_______________________________________
-def safe_access(container, index_values):
-    result = container
-    try:
-        for idx in index_values:
-            result = result[idx]
-        return result
-    except IndexError or KeyError:
-        return pd.np.nan
-#_______________________________________
-LOST_COLUMNS = [
-    'actor_1_facebook_likes',
-    'actor_2_facebook_likes',
-    'actor_3_facebook_likes',
-    'aspect_ratio',
-    'cast_total_facebook_likes',
-    'color',
-    'content_rating',
-    'director_facebook_likes',
-    'facenumber_in_poster',
-    'movie_facebook_likes',
-    'movie_imdb_link',
-    'num_critic_for_reviews',
-    'num_user_for_reviews']
-#_______________________________________
-TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES = {
-    'budget': 'budget',
-    'genres': 'genres',
-    'revenue': 'gross',
-    'title': 'movie_title',
-    'runtime': 'duration',
-    'original_language': 'language',  
-    'keywords': 'plot_keywords',
-    'vote_count': 'num_voted_users'}
-#_______________________________________     
-IMDB_COLUMNS_TO_REMAP = {'imdb_score': 'vote_average'}
-#_______________________________________
-def get_director(crew_data):
-    directors = [x['name'] for x in crew_data if x['job'] == 'Director']
-    return safe_access(directors, [0])
-#_______________________________________
-def pipe_flatten_names(keywords):
-    return '|'.join([x['name'] for x in keywords])
-#_______________________________________
-def convert_to_original_format(movies, credits):
-    tmdb_movies = movies.copy()
-    tmdb_movies.rename(columns=TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES, inplace=True)
-    tmdb_movies['title_year'] = pd.to_datetime(tmdb_movies['release_date']).apply(lambda x: x.year)
-    # I'm assuming that the first production country is equivalent, but have not been able to validate this
-    tmdb_movies['country'] = tmdb_movies['production_countries'].apply(lambda x: safe_access(x, [0, 'name']))
-    tmdb_movies['language'] = tmdb_movies['spoken_languages'].apply(lambda x: safe_access(x, [0, 'name']))
-    tmdb_movies['director_name'] = credits['crew'].apply(get_director)
-    tmdb_movies['actor_1_name'] = credits['cast'].apply(lambda x: safe_access(x, [1, 'name']))
-    tmdb_movies['actor_2_name'] = credits['cast'].apply(lambda x: safe_access(x, [2, 'name']))
-    tmdb_movies['actor_3_name'] = credits['cast'].apply(lambda x: safe_access(x, [3, 'name']))
-    tmdb_movies['genres'] = tmdb_movies['genres'].apply(pipe_flatten_names)
-    tmdb_movies['plot_keywords'] = tmdb_movies['plot_keywords'].apply(pipe_flatten_names)
-    return tmdb_movies
-
-
-# and the load the packages and the dataset:
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-import plotly.offline as pyo
-pyo.init_notebook_mode()
-from plotly.graph_objs import *
-import plotly.graph_objs as go
 import numpy as np
-import pandas as pd
-#_______________________________________________
-credits = load_tmdb_credits("../input/tmdb_5000_credits.csv")
-movies = load_tmdb_movies("../input/tmdb_5000_movies.csv")
-df = convert_to_original_format(movies, credits)
+import collections, re
+import copy
 
+from pandas.tools.plotting import scatter_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+plt.style.use('bmh')
 
-# This dataframe contains around 5000 movies which are described according to 28 variables. In what follows, I will focus on a few of them. I start with the **genres** variable that describes the cinematographic genres (each film can pertain to various categories). As a first step, I extract the list of categorical values:
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import cross_val_score
+
+from sklearn.grid_search import GridSearchCV
+
+pd.set_option('display.max_columns', 500)
+import warnings
+warnings.filterwarnings("ignore")
+
 
 # In[ ]:
 
 
-liste_genres = set()
-for s in df['genres'].str.split('|'):
-    liste_genres = set().union(s, liste_genres)
-liste_genres = list(liste_genres)
-liste_genres.remove('')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
-
-# For the current exercise, the others variables of interest are the **actor_*N*_name** (**_N_** $\in [1:3]$) variables, that list the three main actors appearing in each film. My first goal is to determine the favorite genre of actors. For simplicity, in what follows, I will only consider the actors who appear in the **actor_1_name**. In fact, a more exhaustive view would be
-# achieved considering also the two other categories. To proceed with that, I perform some one hot encoding:
 
 # In[ ]:
 
 
-df_reduced = df[['actor_1_name', 'vote_average',
-                 'title_year', 'movie_title']].reset_index(drop = True)
-for genre in liste_genres:
-    df_reduced[genre] = df['genres'].str.contains(genre).apply(lambda x:1 if x else 0)
-df_reduced[:5]
+train.info()
 
 
-# and I group according to every actors, taking the mean of all the other variables. Then I check which genre's column takes the highest value and assign the corresponding genre as the actor's favorite genre: 
+# # 1. Exploratory analysis
+# ## Basic Information about the table
 
 # In[ ]:
 
 
-df_actors = df_reduced.groupby('actor_1_name').mean()
-df_actors.loc[:, 'favored_genre'] = df_actors[liste_genres].idxmax(axis = 1)
-df_actors.drop(liste_genres, axis = 1, inplace = True)
-df_actors = df_actors.reset_index()
-df_actors[:10]
+train.head(2)
 
 
-# At this point, the dataframe contains a list of actors and for each of them, we have a mean IMDB score, its mean year of activity and his favored acting style.
+# In[ ]:
+
+
+train.describe()
+
+
+# Average Age is 29 years and ticket price is 32.
+# As there are 681 unique tickets and there is no way to extract less detailed information we exclude this variable. There are 891 unique names but we could take a look on the title of each person to understand if the survival rate of people from high society was higher
+
+# In[ ]:
+
+
+train.describe(include=['O'])
+
+
+# In[ ]:
+
+
+## exctract cabin letter
+def extract_cabin(x):
+    return x!=x and 'other' or x[0]
+train['Cabin_l'] = train['Cabin'].apply(extract_cabin)
+
+
+# ## 1.1 Superficial overview of each variable
+
+# Just a quick look on variables we are dealing with.
+
+# In[ ]:
+
+
+plain_features = ['Pclass', 'Sex', 'SibSp', 'Parch', 'Embarked', 'Cabin_l']
+fig, ax = plt.subplots(nrows = 2, ncols = 3 ,figsize=(20,10))
+start = 0
+for j in range(2):
+    for i in range(3):
+        if start == len(plain_features):
+            break
+        sns.barplot(x=plain_features[start], y='Survived', data=train, ax=ax[j,i])
+        start += 1
+
+
+# #### A citate from a movie: 'Children and women first'. 
+# * Sex: Survival chances of women are higher.
+# * Pclass: Having a first class ticket is beneficial for the survival.
+# * SibSp and Parch: middle size families had higher survival rate than the people who travelled alone or big families. The reasoning might be that alone people would want to sacrifice themselves to help others. Regarding the big families I would explain that it is hard to manage the whole family and therefore people would search for the family members insetad of getting on the boat.
+# * Embarked C has a higher survival rate. It would be interesting to see if, for instance, the majority of Pclass 1 went on board in embarked C.
+
+# ## 1.2 Survival by Sex and Age
+
+# In[ ]:
+
+
+sv_lab = 'survived'
+nsv_lab = 'not survived'
+fig, ax = plt.subplots(figsize=(5,3))
+ax = sns.distplot(train[train['Survived']==1].Age.dropna(), bins=20, label = sv_lab, ax = ax)
+ax = sns.distplot(train[train['Survived']==0].Age.dropna(), bins=20, label = nsv_lab, ax = ax)
+ax.legend()
+_ = ax.set_ylabel('KDE')
+
+fig, axes = plt.subplots(nrows=1, ncols=2,figsize=(10, 4))
+females = train[train['Sex']=='female']
+males = train[train['Sex']=='male']
+
+ax = sns.distplot(females[females['Survived']==1].Age.dropna(), bins=30, label = sv_lab, ax = axes[0], kde =False)
+ax = sns.distplot(females[females['Survived']==0].Age.dropna(), bins=30, label = nsv_lab, ax = axes[0], kde =False)
+ax.legend()
+ax.set_title('Female')
+ax = sns.distplot(males[males['Survived']==1].Age.dropna(), bins=30, label = sv_lab, ax = axes[1], kde = False)
+ax = sns.distplot(males[males['Survived']==0].Age.dropna(), bins=30, label = nsv_lab, ax = axes[1], kde = False)
+ax.legend()
+_ = ax.set_title('Male')
+
+
+# * Survival rate of boys is higher than of the adult men. However, the same fact does not hold for the girls. and between 13 and 30 is lower. Take it into consideration while engineering the variable: we could specify a categorical variable as young and adult.
+# * For women the survival chances are higher between 14 and 40 age. For men of the same age the survival chances are flipped.
+
+# ## 1.3 Survival by Class,  Embarked and Fare.
+
+# ## 1.3.1 Survival by Class and Embarked
+
+# In[ ]:
+
+
+_ = sns.factorplot('Pclass', 'Survived', hue='Sex', col = 'Embarked', data=train)
+_ = sns.factorplot('Pclass', 'Survived', col = 'Embarked', data=train)
+
+
+# * As noticed already before, the class 1 passangers had a higher survival rate.
+# * All women who died were from the 3rd class. 
+# * Embarked in Q as a 3rd class gave you slighly better survival chances than embarked in S for the same class.
+# * In fact, there is a very high variation in survival rate in embarked Q among 1st and 2nd class. The third class had the same survival rate as the 3rd class embarked C. We will exclude this variable embarked Q. From crosstab we see that there were only 5 passengers in embarked Q with the 1st and 2nd class. That explains large variation in survival rate and a perfect separation of men and women in Q.
+
+# In[ ]:
+
+
+tab = pd.crosstab(train['Embarked'],train['Pclass'])
+print(tab)
+tab_prop = tab.div(tab.sum(1).astype(float), axis=0)
+tab_prop.plot(kind="bar", stacked=True)
+
+
+# ## 1.3.2 Fare and class distribution
+
+# In[ ]:
+
+
+ax = sns.boxplot(x="Pclass", y="Fare", hue="Survived", data=train)
+ax.set_yscale('log')
+
+
+# * It appears that the higher the fare was in the first class the higher survival chances a person from the 1st had.
+
+# ## 1.3.3 Class and age distribution
+
+# In[ ]:
+
+
+_ = sns.violinplot(x='Pclass', y='Age', hue = 'Survived', data=train, split=True)
+
+
+# * Interesting note that Age decreases proportionally with the Pclass, meaning most old passangers are from 1st class. We will construct a new feature Age*Class to intefere the this findig. 
+# * The younger people from 1st had higher survival chanches than older from the same class.
+# * Majority (from the 3rd class) and most children from the 2nd class survived.
+
+# ## 1.4 Survival rate regarding the family members
+
+# In[ ]:
+
+
+# To get the full family size of a person, added siblings and parch.
+#fig, axes = plt.subplots(nrows=1, ncols=1,figsize=(15, 5))
+train['family_size'] = train['SibSp'] + train['Parch'] + 1 
+test['family_size'] = test['SibSp'] + test['Parch'] + 1 
+axes = sns.factorplot('family_size','Survived', 
+                      hue = 'Sex', 
+                      data=train, aspect = 4)
+
+
+# Assumption: the less people was in your family the faster you were to get to the boat. The more people they are the more managment is required. However, if you had no family members you might wanted to help others and therefore sacrifice.
 # 
-# Then, I create a mask to account only for the actors that played in more than 5 films:
+# * The females traveling with up to 2 more family members had a higher chance to survive. However, a high variation of survival rate appears once family size exceeds 4 as mothers/daughters would search longer for the members and therefore the chanes for survival decrease.
+# * Alone men might want to sacrifice and help other people to survive. 
+
+# ## 1.5 Survival rate by the title
+# * Barplots show that roalties had normally 1st or 2nd class tickets. However, people with the title Master had mostly 3rd class. In fact, a title 'Master' was given to unmarried boys. You can see that the age of of people with this title is less than 13.
+# * Women and roalties had higher survival rate. (There are only two titlted women in the train class and both have survived, I would put them into Mrs class)
+# * The civils and reverends a lower one due to the fact that they had/wanted to help people.
 
 # In[ ]:
 
 
-df_appearance = df_reduced[['actor_1_name', 'title_year']].groupby('actor_1_name').count()
-df_appearance = df_appearance.reset_index(drop = True)
-selection = df_appearance['title_year'] > 4
-selection = selection.reset_index(drop = True)
-most_prolific = df_actors[selection]
-
-
-# Finally, I look at the percentage of films of each genre to further choose the genres I want to look at:
-
-# In[ ]:
-
-
-plt.rc('font', weight='bold')
-f, ax = plt.subplots(figsize=(5, 5))
-genre_count = []
-for genre in liste_genres:
-    genre_count.append([genre, df_reduced[genre].values.sum()])
-genre_count.sort(key = lambda x:x[1], reverse = True)
-labels, sizes = zip(*genre_count)
-labels_selected = [n if v > sum(sizes) * 0.01 else '' for n, v in genre_count]
-ax.pie(sizes, labels=labels_selected,
-       autopct = lambda x:'{:2.0f}%'.format(x) if x > 1 else '',
-       shadow=False, startangle=0)
-ax.axis('equal')
-plt.tight_layout()
-
-
-# ___
-# ## 2. Actors overview
-# And now, the **magic of plotly** happens:
-
-# In[ ]:
-
-
-reduced_genre_list = labels[:12]
-trace=[]
-for genre in reduced_genre_list:
-    trace.append({'type':'scatter',
-                  'mode':'markers',
-                  'y':most_prolific.loc[most_prolific['favored_genre']==genre,'vote_average'],
-                  'x':most_prolific.loc[most_prolific['favored_genre']==genre,'title_year'],
-                  'name':genre,
-                  'text': most_prolific.loc[most_prolific['favored_genre']==genre,'actor_1_name'],
-                  'marker':{'size':10,'opacity':0.7,
-                            'line':{'width':1.25,'color':'black'}}})
-layout={'title':'Actors favored genres',
-       'xaxis':{'title':'mean year of activity'},
-       'yaxis':{'title':'mean score'}}
-fig=Figure(data=trace,layout=layout)
-pyo.iplot(fig)
-
-
-# The above graph lists all the actors that appeared in more than 5 films (only taking into account the **actor_1_name**). The abscissa corresponds to the average of the film release years and the ordinate to the mean IMDB score. Every film is tagged according to its genre and hovering with the mouse, the actors names are displayed.
-
-# ___
-# ## 3. A close look at actors
-
-# In the previous section, we had a global overview of all the actors that appeared in more than 5 films and each of them was described with quantites (year, IMDB score, genre) averaged over the films. In this section, the aim is to select some particular actor and to display all its cinematographic biography in a simple view.
-
-# In[ ]:
-
-
-selection = df_appearance['title_year'] > 10
-most_prolific = df_actors[selection]
-most_prolific
+train['Title'] = train['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+print(collections.Counter(train['Title']).most_common())
+test['Title'] = test['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+print()
+print(collections.Counter(test['Title']).most_common())
 
 
 # In[ ]:
 
 
-class Trace():
-    #____________________
-    def __init__(self, color):
-        self.mode = 'markers'
-        self.name = 'default'
-        self.title = 'default title'
-        self.marker = dict(color=color, size=110,
-                           line=dict(color='white'), opacity=0.7)
-        self.r = []
-        self.t = []
-    #______________________________
-    def set_color(self, color):
-        self.marker = dict(color = color, size=110,
-                           line=dict(color='white'), opacity=0.7)
-    #____________________________
-    def set_name(self, name):
-        self.name = name
-    #____________________________
-    def set_title(self, title):
-        self.na = title
-    #__________________________
-    def set_values(self, r, t):
-        self.r = np.array(r)
-        self.t = np.array(t)
+tab = pd.crosstab(train['Title'],train['Pclass'])
+print(tab)
+tab_prop = tab.div(tab.sum(1).astype(float), axis=0)
+tab_prop.plot(kind="bar", stacked=True)
 
 
-# Below, I make a census of the films starring Brad Pitt, identifying the genre of every film. **However, I just take into account the genres with at least 4 films because of a bug in plotly: below this threshold, a few spurious points appear on the graph. A [ticket](https://github.com/plotly/plotly.js/issues/2023#issuecomment-330852374) was sent to report that bug.**
+# Investigate who were masters. The age is less than 12.
 
 # In[ ]:
 
 
-df2 = df_reduced[df_reduced['actor_1_name'] == 'Brad Pitt']
-total_count  = 0
-years = []
-imdb_score = []
-genre = []
-titles = []
-for s in liste_genres:
-    icount = df2[s].sum()
-    #__________________________________________________________________
-    # Here, we set the limit to 3 because of a bug in plotly's package
-    if icount > 3: 
-        total_count += 1
-        genre.append(s)
-        years.append(list(df2[df2[s] == 1]['title_year']))
-        imdb_score.append(list(df2[df2[s] == 1]['vote_average'])) 
-        titles.append(list(df2[df2[s] == 1]['movie_title']))
-max_y = max([max(s) for s in years])
-min_y = min([min(s) for s in years])
-year_range = max_y - min_y
-
-years_normed = []
-for i in range(total_count):
-    years_normed.append( [360/total_count*((an-min_y)/year_range+i) for an in years[i]])
+max(train[train['Title']== 'Master'].Age)
 
 
 # In[ ]:
 
 
-color = ['royalblue', 'grey', 'wheat', 'c', 'firebrick', 'seagreen', 'lightskyblue',
-          'lightcoral', 'yellowgreen', 'gold', 'tomato', 'violet', 'aquamarine', 'chartreuse']
+_ = sns.factorplot('Title','Survived', data=train, aspect = 3)
+
+
+# We will group the roalties and assign masters to Mr and due to the fact that there were not so many roaly women, we will assign then to Mrs.
+
+# In[ ]:
+
+
+#train['Title'].replace(['Master','Major', 'Capt', 'Col', 'Countess','Dona','Lady', 'Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+train['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+#train['Title'].replace(['Countess','Dona','Lady'], 'titled_women', inplace = True)
+#train['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled_man', inplace = True)
+train['Title'].replace(['Countess','Dona','Lady'], 'Mrs', inplace = True)
+#train['Title'].replace(['Master'], 'Mr', inplace = 'True')
+train['Title'].replace(['Mme'], 'Mrs', inplace = True)
+train['Title'].replace(['Mlle','Ms'], 'Miss', inplace = True)
 
 
 # In[ ]:
 
 
-trace = [Trace(color[i]) for i in range(total_count)]
-tr    = []
-for i in range(total_count):
-    trace[i].set_name(genre[i])
-    trace[i].set_title(titles[i])
-    trace[i].set_values(np.array(imdb_score[i]),
-                        np.array(years_normed[i]))
-    tr.append(go.Scatter(r      = trace[i].r,
-                         t      = trace[i].t,
-                         mode   = trace[i].mode,
-                         name   = trace[i].name,
-                         marker = trace[i].marker,
-#                         text   = ['default title' for j in range(len(trace[i].r))], 
-                         hoverinfo = 'all'
-                        ))        
-layout = go.Layout(
-    title='Brad Pitt movies',
-    font=dict(
-        size=15
-    ),
-    plot_bgcolor='rgb(223, 223, 223)',
-    angularaxis=dict(        
-        tickcolor='rgb(253,253,253)'
-    ),
-    hovermode='Closest',
-)
-fig = go.Figure(data = tr, layout=layout)
-pyo.iplot(fig)
+g = sns.factorplot('Title','Survived', data=train, aspect = 3)
 
 
-# On this graph, we see every film starring Brad Pitt. The radial scale corresponds to the IMDB score and the angular scale indicates both the movie's genre and the films release years. **Unfortunately, polar charts are not any more maintened by plotly's developpement team and it is currently impossible to make the text appearing on hover (see this [ticket](https://github.com/plotly/plotly.js/issues/94#issuecomment-330853403))**. Initially, my objective was to make the films titles and release year appear on hover but it is currently impossible. Hence, this puts strong limits on the usefulness of that kind of representation ...
+# ## 1.6 Survival rate by cabin
+# Cabin is supposed to be less distingushing, also taking into consideration that most of the values are missing.
 
-# ### 4.  Network
+# In[ ]:
+
+
+def extract_cabin(x):
+    return x!=x and 'other' or x[0]
+train['Cabin_l'] = train['Cabin'].apply(extract_cabin)
+print(train.groupby('Cabin_l').size())
+sns.factorplot('Cabin_l','Survived', 
+               order = ['other', 'A','B', 'C', 'D', 'E', 'F', 'T' ], 
+               aspect = 3, 
+               data=train)
+
+
+# ## 1.7 Correlation of the variables
+# * Pclass is slightly correlated with Fare as logically, 3rd class ticket would cost less than the 1st class.
+# * Pclass is also slightly correlated with Survived
+# * SibSp and Parch are weakly correlated as basically they show how big the family size is.
 # 
 
-# Here, I look at the connections between the most prolific actors:
+# In[ ]:
+
+
+plt.figure(figsize=(8, 8))
+corrmap = sns.heatmap(train.drop('PassengerId',axis=1).corr(),square=True, annot=True)
+
+
+# ## 2. FEATURE SELECTION AND ENGINEERING
+# ## 2.1 Impute values
+# First, we check how many nas there is in general. If there is only small amount then we can just exclude those individuals. Considering that there are 891 training samples, 708 do not have missing values. 183 samples have na values. It is better to impute. There are different techniques one can impute the values.
 
 # In[ ]:
 
 
-selection = df_appearance['title_year'] > 4
-most_prolific = df_actors[selection]
-actors_list = most_prolific['actor_1_name'].unique()
+train.shape[0] - train.dropna().shape[0]
 
 
-# In[ ]:
-
-
-test = pd.crosstab(df['actor_1_name'], df['actor_2_name'])
-
+# Check wich columns to impute in which set. It shows the number of na-values in each column.
 
 # In[ ]:
 
 
-edge = []
-for actor_1, actor_2 in list(test[test > 0].stack().index):
-    if actor_1 not in actors_list: continue
-    if actor_2 not in actors_list: continue
-   
-    if actor_1 not in actors_list or actor_2 not in actors_list: continue
-    if actor_1 != actor_2:
-        edge.append([actor_1, actor_2])
+train.isnull().sum()
 
 
 # In[ ]:
 
 
-num_of_adjacencies = [0 for _ in range(len(df_actors))]
-for ind, col in df_actors.iterrows():
-    actor = col['actor_1_name']
-    nb = sum([1 for i,j in edge if (i == actor) or (j == actor)])
-    num_of_adjacencies[ind] = nb
+test.isnull().sum()
+
+
+# Embarked: fill embarked with a major class
+
+# In[ ]:
+
+
+max_emb = np.argmax(train['Embarked'].value_counts())
+train['Embarked'].fillna(max_emb, inplace=True)
+
+
+# Pclass: because there is only one missing value in Fare we will fill it with a median of the corresponding Pclass
+
+# In[ ]:
+
+
+indz = test['Fare'].index[test['Fare'].apply(np.isnan)].tolist
+print(indz)
+pclass = test['Pclass'][152]
+fare_test = test[test['Pclass']==pclass].Fare.dropna()
+fare_train = train[train['Pclass']==pclass].Fare
+fare_med = (fare_test + fare_train).median()
+print(fare_med)
+test.loc[152,'Fare'] = fare_med
+
+
+# There are several imputing techniques, we will use the random number from the range mean +- std 
+
+# In[ ]:
+
+
+ages = np.concatenate((test['Age'].dropna(), train['Age'].dropna()), axis=0)
+std_ages = ages.std()
+mean_ages = ages.mean()
+train_nas = np.isnan(train["Age"])
+test_nas = np.isnan(test["Age"])
+np.random.seed(122)
+impute_age_train  = np.random.randint(mean_ages - std_ages, mean_ages + std_ages, size = train_nas.sum())
+impute_age_test  = np.random.randint(mean_ages - std_ages, mean_ages + std_ages, size = test_nas.sum())
+train["Age"][train_nas] = impute_age_train
+test["Age"][test_nas] = impute_age_test
+ages_imputed = np.concatenate((test["Age"],train["Age"]), axis = 0)
 
 
 # In[ ]:
 
 
-def prep(edge, num_of_adjacencies, df, actors_list):
-    edge_trace = Scatter(
-    x=[],
-    y=[],
-    line = Line(width=0.5,color='#888'),
-    hoverinfo = 'none',
-    mode = 'lines')
-    
-    for actor_1, actor_2 in edge:
-        x0, y0 = df[df['actor_1_name'] == actor_1][['title_year', 'vote_average']].unstack()
-        x1, y1 = df[df['actor_1_name'] == actor_2][['title_year', 'vote_average']].unstack()
-        edge_trace['x'] += [x0, x1, None]
-        edge_trace['y'] += [y0, y1, None]
+train['Age*Class'] = train['Age']*train['Pclass']
+test['Age*Class'] = test['Age']*test['Pclass']
 
-    node_trace = Scatter(
-        x=[],
-        y=[],
-        text=[],
-        mode='markers',
-        hoverinfo='text',
-        marker=Marker(
-            showscale=True,
-            colorscale='YIGnBu',
-            reversescale=True,
-            color=[],
-            size=10,
-             colorbar=dict(
-                thickness=15,
-                title='Node Connections',
-                xanchor='left',
-                titleside='right'
-            ),
-            line=dict(width=2)))
-    
-    for ind, col in df.iterrows():
-        if col['actor_1_name'] not in actors_list: continue
-        node_trace['x'].append(col['title_year'])
-        node_trace['y'].append(col['vote_average'])
-        node_trace['text'].append(col['actor_1_name'])
-        node_trace['marker']['color'].append(num_of_adjacencies[ind])
-        
-    fig = Figure(data=Data([edge_trace, node_trace]),
-                 layout=Layout(
-                    title='<br>Connections between actors',
-                    titlefont=dict(size=16),
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(b=20,l=5,r=5,t=40),
-                    annotations=[ dict(
-                        showarrow=False,
-                        xref="paper", yref="paper",
-                        x=0.005, y=-0.002 ) ],
-                    xaxis=XAxis(showgrid=True, zeroline=False, showticklabels=True),
-                    yaxis=YAxis(showgrid=True, zeroline=False, showticklabels=True)))
-    
-    return fig
+
+# Check if we disrupted the distribution somehow.
+
+# In[ ]:
+
+
+_ = sns.kdeplot(ages_imputed, label = 'After imputation')
+_ = sns.kdeplot(ages, label = 'Before imputation')
+
+
+# ## 2.2 ENGENEER VALUES
+
+# Integrate into test the title feature
+
+# In[ ]:
+
+
+test['Title'] = test['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+
+test['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+test['Title'].replace(['Countess','Dona','Lady'], 'Mrs', inplace = True)
+#test['Title'].replace(['Master'], 'Mr', inplace = True)
+test['Title'].replace(['Mme'], 'Mrs', inplace = True)
+test['Title'].replace(['Mlle','Ms'], 'Miss', inplace = True)
+
+
+# Seperate young and adult people
+
+# In[ ]:
+
+
+train['age_cat'] = None
+train.loc[(train['Age'] <= 13), 'age_cat'] = 'young'
+train.loc[ (train['Age'] > 13), 'age_cat'] = 'adult'
+
+test['age_cat'] = None
+test.loc[(test['Age'] <= 13), 'age_cat'] = 'young'
+test.loc[(test['Age'] > 13), 'age_cat'] = 'adult'
+
+
+# Drop broaden variables. As we have seen from describe there are too many unique values for Ticket and missing values for Cabin
+
+# In[ ]:
+
+
+train_label = train['Survived']
+test_pasId = test['PassengerId']
+drop_cols = ['Name','Ticket', 'Cabin', 'SibSp', 'Parch', 'PassengerId']
+train.drop(drop_cols + ['Cabin_l'], 1, inplace = True)
+test.drop(drop_cols, 1, inplace = True)
+
+
+# Convert Pclass into categorical variable
+
+# In[ ]:
+
+
+train['Pclass'] = train['Pclass'].apply(str)
+test['Pclass'] = test['Pclass'].apply(str)
+
+
+# Create dummy variables for categorical data.
+
+# In[ ]:
+
+
+train.drop(['Survived'], 1, inplace = True)
+train_objs_num = len(train)
+dataset = pd.concat(objs=[train, test], axis=0)
+dataset = pd.get_dummies(dataset)
+train = copy.copy(dataset[:train_objs_num])
+test = copy.copy(dataset[train_objs_num:])
 
 
 # In[ ]:
 
 
-fig = prep(edge, num_of_adjacencies, df_actors, actors_list)
-pyo.iplot(fig)
+droppings = ['Embarked_Q', 'Age']
+#droppings += ['Sex_male', 'Sex_female']
 
+test.drop(droppings, 1, inplace = True)
+train.drop(droppings,1, inplace = True)
+
+
+# In[ ]:
+
+
+train.head(5)
+
+
+# ## CLASSIFICATION
+# 
+
+# In[ ]:
+
+
+def prediction(model, train, label, test, test_pasId):
+    model.fit(train, label)
+    pred = model.predict(test)
+    accuracy = cross_val_score(model, train, label, cv = 5)
+
+    sub = pd.DataFrame({
+            "PassengerId": test_pasId,
+            "Survived": pred
+        })    
+    return [model, accuracy, sub]
+
+
+# ## 1. Random Forest
+# There are many categorical features, so I have chosen random forest to do the classification.
+
+# In[ ]:
+
+
+rf = RandomForestClassifier(n_estimators=80, min_samples_leaf = 2, min_samples_split=2, random_state=110)
+acc_random_forest = prediction(rf, train, train_label, test, test_pasId)
+importances = pd.DataFrame({'feature':train.columns,'importance':np.round(rf.feature_importances_,3)})
+importances = importances.sort_values('importance', ascending=False).set_index('feature')
+#acc_random_forest[2].to_csv('~/Desktop/random_forest.txt', index=False)
+print (importances)
+importances.plot.bar()
+print(acc_random_forest[1])
+
+test_predictions = acc_random_forest[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+
+submission.to_csv("titanic_submission_randomforest.csv", index=False)
+
+
+# ## 2. Logistic Regression
+# 
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler().fit(train['Fare'].values.reshape(-1, 1))
+train['Fare'] = scaler.transform(train['Fare'].values.reshape(-1, 1)) 
+test['Fare'] = scaler.transform(test['Fare'].values.reshape(-1, 1))  
+
+scaler = StandardScaler().fit(train['Age*Class'].values.reshape(-1, 1))
+train['Age*Class'] = scaler.transform(train['Age*Class'].values.reshape(-1, 1)) 
+test['Age*Class'] = scaler.transform(test['Age*Class'].values.reshape(-1, 1))  
+
+
+
+lr  = LogisticRegression(random_state=110)
+acc = prediction(lr, train, train_label, test, test_pasId)
+print(acc[1])
+
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_logregres.csv", index=False)
+
+#train.columns.tolist()
+print(list(zip(acc[0].coef_[0], train.columns.tolist())))
+
+
+# ## 3. KNeighbours
+
+# In[ ]:
+
+
+kn = KNeighborsClassifier()
+acc = prediction(kn, train, train_label, test, test_pasId)
+print(acc[1])
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_kn.csv", index=False)
+
+
+# ## 4. Ensemble
+# 
+
+# In[ ]:
+
+
+from sklearn.ensemble import VotingClassifier
+eclf1 = VotingClassifier(estimators=[
+        ('lr', lr), ('rf', rf)], voting='soft')
+eclf1 = eclf1.fit(train, train_label)
+test_predictions = eclf1.predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+
+submission.to_csv("titanic_submission.csv", index=False)
+
+
+# ## 5. Grid Search
+# Find optimal parameters for the logistic regression.
+
+# In[ ]:
+
+
+def grid_search(clf, X, Y, parameters, cv):
+    grid_model = GridSearchCV(estimator=clf, param_grid=parameters, cv=cv)
+    grid_model.fit(X, Y)
+    #grid_model.cv_results_
+    print("Best Score:", grid_model.best_score_," / Best parameters:", grid_model.best_params_)
+    return grid_model.best_params_
+
+
+# In[ ]:
+
+
+param_range = np.logspace(-6, 5, 12)
+parameters = dict(C= param_range, penalty = ['l1', 'l2'])
+grid_search(lr, train, train_label, parameters, 5)
+
+
+# In[ ]:
+
+
+lr  = LogisticRegression(random_state=110, penalty= 'l1', C= 100)
+acc = prediction(lr, train, train_label, test, test_pasId)
+print(acc[1])
+
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_logregres_tuned_scaled.csv", index=False)
+
+
+# **********
+# I will be happy to hear remarks or comments. If you liked the Kernel, please upvote :)
+#     
+# Have fun with the data!
+# *****

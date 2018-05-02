@@ -1,292 +1,254 @@
 
 # coding: utf-8
 
-# This notebook demonstrates a custom loss function for neural nets, that provides a differentiable approximation to AUC. AUC, in turn, has a linear relationship with Gini, hence this is very useful when we want to train a network to maximise AUC.
-# 
-# We set up 2 identical NNs and run them for a few epochs, to show how this approach improves convergence on AUC compared to binary crossentropy.
-# 
-# I've used this to get a network that has a local CV AUC around 0.642, which corresponds to Gini of 0.284. The performance on the LB test set is considerably worse (around 0.276)
-# 
-# This is hacked together from various bits of my local code, and hasn't been thoroughly tested, so let please me know of any bugs etc.
-# 
-# I would have coded as a script, but I need to use the Theano backend as the AUC function uses Theano specific code. If anyone knows how to make Kaggle Kernels use the Theano backend for script, let me know.
-# 
-# First of all, imports and constants
-
-# In[1]:
+# In[ ]:
 
 
-import numpy as np
-import pandas as pd
+#
+# Finetune the Inception V3 network on the CDiscount dataset.
+#
+# Taken from https://keras.io/applications/#usage-examples-for-image-classification-models
 
-get_ipython().run_line_magic('env', 'KERAS_BACKEND=theano')
-
-from keras.models import Sequential
-from keras.layers import Dropout
-from keras.layers.normalization import BatchNormalization
-from keras import regularizers
-from keras.layers import Dense
-from keras.optimizers import Adam
-from keras.utils import custom_object_scope
-from keras import callbacks
-
-from sklearn.metrics import roc_auc_score
-from sklearn import preprocessing
-
-import theano
-
-# train and test data path
-#DATA_TRAIN_PATH = '../input/train.csv'
-#DATA_TEST_PATH = '../input/test.csv'
-
-DATA_TRAIN_PATH = 'c:\\projects\\psdriver\\data\\train.csv'
-DATA_TEST_PATH = 'c:\\projects\\psdriver\\data\\test.csv'
-
-
-featuresToDrop = [
-    'ps_calc_10',
-    'ps_calc_01',
-    'ps_calc_02',
-    'ps_calc_03',
-    'ps_calc_13',
-    'ps_calc_08',
-    'ps_calc_07',
-    'ps_calc_12',
-    'ps_calc_04',
-    'ps_calc_17_bin',
-    'ps_car_10_cat',
-    'ps_car_11_cat',
-    'ps_calc_14',
-    'ps_calc_11',
-    'ps_calc_06',
-    'ps_calc_16_bin',
-    'ps_calc_19_bin',
-    'ps_calc_20_bin',
-    'ps_calc_15_bin',
-    'ps_ind_11_bin',
-    'ps_ind_10_bin'
-]
-
-
-
-# Now, the secret sauce
 
 # In[ ]:
 
 
+import os
+import pickle
+import itertools
+import io
+import time
+import bson
+import threading
 
-# An analogue to AUC which takes the differences between each pair of true/false predictions
-# and takes the average sigmoid of the differences to get a differentiable loss function.
-# Based on code and ideas from https://github.com/Lasagne/Lasagne/issues/767
-def soft_AUC_theano(y_true, y_pred):
-    # Extract 1s
-    pos_pred_vr = y_pred[y_true.nonzero()]
-    # Extract zeroes
-    neg_pred_vr = y_pred[theano.tensor.eq(y_true, 0).nonzero()]
-    # Broadcast the subtraction to give a matrix of differences  between pairs of observations.
-    pred_diffs_vr = pos_pred_vr.dimshuffle(0, 'x') - neg_pred_vr.dimshuffle('x', 0)
-    # Get signmoid of each pair.
-    stats = theano.tensor.nnet.sigmoid(pred_diffs_vr * 2)
-    # Take average and reverse sign
-    return 1-theano.tensor.mean(stats) # as we want to minimise, and get this to zero
-
-
-# This callback records the SKLearn calculated AUC each round, for use by early stopping
-# It also has slots where you can save down metadata or the model at useful points -
-# for Kaggle kernel purposes I've commented these out
-class AUC_SKlearn_callback(callbacks.Callback):
-    def __init__(self, X_train, y_train, useCv = True):
-        super(AUC_SKlearn_callback, self).__init__()
-        self.bestAucCv = 0
-        self.bestAucTrain = 0
-        self.cvLosses = []
-        self.bestCvLoss = 1,
-        self.X_train = X_train
-        self.y_train = y_train
-        self.useCv = useCv
-
-    def on_train_begin(self, logs={}):
-        return
-
-    def on_train_end(self, logs={}):
-        return
-
-    def on_epoch_begin(self, epoch, logs={}):
-        return
-
-    def on_epoch_end(self, epoch, logs={}):
-        train_pred = self.model.predict(np.array(self.X_train))
-        aucTrain = roc_auc_score(self.y_train, train_pred)
-        print("SKLearn Train AUC score: " + str(aucTrain))
-
-        if (self.bestAucTrain < aucTrain):
-            self.bestAucTrain = aucTrain
-            print ("Best SKlearn AUC training score so far")
-            #**TODO: Add your own logging/saving/record keeping code here
-
-        if (self.useCv) :
-            cv_pred = self.model.predict(self.validation_data[0])
-            aucCv = roc_auc_score(self.validation_data[1], cv_pred)
-            print ("SKLearn CV AUC score: " +  str(aucCv))
-
-            if (self.bestAucCv < aucCv) :
-                # Great! New best *actual* CV AUC found (as opposed to the proxy AUC surface we are descending)
-                print("Best SKLearn genuine AUC so far so saving model")
-                self.bestAucCv = aucCv
-
-                # **TODO: Add your own logging/model saving/record keeping code here.
-                self.model.save("best_auc_model.h5", overwrite=True)
-
-            vl = logs.get('val_loss')
-            if (self.bestCvLoss < vl) :
-                print("Best val loss on SoftAUC so far")
-                #**TODO -  Add your own logging/saving/record keeping code here.
-        return
-
-    def on_batch_begin(self, batch, logs={}):
-        return
-
-    def on_batch_end(self, batch, logs={}):
-        # logs include loss, and optionally acc( if accuracy monitoring is enabled).
-        return
+import pandas as pd
+from scipy.misc import imread
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from keras.applications.inception_v3 import InceptionV3
+from keras.preprocessing import image
+from keras.models import Model
+from keras.layers import Dense, GlobalAveragePooling2D
+from keras import backend as K
+import keras
 
 
-# Create the model.
-def create_model_AUC(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout):
-    return create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, "AUC")
-
-def create_model_bce(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout):
-    return create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, "crossentropy")
+# In[ ]:
 
 
-def create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, mode="AUC") :
-    print("Creating model with input dim ", input_dim)
-    # likely to need tuning!
-    reg = regularizers.l2(l2reg)
+def create_model(num_classes=None):
+    # create the base pre-trained model
+    base_model = InceptionV3(weights='imagenet', include_top=False)
+    
+    # add a global spatial average pooling layer
+    x = base_model.output
+    x = GlobalAveragePooling2D()(x)
+    # let's add a fully-connected layer
+    x = Dense(4096, activation='relu')(x)
+    # and a logistic layer -- let's say we have 200 classes
+    predictions = Dense(num_classes, activation='softmax')(x)
 
-    model = Sequential()
+    # this is the model we will train
+    model = Model(inputs=base_model.input, outputs=predictions)
 
-    model.add(Dense(units=first_layer_size, kernel_initializer='lecun_normal', kernel_regularizer=reg, activation='relu', input_dim=input_dim))
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout))
+    # first: train only the top layers (which were randomly initialized)
+    # i.e. freeze all convolutional InceptionV3 layers
+    for layer in base_model.layers:
+        layer.trainable = False
 
-    model.add(Dense(units=second_layer_size, kernel_initializer='lecun_normal', activation='relu', kernel_regularizer=reg))
-    model.add(BatchNormalization(axis=1))
-    model.add(Dropout(dropout))
-
-    model.add(Dense(units=third_layer_size, kernel_initializer='lecun_normal', activation='relu', kernel_regularizer=reg))
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout))
-
-    model.add(Dense(1, kernel_initializer='lecun_normal', activation='sigmoid'))
-
-    # classifier.compile(loss='mean_absolute_error', optimizer='rmsprop', metrics=['mae', 'accuracy'])
-    opt = Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-    if (mode == "AUC"):
-        model.compile(loss=soft_AUC_theano, metrics=[soft_AUC_theano], optimizer=opt)  # not sure whether to use metrics here?
-    else:
-        model.compile(loss='binary_crossentropy', metrics=['accuracy'], optimizer=opt)  # not sure whether to use metrics here?
+    # compile the model (should be done *after* setting layers to non-trainable)
+    model.compile(optimizer='rmsprop', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    
     return model
 
 
-def train_model( X_train, y_train, model, valSplit=0.15, epochs = 5, batch_size = 4096):
-
-    callbacksList = [AUC_SKlearn_callback(X_train, y_train, useCv = (valSplit > 0))]
-    if (valSplit > 0) :
-        early_stopping = callbacks.EarlyStopping(monitor='val_loss', min_delta=0.00001, patience=5,
-                                                       verbose=0, mode='min')
-        callbacksList.append( early_stopping )
-    return model.fit(x=np.array(X_train), y=np.array(y_train),
-                        callbacks=callbacksList, validation_split=valSplit,
-                        verbose=2, batch_size=batch_size, epochs=epochs)
+# In[ ]:
 
 
+def grouper(n, iterable):
+    '''
+    Given an iterable, it'll return size n chunks per iteration.
+    Handles the last chunk too.
+    '''
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, n))
+        if not chunk:
+            return
+        yield chunk
 
-def scale_features(df_for_range, df_to_scale, columnsToScale) :
-    # Scale columnsToScale in df_to_scale
-    columnsOut = list(map( (lambda x: x + "_scaled"), columnsToScale))
-    for c, co in zip(columnsToScale, columnsOut) :
-        scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
-        print("scaling ", c ," to ",co)
-        vals = df_for_range[c].values.reshape(-1, 1)
-        scaler.fit(vals )
-        df_to_scale[co]=scaler.transform(df_to_scale[c].values.reshape(-1,1))
+class threadsafe_iter:
+    """
+    Takes an iterator/generator and makes it thread-safe by
+    serializing call to the `next` method of given iterator/generator.
+    """
+    def __init__(self, it):
+        self.it = it
+        self.lock = threading.Lock()
 
-    df_to_scale.drop (columnsToScale, axis=1, inplace = True)
+    def __iter__(self):
+        return self
 
-    return df_to_scale
+    def __next__(self):
+        with self.lock:
+            return self.it.__next__()
+
+def threadsafe_generator(f):
+    """
+    A decorator that takes a generator function and makes it thread-safe.
+    """
+    def g(*a, **kw):
+        return threadsafe_iter(f(*a, **kw))
+    return g
+
+@threadsafe_generator
+def get_features_label(documents, batch_size=32, return_labels=True):
+    '''
+    Given a document return X, y
+    
+    X is scaled to [0, 1] and consists of all images contained in document.
+    y is given an integer encoding.
+    '''
+    
+    
+    for batch in grouper(batch_size, documents): 
+        images = []
+        labels = []
+
+        for document in batch:
+            category = document.get('category_id', '')
+            img = document.get('imgs')[0]
+            data = io.BytesIO(img.get('picture', None))
+            im = imread(data)
+
+            if category:    
+                label = labelencoder.transform([category])
+            else:
+                label = None
+
+            im = im.astype('float32') / 255.0
+
+            images.append(im)
+            labels.append(label)
+
+        if return_labels:
+            yield np.array(images), np.array(labels)
+        else:
+            yield np.array(images)
 
 
-def one_hot (df, cols):
-    # One hot cols requested, drop original cols, return df
-    df = pd.concat([df, pd.get_dummies(df[cols], columns=cols)], axis=1)
-    df.drop(cols, axis=1, inplace = True)
-    return df
-
-def get_data() :
-    X_train = pd.read_csv(DATA_TRAIN_PATH, index_col = "id")
-    X_test = pd.read_csv(DATA_TEST_PATH, index_col = "id")
-
-    y_train = pd.DataFrame(index = X_train.index)
-    y_train['target'] = X_train.loc[:,'target']
-    X_train.drop ('target', axis=1, inplace = True)
-    X_train.drop (featuresToDrop, axis=1, inplace = True)
-    X_test.drop (featuresToDrop,axis=1, inplace = True)
-
-    # car_11 is really a cat col
-    X_train.rename(columns={'ps_car_11': 'ps_car_11a_cat'}, inplace=True)
-    X_test.rename(columns={'ps_car_11': 'ps_car_11a_cat'}, inplace=True)
-
-    cat_cols = [elem for elem in list(X_train.columns) if "cat" in elem]
-    bin_cols = [elem for elem in list(X_train.columns) if "bin" in elem]
-    other_cols = [elem for elem in list(X_train.columns) if elem not in bin_cols and elem not in cat_cols]
-
-    # Scale numeric features in region of -1,1 using training set as the scaling range
-    X_test = scale_features(X_train, X_test, columnsToScale=other_cols)
-    X_train = scale_features(X_train, X_train, columnsToScale=other_cols)
-
-    X_train = one_hot(X_train, cat_cols)
-    X_test = one_hot(X_test, cat_cols)
+# In[ ]:
 
 
-    return X_train, X_test, y_train
+if os.path.isfile('labelencoder.pkl'):
+    with open('labelencoder.pkl', 'rb') as f:
+        labelencoder = pickle.load(f)
+    categories = pd.read_csv('categories.csv')
+    
+else:
+    # Get the category ID for each document in the training set.
+    documents = bson.decode_file_iter(open('../input/train.bson', 'rb'))
+    categories = [(d['_id'], d['category_id']) for d in documents]
+    categories = pd.DataFrame(categories, columns=['id', 'cat'])
+
+    # Create a label encoder for all the labels found
+    labelencoder = LabelEncoder()
+    labelencoder.fit(categories.cat.unique().ravel())
+    
+    with open('labelencoder.pkl', 'wb') as f:
+        pickle.dump(labelencoder, f)
+        
+    categories.to_csv('categories.csv')
 
 
-def makeOutputFile(pred_fun, test, subsFile) :
-    df_out = pd.DataFrame(index=test.index)
-    y_pred = pred_fun( test )
-    df_out['target'] = y_pred
-    df_out.to_csv(subsFile, index_label="id")
+# In[ ]:
 
-def main() :
-    X_train, X_test, y_train = get_data()
-    model = create_model( input_dim=X_train.shape[1],
-                          first_layer_size=300,
-                          second_layer_size=200,
-                          third_layer_size=200,
-                          lr=0.0001,
-                          l2reg = 0.1,
-                          dropout = 0.2,
-                          mode="AUC")
 
-    train_model(X_train, y_train, model)
+# load the previous model
 
-    with custom_object_scope({'soft_AUC_theano': soft_AUC_theano}):
-        pred_fun = lambda x: model.predict(np.array(x))
-        makeOutputFile(pred_fun, X_test, "auc.csv")
+try:
+    inception = keras.models.load_model('inceptionv3-finetune.h5')
+except:
+    inception = create_model(num_classes=len(labelencoder.classes_))
 
-    model = create_model_bce( input_dim=X_train.shape[1],
-                          first_layer_size=300,
-                          second_layer_size=200,
-                          third_layer_size=200,
-                          lr=0.0001,
-                          l2reg = 0.1,
-                          dropout = 0.2)
+# So we can look at the progress on Tensorboard
+callback = keras.callbacks.TensorBoard(
+    log_dir='./logs/inception/2/{}'.format(time.time())
+)
 
-    train_model(X_train, y_train, model)
+generator = get_features_label(bson.decode_file_iter(open('../input/train.bson', 'rb')))
 
-    pred_fun = lambda x: model.predict(np.array(x))
-    makeOutputFile(pred_fun, X_test, "no_auc.csv")
+# docs says train for a few epocs (LOL!)
+# Each step is 32 images.
 
-main()
+# 200 epochs x  500 steps x 32 images -> 3 200 000 images / ~7M
+inception.fit_generator(
+    generator=generator,
+    epochs=320,
+    steps_per_epoch=500,
+    callbacks=[callback],
+    validation_data=generator,
+    validation_steps=50
+)
+
+inception.save('inceptionv3-finetune.h5')
+
+
+# In[ ]:
+
+
+# we chose to train the top 2 inception blocks, i.e. we will freeze
+# the first 249 layers and unfreeze the rest:
+for layer in inception.layers[:249]:
+    layer.trainable = False
+for layer in inception.layers[249:]:
+    layer.trainable = True
+
+# we need to recompile the model for these modifications to take effect
+# we use SGD with a low learning rate
+from keras.optimizers import SGD
+inception.compile(optimizer=SGD(lr=0.00001, momentum=0.9),
+                            loss='sparse_categorical_crossentropy',
+                            metrics=['accuracy'])
+
+# we train our model again (this time fine-tuning the top 2 inception blocks
+# alongside the top Dense layers
+# So we can look at the progress on Tensorboard
+callback = keras.callbacks.TensorBoard(
+    log_dir='./logs/inception/{}'.format(time.time())
+)
+
+generator = get_features_label(bson.decode_file_iter(open('data/train.bson', 'rb')))
+
+# docs says train for a few epocs (LOL!)
+# Each step is 32 images.
+
+# 200 epochs x  steps x 32 images -> 320 000 images / ~7M
+inception.fit_generator(
+    generator=generator,
+    epochs=320,
+    steps_per_epoch=500,
+    callbacks=[callback],
+    validation_data=generator,
+    validation_steps=50
+)
+
+inception.save('inceptionv3-finetune-2.h5')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', '# create a submission\n\ngenerator = get_features_label(bson.decode_file_iter(open(\'data/test.bson\', \'rb\')), return_labels=False)\n\npredictions = []\n\nfor i, batch in enumerate(generator):\n    output = inception.predict(batch)\n    labels = labelencoder.inverse_transform(output.argmax(axis=1))\n    predictions.extend(labels.tolist())\n    \n    if i and (i % 200 == 0):\n        print("{} images predicted.".format(len(predictions)))')
+
+
+# In[ ]:
+
+
+with open('predictions.pkl', 'wb') as pf:
+    pickle.dump(predictions, pf)
+
+submission = pd.read_csv('data/sample_submission.csv')
+submission.category_id = predictions
+submission.to_csv('submission.csv', index=False)
 

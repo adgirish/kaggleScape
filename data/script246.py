@@ -1,192 +1,273 @@
 
 # coding: utf-8
 
-# ## Temporal corelations
-# 
-# The idea of this notebook is to see how corelation between various features and target variable change over time.
-# 
-# As has been observed in other EDA notebooks, there is very little corelation between given features and y variable.
-# 
-# As pointed by Raddar here, distribution of features seem to vary quite a bit for many features with time.
-
 # In[ ]:
 
 
-import kagglegym
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-import math
+import os
 import matplotlib.pyplot as plt
-import seaborn as sns
+import seaborn as sns 
+from mpl_toolkits.basemap import Basemap
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-from matplotlib import rcParams
-rcParams['figure.figsize'] = 8, 6
 
-
-# In[ ]:
-
-
-train_all = pd.read_hdf('../input/train.h5')
-
-#Skipping alternate timestamps to be able to run this kernel
-
-#odd_timestamps = [t for t in  train_all.timestamp.unique() if t%2 !=0]
-#print(len(odd_timestamps))
-
-#train_all = train_all.loc[train_all.timestamp.isin(odd_timestamps)]
-
+# ### This is just a small script to plot some of the lat/lon data.
 
 # In[ ]:
 
 
-#Lets get all features and devide into derived, fundamental and technical categories
-feats = [col for col in train_all.columns if col not in ['id', 'timestamp', 'y']]
+df_events = pd.read_csv("../input/events.csv", dtype={'device_id': np.str})
+df_events.head()
 
 
-# It would be good idea to do a box plot of all variables after clip them appropriately (as there are lot of very high values).
-
-# In[ ]:
-
-
-train_all[feats] = train_all[feats].clip(upper=5, lower=-5)
-
+# ### Plot a bunch of different maps showing the locations of the events
 
 # In[ ]:
 
 
-train_all[feats].plot(kind='box')
-plt.ylim([-2,2])
+# Set up plot
+df_events_sample = df_events.sample(n=100000)
+plt.figure(1, figsize=(12,6))
+
+# Mercator of World
+m1 = Basemap(projection='merc',
+             llcrnrlat=-60,
+             urcrnrlat=65,
+             llcrnrlon=-180,
+             urcrnrlon=180,
+             lat_ts=0,
+             resolution='c')
+
+m1.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
+m1.drawmapboundary(fill_color='#000000')                # black background
+m1.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
+
+# Plot the data
+mxy = m1(df_events_sample["longitude"].tolist(), df_events_sample["latitude"].tolist())
+m1.scatter(mxy[0], mxy[1], s=3, c="#1292db", lw=0, alpha=1, zorder=5)
+
+plt.title("Global view of events")
+plt.show()
 
 
-# All the features lie mostly within -2 to 2. So, clipping features at -2 and 2 could be a good idea for modeling purposes
-
-# In[ ]:
-
-
-#Group by mean, median and 2 sigma. (Note! Many of the features are not normal, 
-#hence 2 sigma  does not give complete picture but good for starters) 
-#(No pun intended for sponsor of competition ;)
-
-train_all_mean = train_all.groupby('timestamp').apply(lambda x: x.mean())
-
-train_all_2stdp = train_all.groupby('timestamp').apply(lambda x: x.mean() + 2*x.std())
-
-train_all_2stdm = train_all.groupby('timestamp').apply(lambda x: x.mean() - 2*x.std())
-
-
-# In[ ]:
-
-
-tmp1 = pd.melt(train_all_mean, value_vars=feats, var_name='features1', value_name='mean')
-tmp2 = pd.melt(train_all_2stdp, value_vars=feats, var_name='features2', value_name='2_sigma_plus')
-tmp3 = pd.melt(train_all_2stdm, value_vars=feats, var_name='features3', value_name='2_sigma_minus')
-
-tmp = pd.concat([tmp1, tmp2, tmp3], axis=1)
-
-fg = sns.FacetGrid(data=tmp, col='features1', col_wrap=3, size=2.7)
-fg.map(plt.plot, 'mean', color='blue')
-fg.map(plt.plot, '2_sigma_plus', color='black')
-fg.map(plt.plot, '2_sigma_minus', color='black')
-#fg.map(plt.fill_between, 'mean', '2_sigma_minus', '2_sigma_plus', color='Purple', alpha=0.3)
-
-#plt.ylim([-4.5, 4.5])
-
-del tmp1, tmp2, tmp
-
-
-# * As has been already been pointed out by raddar, variables that are stable (flat mean and variance) over time are more suitable for modeling.**
+# Not surprisingly, most of the events are geo-located in China. We also see a few sporadic ones around the globe, most which look real (e.g., Austalia-Sydney/Melbourne/Perth).
 # 
-# * Removing(or modeling separately) two periods of high variance in y, can provide additional paramters for modeling 
-# 
-# 
-# Now, lets see how corelation with y changes for different variables
+# One interesting thing is there are a number of events at (lat,lon) = (0,0), and also around that area where there is not much land.
 
 # In[ ]:
 
 
-#I had to impute missing data otherwise either it takes very long time or we get lot of NaN 
-import time
-def get_corr(x):
-    s= time.time()
-    #for f in feats:
-    #    corr.append(np.corrcoef(x[f],x['y'],rowvar=0)[0,1])
-    corr = np.corrcoef(x.values.T)[-1,2:-1]
-    #print(time.time()- s)
-    return corr
-    
-train_all_imputed = train_all.fillna(0)
-train_all_corr = train_all_imputed.groupby('timestamp').apply(get_corr) #This will take some time
-train_all_corr = pd.DataFrame(np.vstack(train_all_corr), columns=feats)
-train_all_corr.head()
+df_at0 = df_events[(df_events["longitude"]==0) & (df_events["latitude"]==0)]
+df_near0 = df_events[(df_events["longitude"]>-1) &                     (df_events["longitude"]<1) &                     (df_events["latitude"]>-1) &                     (df_events["latitude"]<1)]
 
+print("# events:", len(df_events))
+print("# at (0,0)", len(df_at0))
+print("# near (0,0)", len(df_near0))
+
+
+# Plot another mercator plot, but zooming in on China
 
 # In[ ]:
 
 
-tmp3 = pd.melt(train_all_corr, value_vars=feats, var_name='features3', value_name='corr')
+# Sample it down to only the China region
+lon_min, lon_max = 75, 135
+lat_min, lat_max = 15, 55
 
-fg = sns.FacetGrid(data=tmp3, col='features3', col_wrap=3, size=2.8)
-fg.map(plt.plot, 'corr', color='blue').add_legend()
-del tmp3
+idx_china = (df_events["longitude"]>lon_min) &            (df_events["longitude"]<lon_max) &            (df_events["latitude"]>lat_min) &            (df_events["latitude"]<lat_max)
 
+df_events_china = df_events[idx_china].sample(n=100000)
 
-# All the corelation coefficients are oscillating quite a lot. Almost all features show positive and negative corelations with high frequency, most likely because of high volatility of y.
+# Mercator of China
+plt.figure(2, figsize=(12,6))
 
-# In[ ]:
+m2 = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='i')
 
+m2.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
+m2.drawmapboundary(fill_color='#000000')                # black background
+m2.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
 
-def get_corr2(x):
-    corr = np.corrcoef(x.values.T)[-1,2:-2]
-    return corr
-    
-    
-train_all_imputed['abs_y'] = abs(train_all_imputed['y'])
-train_all_corr2 = train_all_imputed.groupby('timestamp').apply(get_corr2) #This will take some time
-train_all_corr2 = pd.DataFrame(np.vstack(train_all_corr2), columns=feats)
-train_all_corr2.head()
+# Plot the data
+mxy = m2(df_events_china["longitude"].tolist(), df_events_china["latitude"].tolist())
+m2.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.05, zorder=5)
 
-
-# In[ ]:
-
-
-tmp4 = pd.melt(train_all_corr2, value_vars=feats, var_name='features3', value_name='corr')
-
-fg = sns.FacetGrid(data=tmp4, col='features3', col_wrap=3, size=2.7)
-fg.map(plt.plot, 'corr', color='blue').add_legend()
-
-del tmp4
+plt.title("China view of events")
+plt.show()
 
 
-# ** Many features are showing strong corelations with absolute values of y. **
+# This is more interesting to visualise, and roughly matches what you'd expect from the population density in China, see e.g.
 # 
-# ** Building separate models for absolute values of y and direction of y can be a good approach **
+# http://www.china-food-security.org/images/maps/pop/pop_2_h.jpg
 # 
-# Also, they seem to be varying over time.**
 # 
-# Normalize everything and plot together
 
 # In[ ]:
 
 
-tmp1 = pd.melt(train_all_mean, value_vars=feats, var_name='features1', value_name='mean')
-tmp2 = pd.melt(train_all_2stdp, value_vars=feats, var_name='features2', value_name='2std')
-tmp3 = pd.melt(train_all_corr, value_vars=feats, var_name='features3', value_name='corr')
-tmp4 = pd.melt(train_all_corr2, value_vars=feats, var_name='features3', value_name='yabs_corr')
+# Sample it down to only the Beijing region
+lon_min, lon_max = 116, 117
+lat_min, lat_max = 39.75, 40.25
 
-tmp = pd.concat([tmp1, tmp2, tmp3, tmp4], axis=1)
-cols = ['mean', '2std', 'corr', 'yabs_corr']
-tmp[cols] = tmp[cols].apply(lambda x: (x - x.mean())/x.std())
-fg = sns.FacetGrid(data=tmp, col='features1', col_wrap=3, size=2.7)
-fg = fg.map(plt.plot, 'mean', color='red')
-fg = fg.map(plt.plot, 'corr', color='green', alpha=0.4)
-fg = fg.map(plt.plot, '2std', color='black')
-fg = fg.map(plt.plot, 'yabs_corr', color='purple', alpha=0.4)
-fg.add_legend()
+idx_beijing = (df_events["longitude"]>lon_min) &              (df_events["longitude"]<lon_max) &              (df_events["latitude"]>lat_min) &              (df_events["latitude"]<lat_max)
+
+df_events_beijing = df_events[idx_beijing]
+
+# Mercator of Beijing
+plt.figure(3, figsize=(12,6))
+
+m3 = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='c')
+
+m3.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
+m3.drawmapboundary(fill_color='#000000')                # black background
+m3.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
+
+# Plot the data
+mxy = m3(df_events_beijing["longitude"].tolist(), df_events_beijing["latitude"].tolist())
+m3.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
+
+plt.title("Beijing view of events")
+plt.show()
 
 
-del tmp1, tmp2, tmp3, tmp4, tmp
+# At this scale, you can actually see the finite resolution of the lat/lon values.
+# 
+# ### Now we can try plotting the same for male/female, and show average age per grid
+
+# In[ ]:
 
 
-# **Many features have same trend as their correlation with absolute values of y. Some sort of temporal correction for features can improve lineal models **
+# Load the train data and join on the events
+df_train = pd.read_csv("../input/gender_age_train.csv", dtype={'device_id': np.str})
+
+df_plot = pd.merge(df_train, df_events_beijing, on="device_id", how="inner")
+
+df_m = df_plot[df_plot["gender"]=="M"]
+df_f = df_plot[df_plot["gender"]=="F"]
+
+
+# In[ ]:
+
+
+# Male/female plot
+plt.figure(4, figsize=(12,6))
+
+plt.subplot(121)
+m4a = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='c')
+m4a.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
+m4a.drawmapboundary(fill_color='#000000')                # black background
+m4a.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
+mxy = m4a(df_m["longitude"].tolist(), df_m["latitude"].tolist())
+m4a.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
+plt.title("Male events in Beijing")
+
+plt.subplot(122)
+m4b = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='c')
+m4b.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
+m4b.drawmapboundary(fill_color='#000000')                # black background
+m4b.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
+mxy = m4b(df_f["longitude"].tolist(), df_f["latitude"].tolist())
+m4b.scatter(mxy[0], mxy[1], s=5, c="#fd3096", lw=0, alpha=0.1, zorder=5)
+plt.title("Female events in Beijing")
+
+plt.show()
+
+
+# Clearly some different patterns emerging, though it's not immediately clear whether or not this is just because there are different amounts of data for M/F.
+
+# In[ ]:
+
+
+print("# M obs:", len(df_m))
+print("# F obs:", len(df_f))
+
+
+# In[ ]:
+
+
+# Make a pivot table showing average age per area of a grid, also store the counts
+df_plot["lon_round"] = df_plot["longitude"].round(decimals=2)
+df_plot["lat_round"] = df_plot["latitude"].round(decimals=2)
+
+df_age = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc=np.mean)
+
+df_cnt = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc="count")
+
+
+# In[ ]:
+
+
+# Age plot
+plt.figure(5, figsize=(12,6))
+
+# Plot avg age per grid
+plt.subplot(121)
+m5a = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='c')      
+# Construct a heatmap
+lons = df_age.index.values
+lats = df_age.columns.values
+x, y = np.meshgrid(lons, lats) 
+px, py = m5a(x, y) 
+data_values = df_age.values
+masked_data = np.ma.masked_invalid(data_values.T)
+cmap = plt.cm.viridis
+cmap.set_bad(color="#191919")
+# Plot the heatmap
+m5a.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
+m5a.colorbar().set_label("average age")
+plt.title("Average age per grid area in Beijing")
+
+# Plot count per grid
+plt.subplot(122)
+m5b = Basemap(projection='merc',
+             llcrnrlat=lat_min,
+             urcrnrlat=lat_max,
+             llcrnrlon=lon_min,
+             urcrnrlon=lon_max,
+             lat_ts=35,
+             resolution='c')      
+# Construct a heatmap 
+data_values = df_cnt.values
+masked_data = np.ma.masked_invalid(data_values.T)
+cmap = plt.cm.viridis
+cmap.set_bad(color="#191919")
+# Plot the heatmap
+m5b.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
+m5b.colorbar().set_label("count")
+plt.title("Event count per grid area in Beijing")
+
+plt.show()
+
+
+# Again, clearly some potentially interesting patterns.

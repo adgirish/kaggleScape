@@ -1,137 +1,201 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the [Learn Machine Learning](https://www.kaggle.com/dansbecker/learn-machine-learning) series. In this step, you will learn how to build and optimize models with the powerful xgboost library.* 
-# 
-# # What is XGBoost
-# 
-# **XGBoost** is the leading model for working with standard tabular data (the type of data you store in Pandas DataFrames, as opposed to more exotic types of data like images and videos). XGBoost models dominate many Kaggle competitions. 
-# 
-# To reach peak accuracy, XGBoost models require more knowledge and  _model tuning_ than techniques like Random Forest. After this tutorial, you'ill be able to 
-# - Follow the full modeling workflow with XGBoost 
-# - Fine-tune XGBoost models for optimal performance
-# 
-# 
-# XGBoost is an implementation of the **Gradient Boosted Decision Trees** algorithm (scikit-learn has another version of this algorithm, but XGBoost has some technical advantages.)  What is **Gradient Boosted Decision Trees**?  We'll walk through a diagram.
-# 
-# ![xgboost image](https://i.imgur.com/e7MIgXk.png)
-# 
-# We go through cycles that repeatedly builds new models and combines them into an **ensemble** model.  We start the cycle by calculating the errors for each observation in the dataset.  We then build a new model to predict those.  We add predictions from this error-predicting model to the "ensemble of models."  
-# 
-# To make a prediction, we add the predictions from all previous models.  We can use these predictions to calculate new errors, build the next model, and add it to the ensemble.
-# 
-# There's one piece outside that cycle.  We need some base prediction to start the cycle. In practice, the initial predictions can be pretty naive. Even if it's predictions are wildly inaccurate, subsequent additions to the ensemble will address those errors.
-# 
-# This process may sound complicated, but the code to use it is straightforward. We'll fill in some additional explanatory details in the **model tuning** section below.
-# 
-# ---
-# 
-# # Example
-
-# We will start with the data pre-loaded into **train_X**, **test_X**, **train_y**, **test_y**.
+# This notebook tries to describe the trend of Japan trade statistics and relationship among each world areas. 
 
 # In[ ]:
 
 
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import Imputer
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-data = pd.read_csv('../input/train.csv')
-data.dropna(axis=0, subset=['SalePrice'], inplace=True)
-y = data.SalePrice
-X = data.drop(['SalePrice'], axis=1).select_dtypes(exclude=['object'])
-train_X, test_X, train_y, test_y = train_test_split(X.as_matrix(), y.as_matrix(), test_size=0.25)
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn
 
-my_imputer = Imputer()
-train_X = my_imputer.fit_transform(train_X)
-test_X = my_imputer.transform(test_X)
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# We build and fit a model just as we would in scikit-learn.
+# `year_latest` is a statistics which collects the value of the goods between Japan and the other countries. These records include 
+# 
+# * `VY` is a value of goods which was traded
+# * `hs2` is a top category which was categorized hierarchically by [HS code](http://www.foreign-trade.com/reference/hscode.htm).
+# * `hs4` is a second categorization as well as hs2
+# * `hs6` is a third one
+# * `Year` specifies a records is a statistics of the year.
 
 # In[ ]:
 
 
-from xgboost import XGBRegressor
+# The trade statistics records for each year from 1988 to 2016
+df = pd.read_csv('../input/year_latest.csv')
 
-my_model = XGBRegressor()
-# Add silent=True to avoid printing out updates with each cycle
-my_model.fit(train_X, train_y, verbose=False)
+df.head()
 
-
-# We similarly evaluate a model and make predictions as we would do in scikit-learn.
 
 # In[ ]:
 
 
-# make predictions
-predictions = my_model.predict(test_X)
+# The area and country codes
+country_df = pd.read_csv('../input/country_eng.csv')
 
-from sklearn.metrics import mean_absolute_error
-print("Mean Absolute Error : " + str(mean_absolute_error(predictions, test_y)))
+country_df.head()
 
 
-# ---
-# # Model Tuning
-# 
-# XGBoost has a few parameters that can dramatically affect your model's accuracy and training speed.  The first parameters you should understand are:
-# 
-# ### n_estimators and early_stopping_rounds
-# **n_estimators** specifies how many times to go through the modeling cycle described above.  
-# 
-# In the [underfitting vs overfitting graph](http://i.imgur.com/2q85n9s.png), n_estimators moves you further to the right.  Too low a value causes underfitting, which is inaccurate predictions on both training data and new data. Too large a value causes overfitting, which is accurate predictions on training data, but inaccurate predictions on new data (which is what we care about). You can experiment with your dataset to find the ideal.  Typical values range from 100-1000, though this depends a lot on the **learning rate** discussed below.
-# 
-# The argument **early_stopping_rounds** offers a way to automatically find the ideal value. Early stopping causes the model to stop iterating when the validation score stops improving, even if we aren't at the hard stop for n_estimators.  It's smart to set a high value for **n_estimators** and then use **early_stopping_rounds** to find the optimal time to stop iterating.
-# 
-# Since random chance sometimes causes a single round where validation scores don't improve, you need to specify a number for how many rounds of straight deterioration to allow before stopping.  **early_stopping_rounds = 5** is a reasonable value.  Thus we stop after 5 straight rounds of deteriorating validation scores.
-# 
-# Here is the code to fit with early_stopping:
+# # Trade with each area
 
 # In[ ]:
 
 
-my_model = XGBRegressor(n_estimators=1000)
-my_model.fit(train_X, train_y, early_stopping_rounds=5, 
-             eval_set=[(test_X, test_y)], verbose=False)
+# Joined trade records with Country name
+joined_df = pd.merge(df, country_df, on=['Country'])
+
+# Plot VY transition
+def plot_vys(column_value, column_name):
+    data = vys[vys[column_name] == column_value]
+    plt.plot(data['Year'], data['VY'], label=column_value)
+    
+areas = np.unique(country_df['Area'].values)
+    
+grouped_by_area = joined_df[['Year', 'VY', 'Area']].groupby(['Area', 'Year'], as_index=False)
+vys = grouped_by_area.aggregate(np.sum)
+
+plt.figure(figsize=(7.5, 8))
+for area in areas:
+    plot_vys(area, 'Area')
+    
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+plt.show()
 
 
-# When using **early_stopping_rounds**, you need to set aside some of your data for checking the number of rounds to use.  If you later want to fit a model with all of your data, set **n_estimators** to whatever value you found to be optimal when run with early stopping.
+# This graph shows Asia area is the biggest trade partner for Japan and the most growing partner. One thing to note here is that the VY is decreasing at 2008 for all areas. This trend was caused by "Reman Shock" which hit all around the world. And the VY value does not come back at the same level to before "Reman Shock" except for Asia area. 
 # 
-# ### learning_rate
-# Here's a subtle but important trick for better XGBoost models:
+# In addition there are two time span when trade value was decreased in the plot between Middle East.  Japan depends on the oil imported from mainly Middle East. So the trend was caused by crude oil weaker trend recently. Let's confirm the main goods from Middle East.
 # 
-# Instead of getting predictions by simply adding up the predictions from each component model, we will multiply the predictions from each model by a small number before adding them in.  This means each tree we add to the ensemble helps us less.  In practice, this reduces the model's propensity to overfit.
-# 
-# So, you can use a higher value of **n_estimators** without overfitting.  If you use early stopping, the appropriate number of trees will be set automatically.
-# 
-# In general, a small learning rate (and large number of estimators) will yield more accurate XGBoost models, though it will also take the model longer to train since it does more iterations through the cycle.
-# 
-# Modifying the example above to include a learing rate would yield the following code:
+# # Trade with Middle East
 
 # In[ ]:
 
 
-my_model = XGBRegressor(n_estimators=1000, learning_rate=0.05)
-my_model.fit(train_X, train_y, early_stopping_rounds=5, 
-             eval_set=[(test_X, test_y)], verbose=False)
+hs2_df = pd.read_csv('../input/hs2_eng.csv')
+middle_east_df = joined_df[joined_df['Area'] == 'Middle_East']
+
+grouped_by_hs2 = joined_df[['Year', 'VY', 'hs2']].groupby(['hs2','Year'], as_index=False)
+
+vys = grouped_by_hs2.aggregate(np.sum)
+vys = pd.merge(vys, hs2_df, on=['hs2'])
+
+main_goods = vys[vys['VY'] >  0.4 * 1e10]
+hs2_names = np.unique(main_goods['hs2_name'].values)
+
+for hs2_name in hs2_names:
+    plot_vys(hs2_name, 'hs2_name')
+
+plt.legend()
+plt.legend(bbox_to_anchor=(1.0, 1), loc=2, borderaxespad=0.)
+plt.show()
 
 
-# ### n_jobs
-# On larger datasets where runtime is a consideration, you can use parallelism to build your models faster.  It's common to set the parameter **n_jobs** equal to the number of cores on your machine.  On smaller datasets, this won't help. 
+# We can see several goods are traded between Japan and Middle East areas. As expected the most traded goods after 2010 is "Fuels". "Fuels" is the only good which trade was decreased from 2014's. 
+
+# In[ ]:
+
+
+areas = np.unique(country_df['Area'].values)
+    
+grouped_by_area = joined_df[['Year', 'VY', 'Area']].groupby(['Area', 'Year'], as_index=False)
+vys = grouped_by_area.aggregate(np.sum)
+plt.figure(figsize=(12.0, 8))
+g = seaborn.boxplot(x="Area", y="VY", data=vys, palette="PRGn")
+g.set_xticklabels(labels=areas, rotation=45)
+
+
+# We can see the trade growth (the difference between mean value and high deviation) of Asia are is the most. On the other hand the trade between Japan and North America or Western Europe relatively stable though they are ranked as 2nd and 3rd position. The growth of Middle East is relatively high compared with North America and Western Europe.
 # 
-# The resulting model won't be any better, so micro-optimizing for fitting time is typically nothing but a distraction. But, it's useful in large datasets where you would otherwise spend a long time waiting during the `fit` command.
+# # Trade with Asian countries
+
+# In[ ]:
+
+
+grouped_by_country = joined_df[['Year', 'VY', 'Country_name']].groupby(['Country_name','Year'], as_index=False)
+
+vys = grouped_by_country.aggregate(np.sum)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(7.5, 8))
+
+asia_countries = country_df[country_df['Area'] == 'Asia']['Country_name']
+    
+for country in asia_countries:
+    plot_vys(country, 'Country_name')
+
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+plt.show()
+
+
+# # Trade with China
 # 
-# XGBoost has a multitude of other parameters, but these will go a very long way in helping you fine-tune your XGBoost model for optimal performance.
-# 
+# China is the biggest trade partner for Japan. Let's take a look into detail of trade with this country.
+
+# In[ ]:
+
+
+# Trade values with China
+china_df = joined_df[joined_df['Country_name'] == 'People\'s_Republic_of_China']
+grouped_by_hs2 = china_df[['Year', 'VY', 'hs2']].groupby(['hs2','Year'], as_index=False)
+
+vys = grouped_by_hs2.aggregate(np.sum)
+vys = pd.merge(vys, hs2_df, on=['hs2'])
+vys.head()
+
+
+# In[ ]:
+
+
+main_goods = vys[vys['VY'] >  0.15 * 1e10]
+hs2_names = np.unique(main_goods['hs2_name'].values)
+
+for hs2_name in hs2_names:
+    plot_vys(hs2_name, 'hs2_name')
+
+plt.legend(bbox_to_anchor=(1., 1), loc=2, borderaxespad=0.)
+plt.show()
+
+
+# We can see the biggest goods traded with Chine is machinery type goods.
+
+# In[ ]:
+
+
+minor_goods = vys[vys['VY'] <  0.1 * 1e6]
+hs2_names = np.unique(minor_goods['hs2_name'].values)
+
+pivotted_vys = vys[vys['hs2_name'].isin(hs2_names)]
+pivotted_vys = pivotted_vys.pivot('Year' ,'hs2_name', 'VY')
+plt.figure(figsize=(12.0, 8))
+g = seaborn.heatmap(pivotted_vys, annot=True, linewidths=.5)
+g.set_xticklabels(labels=hs2_names, rotation=45)
+
+
+# Minor goods traded with China such as Aircraft or Corks are not changing so much.
+
 # # Conclusion
-# XGBoost is currently the dominant algorithm for building accurate models on conventional data (also called tabular or strutured data).  Go apply it to improve your models!
 # 
-# # Your Turn
-# Convert yuor model to use XGBoost.
+# We can see some interesting points from these data set.
 # 
-# Use early stopping to find a good value for n_estimators.  Then re-estimate the model with all of your training data, and that value of n_estimators.
-# 
-# Once you've done this, return to **[Learning Machine Learning](https://www.kaggle.com/dansbecker/learn-machine-learning)**, to keep improving..  
-# 
-# 
+# * The trade value was decreased at 2008 all over the world.
+# * The main goods traded between Japan and Middle East is crude oil.
+# * The trade value of crude oil was decreasing recently due to low price of oil.
+# * China is the biggest trade partner for Japan.
+# * The main goods traded between Japan and China is machinery.

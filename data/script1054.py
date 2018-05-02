@@ -1,263 +1,181 @@
 
 # coding: utf-8
 
-# # Filtering and Auto-Correlation Tutorial with Temperature Data
-# In this scipt we will perform basic filtering operations using pandas (low pass and high pass filtering) and also examine the auto-correlation structure of temperature data (taken from the [Historical Hourly Weather Dataset](https://www.kaggle.com/selfishgene/historical-hourly-weather-data)) also using pandas.
-# 
-# The main goal of the script is to give some intuition about what low pass and high pass filtering operations are, and understand what is the auto-correlation function. We use hourly sampled temperature data since it contains periodic structrue both on a daily basis and on a yearly basis.
+# ## Notes about machine generated images:
+# <p> I'm republishing this notebook because questions about machine generated images are getting asked alot.
+#  Machine generated images DO NOT count in the scoring of the public or private leaderboard.  It says this in the competition description!  <br>
+# TL:DR - You can identify machine generated images by the length of the decimal in the incidence angle (natural have <= 4, machine generated have > 4).   <br>
+# This really has no effect on your predictions, but I guess it could make it easier for you to hand label the 3425 natural images if you really wanted to.  
+# </p>
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-from pandas.plotting import autocorrelation_plot, lag_plot
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+from subprocess import check_output
+from mpl_toolkits.axes_grid1 import ImageGrid
+import random
+random.seed(1)
 
-
-# # Load Data and Show available Cities in the dataset
 
 # In[ ]:
 
 
-#%% load data that will be used in the script
-cityTable     = pd.read_csv('../input/city_attributes.csv')
-temperatureDF = pd.read_csv('../input/temperature.csv', index_col=0)
-temperatureDF.index = pd.to_datetime(temperatureDF.index)
+train = pd.read_json("../input/train.json")
+agg_df = train.groupby('inc_angle').agg({"is_iceberg": [len, np.sum]}).sort_values([('is_iceberg', 'len')], ascending=False)
+agg_df[0:20]
 
-cityTable
-
-
-# We see that the cities have latitude and longitude information, and are ordered from west to east (according to longitude coordinate).
-# 
-# # Show Temperature as function of time for several selected Cities
 
 # In[ ]:
 
 
-#%% show several temperature plots to get a feel for the dataset
-#citiesToShow = ['San Francisco','Las Vegas','Chicago','Toronto','Houston','Jerusalem']
-citiesToShow  = ['Portland','Dallas','Miami','Montreal','Tel Aviv District']
-
-t0 = temperatureDF.index
-t1 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('1/10/2016',dayfirst=True),freq='H')
-t2 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('1/9/2015' ,dayfirst=True),freq='H')
-t3 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('21/7/2015',dayfirst=True),freq='H')
-t = [t0, t1, t2, t3]
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(15,14))
-for i, t in enumerate(t):
-    for k in range(len(citiesToShow)):
-        ax[i].plot(t,temperatureDF.loc[t,citiesToShow[k]])
-
-ax[0].legend(citiesToShow, fontsize=16,
-              loc='upper left',bbox_to_anchor=(0.02,1.3), ncol=len(citiesToShow))
-for i in range(len(ax)): ax[i].set_ylabel('Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
-
-
-# We clearly see yearly periodicity (top plot) as well as daily peridicity (bottom two plots) in all cities. We can also see that it's quite warm in Miami and Dallas, quite cool in Montreal and the amplitude between day and night in Portland is very large.
-# 
-# # Show the Auto-Correlation function of Los Angeles Temperature Signal
-
-# In[ ]:
-
-
-#%% show autocorr and lag plots
-
-cityToShow = 'Los Angeles'
-selectedLagPoints = [1,3,6,9,12,24,36,48,60]
-maxLagDays = 7
-
-originalSignal = temperatureDF[cityToShow]
-
-# set grid spec of the subplots
-plt.figure(figsize=(12,6))
-gs = gridspec.GridSpec(2, len(selectedLagPoints))
-axTopRow = plt.subplot(gs[0, :])
-axBottomRow = []
-for i in range(len(selectedLagPoints)):
-    axBottomRow.append(plt.subplot(gs[1, i]))
-
-# plot autocorr
-allTimeLags = np.arange(1,maxLagDays*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in allTimeLags]
-axTopRow.plot(allTimeLags,autoCorr); 
-axTopRow.set_title('Autocorrelation Plot of Temperature Signal', fontsize=18);
-axTopRow.set_xlabel('time lag [hours]'); axTopRow.set_ylabel('correlation coefficient')
-selectedAutoCorr = [originalSignal.autocorr(lag=dt) for dt in selectedLagPoints]
-axTopRow.scatter(x=selectedLagPoints, y=selectedAutoCorr, s=50, c='r')
-
-# plot scatter plot of selected points
-for i in range(len(selectedLagPoints)):
-    lag_plot(originalSignal, lag=selectedLagPoints[i], s=0.5, alpha=0.7, ax=axBottomRow[i])    
-    if i >= 1:
-        axBottomRow[i].set_yticks([],[])
-plt.tight_layout()
+def plot_bands(df, ia):
+    df = df[df['inc_angle'] == ia]
+    i = int(np.sqrt(len(df))//1 * 2)
+    j = int(2*len(df) // i + 1)
+    fig = plt.figure(1, figsize=(24,24))
+    grid = ImageGrid(fig, 111, nrows_ncols=(i, j), axes_pad=0.05)
+    for i, (band1, band2, id_num, inc_angle, iceberg) in enumerate(df.values):
+        # plot band 1
+        ax = grid[(i*2)]
+        band1_sample = band1
+        band1_sample = np.array(band1_sample).reshape(75, 75)
+        ax.imshow(band1_sample / 75.)
+        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
+        ax.text(10, 10, 'Incidence Angle: (%.4f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
+        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
+        ax.axis('on')
+        # plot band 2
+        ax = grid[(i*2)+1]
+        band2_sample = band2
+        band2_sample = np.array(band2_sample).reshape(75, 75)
+        ax.imshow(band2_sample / 75.)
+        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_2"), color='k', backgroundcolor='m', alpha=0.8)
+        ax.text(10, 10, 'Incidence Angle: (%.4f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
+        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
+        ax.axis('on')
 
 
-# The top row shows the auto-correlation plot.  
-# The bottom scatter plots correspond to the red points marked on the auto-correlation plot. 
-# 
-# The leftmost plot shows the Temperature at time t vs Temperature at time t + 1 hour scatter plot. We know that weather doesn't change that much in one hour and therefore we see extreemly high correlation between the temeratures there.  
-# This correlation gradually decreases up to 12 hour difference, that corresponds to the switch from day to night, and then contiues to oscillate with a slow decreasing trend as the days go by. 
-# 
-# # Show Auto-Correlation with various zoom ins (temporal scales)
+# ## Plot some of the leaky image pairs
 
 # In[ ]:
 
 
-#%% zoom in and out on the autocorr plot
-fig, ax = plt.subplots(nrows=4,ncols=1, figsize=(14,14))
+test = pd.read_json("../input/test.json")
+test['is_iceberg'] = -999
+combined = pd.concat([train, test])
 
-timeLags = np.arange(1,25*24*30)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); ax[0].set_title('Autocorrelation Plot', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
-
-
-# ### We clearly see the two periods here:
-# * The yearly period on the top plot (12 month period)
-# * The daily period on the two bottom plots (24 hour period)
-# 
-# When we looked at the data we also saw these two periods, but these autocorr plots are much smoother as they represent aggregate data across all time points of the signal. 
-
-# # Apply moving average and show the Low Pass Filtered Signal
-# The name low pass is because the resulting singal contains only low frequency changes. Applying the moving average operation (or different phrasing of the same this: filtering/convolving with a rectangular filter), is eqivalent to filtering out the high frequency changes and keeping only low frequency changes in the original signal. Hence the name "low pass".
 
 # In[ ]:
 
 
-#%% apply rolling mean and plot the signal (low pass filter)
-windowSize = 5*24
+plot_bands(combined, 42.5128)
 
-lowPassFilteredSignal = originalSignal.rolling(windowSize, center=True).mean()
-
-t0 = temperatureDF.index
-t1 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('1/10/2016',dayfirst=True),freq='H')
-t2 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('1/9/2015' ,dayfirst=True),freq='H')
-t3 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('21/7/2015',dayfirst=True),freq='H')
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,12))
-ax[0].plot(t0,originalSignal,c='y')
-ax[0].plot(t0,lowPassFilteredSignal,c='r')
-
-ax[1].plot(t1,originalSignal[t1],c='y')
-ax[1].plot(t1,lowPassFilteredSignal[t1],c='r')
-
-ax[2].plot(t2,originalSignal[t2],c='y')
-ax[2].plot(t2,lowPassFilteredSignal[t2],c='r')
-
-ax[3].plot(t3,originalSignal[t3],c='y')
-ax[3].plot(t3,lowPassFilteredSignal[t3],c='r')
-
-ax[0].legend(['original signal','low pass filtered'], fontsize=18,
-              loc='upper left',bbox_to_anchor=(0.02,1.4), ncol=len(citiesToShow))
-for i in range(len(ax)): ax[i].set_ylabel('Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
-
-
-# # Subtract the Low-Pass-Filtered Signal from the Original Signal and show the resulting High-Pass-Filtered Signal
-# The deviation from the local average is what we call the high frequency contnent of the singal. The resulting singal doesn't contain any slow changes (or different phrasing of the same thing: doesn't contain any low frequencies), since we subtracted them. This sequence of opperations (low pass filtering and subtracting the original singal from the low passed signal) is equivalent to "high pass filtering". i.e. keeping only the high frequency contnent and subtracting/removing/filtering out the low frequency content.  
 
 # In[ ]:
 
 
-#%% subtract the low pass filtered singal from the original to get high pass filtered signal
-highPassFilteredSignal = originalSignal - lowPassFilteredSignal
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,12))
-ax[0].plot(t0,highPassFilteredSignal,c='k')
-ax[1].plot(t1,highPassFilteredSignal[t1],c='k')
-ax[2].plot(t2,highPassFilteredSignal[t2],c='k')
-ax[3].plot(t3,highPassFilteredSignal[t3],c='k')
-
-ax[0].set_title('Deflection of Temperature from local mean',fontsize=20)
-for i in range(len(ax)): ax[i].set_ylabel('$\Delta$ Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
-
-
-# We see that the resulting signal is now varying around zero and the bottom plot is much more periodic. We've essentially removed the slow changing signal that the fast changing signal was riding on top of, and extracted the fast changing signal only.
-# 
-# # Show the Auto-Correlation of the Low Pass Filtered Signal
-
-# In[ ]:
-
-
-#%% autocorr of low pass filtered singal
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,14))
-
-timeLags = np.arange(1,25*24*30)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); 
-ax[0].set_title('Autocorrelation Plot of Low Pass Filtered Signal', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
+def plot_bands_test(df):
+    df = df.sample(8)
+    i = 4 #int(np.sqrt(len(df))//1 * 2)
+    j = 4 #int(2*len(df) // i + 1)
+    fig = plt.figure(1, figsize=(16,16))
+    grid = ImageGrid(fig, 111, nrows_ncols=(i, j), axes_pad=0.05)
+    for i, (band1, band2, id_num, inc_angle, iceberg) in enumerate(df.values):
+        # plot band 1
+        ax = grid[(i*2)]
+        band1_sample = band1
+        band1_sample = np.array(band1_sample).reshape(75, 75)
+        ax.imshow(band1_sample / 75.)
+        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
+        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
+        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
+        ax.axis('on')
+        # plot band 2
+        ax = grid[(i*2)+1]
+        band2_sample = band2
+        band2_sample = np.array(band2_sample).reshape(75, 75)
+        ax.imshow(band2_sample / 75.)
+        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_2"), color='k', backgroundcolor='m', alpha=0.8)
+        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
+        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
+        ax.axis('on')
 
 
-# We see that the low pass signal displays now only the yearly periodicity, because the yearly periodicity is related to slow changes in the signal and we've remove the high changing signals by applying the moving average operation
-# 
-# # Show the Auto-Correlation of the High Pass Filtered Signal
+# ## Plot random sample of test images
 
 # In[ ]:
 
 
-#%% autocorr of high pass filtered signal
-fig, ax = plt.subplots(nrows=4,ncols=1, figsize=(14,14))
-
-timeLags = np.arange(1,25*24*30)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); 
-ax[0].set_title('Autocorrelation Plot of High Pass Filtered Signal', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
+plot_bands_test(test)
 
 
-# We see that the high pass signal displays now only the daily periodicity, because the daily periodicity is related to fast changes in the signal and we've remove the low changing signals by subtracting the moving average.
+# In[ ]:
+
+
+def plot_bands_test_juxt(df):
+    df['precision_4'] = df['inc_angle'].apply(lambda x: len(str(x))) <= 7
+    df = pd.concat([df[df['precision_4'] == True].sample(8), df[df['precision_4'] == False].sample(8)])
+    fig = plt.figure(1, figsize=(16,16))
+    grid = ImageGrid(fig, 111, nrows_ncols=(4, 4), axes_pad=0.05)
+    for i, (band1, band2, id_num, inc_angle, iceberg, precision_4) in enumerate(df.values):
+        # plot band 1
+        ax = grid[(i)]
+        band1_sample = band1
+        band1_sample = np.array(band1_sample).reshape(75, 75)
+        ax.imshow(band1_sample / 75.)
+        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
+        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
+        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
+        if i < 8:
+            ax.text(10, 22, 'Precision is <= 4: %s' % precision_4, color='k', backgroundcolor='g', alpha=0.8)
+        else:
+            ax.text(10, 22, 'Precision is <= 4: %s' % precision_4, color='k', backgroundcolor='r', alpha=0.8)
+        ax.axis('on')
+
+
+# ## Something seems suspicious about the precision of the incidence angle
+
+# In[ ]:
+
+
+plot_bands_test_juxt(test)
+
+
+# **It looks like images with incidence angles having less than or equal to 4 decimal places (like all of those in the training set) are the naturally captured images, and those with greater precision are machine generated.**
+
+# In[ ]:
+
+
+print('~%.1f%% of the test data is machine generated' % (100 * (1 - test['precision_4'].sum() / len(test))))
+print('There are %i naturally captured images in the test set' % (test['precision_4'].sum() + 13))
+# My method misses 13 of the natural images.  Thanks for the fix! Sorry I didn't update this sooner
+
+
+# > ## Trying a leakage submission
+
+# In[ ]:
+
+
+CUTOFF = 2
+agg_df = agg_df[agg_df['is_iceberg']['len'] >= CUTOFF]
+my_df = []
+for i in range(0,len(agg_df.index.values)):
+    my_df.append([agg_df.index.values[i], agg_df['is_iceberg'].values[i][0], agg_df['is_iceberg'].values[i][1]])
+my_df = pd.DataFrame(my_df, columns = ['ia', 'count', 'sum_is_iceberg']).drop(0) # remove 1st row NA
+
+test['is_iceberg'] = 0.5
+for (ia, count, sum_is_iceberg) in my_df.values:
+    if(count == sum_is_iceberg):
+        leak = 1
+        test.loc[test['inc_angle'] == ia, 'is_iceberg'] = leak
+    elif(sum_is_iceberg == 0):
+        leak = 0
+        test.loc[test['inc_angle'] == ia, 'is_iceberg'] = leak
+
+test[['id', 'is_iceberg']].to_csv('littleleak_cutoff2.csv', index=False)
+
+
+# <p> * The R version of this submission scores .46560 on the public LB, with about 1300 of the 3425 natural test images labelled 0 or 1. (This suggests that exactly 1 prediction of either 1 or 0 is incorrect on the public LB)

@@ -1,502 +1,917 @@
 
 # coding: utf-8
 
-# # House price prediction using multiple regression analysis
-# 
-# # Part 1: Exploratory Data Analysis
-# 
-# The following notebook presents a thought process of predicting a continuous variable through Machine Learning methods. More specifically, we want to predict house prices based on multiple features using regression analysis. 
-# 
-# As an example, we will use a dataset of house sales in King County, where Seattle is located.
-# 
-# In this notebook we will first apply some Exploratory Data Analysis (EDA) techniques to summarize the main characteristics of the dataset.
-# 
-# ## 1. Preparation
-# 
-# ### 1.1 Load the librairies
-
 # In[ ]:
 
 
-import numpy as np # NumPy is the fundamental package for scientific computing
+#basic
+import numpy as np 
+import pandas as pd
+#viz
+import seaborn as sns
+import matplotlib.pyplot as plt
+color = sns.color_palette()
 
-import pandas as pd # Pandas is an easy-to-use data structures and data analysis tools
-pd.set_option('display.max_columns', None) # To display all columns
+#others
+import subprocess
+from subprocess import check_output
+import gc
 
-import matplotlib.pyplot as plt # Matplotlib is a python 2D plotting library
 get_ipython().run_line_magic('matplotlib', 'inline')
-# A magic command that tells matplotlib to render figures as static images in the Notebook.
-
-import seaborn as sns # Seaborn is a visualization library based on matplotlib (attractive statistical graphics).
-sns.set_style('whitegrid') # One of the five seaborn themes
-import warnings
-warnings.filterwarnings('ignore') # To ignore some of seaborn warning msg
-
-from scipy import stats, linalg
-
-import folium # for map visualization
-from folium import plugins
-
-
-# humm, looks like folium isn't available on kaggle. We'll work around it 
-# 
-# ### 1.2 Load the dataset
-# 
-# Let's load the data from CSV file using pandas and convert some columns to category type (for better summarization).
-
-# In[ ]:
-
-
-data = pd.read_csv("../input/kc_house_data.csv", parse_dates = ['date'])
-data['waterfront'] = data['waterfront'].astype('category',ordered=True)
-data['view'] = data['view'].astype('category',ordered=True)
-data['condition'] = data['condition'].astype('category',ordered=True)
-data['grade'] = data['grade'].astype('category',ordered=False)
-data['zipcode'] = data['zipcode'].astype(str)
-data = data.sort('date')
-data.head(2) # Show the first 2 lines
 
 
 # In[ ]:
 
 
-data.dtypes
 
+files=check_output(["ls", "../input"]).decode("utf8")
+#Check the number of row of each file
+for file in files.split("\n"):
+    path='../input/'+file
+    popenobj=subprocess.Popen(['wc', '-l', path], stdout=subprocess.PIPE, 
+                                              stderr=subprocess.PIPE)
+    result,error= popenobj.communicate()
+    print("The file :",file,"has :",result.strip().split()[0],"rows")
 
-# ## 2. Descriptive statistics
-# 
-# The initial dimension of the dataset
 
 # In[ ]:
 
 
-data.shape
+#train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
+stores = pd.read_csv("../input/stores.csv")
+items = pd.read_csv("../input/items.csv")
+trans = pd.read_csv("../input/transactions.csv")
+oil = pd.read_csv("../input/oil.csv")
+holiday = pd.read_csv("../input/holidays_events.csv")
+print("done")
 
 
-# Let's summarize the main statistics of each parameters
+# ## Memory optimization
+# Since train.csv has 125 mil records, it is best to consider performing some data engineering before starting any analysis.
+# 
+# Note: This kernal was inspired by Jeru666's kernel for the KKBox churn challenge. 
+# If you like this kernel, do checkout his work using the link here ->
+# https://www.kaggle.com/jeru666/memory-reduction-and-data-insights
+# 
+# Also a similar kernal that I've written for KKBox churn challenge.
+# https://www.kaggle.com/jagangupta/processing-huge-datasets-user-log
+# 
 
 # In[ ]:
 
 
-data.describe(include='all')
+#check memory use for the two biggest files - train and test
+#mem_train = train.memory_usage(index=True).sum()
+mem_test=test.memory_usage(index=True).sum()
+#print("train dataset uses ",mem_train/ 1024**2," MB")
+print("test dataset uses ",mem_test/ 1024**2," MB")
+# checking contents in train
+test.head()
 
-
-# ## 3. Setting the context (map visualization)
-# 
-# Before we dive into exploring the data, we’ll want to set the context of the analysis. One good way to do this is with exploratory charts or maps. In this case, we’ll map out the positions of the houses, which will help us understand the problem we’re exploring.
-# 
-# In the below code, we:
-# 
-# * Setup a map centered on King County.
-# * Add a marker to the map for each house sold in the area.
-# * Display the map.
 
 # In[ ]:
 
 
-houses_map = folium.Map(location = [data['lat'].mean(), data['long'].mean()], zoom_start = 10)
-marker_cluster = folium.MarkerCluster().add_to(houses_map)
-MAX_RECORDS = 100
-for name, row in data.iterrows():
-    folium.Marker([row["lat"], row["long"]], 
-                  popup="Sold for {0}$ on: {1}. Features: {2} sqft, {3} bedrooms, {4} bathrooms, year built: {5}"\
-                  .format(row["price"], row["date"], row['sqft_living'], 
-                          row['bedrooms'], row['bathrooms'], row['yr_built'])).add_to(marker_cluster)
-    
-houses_map.create_map('houses.html')
-houses_map
+# optimize test.csv
+# First check the contents of train.csv
+print(test.max())
+print(test.min())
+#check datatypes
+print(test.dtypes)
 
 
-# ![houses map][1]
+# TLDR: following are the steps I've used to reduce memory consumption 
+# - Check the range of values stored in the column
+# - Check the suitable datatype from the following link
+#     https://docs.scipy.org/doc/numpy-1.13.0/user/basics.types.html
+# - Change datatype
+# - split date col into three columns
+#     - There are two reasons to do this
+#         - In pandas any operation on column of type "datetime" is not vectorized.Hence any operations on it will take more time
+#         - Splitting it into three columns will provide better memory utilization. Eg: in the test dataset date col uses approx. 25 mb while storenbr(uint8) uses approx. 3 mb
+# - Impute on promo col 
+# - join everything
 # 
-# Interactive map is available [here][2]
 # 
-# The map is helpful but it's hard to see where the houses in our dataset are located. Instead, we could make a heatmap:
-# 
-# 
-#   [1]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/housesmap.png
-#   [2]: https://harlfoxem.github.io/houses.html
 
 # In[ ]:
 
 
-houses_heatmap = folium.Map(location = [data['lat'].mean(), data['long'].mean()], zoom_start = 9)
-houses_heatmap.add_children(plugins.HeatMap([[row["lat"], row["long"]] for name, row in data.iterrows()]))
-houses_heatmap.create_map("heatmap.html")
-houses_heatmap
+#There are only 54 stores
+test['store_nbr'] = test['store_nbr'].astype(np.uint8)
+# The ID column is a continuous number from 1 to 128867502 in train and 128867503 to 125497040 in test
+test['id'] = test['id'].astype(np.uint32)
+# item number is unsigned 
+test['item_nbr'] = test['item_nbr'].astype(np.uint32)
+#Converting the date column to date format
+test['date']=pd.to_datetime(test['date'],format="%Y-%m-%d")
+#check memory
+print(test.memory_usage(index=True))
+new_mem_test=test.memory_usage(index=True).sum()
+print("test dataset uses ",new_mem_test/ 1024**2," MB after changes")
+print("memory saved =",(mem_test-new_mem_test)/ 1024**2," MB")
 
 
-# ![heatmap][1]
-# 
-# (again, map: [here][2])
-# 
-# Heatmaps are good for mapping out gradients, but we’ll want something with more structure to plot out differences in house sale accross the county. Zip codes are a good way to visualize this information.
-# 
-# We could for example compute the mean house price by zip code, then plot this out on a map. In the below code, we'll:
-# 
-# * group the dataframe by zipcode,
-# * Compute the average price of each column
-# * add a column with the total number of observations (i.e., house sales) per zipcode
-# 
-# 
-#   [1]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/heatmap.png
-#   [2]: https://harlfoxem.github.io/heatmap.html
+# ## Around 50% save in memory utilization
 
 # In[ ]:
 
 
-zipcode_data = data.groupby('zipcode').aggregate(np.mean)
-zipcode_data.reset_index(inplace=True)
+print(test.memory_usage())
 
-data['count'] = 1
-count_houses_zipcode = data.groupby('zipcode').sum()
-count_houses_zipcode.reset_index(inplace=True)
-count_houses_zipcode = count_houses_zipcode[['zipcode','count']]
-data.drop(['count'], axis = 1, inplace = True)
-
-zipcode_data = pd.merge(zipcode_data, count_houses_zipcode, how='left', on=['zipcode'])
-zipcode_data.head(2)
+#check range of float 16
+min_value = np.finfo(np.float16).min
+max_value = np.finfo(np.float16).max
+print("range of float16 is",min_value,max_value)
 
 
-# We’ll now be able to plot the average value of a specific attribute for each zip code. In order to do this, we’ll read data in GeoJSON format to get the shape of each zip code, then match each zip code shape with the attribute score. Let's first create a function.
+# But the unit sales is not present in test.
+# Based on the top EDA kernal till now by @"head or tails" the max and min of unit sales from a random sample is 20748.000 and -15372.000 respectively, and it has a "double" datatype meaning it some items can have unit sales in decimals.
+# link:https://www.kaggle.com/headsortails/shopping-for-insights-favorita-eda
 # 
-# GeoJSON file available [here][1]
+# Hence "float 16" would be a good choice.
 # 
+# Any value which is out of that range is anyways an outlier which should be imputed before analysis.
 # 
-#   [1]: https://github.com/harlfoxem/House_Price_Prediction/blob/master/zipcode_king_county.geojson
+
+# ## Import train.csv with the correct datatypes
+# We can specify the datatypes as a dictionary while importing a csv
+# 
 
 # In[ ]:
 
 
-def show_zipcode_map(col):
-    geo_path = 'zipcode/zipcode_king_county.geojson'
-    zipcode = folium.Map(location=[data['lat'].mean(), data['long'].mean()], zoom_start=9)
-    zipcode.geo_json(geo_path = geo_path,
-                     data=zipcode_data, 
-                     columns = ['zipcode', col], key_on = 'feature.properties.ZCTA5CE10',
-                 fill_color='OrRd', fill_opacity=0.9,line_opacity=0.2)
-    zipcode.save(col + '.html')
-    return zipcode
+# taking a peak
+#train = pd.read_csv("../input/train.csv",nrows=10000)
+#print(train.dtypes)
+
+dtype_dict={"id":np.uint32,
+            "store_nbr":np.uint8,
+            "item_nbr":np.uint32,
+            "unit_sales":np.float16
+           }
+
+#test for 10000 rows
+train_part1 = pd.read_csv("../input/train.csv",nrows=100,dtype=dtype_dict,usecols=[0,2,3,4])
+print(train_part1.describe())
+print(train_part1.dtypes)
 
 
-# Now that we have our function ready, let's make a plot using the variable count.
+
+
+# read in the date col,on promo col
+#specify the column number which has the date in the parse_dates as a list
+train_part2=pd.read_csv("../input/train.csv",nrows=10000,dtype=dtype_dict,usecols=[1,5],parse_dates=[0])
+train_part2['Year'] = pd.DatetimeIndex(train_part2['date']).year
+train_part2['Month'] = pd.DatetimeIndex(train_part2['date']).month
+train_part2['Day'] =pd.DatetimeIndex(train_part2['date']).day.astype(np.uint8)
+del(train_part2['date'])
+train_part2['Day']=train_part2['Day'].astype(np.uint8)
+train_part2['Month']=train_part2['Month'].astype(np.uint8)
+train_part2['Year']=train_part2['Year'].astype(np.uint16)
+
+#impute the missing values to be -1
+train_part2["onpromotion"].fillna(0, inplace=True)
+train_part2["onpromotion"]=train_part2["onpromotion"].astype(np.int8)
+print(train_part2.head())
+print(train_part2.dtypes)
+
 
 # In[ ]:
 
 
-show_zipcode_map('count')
+# now scaling it to the entire dataset of train
 
+train_part2=pd.read_csv("../input/train.csv",dtype=dtype_dict,usecols=[1,5],parse_dates=[0])
+train_part2['Year'] = pd.DatetimeIndex(train_part2['date']).year
+train_part2['Month'] = pd.DatetimeIndex(train_part2['date']).month
+train_part2['Day'] =pd.DatetimeIndex(train_part2['date']).day.astype(np.uint8)
+del(train_part2['date'])
+train_part2['Day']=train_part2['Day'].astype(np.uint8)
+train_part2['Month']=train_part2['Month'].astype(np.uint8)
+train_part2['Year']=train_part2['Year'].astype(np.uint16)
 
-# ![count map][1]
-# 
-# Again, map [here][2]
-# 
-# The map helps us understand a few things about the dataset. First, we can see that we don't have data for every zip code in the county. This is especially true for the inner suburbs of Seattle. Second, some zipcodes have a lot more house sales recorded than others. The number of observations range from ~50 to ~600.
-# Let's show a few more maps:
-# 
-# 
-#   [1]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/count.png
-#   [2]: https://harlfoxem.github.io/count.html
+#impute the missing values to be -1
+train_part2["onpromotion"].fillna(0, inplace=True)
+train_part2["onpromotion"]=train_part2["onpromotion"].astype(np.int8)
+print(train_part2.head())
+print(train_part2.dtypes)
+
 
 # In[ ]:
 
 
-show_zipcode_map('price')
-show_zipcode_map('sqft_living')
-show_zipcode_map('yr_built')
+# scaling part 1 to the entire dataset
+dtype_dict={"id":np.uint32,
+            "store_nbr":np.uint8,
+            "item_nbr":np.uint32,
+            "unit_sales":np.float32
+           }
 
+train_part1 = pd.read_csv("../input/train.csv",dtype=dtype_dict,usecols=[0,2,3,4])
+print(train_part1.dtypes)
 
-# ![price map][1]
-# 
-# ![sqft map][2]
-# 
-# ![yr built map][3]
-# 
-# The three interactive maps are available [here][4], [here][5] and [here][6]
-# 
-# We can see that on average, the houses on the eastern suburbs of Seattle are more expensive. They are also bigger in sqft. 
-# 
-# The houses close to the metropolitan are of Seattle are relatively old compare to the houses in the rural area. 
-# 
-# 
-#   [1]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/price.png
-#   [2]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/sqft.png
-#   [3]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/yrbuilt.png
-#   [4]: https://harlfoxem.github.io/price.html
-#   [5]: https://harlfoxem.github.io/sqft_living.html
-#   [6]: https://harlfoxem.github.io/yr_built.html
-
-# ## 3. The Output Variable
-# 
-# Now that we've set the context by plotting out where the houses in our dataset are located, we can move into exploring different angles for our regression analysis. 
-# 
-# Let's first display the distribution of the target column (price) using a boxplot.
-# ![boxplot definition][1]
-# 
-# 
-#   [1]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/boxplot.png
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(12,4))
-sns.boxplot(x = 'price', data = data, orient = 'h', width = 0.8, 
-                 fliersize = 3, showmeans=True, ax = ax)
+# joining part one and two
+# For people familiar with R , the equivalent of cbind in pandas is the following command
+train = pd.concat([train_part1.reset_index(drop=True), train_part2], axis=1)
+#drop temp files
+del(train_part1)
+del(train_part2)
+#Further Id is just an indicator column, hence not required for analysis
+id=train['id']
+del(train['id'])
+# check memory
+print(train.memory_usage())
+#The extracted train.csv file is approx 5 GB
+mem_train=5*1024**3
+new_mem_train=train.memory_usage().sum()
+print("Train dataset uses ",new_mem_train/ 1024**2," MB after changes")
+print("memory saved is approx",(mem_train-new_mem_train)/ 1024**2," MB")
+
+
+# # Finally, We have the entire train dataset loaded into memory.
+# ## ~1.6GB is a managable size for basic computations in the kaggle kernal
+# 
+# Further if there is some heavy computation that need to be made,and it can be applied to the data as chunks, then we can split the data into blocks and aggregate and combine them.
+# (ie) Use map reduce concepts to further optimize if required.
+# 
+# # Now lets look into the dataset and perform some basic EDAs
+
+# In[ ]:
+
+
+# summary stats
+train['unit_sales'].describe()
+#check
+train['unit_sales'].isnull().sum()
+
+
+# Further to make EDA easier, rolling up the sales to different levels
+#      - Day-Store level
+#      - Day-Item level
+#      - Store level
+#      - Item level
+#      - Day level
+#      
+
+# In[ ]:
+
+
+# Using pandas group by and aggregate
+#sale_day_store_level=train.groupby(['Year','Month','Day','store_nbr'])['unit_sales'].sum()
+#sale_day_item_level=train.groupby(['Year','Month','Day','item_nbr'])['unit_sales'].sum()
+
+#kernal got stuck when trying this piece of code, hence splitting into chunks(chunks of one year) and appending
+
+
+# In[ ]:
+
+
+train_2013=train.loc[train['Year']==2013]
+train_2014=train.loc[train['Year'] ==2014]
+train_2015=train.loc[train['Year'] ==2015]
+train_2016=train.loc[train['Year'] ==2016]
+train_2017=train.loc[train['Year'] ==2017]
+
+
+# ## Short description of the metrics that I'm pulling here
+# - Store-day level sale -- This variable indicates the sale of a particular store over time
+# - Store-day level count -- This variable gives an indication of the variaty/spread of the items sold
+# 
+# - Item-day level sale -- Sale of an item over time
+# - Item-day level count -- This gives an indication of the popularity of the item across the supermarket chain. 
+#     - This variable can lead to information like region specific items,etc
+
+# In[ ]:
+
+
+def aggregate_level1(df):
+    '''writing a function to get item and store level summary metrics for a specific year'''
+#day-store level
+    sale_day_store_level=df.groupby(['Year','Month','Day','store_nbr'],as_index=False)['unit_sales'].agg(['sum','count'])
+    #drop index and rename
+    sale_day_store_level=sale_day_store_level.reset_index().rename(columns={'sum':'store_sales','count':'item_variety'})
+#day-item level  
+    sale_day_item_level=df.groupby(['Year','Month','Day','item_nbr'],as_index=False)['unit_sales'].agg(['sum','count'])
+    #drop index and rename
+    sale_day_item_level=sale_day_item_level.reset_index().rename(columns={'sum':'item_sales','count':'store_spread'})
+#store item level   
+    sale_store_item_level=df.groupby(['Year','store_nbr','item_nbr'],as_index=False)['unit_sales'].agg(['sum','count'])
+    #drop index and rename
+    sale_store_item_level=sale_store_item_level.reset_index().rename(columns={'sum':'item_sales','count':'entries'})
+
+    return sale_day_store_level,sale_day_item_level,sale_store_item_level
+
+
+# In[ ]:
+
+
+#run for 2013
+sale_day_store_level_2013,sale_day_item_level_2013,sale_store_item_level_2013=aggregate_level1(train_2013)
+print(sale_day_store_level_2013.head())
+sale_day_item_level_2013.head()
+
+
+# ### Now apply the function to other years and append together
+
+# In[ ]:
+
+
+import time
+start_time = time.time()
+#run for 2014
+sale_day_store_level_2014,sale_day_item_level_2014,sale_store_item_level_2014=aggregate_level1(train_2014)
+#run for 2015
+sale_day_store_level_2015,sale_day_item_level_2015,sale_store_item_level_2015=aggregate_level1(train_2015)
+#run for 2016
+sale_day_store_level_2016,sale_day_item_level_2016,sale_store_item_level_2016=aggregate_level1(train_2016)
+#run for 2017
+sale_day_store_level_2017,sale_day_item_level_2017,sale_store_item_level_2017=aggregate_level1(train_2017)
+
+end_time=time.time()
+time_taken=end_time-start_time
+print("This block took ",time_taken,"seconds")
+
+
+# ## A wierd trivia here is that only store number 25 is open 1st Jan of every year :p
+
+# In[ ]:
+
+
+# appending together
+#note: concat expects a list of dfs and not a list of strings
+sale_day_store_level=pd.concat([sale_day_store_level_2013,sale_day_store_level_2014,
+                                sale_day_store_level_2015,sale_day_store_level_2016,
+                                sale_day_store_level_2017])
+
+sale_day_item_level=pd.concat([sale_day_item_level_2013,sale_day_item_level_2014,
+                                sale_day_item_level_2015,sale_day_item_level_2016,
+                                sale_day_item_level_2017])
+sale_store_item_level=pd.concat([sale_store_item_level_2013,sale_store_item_level_2014,
+                                sale_store_item_level_2015,sale_store_item_level_2016,
+                                sale_store_item_level_2017])
+
+
+# In[ ]:
+
+
+# freeup memory
+del(sale_day_store_level_2013)
+del(sale_day_store_level_2014)
+del(sale_day_store_level_2015)
+del(sale_day_store_level_2016)
+del(sale_day_store_level_2017)
+del(sale_day_item_level_2013)
+del(sale_day_item_level_2014)
+del(sale_day_item_level_2015)
+del(sale_day_item_level_2016)
+del(sale_day_item_level_2017)
+del(sale_store_item_level_2013)
+del(sale_store_item_level_2014)
+del(sale_store_item_level_2015)
+del(sale_store_item_level_2016)
+del(sale_store_item_level_2017)
+gc.collect()
+
+
+# # Exporting the two datasets for others to use.
+# 
+# Please leave a reference to this kernal in your script if you decide to use them :) 
+
+# In[ ]:
+
+
+sale_day_store_level.to_csv("sale_day_store_level.csv")
+sale_day_item_level.to_csv("sale_day_item_level.csv")
+sale_store_item_level.to_csv("sale_store_item_level.csv")
+
+
+# ## Further aggregations 
+# 
+#  - Store level aggregation
+#  - Item level aggregation
+#  - Day level aggregation
+#  
+
+# In[ ]:
+
+
+#Creating store level metrics
+sale_store_level=sale_day_store_level.groupby(['store_nbr'],as_index=False)['store_sales','item_variety'].agg(['sum'])
+
+# Here the group by gives a multiindex , removing that
+sale_store_level.columns = sale_store_level.columns.droplevel(1)
+sale_store_level=sale_store_level.reset_index()
+sale_store_level.head()
+
+
+# In[ ]:
+
+
+#Creating item level metrics
+sale_item_level=sale_day_item_level.groupby(['item_nbr'],as_index=False)['item_sales'].agg(['sum'])
+
+sale_item_level=sale_item_level.reset_index()
+sale_item_level.head()
+
+
+# # Section 2 : Plots 
+# 1. Store
+# 2. Item
+# 
+
+# In[ ]:
+
+
+# Sorting by sales
+temp=sale_store_level.sort_values('store_sales',ascending=False).reset_index(drop=True)
+temp=temp.set_index('store_nbr').head(10)
+
+plt.figure(figsize=(12,8))
+sns.barplot(temp.index,temp.store_sales, alpha=0.8, color=color[2],)
+plt.ylabel('Overall Sales', fontsize=12)
+plt.xlabel('Store Number', fontsize=12)
+plt.title('Top Stores by Overall sale', fontsize=15)
+# plt.xticks(rotation='vertical')
 plt.show()
 
 
-# There seems to be a lot of outliers at the top of the distribution, with a few houses above the 5000000`$`  value. If we ignore outliers, the range is illustrated by the distance between the opposite ends of the whiskers (1.5 IQR) - about 1000000`$` here.
-# Also, we can see that the right whisker is slightly longer than the left whisker and that the median line is gravitating towards the left of the box. The distribution is therefore slightly skewed to the right.
-# 
-# ## 4. Associations and Correlations between Variables
-# 
-# Let's analyze now the relationship between the independent variables available in the dataset and the dependent variable that we are trying to predict (i.e., price).
-# These analysis should provide some interesting insights for our regression models. 
-# 
-# We'll be using scatterplots and correlations coefficients (e.g., Pearson, Spearman) to explore potential associations between the variables.
-# 
-# ### 4.1 Continuous Variables
-# 
-# For example, let's analyze the relationship between the square footage of a house (sqft_living) and its selling price. Since the two variables are measured on a continuous scale, we can use Pearson's coefficient r to measures the strength and direction of the relationship.
-
 # In[ ]:
 
 
-# A joint plot is used to visualize the bivariate distribution
-sns.jointplot(x="sqft_living", y="price", data=data, kind = 'reg', size = 7)
+# Sorting by sales
+temp1=sale_item_level.sort_values('sum',ascending=False).reset_index(drop=True)
+temp1=temp1.set_index('item_nbr').head(10)
+plt.figure(figsize=(12,8))
+x=temp1.index.values
+y=temp1['sum'].values
+sns.barplot(x,y, alpha=0.8, color=color[8])
+plt.ylabel('Overall Sales', fontsize=12)
+plt.xlabel('Store Number', fontsize=12)
+plt.title('Top Items by Overall sale', fontsize=15)
 plt.show()
 
 
-# There is a clear linear association between the variables (r = 0.7), indicating a strong positive relationship. sqft_living should be a good predicator of house price.
-# (note: sqft_living distribution is also skewed to the right)
-# 
-# Let's do the same with the 7 remaining continuous variables:
-# 
-# * sqft_lot 
-# * sqft_above (i.e., sqft_above = sqft_living - sqft_basement)
-# * sqft_basement
-# * sqft_living15, the average house square footage of the 15 closest neighbours
-# * sqft_lot15, the average lot square footage of the 15 closest neighbours
-# * yr_built
-# * yr_renovated
-# * lat
-# * long
-
 # In[ ]:
 
 
-get_ipython().run_cell_magic('javascript', '', 'IPython.OutputArea.auto_scroll_threshold = 9999;\n//First, a simple command to increase the maximum size of the output cells in the notebook')
-
-
-# In[ ]:
-
-
-sns.jointplot(x="sqft_lot", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="sqft_above", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="sqft_basement", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="sqft_living15", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="sqft_lot15", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="yr_built", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="yr_renovated", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="lat", y="price", data=data, kind = 'reg', size = 5)
-sns.jointplot(x="long", y="price", data=data, kind = 'reg', size = 5)
+print("PLot I wanted to show :(")
+print("top 10 items")
+temp.iloc[:,0].plot.bar()
 plt.show()
 
 
-# sqft_lot, sqft_lot15 and yr_built seem to be poorly related to price. 
+# ## There seems to be an issue with Seaborn automatically sorting the plots by the x variable. 
+# ### If someone from the community could help me figure out the right way to do this it would be great 
 # 
-# We can see that there is a lot of zeros in the sqft_basement distribution (i.e., no basement). Similarly, there is a lot of zeros in the yr_renovated variable.
+# Anyways,moving on..
 # 
-# Let's rerun the association tests for these two variables without the zeros.
 
 # In[ ]:
 
 
-# Create 2 new columns for the analysis 
-data['sqft_basement2'] = data['sqft_basement'].apply(lambda x: x if x > 0 else None)
-data['yr_renovated2'] = data['yr_renovated'].apply(lambda x: x if x > 0 else None)
+#Overall sales
+#YOY sales
+temp=sale_day_store_level.groupby('Year')['store_sales'].sum()
+plt.figure(figsize=(13,4))
+sns.pointplot(temp.index,temp.values, alpha=0.8, color=color[1],)
+plt.ylabel('Overall Sales', fontsize=12)
+plt.xlabel('Year', fontsize=12)
+plt.title('Sale YOY', fontsize=15)
+plt.xticks(rotation='vertical')
 
-# Show the new plots with paerson correlation
-sns.jointplot(x="sqft_basement2", y="price", data=data, kind = 'reg', dropna=True, size = 5)
-sns.jointplot(x="yr_renovated2", y="price", data=data, kind = 'reg', dropna=True, size = 5)
+# month over month sales
+temp=sale_day_store_level.groupby(['Year','Month'])['store_sales'].sum()
+plt.figure(figsize=(13,4))
+sns.pointplot(temp.index,temp.values, alpha=0.8, color=color[2],)
+plt.ylabel('Overall Sales', fontsize=12)
+plt.xlabel('Month', fontsize=12)
+plt.title('Monthly sales variation', fontsize=15)
+plt.xticks(rotation='vertical')
+
+
+
+# also checking the oil price change
+oil['date']=pd.to_datetime(oil['date'])
+oil['Year']=oil['date'].dt.year
+oil['Month']=oil['date'].dt.month 
+
+# Oil price variation over month
+temp=oil.groupby(['Year','Month']).agg(['sum','count'])
+temp.columns = temp.columns.droplevel(0)
+temp['avg']=temp['sum']/temp['count']
+#plot
+plt.figure(figsize=(13,4))
+sns.pointplot(temp.index,temp.avg, alpha=0.8, color=color[4],)
+plt.ylabel('Oil price', fontsize=12)
+plt.xlabel('Month', fontsize=12)
+plt.title('Monthly variation in oil price', fontsize=15)
+plt.xticks(rotation='vertical')
+
+plt.show()
 plt.show()
 
 
-# The house price is moderately correlated with the size of the basement (if basement present). There is also a small correlation with the year of the renovation (if renovated).
 # 
-# It might be more interesting for our analysis to classify basement and renovation as dichotomous variables (e.g., 0 for no basement, 1 for basement present). Let's create two new columns in our dataset.
+# 
 
 # In[ ]:
 
 
-data['basement_present'] = data['sqft_basement'].apply(lambda x: 1 if x > 0 else 0)
-data['basement_present'] = data['basement_present'].astype('category', ordered = False)
-
-data['renovated'] = data['yr_renovated'].apply(lambda x: 1 if x > 0 else 0)
-data['renovated'] = data['renovated'].astype('category', ordered = False)
-
-
-# We will analyse these new variables as categorical (see in few cells below).
-# 
-# But first, let's go back to the plots above and the two variables: sqft_above and sqft_living15. They seem to be strongly related to price. Let's analyse their associations (along with sqft_living) using the pairgrid() function from seaborn. This function creates a matrix of axes and shows the relationship for each pair of the selected variables. 
-# 
-# We will draw the univariate distribution of each variable on the diagonal Axes, and the bivariate distributions using scatterplots on the upper diagonal and kernel density estimation on the lower diagonal. We will create a function to display the paerson coefficient of each pair. 
-
-# In[ ]:
-
-
-# define a function to display pearson coefficients on the lower graphs 
-def corrfunc(x, y, **kws):
-    r, _ = stats.pearsonr(x, y)
-    ax = plt.gca()
-    ax.annotate("pearsonr = {:.2f}".format(r),
-                xy=(.1, .9), xycoords=ax.transAxes)
-
-g = sns.PairGrid(data, vars = ['sqft_living', 'sqft_living15', 'sqft_above'], size = 3.5) # define the pairgrid
-g.map_upper(plt.scatter) 
-g.map_diag(sns.distplot)
-g.map_lower(sns.kdeplot, cmap="Blues_d")
-g.map_lower(corrfunc)
+# month over month sales
+temp=sale_day_store_level.groupby(['Year','Month']).aggregate({'store_sales':np.sum,'Year':np.min,'Month':np.min})
+temp=temp.reset_index(drop=True)
+sns.set(style="whitegrid", color_codes=True)
+# temp
+plt.figure(figsize=(15,8))
+plt.plot(range(1,13),temp.iloc[0:12,0],label="2013")
+plt.plot(range(1,13),temp.iloc[12:24,0],label="2014")
+plt.plot(range(1,13),temp.iloc[24:36,0],label="2015")
+plt.plot(range(1,13),temp.iloc[36:48,0],label="2015")
+plt.ylabel('Overall Sales', fontsize=12)
+plt.xlabel('Month', fontsize=12)
+plt.title('Monthly sales variation', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(['2013', '2014', '2015', '2016'], loc='upper left')
 plt.show()
 
 
-# As envisaged, there is a strong positive relationship between the 3 variables (r>0.7). It was kind of obvious for sqft_above which is equal to sqft_livng - sqft_basement. So we know that they both have an impact on price. 
+# # Store
+# - First lets check the distribution of stores across different store dimention fields
+# - Cumilative sales across different store dimentions
+# - Box plots for the same to understand variations
 # 
-# For sqft_living15 however, we are not sure if the relationship with house price is actually due to the average square footage of the 15th closest houses. This is because of the high correlation between sqft_living15 and sqft_living.
-# 
-# To assess the true relationship between price and sqft_living15, we can use the Pearson Partial Correlation test. The correlation can assess the association between two continuous variables whilst controlling for the effect of other continuous variables called covariates. In our example, we will test the relationship between price and sqft_living15 using sqft_living as covariate.
+# ## Store distribution
 
 # In[ ]:
 
 
-# a Function to returns the sample linear partial correlation coefficients between pairs of variables in C, controlling 
-# for the remaining variables in C (clone of Matlab's partialcorr). 
-def partial_corr(C):
-    C = np.asarray(C)
-    p = C.shape[1]
-    P_corr = np.zeros((p, p), dtype=np.float)
-    for i in range(p):
-        P_corr[i, i] = 1
-        for j in range(i+1, p):
-            idx = np.ones(p, dtype=np.bool)
-            idx[i] = False
-            idx[j] = False
-            beta_i = linalg.lstsq(C[:, idx], C[:, j])[0]
-            beta_j = linalg.lstsq(C[:, idx], C[:, i])[0]
-            res_j = C[:, j] - C[:, idx].dot( beta_i)
-            res_i = C[:, i] - C[:, idx].dot(beta_j)            
-            corr = stats.pearsonr(res_i, res_j)[0]
-            P_corr[i, j] = corr
-            P_corr[j, i] = corr
-    return P_corr
+#Count of stores in different types and clusters
+plt.figure(figsize=(15,12))
+#row col plotnumber - 121
+plt.subplot(221)
+# Count of stores for each type 
+temp = stores['cluster'].value_counts()
+#plot
+sns.barplot(temp.index,temp.values,color=color[5])
+plt.ylabel('Count of stores', fontsize=12)
+plt.xlabel('Cluster', fontsize=12)
+plt.title('Store distribution across cluster', fontsize=15)
 
-# Convert pandas dataframe to a numpy array using only three columns
-partial_corr_array = data.as_matrix(columns = ['price', 'sqft_living', 'sqft_living15'])
+plt.subplot(222)
+# Count of stores for each type 
+temp = stores['type'].value_counts()
+#plot
+sns.barplot(temp.index,temp.values,color=color[7])
+plt.ylabel('Count of stores', fontsize=12)
+plt.xlabel('Type of store', fontsize=12)
+plt.title('Store distribution across store types', fontsize=15)
 
-# Calculate the partial correlation coefficients
-partial_corr(partial_corr_array)
+plt.subplot(223)
+# Count of stores for each type 
+temp = stores['state'].value_counts()
+#plot
+sns.barplot(temp.index,temp.values,color=color[8])
+plt.ylabel('Count of stores', fontsize=12)
+plt.xlabel('state', fontsize=12)
+plt.title('Store distribution across states', fontsize=15)
+plt.xticks(rotation='vertical')
 
-
-# We can see now that the average house size of the surrounding
-#  houses has no effect on the sell price when controlling for the size of the house (r = 0.06). 
-# 
-# ### 4.2 Categorical Variables
-# 
-# Let's now analyze the relationship between house price and the categorical variables.
-# 
-# As a first example, we will try to assess if having a waterfront is related to a higher house value. waterfront is a dichotomous variable with underlying continuous distribution (having a waterfront is better that not having a waterfront). We can use a point-biserial correlation coefficient to highlight the relationship between the two variables. 
-
-# In[ ]:
-
-
-# Let's show boxplots first
-fig, ax = plt.subplots(figsize=(12,4))
-sns.boxplot(y = 'waterfront', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = ax)
-plt.show()
-
-# Calculate the correlation coefficient
-r, p = stats.pointbiserialr(data['waterfront'], data['price'])
-print ('point biserial correlation r is %s with p = %s' %(r,p))
-
-
-# Comments: 
-# 
-# * The no waterfront box plot is comparatively short. This suggests that overall, house prices in this group are very close to each other. 
-# * The waterfront box plot is comparatively tall. This suggests that house prices differ greatly in this group.
-# * There is obvious shape differences between the two distributions, suggesting a higher sell price, in general, for houses with a waterfront. This is validated by a positive value of the point-biserial correlation.
-# * The correlation if however small (r<0.3). Note that we haven't test here the 3 main assumptions of the point-biserial correlation and can't rely too much on the result (1: There should be no significant outliers in the two groups of the dichotomous variable in terms of the continuous variable, 2: There should be homogeneity of variances, 3: The continuous variable should be approximately normally distributed for each group of the dichotomous variable).  
-# 
-# We can run the same test on the basement_present variable and whether or not the house had been renovated in the past.
-
-# In[ ]:
-
-
-# basement_present variable
-fig, ax = plt.subplots(figsize=(12,4))
-sns.boxplot(y = 'basement_present', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = ax)
-plt.show()
-r, p = stats.pointbiserialr(data['basement_present'], data['price'])
-print ('point biserial correlation r between price and basement_present is %s with p = %s' %(r,p))
-
-# renovated variable
-fig, ax = plt.subplots(figsize=(12,4))
-sns.boxplot(y = 'renovated', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = ax)
-print ('')
-plt.show()
-r, p = stats.pointbiserialr(data['renovated'], data['price'])
-print ('point biserial correlation r between price and renovated is %s with p = %s' %(r,p))
-
-
-# Associations exist but they are fairly small (0.1 < r < 0.3). 
-# 
-# Let's move on to our ordinal variables and asses their association with house price. We will show the distribution of the categories of each variable using boxplots.  
-
-# In[ ]:
-
-
-fig, axarr = plt.subplots(6, figsize=(12,40))
-sns.boxplot(y = 'bedrooms', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[0])
-sns.boxplot(y = 'bathrooms', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[1])
-sns.boxplot(y = 'floors', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[2])
-sns.boxplot(y = 'view', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[3])
-sns.boxplot(y = 'condition', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[4])
-sns.boxplot(y = 'grade', x = 'price', data = data,width = 0.8,orient = 'h', showmeans = True, fliersize = 3, ax = axarr[5])
+plt.subplot(224)
+# Count of stores for each type 
+temp = stores['city'].value_counts()
+#plot
+sns.barplot(temp.index,temp.values,color=color[9])
+plt.ylabel('Count of stores', fontsize=12)
+plt.xlabel('City', fontsize=12)
+plt.title('Store distribution across cities', fontsize=15)
+plt.xticks(rotation='vertical')
 plt.show()
 
 
-# As expected, they all seem to be related to the house price.
-# 
-# We can use the Spearman's rank-order correlation to measure the strength and direction of the relationships between house price and these variables.
+# ## Sale distribution 
 
 # In[ ]:
 
 
-r, p = stats.spearmanr(data['bedrooms'], data['price'])
-print ('spearman correlation r between price and bedrooms is %s with p = %s' %(r,p))
-r, p = stats.spearmanr(data['bathrooms'], data['price'])
-print ('spearman correlation r between price and bathrooms is %s with p = %s' %(r,p))
-r, p = stats.spearmanr(data['floors'], data['price'])
-print ('spearman correlation r between price and floors is %s with p = %s' %(r,p))
-r, p = stats.spearmanr(data['view'], data['price'])
-print ('spearman correlation r between price and view is %s with p = %s' %(r,p))
-r, p = stats.spearmanr(data['condition'], data['price'])
-print ('spearman correlation r between price and condition is %s with p = %s' %(r,p))
-r, p = stats.spearmanr(data['grade'], data['price'])
-print ('spearman correlation r between price and grade is %s with p = %s' %(r,p))
+sale_store_level=sale_store_level.iloc[:,0:2]
+#print(sale_store_level)
+merge=pd.merge(sale_store_level,stores,how='left',on='store_nbr')
+#temp
+
+#Sale of stores in different types and clusters
+plt.figure(figsize=(15,12))
+#row col plotnumber - 121
+plt.subplot(221)
+# Sale of stores for each type 
+temp = merge.groupby(['cluster'])['store_sales'].sum()
+#plot
+sns.barplot(temp.index,temp.values,color=color[5])
+plt.ylabel('Sales', fontsize=12)
+plt.xlabel('Cluster', fontsize=12)
+plt.title('Cumulative sales across store clusters', fontsize=15)
+
+plt.subplot(222)
+# sale of stores for each type 
+temp = merge.groupby(['type'])['store_sales'].sum()
+#plot
+sns.barplot(temp.index,temp.values,color=color[7])
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('Type of store', fontsize=12)
+plt.title('Cumulative sales across store types', fontsize=15)
+
+plt.subplot(223)
+# sale of stores for each type 
+temp = merge.groupby(['state'])['store_sales'].sum()
+#plot
+sns.barplot(temp.index,temp.values,color=color[8])
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('state', fontsize=12)
+plt.title('Cumulative sales across states', fontsize=15)
+plt.xticks(rotation='vertical')
+
+plt.subplot(224)
+# sale of stores for city
+temp = merge.groupby(['city'])['store_sales'].sum()
+#plot
+sns.barplot(temp.index,temp.values,color=color[9])
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('City', fontsize=12)
+plt.title('Cumulative sales across cities', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
 
 
-# There is indeed associations between these variables and the house price (except for condition). grade seems to be the best indicator.
+# - Interesting fact here is that store cluster number 14 which has only 4 stores has the most sales.
 # 
-# ## Conclusion
+# # Sale variation
+
+# In[ ]:
+
+
+sale_store_level=sale_store_level.iloc[:,0:2]
+merge=pd.merge(sale_store_level,stores,how='left',on='store_nbr')
+
+plt.figure(figsize=(15,12))
+#row col plotnumber - 121
+plt.subplot(221)
+#plot
+sns.boxplot(x='cluster', y="store_sales", data=merge)
+plt.ylabel('Sales', fontsize=12)
+plt.xlabel('Cluster', fontsize=12)
+plt.title('Variation across store clusters', fontsize=15)
+
+plt.subplot(222)
+# sale of stores for each type 
+sns.boxplot(x='type', y="store_sales", data=merge)
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('Type of store', fontsize=12)
+plt.title('Variation across store types', fontsize=15)
+
+plt.subplot(223)
+# sale of stores for each type 
+sns.boxplot(x='state', y="store_sales", data=merge)
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('state', fontsize=12)
+plt.title('Variation across states', fontsize=15)
+plt.xticks(rotation='vertical')
+
+plt.subplot(224)
+# sale of stores for city
+sns.boxplot(x='city', y="store_sales", data=merge)
+plt.ylabel('sales', fontsize=12)
+plt.xlabel('City', fontsize=12)
+plt.title('Variation across cities', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# - There are a lot of cases where there is only one store that is present in that specific grouping. Hence the single lines in the boxplot above
+#     - Clusters 5,16,17,12 have only one store
+#     - 8 states have only one store
+#     - 15 cities have only one store
+#     
+
+# In[ ]:
+
+
+#transactions
+# month over month sales
+trans['date']=pd.to_datetime(trans['date'])
+#print(trans.dtypes)
+temp=trans.groupby(['date']).aggregate({'store_nbr':'count','transactions':np.sum})
+temp=temp.reset_index()
+temp_2013=temp[temp['date'].dt.year==2013].reset_index(drop=True)
+temp_2014=temp[temp['date'].dt.year==2014].reset_index(drop=True)
+temp_2015=temp[temp['date'].dt.year==2015].reset_index(drop=True)
+temp_2016=temp[temp['date'].dt.year==2016].reset_index(drop=True)
+temp_2017=temp[temp['date'].dt.year==2017].reset_index(drop=True)
+
+#print(temp)
+sns.set(style="whitegrid", color_codes=True)
+# temp
+plt.figure(figsize=(15,14))
+plt.subplot(211)
+plt.plot(temp_2013['date'],temp_2013.iloc[:,1],label="2013")
+plt.plot(temp_2014['date'],temp_2014.iloc[:,1],label="2014")
+plt.plot(temp_2015['date'],temp_2015.iloc[:,1],label="2015")
+plt.plot(temp_2016['date'],temp_2016.iloc[:,1],label="2016")
+plt.plot(temp_2017['date'],temp_2017.iloc[:,1],label="2017")
+plt.ylabel('Number of stores open', fontsize=12)
+plt.xlabel('Time', fontsize=12)
+plt.title('Number of stores open', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(['2013', '2014', '2015', '2016'], loc='lower right')
+
+plt.subplot(212)
+plt.plot(temp_2013.index,temp_2013.iloc[:,1],label="2013")
+plt.plot(temp_2014.index,temp_2014.iloc[:,1],label="2014")
+plt.plot(temp_2015.index,temp_2015.iloc[:,1],label="2015")
+plt.plot(temp_2016.index,temp_2016.iloc[:,1],label="2016")
+plt.plot(temp_2017.index,temp_2017.iloc[:,1],label="2017")
+
+
+plt.ylabel('Number of stores open', fontsize=12)
+plt.xlabel('Day of year', fontsize=12)
+plt.title('Number of stores open', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(['2013', '2014', '2015', '2016'], loc='lower right')
+plt.show()
+
+
+
+#  - New year seems to be the only time when most of the stores are closed.(Store number 25 being the exception)
+#      - But in 2016 new year all the stores were closed. There was only one store opened on 2nd of Jan which is an oddity
+#  - There seems to be certain local holidays where some of the stores are closed. But there is no consistent pattern of holidays where stores are closed
+#  
+#  ## Store age
+
+# In[ ]:
+
+
+temp=trans.groupby(['store_nbr']).agg({'date':[np.min,np.max]}).reset_index()
+temp['store_age']=temp['date']['amax']-temp['date']['amin']
+temp['open_year']=temp['date']['amin'].dt.year
+data=temp['open_year'].value_counts()
+#print(data)
+plt.figure(figsize=(12,4))
+sns.barplot(data.index,data.values, alpha=0.8, color=color[0])
+plt.ylabel('Stores', fontsize=12)
+plt.xlabel('Store opening Year', fontsize=12)
+plt.title('When were the stores started?', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# - 5 Stores were opened in 2015 and 1 each in 2014 and 2017
 # 
-# In this post, we analyzed the relationship between the output variable (house price) and the dependent variables in our dataset. 
+# # Item preference across store types
 # 
-# More specifically, we highlighted that:
+# Lets try out new plotly library for treemaps
+
+# In[ ]:
+
+
+store_items=pd.merge(sale_store_item_level,items,on='item_nbr')
+store_items=pd.merge(store_items,stores,on='store_nbr')
+store_items['item_sales']=store_items['item_sales']
+
+#item
+# top selling items by store type
+top_items_by_type=store_items.groupby(['type','item_nbr'])['item_sales'].sum()
+top_items_by_type=top_items_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+
+#get top 5
+top_items_by_type=top_items_by_type.groupby(['type']).head(5)
+
+
+#class
+# top selling item class by store type
+top_class_by_type=store_items.groupby(['type','class'])['item_sales'].sum()
+top_class_by_type=top_class_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+
+#get top 5
+top_class_by_type=top_class_by_type.groupby(['type']).head(5)
+
+
+#family
+# top selling item family by store type
+top_family_by_type=store_items.groupby(['type','family'])['item_sales'].sum()
+top_family_by_type=top_family_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+
+#get top 5
+top_family_by_type=top_family_by_type.groupby(['type']).head(5)
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,5))
+
+x=top_family_by_type.pivot(index='type',columns='family')
+x.plot.bar(stacked=True,figsize=(12,5))
+y=x.columns.droplevel(0).values
+#print(y)
+plt.ylabel('Sales', fontsize=12)
+plt.xlabel('Top 5 item families', fontsize=12)
+plt.title('Top 5 item families across different store types', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(y)
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,5))
+x=top_class_by_type.pivot(index='type',columns='class')
+x.plot.bar(stacked=True,figsize=(12,5))
+y=x.columns.droplevel(0).values
+#print(y)
+plt.ylabel('Sales', fontsize=12)
+plt.xlabel('Top 5 item classes', fontsize=12)
+plt.title('Top 5 item classes across different store types', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(y)
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,5))
+x=top_items_by_type.pivot(index='type',columns='item_nbr')
+x.plot.bar(stacked=True,figsize=(12,5))
+y=x.columns.droplevel(0).values
+#print(y)
+plt.ylabel('Sales', fontsize=12)
+plt.xlabel('Top 5 items ', fontsize=12)
+plt.title('Top 5 items across different store types', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.legend(y)
+plt.show()
+
+
+# ## Performance of Item families across stores of different type
+
+# In[ ]:
+
+
+top_family_by_type=store_items.groupby(['type','family'])['item_sales'].sum()
+top_family_by_type=top_family_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+x=top_family_by_type.pivot(index='family',columns='type')
+cm = sns.light_palette("orange", as_cmap=True)
+x = x.style.background_gradient(cmap=cm)
+x
+
+
+# ## Top 20 Item classes(by overall sales)
+# - The distribution of sale across the store types for the top 20 item classes have been shown below
+# - The darker the color gradient the more the store type has contributed to the sale of items in that class
+
+# In[ ]:
+
+
+top_class_by_type=store_items.groupby(['type','class'])['item_sales'].sum()
+top_class_by_type=top_class_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+top_class_by_type=top_class_by_type.groupby(['class']).head(20)
+x=top_class_by_type.pivot(index='class',columns='type')
+x['total']=x.sum(axis=1)
+x=x.sort_values('total',ascending=False)
+del(x['total'])
+x=x.head(20)
+cm = sns.light_palette("gray", as_cmap=True)
+x = x.style.background_gradient(cmap=cm,axis=1)
+x
+
+
+# ## Top 30 Items(by overall sales)
+# - The distribution of sale across the store types for the top 30 items have been shown below
+# - The darker the color gradient the more the store type has contributed to the sale of items in that class
+
+# In[ ]:
+
+
+top_items_by_type=store_items.groupby(['type','item_nbr'])['item_sales'].sum()
+top_items_by_type=top_items_by_type.reset_index().sort_values(['type','item_sales'],ascending=[True,False])
+top_items_by_type=top_items_by_type.groupby(['item_nbr']).head(20)
+#print(top_items_by_type)
+x=top_items_by_type.pivot(index='item_nbr',columns='type')
+x['total']=x.sum(axis=1)
+x=x.sort_values('total',ascending=False)
+del(x['total'])
+x=x.head(30)
+cm = sns.light_palette("green", as_cmap=True)
+x = x.style.background_gradient(cmap=cm,axis=1)
+x
+
+
 # 
-# * sqft_living, sqft_above and sqft_basement were moderately/strongly associated with price. Paerson r was equal to 0.70, 0.61 and 0.41, respectively. The 3 variables were also strongly related to each other as sqft_living = sqft_above and sqft_basement.
-# * sqft_living15, the average house square footage of the 15 closest neighbors, was also strongly related to price (r = 0.59) . However, when controlling for sqft_living, the relationship disappeared ($r = 0.06$).
-# * sqft_lot, sqft_lot15 (average lot size of the 15 closest houses) and *yr_built* were poorly related to price.
-# * The three dichotomous variables (waterfront, basement_present, renovated) were associated with price. The associations were small (r < 0.3)
-# * Five of the ordinal parameters (bedrooms, bathrooms, floors, views, grade) were also moderately to strongly associated with price.
-# 
-# Our multiple regression analysis models in Part 2 will be built on these results.
+#     
+
+# # To be continued

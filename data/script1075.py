@@ -1,141 +1,673 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the [Machine Learning](https://www.kaggle.com/learn/machine-learning) series. In this step, you will learn what a "categorical" variable is, as well as the most common approach for handling this type of data.* 
+# # Quora Question-pair classification
+# 
+# This competition is about modelling whether a pair of questions on Quora is asking the same question. For this problem we have about **400.000** training examples. Each row consists of two sentences and a binary label that indicates to us whether the two questions were the same or not.
+# 
+# Inspired by this nice [kernel](https://www.kaggle.com/arthurtok/d/mcdonalds/nutrition-facts/super-sized-we-macdonald-s-nutritional-metrics) from [Anisotropic](https://www.kaggle.com/arthurtok) I've added a few interactive 2D and 3D scatter plots.
+# To get an insight into how the duplicates evolve over the number of words in the questions, I've added a plotly animation that encodes number of words and word share similarity in a scatter plot.
+# 
+# **We will be looking in detail at:**
+# 
+# * question pair TF-IDF encodings
+# * basic feature engineering and their embeddings in lower dimensional spaces
+# * parallel coordinates visualization
+# * model selection and evaluation + sample submission.
+# 
+# If you like this kernel, please upvote it :D, thanks!
 # 
 # 
-# # Introduction
-# Categorical data is data that takes only a limited number of values.  
+# ----------
 # 
-# For example, if you people responded to a survey about which what brand of car they owned, the result would be categorical (because the answers would be things like _Honda_,  _Toyota_, _Ford_, _None_, etc.). Responses fall into
-# a fixed set of categories.
 # 
-# You will get an error if you try to plug these variables into most machine learning models in Python without "encoding" them first.  Here we'll show the most popular method for encoding categorical variables.
-# 
-# ---
-# 
-# ## One-Hot Encoding : The Standard Approach for Categorical Data
-# One hot encoding is the most widespread approach, and it works very well unless your categorical variable takes on a large number of values (i.e. you generally won't it for variables taking more than 15 different values.  It'd be a poor choice in some cases with fewer values, though that varies.)
-# 
-# One hot encoding creates new (binary) columns, indicating the presence of each possible value from the original data.  Let's work through an example.
-# 
-# ![Imgur](https://i.imgur.com/mtimFxh.png)
-# 
-# The values in the original data are _Red_, _Yellow_ and _Green_.  We create a separate column for each possible value. Wherever the original value was _Red_, we put a 1 in the _Red_ column.  
-# 
-# ---
-# 
-# # Example
-# 
-# Let's see this in code. We'll skip the basic data set-up code, so you can start at the point where you have **train_predictors**, **test_predictors** DataFrames. This data contains housing characteristics. You will use them to predict home prices, which are stored  in a Series called **target**.
-# 
+# Added a final section for cross-validated model selection and evaluation. We will look at standard binary classification metrics, like ROC and PR curves and their AUCs. The best (linear) model that we found then generates a submission.
 
 # In[ ]:
 
 
-# Read the data
+import numpy as np
 import pandas as pd
-train_data = pd.read_csv('../input/train.csv')
-test_data = pd.read_csv('../input/test.csv')
+import seaborn as sns
+import matplotlib.pyplot as plt
+from subprocess import check_output
 
-# Drop houses where the target is missing
-train_data.dropna(axis=0, subset=['SalePrice'], inplace=True)
+get_ipython().run_line_magic('matplotlib', 'inline')
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
 
-target = train_data.SalePrice
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Since missing values isn't the focus of this tutorial, we use the simplest
-# possible approach, which drops these columns. 
-# For more detail (and a better approach) to missing values, see
-# https://www.kaggle.com/dansbecker/handling-missing-values
-cols_with_missing = [col for col in train_data.columns 
-                                 if train_data[col].isnull().any()]                                  
-candidate_train_predictors = train_data.drop(['Id', 'SalePrice'] + cols_with_missing, axis=1)
-candidate_test_predictors = test_data.drop(['Id'] + cols_with_missing, axis=1)
-
-# "cardinality" means the number of unique values in a column.
-# We use it as our only way to select categorical columns here. This is convenient, though
-# a little arbitrary.
-low_cardinality_cols = [cname for cname in candidate_train_predictors.columns if 
-                                candidate_train_predictors[cname].nunique() < 10 and
-                                candidate_train_predictors[cname].dtype == "object"]
-numeric_cols = [cname for cname in candidate_train_predictors.columns if 
-                                candidate_train_predictors[cname].dtype in ['int64', 'float64']]
-my_cols = low_cardinality_cols + numeric_cols
-train_predictors = candidate_train_predictors[my_cols]
-test_predictors = candidate_test_predictors[my_cols]
+df = pd.read_csv("../input/train.csv").fillna("")
+df.head() 
 
 
-# Pandas assigns a data type (called a dtype) to each column or Series.  Let's see a random sample of dtypes from our prediction data:
+# So we have six columns in total one of which is the label.
 
 # In[ ]:
 
 
-train_predictors.dtypes.sample(10)
+df.info()
 
-
-# **Object** indicates a column has text (there are other things it could be theoretically be, but that's unimportant for our purposes). It's most common to one-hot encode these "object" columns, since they can't be plugged directly into most models.  Pandas offers a convenient function called **get_dummies** to get one-hot encodings. Call it like this:
 
 # In[ ]:
 
 
-one_hot_encoded_training_predictors = pd.get_dummies(train_predictors)
+df.shape
 
 
-# Alternatively, you could have dropped the categoricals. To see how the approaches compare, we can calculate the mean absolute error of models built with two alternative sets of predictors:
-# 1.  One-hot encoded categoricals as well as numeric predictors
-# 2. Numerical predictors, where we drop categoricals.
-# 
-# One-hot encoding usually helps, but it varies on a case-by-case basis.  In this case, there doesn't appear to be any meaningful benefit from using the one-hot encoded variables.
+# We have a fairly balanced dataset here.
 
 # In[ ]:
 
 
-from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import RandomForestRegressor
-
-def get_mae(X, y):
-    # multiple by -1 to make positive MAE score instead of neg value returned as sklearn convention
-    return -1 * cross_val_score(RandomForestRegressor(50), 
-                                X, y, 
-                                scoring = 'neg_mean_absolute_error').mean()
-
-predictors_without_categoricals = train_predictors.select_dtypes(exclude=['object'])
-
-mae_without_categoricals = get_mae(predictors_without_categoricals, target)
-
-mae_one_hot_encoded = get_mae(one_hot_encoded_training_predictors, target)
-
-print('Mean Absolute Error when Dropping Categoricals: ' + str(int(mae_without_categoricals)))
-print('Mean Abslute Error with One-Hot Encoding: ' + str(int(mae_one_hot_encoded)))
+df.groupby("is_duplicate")['id'].count().plot.bar()
 
 
-# ## Applying to Multiple Files
+# # Feature construction
 # 
-# So far, you've one-hot-encoded your training data.  What about when you have multiple files (e.g. a test dataset, or some other data that you'd like to make predictions for)?  Scikit-learn is sensitive to the ordering of columns, so if the training dataset and test datasets get misaligned, your results will be nonsense.  This could happen if a categorical had a different number of values in the training data vs the test data.
+# We will now construct a basic set of features that we will later use to embed our samples with.
 # 
-# Ensure the test data is encoded in the same manner as the training data with the align command:
+# The first we will be looking at is rather standard TF-IDF encoding for each of the questions. In order to limit the computational complexity and storage requirements we will only encode the top terms across all documents with TF-IDF and also look at a subsample of the data.
 
 # In[ ]:
 
 
-one_hot_encoded_training_predictors = pd.get_dummies(train_predictors)
-one_hot_encoded_test_predictors = pd.get_dummies(test_predictors)
-final_train, final_test = one_hot_encoded_training_predictors.align(one_hot_encoded_test_predictors,
-                                                                    join='left', 
-                                                                    axis=1)
+dfs = df[0:2500]
+dfs.groupby("is_duplicate")['id'].count().plot.bar()
 
 
+# The subsample still has a very similar label distribution, ok to continue like that, without taking a deeper look how to achieve better sampling than just taking the first rows of the dataset.
+# 
+# Create a dataframe where the top 50% of rows have only question 1 and the bottom 50% have only question 2, same ordering per halve as in the original dataframe.
 
-# The align command makes sure the columns show up in the same order in both datasets (it uses column names to identify which columns line up in each dataset.)  The argument `join='left'` specifies that we will do the equivalent of SQL's _left join_.  That means, if there are ever columns that show up in one dataset and not the other, we will keep exactly the columns from our training data.  The argument `join='inner'` would do what SQL databases call an _inner join_, keeping only the columns showing up in both datasets.  That's also a sensible choice.
+# In[ ]:
+
+
+dfq1, dfq2 = dfs[['qid1', 'question1']], dfs[['qid2', 'question2']]
+dfq1.columns = ['qid1', 'question']
+dfq2.columns = ['qid2', 'question']
+
+# merge two two dfs, there are two nans for question
+dfqa = pd.concat((dfq1, dfq2), axis=0).fillna("")
+nrows_for_q1 = dfqa.shape[0]/2
+dfqa.shape
+
+
+# Transform questions by TF-IDF.
+
+# In[ ]:
+
+
+from sklearn.feature_extraction.text import TfidfVectorizer, HashingVectorizer
+mq1 = TfidfVectorizer(max_features = 256).fit_transform(dfqa['question'].values)
+mq1
+
+
+# Since we are looking at pairs of data, we will be taking the difference of all question one and question two pairs with this. This will result in a matrix that again has the same number of rows as the subsampled data and one vector that describes the relationship between the two questions.
+
+# In[ ]:
+
+
+diff_encodings = np.abs(mq1[::2] - mq1[1::2])
+diff_encodings
+
+
+# # 3D t-SNE embedding
 # 
-# # Conclusion
-# The world is filled with categorical data. You will be a much more effective data scientist if you know how to use this data. Here are resources that will be useful as you start doing more sophisticated work with cateogircal data.
+# We will use t-SNE to embed the TF-IDF vectors in three dimensions and create an interactive scatter plot with them.
+
+# In[ ]:
+
+
+from sklearn.manifold import TSNE
+tsne = TSNE(
+    n_components=3,
+    init='random', # pca
+    random_state=101,
+    method='barnes_hut',
+    n_iter=200,
+    verbose=2,
+    angle=0.5
+).fit_transform(diff_encodings.toarray())
+
+
+# In[ ]:
+
+
+trace1 = go.Scatter3d(
+    x=tsne[:,0],
+    y=tsne[:,1],
+    z=tsne[:,2],
+    mode='markers',
+    marker=dict(
+        sizemode='diameter',
+        color = dfs['is_duplicate'].values,
+        colorscale = 'Portland',
+        colorbar = dict(title = 'duplicate'),
+        line=dict(color='rgb(255, 255, 255)'),
+        opacity=0.75
+    )
+)
+
+data=[trace1]
+layout=dict(height=800, width=800, title='test')
+fig=dict(data=data, layout=layout)
+py.iplot(fig, filename='3DBubble')
+
+
+# That three dimensional embedding looks nice, but is not telling us much about the structure of the space that we created. There seem to be no clusters of either class present, so let's go on to the next section.
+
+# ## Feature EDA
 # 
-# * **Pipelines:** Deploying models into production ready systems is a topic unto itself. While one-hot encoding is still a great approach, your code will need to built in an especially robust way.  Scikit-learn pipelines are a great tool for this. Scikit-learn offers a [class for one-hot encoding](http://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.OneHotEncoder.html) and this can be added to a Pipeline.  Unfortunately, it doesn't handle text or object values, which is a common use case. 
+# Let us now construct a few features
 # 
-# * **Applications To Text for Deep Learning:** [Keras](https://keras.io/preprocessing/text/#one_hot) and [TensorFlow](https://www.tensorflow.org/api_docs/python/tf/one_hot) have fuctionality for one-hot encoding, which is useful for working with text.
+# * character length of questions 1 and 2
+# * number of words in question 1 and 2
+# * normalized word share count.
 # 
-# * **Categoricals with Many Values:** Scikit-learn's [FeatureHasher](http://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.FeatureHasher.html#sklearn.feature_extraction.FeatureHasher) uses [the hashing trick](https://en.wikipedia.org/wiki/Feature_hashing) to store high-dimensional data.  This will add some complexity to your modeling code.
+# We can then have a look at how well each of these separate the two classes.
+
+# In[ ]:
+
+
+df['q1len'] = df['question1'].str.len()
+df['q2len'] = df['question2'].str.len()
+
+df['q1_n_words'] = df['question1'].apply(lambda row: len(row.split(" ")))
+df['q2_n_words'] = df['question2'].apply(lambda row: len(row.split(" ")))
+
+def normalized_word_share(row):
+    w1 = set(map(lambda word: word.lower().strip(), row['question1'].split(" ")))
+    w2 = set(map(lambda word: word.lower().strip(), row['question2'].split(" ")))    
+    return 1.0 * len(w1 & w2)/(len(w1) + len(w2))
+
+
+df['word_share'] = df.apply(normalized_word_share, axis=1)
+
+df.head()
+
+
+# The distributions for normalized word share have some overlap on the far right hand side, meaning there are quite a lot of questions with high word similarity but are both duplicates and non-duplicates.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12, 8))
+plt.subplot(1,2,1)
+sns.violinplot(x = 'is_duplicate', y = 'word_share', data = df[0:50000])
+plt.subplot(1,2,2)
+sns.distplot(df[df['is_duplicate'] == 1.0]['word_share'][0:10000], color = 'green')
+sns.distplot(df[df['is_duplicate'] == 0.0]['word_share'][0:10000], color = 'red')
+
+
+# Scatter plot of question pair character lengths where color indicates duplicates and the size the word share coefficient we've calculated earlier.
+
+# In[ ]:
+
+
+df_subsampled = df[0:2000]
+
+trace = go.Scatter(
+    y = df_subsampled['q2len'].values,
+    x = df_subsampled['q1len'].values,
+    mode='markers',
+    marker=dict(
+        size= df_subsampled['word_share'].values * 60,
+        color = df_subsampled['is_duplicate'].values,
+        colorscale='Portland',
+        showscale=True,
+        opacity=0.5,
+        colorbar = dict(title = 'duplicate')
+    ),
+    text = np.round(df_subsampled['word_share'].values, decimals=2)
+)
+data = [trace]
+
+layout= go.Layout(
+    autosize= True,
+    title= 'Scatter plot of character lengths of question one and two',
+    hovermode= 'closest',
+        xaxis=dict(
+        showgrid=False,
+        zeroline=False,
+        showline=False
+    ),
+    yaxis=dict(
+        title= 'Question 2 length',
+        ticklen= 5,
+        gridwidth= 2,
+        showgrid=False,
+        zeroline=False,
+        showline=False,
+    ),
+    showlegend= False
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig,filename='scatterWords')
+
+
+# # Animation over average number of words
 # 
-# # Your Turn
-# Use one-hot encoding to allow categoricals in your course project.  Then add some categorical columns to your **X** data. If you choose the right variables, your model will improve quite a bit.  Once you've done that, **[Click Here](https://www.kaggle.com/learn/machine-learning)** to return to Learning Machine Learning where you can continue improving your model.
+# For that we will calculate the average number of words in both questions for each row.
+# 
+# In the end we want to have a scatter plot, just like the one above, but giving us one more dimension, in that case the average number of words in both questions. That will allow us to see the dependence on that variable. We also expect that as the number of words is increased, the character lengths of Q1 and Q2 will increase.
+
+# In[ ]:
+
+
+from IPython.display import display, HTML
+
+df_subsampled['q_n_words_avg'] = np.round((df_subsampled['q1_n_words'] + df_subsampled['q2_n_words'])/2.0).astype(int)
+print(df_subsampled['q_n_words_avg'].max())
+df_subsampled = df_subsampled[df_subsampled['q_n_words_avg'] < 20]
+df_subsampled.head()
+
+
+# In[ ]:
+
+
+word_lens = sorted(list(df_subsampled['q_n_words_avg'].unique()))
+# make figure
+figure = {
+    'data': [],
+    'layout': {
+        'title': 'Scatter plot of char lenghts of Q1 and Q2 (size ~ word share similarity)',
+    },
+    'frames': []#,
+    #'config': {'scrollzoom': True}
+}
+
+# fill in most of layout
+figure['layout']['xaxis'] = {'range': [0, 200], 'title': 'Q1 length'}
+figure['layout']['yaxis'] = {
+    'range': [0, 200],
+    'title': 'Q2 length'#,
+    #'type': 'log'
+}
+figure['layout']['hovermode'] = 'closest'
+
+figure['layout']['updatemenus'] = [
+    {
+        'buttons': [
+            {
+                'args': [None, {'frame': {'duration': 300, 'redraw': False},
+                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
+                'label': 'Play',
+                'method': 'animate'
+            },
+            {
+                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
+                'transition': {'duration': 0}}],
+                'label': 'Pause',
+                'method': 'animate'
+            }
+        ],
+        'direction': 'left',
+        'pad': {'r': 10, 't': 87},
+        'showactive': False,
+        'type': 'buttons',
+        'x': 0.1,
+        'xanchor': 'right',
+        'y': 0,
+        'yanchor': 'top'
+    }
+]
+
+sliders_dict = {
+    'active': 0,
+    'yanchor': 'top',
+    'xanchor': 'left',
+    'currentvalue': {
+        'font': {'size': 20},
+        'prefix': 'Avg. number of words in both questions:',
+        'visible': True,
+        'xanchor': 'right'
+    },
+    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
+    'pad': {'b': 10, 't': 50},
+    'len': 0.9,
+    'x': 0.1,
+    'y': 0,
+    'steps': []
+}
+
+# make data
+word_len = word_lens[0]
+dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
+data_dict = {
+    'x': list(dff['q1len']),
+    'y': list(dff['q2len']),
+    'mode': 'markers',
+    'text': list(dff['is_duplicate']),
+    'marker': {
+        'sizemode': 'area',
+        #'sizeref': 200000,
+        'colorscale': 'Portland',
+        'size': dff['word_share'].values * 120,
+        'color': dff['is_duplicate'].values,
+        'colorbar': dict(title = 'duplicate')
+    },
+    'name': 'some name'
+}
+figure['data'].append(data_dict)
+
+# make frames
+for word_len in word_lens:
+    frame = {'data': [], 'name': str(word_len)}
+    dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
+
+    data_dict = {
+        'x': list(dff['q1len']),
+        'y': list(dff['q2len']),
+        'mode': 'markers',
+        'text': list(dff['is_duplicate']),
+        'marker': {
+            'sizemode': 'area',
+            #'sizeref': 200000,
+            'size': dff['word_share'].values * 120,
+            'colorscale': 'Portland',
+            'color': dff['is_duplicate'].values,
+            'colorbar': dict(title = 'duplicate')
+        },
+        'name': 'some name'
+    }
+    frame['data'].append(data_dict)
+
+    figure['frames'].append(frame)
+    slider_step = {'args': [
+        [word_len],
+        {
+            'frame': {'duration': 300, 'redraw': False},
+            'mode': 'immediate',
+            'transition': {'duration': 300}
+        }
+     ],
+     'label': word_len,
+     'method': 'animate'}
+    sliders_dict['steps'].append(slider_step)
+
+    
+figure['layout']['sliders'] = [sliders_dict]
+
+py.iplot(figure)
+
+
+# What is interesting about that, is that as the number of words increases, the distribution of character lengths of the first and second question becomes less and less spherical.
+
+# # Embedding with engineered features
+# 
+# We will now revisit the t-SNE embedding with the manually engineered features.
+# 
+# For that we use the number of words in both questions, character lengths and their word share coefficient. t-SNE is sensitive to scaling of different dimensions and we want all of the dimensions to contribute equally to the distance measure that t-SNE is trying to preserve.
+
+# In[ ]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+
+df_subsampled = df[0:3000]
+X = MinMaxScaler().fit_transform(df_subsampled[['q1_n_words', 'q1len', 'q2_n_words', 'q2len', 'word_share']])
+y = df_subsampled['is_duplicate'].values
+
+
+# In[ ]:
+
+
+tsne = TSNE(
+    n_components=3,
+    init='random', # pca
+    random_state=101,
+    method='barnes_hut',
+    n_iter=200,
+    verbose=2,
+    angle=0.5
+).fit_transform(X)
+
+
+# In[ ]:
+
+
+trace1 = go.Scatter3d(
+    x=tsne[:,0],
+    y=tsne[:,1],
+    z=tsne[:,2],
+    mode='markers',
+    marker=dict(
+        sizemode='diameter',
+        color = y,
+        colorscale = 'Portland',
+        colorbar = dict(title = 'duplicate'),
+        line=dict(color='rgb(255, 255, 255)'),
+        opacity=0.75
+    )
+)
+
+data=[trace1]
+layout=dict(height=800, width=800, title='3d embedding with engineered features')
+fig=dict(data=data, layout=layout)
+py.iplot(fig, filename='3DBubble')
+
+
+# The embedding of the engineered features has much more structure than the previous one where we were only computing differences of TF-IDF encodings.
+# 
+# In the cluster of the negatives we have few positives whereas in the cluster of positives we have a lot more negatives. That matches our observation from the boxplot of word share coefficient above, where we could see that the negative class has a lot of overlap with the positive class for high word share coefficients.
+
+# # Parallel Coordinates
+# 
+# We now want to get another perspective on high dimensional data, such as the TF-IDF encoded questions. For that purpose I'll encode the concatenated questions into a set of N dimensions, s.t. each row in the dataframe then has one N dimensional vector associated to it.
+# With this we can then have a look at how these coordinates (or TF-IDF dimensions) vary by label.
+# 
+# There are many EDA methods to visualize high dimensional data, I'll show parallel coordinates here.
+# 
+# To make a nice looking plot, I've chosen N to be quite small, much smaller actually than you would encode it in a machine learning algorithm.
+
+# In[ ]:
+
+
+from pandas.tools.plotting import parallel_coordinates
+
+df_subsampled = df[0:500]
+
+N = 64
+
+#encoded = HashingVectorizer(n_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
+encoded = TfidfVectorizer(max_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
+# generate columns in the dataframe for each of the 32 dimensions
+cols = ['hashed_'+str(i) for i in range(encoded.shape[1])]
+for idx, col in enumerate(cols):
+    df_subsampled[col] = encoded[:,idx].toarray()
+
+plt.figure(figsize=(12,8))
+kws = {
+    'linewidth': 0.5,
+    'alpha': 0.7
+}
+parallel_coordinates(
+    df_subsampled[cols + ['is_duplicate']],
+    'is_duplicate',
+    axvlines=False, colormap=plt.get_cmap('plasma'),
+    **kws
+)
+#plt.grid(False)
+plt.xticks([])
+plt.xlabel("encoded question dimensions")
+plt.ylabel("value of dimension")
+
+
+# In the parallel coordinates we can see that there are some dimensions that have high TF-IDF features values for duplicates and others high values for non-duplicates.
+
+# # Question character length correlations by duplication label
+# 
+# The pairplot of character length of both questions by duplication label is showing us that, duplicated questions seem to have a somewhat similar amount of characters in them.
+# 
+# Also we can see something quite intuitive, that there is rather strong correlation in the number of words and the number of characters in a question.
+
+# In[ ]:
+
+
+n = 10000
+sns.pairplot(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'is_duplicate']][0:n], hue='is_duplicate')
+
+
+# # Model starter
+# 
+# Train a model with the basic feature we've constructed so far.
+# 
+# For that we will use Logisitic regression, for which we will do a quick parameter search with CV, plot ROC and PR curve on the holdout set and finally generate a submission.
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_recall_curve, auc, roc_curve
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.preprocessing import MinMaxScaler
+
+scaler = MinMaxScaler().fit(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
+
+X = scaler.transform(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
+y = df['is_duplicate']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
+
+X_train.shape, X_test.shape, y_train.shape, y_test.shape
+
+
+# Run cross-validation with a few hyper parameters.
+
+# In[ ]:
+
+
+clf = LogisticRegression()
+grid = {
+    'C': [1e-6, 1e-3, 1e0],
+    'penalty': ['l1', 'l2']
+}
+cv = GridSearchCV(clf, grid, scoring='neg_log_loss', n_jobs=-1, verbose=1)
+cv.fit(X_train, y_train)
+
+
+# Print validation results. Here we see that the strongly regularized model has much worse negative log loss than the other two models, regardless of which regularizer we've used.
+
+# In[ ]:
+
+
+for i in range(1, len(cv.cv_results_['params'])+1):
+    rank = cv.cv_results_['rank_test_score'][i-1]
+    s = cv.cv_results_['mean_test_score'][i-1]
+    sd = cv.cv_results_['std_test_score'][i-1]
+    params = cv.cv_results_['params'][i-1]
+    print("{0}. Mean validation neg log loss: {1:.3f} (std: {2:.3f}) - {3}".format(
+        rank,
+        s,
+        sd,
+        params
+    ))
+
+
+# In[ ]:
+
+
+print(cv.best_params_)
+print(cv.best_estimator_.coef_)
+
+
+# ### ROC
+# 
+# Receiver operator characteristic, used very commonly to assess the quality of models for binary classification.
+# 
+# We will look at at three different classifiers here, a strongly regularized one and two with weaker regularization. The heavily regularized model has parameters very close to zero and is actually worse than if we would pick the labels for our holdout samples randomly.
+
+# In[ ]:
+
+
+colors = ['r', 'g', 'b', 'y', 'k', 'c', 'm', 'brown', 'r']
+lw = 1
+Cs = [1e-6, 1e-4, 1e0]
+
+plt.figure(figsize=(12,8))
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve for different classifiers')
+
+plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+
+labels = []
+for idx, C in enumerate(Cs):
+    clf = LogisticRegression(C = C)
+    clf.fit(X_train, y_train)
+    print("C: {}, parameters {} and intercept {}".format(C, clf.coef_, clf.intercept_))
+    fpr, tpr, _ = roc_curve(y_test, clf.predict_proba(X_test)[:,1])
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, lw=lw, color=colors[idx])
+    labels.append("C: {}, AUC = {}".format(C, np.round(roc_auc, 4)))
+
+plt.legend(['random AUC = 0.5'] + labels)
+
+
+# # Precision-Recall Curve
+# 
+# Also used very commonly, but more often in cases where we have class-imbalance. We can see here, that there are a few positive samples that we can identify quite reliably. On in the medium and high recall regions we see that there are also positives samples that are harder to separate from the negatives.
+
+# In[ ]:
+
+
+pr, re, _ = precision_recall_curve(y_test, cv.best_estimator_.predict_proba(X_test)[:,1])
+plt.figure(figsize=(12,8))
+plt.plot(re, pr)
+plt.title('PR Curve (AUC {})'.format(auc(re, pr)))
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+
+
+# # Prepare submission
+# 
+# Here we read the test data and apply the same transformations that we've used for the training data. We also need to scale the computed features again.
+
+# In[ ]:
+
+
+dftest = pd.read_csv("../input/test.csv").fillna("")
+
+dftest['q1len'] = dftest['question1'].str.len()
+dftest['q2len'] = dftest['question2'].str.len()
+
+dftest['q1_n_words'] = dftest['question1'].apply(lambda row: len(row.split(" ")))
+dftest['q2_n_words'] = dftest['question2'].apply(lambda row: len(row.split(" ")))
+
+dftest['word_share'] = dftest.apply(normalized_word_share, axis=1)
+
+dftest.head()
+
+
+# We use the best estimator found by cross-validation and retrain it, using the best hyper parameters, on the whole training set.
+
+# In[ ]:
+
+
+retrained = cv.best_estimator_.fit(X, y)
+
+X_submission = scaler.transform(dftest[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
+
+y_submission = retrained.predict_proba(X_submission)[:,1]
+
+submission = pd.DataFrame({'test_id': dftest['test_id'], 'is_duplicate': y_submission})
+submission.head()
+
+
+# In[ ]:
+
+
+sns.distplot(submission.is_duplicate[0:2000])
+
+
+# In[ ]:
+
+
+submission.to_csv("submission.csv", index=False)
+
+
+# Most likely this submission will not score very good, we've only used a small set of features and didn't really dive into feature engineering that much. :)

@@ -1,87 +1,109 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning) series. In this step, you will learn how and why to use pipelines to clean up your modeling code.* 
+# This kernel creates mapping between click_id  from current test.csv and click_id from test.csv uploaded initially (and re-uploaded officially as test_supplement.csv), which has complete data for time range 2017-Nov-10 12:00 - 2017-Nov-10 23:00 (Chinese local time).
 # 
-# # What Are Pipelines
+# The mapping can be useful to predict on test_supplement.csv data directly.
 # 
-# Pipelines are a simple way to keep your data processing and modeling code organized.  Specifically, a pipeline bundles preprocessing and modeling steps so you can use the whole bundle as if it were a single step.
-# 
-# Many data scientists hack together models without pipelines, but Pipelines have some important benefits. Those include:
-# 1. **Cleaner Code:** You won't need to keep track of your training (and validation) data at each step of processing.  Accounting for data at each step of processing can get messy.  With a pipeline, you don't need to manually keep track of each step.
-# 2. **Fewer Bugs:** There are fewer opportunities to mis-apply a step or forget a pre-processing step.
-# 3. **Easier to Productionize:** It can be surprisingly hard to transition a model from a prototype to something deployable at scale.  We won't go into the many related concerns here, but pipelines can help.
-# 4. **More Options For Model Testing:** You will see an example in the next tutorial, which covers cross-validation.
-# 
-# ---
-
-# # Example
-# 
-# We won't focus on the data loading. For now, you can imagine you are at a point where you already have train_X, test_X, train_y and test_y. 
+# Old test data taken from [here](https://www.kaggle.com/tkm2261/old-test-data-on-talkingdata-adtracking), thanks tkm2261.
 
 # In[ ]:
+
+
+
+old_file_path = '../input/old-test-data-on-talkingdata-adtracking/test.csv'
+file_path = '../input/talkingdata-adtracking-fraud-detection/test.csv'
+output_file_path = 'mapping.csv'
+
+
+def _split(line):
+    line = line.strip()
+    index = line.index(',')
+    last_index = line.rindex(',')
+    click_id = line[:index]
+    payload = line[index:]
+    time = line[last_index:]
+    return click_id, payload, time
+
+
+def _read_same_time(lines, unprocessed_line):
+    click_id, payload, group_time = _split(unprocessed_line)
+    click_id_dict = {payload: [click_id]}
+    while True:
+        unprocessed_line = lines.readline()
+        if not unprocessed_line:
+            return unprocessed_line, click_id_dict, group_time
+        click_id, payload, click_time = _split(unprocessed_line)
+        if group_time == click_time:
+            if payload in click_id_dict:
+                click_id_dict[payload].append(click_id)
+            else:
+                click_id_dict[payload] = [click_id]
+        else:
+            return unprocessed_line, click_id_dict, group_time
+
+
+def _find_time(lines, group_time, unprocessed_line):
+    if unprocessed_line:
+        click_id, payload, time = _split(unprocessed_line)
+        if group_time == time:
+            return unprocessed_line
+    while True:
+        unprocessed_line = lines.readline()
+        click_id, payload, time = _split(unprocessed_line)
+        if group_time == time:
+            return unprocessed_line
+
+
+def _save(output, test_click_id_dict, old_test_click_id_dict):
+    for payload, click_ids in test_click_id_dict.items():
+        old_click_ids = old_test_click_id_dict[payload]
+        if len(old_click_ids) != len(click_ids):
+            print('Number of ids mismatch for "{}", test ids = {}, old test ids = {}'.format(payload, click_ids,
+                                                                                             old_click_ids))
+        for i in range(len(click_ids)):
+            output.write('{},{}\n'.format(click_ids[i], old_click_ids[i]))
+
+
+with open(file_path, "r", encoding="utf-8") as test:
+    with open(old_file_path, "r", encoding="utf-8") as old_test:
+        with open(output_file_path, "w", encoding="utf-8") as output:
+            output.write('click_id,old_click_id\n')
+            test.readline()  # skip header
+            old_test.readline()  # skip header
+            old_test_unprocessed_line = old_test.readline()
+            test_unprocessed_line = test.readline()
+            while test_unprocessed_line != '':
+                test_unprocessed_line, test_click_id_dict, click_time = _read_same_time(test, test_unprocessed_line)
+                old_test_unprocessed_line = _find_time(old_test, click_time, old_test_unprocessed_line)
+                old_test_unprocessed_line, old_test_click_id_dict, _ = _read_same_time(old_test,
+                                                                                       old_test_unprocessed_line)
+                _save(output, test_click_id_dict, old_test_click_id_dict)
+        pass
+
+
+# In[1]:
 
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
+mapping = pd.read_csv('../input/mapping-between-test-supplement-csv-and-test-csv/mapping.csv', dtype={'click_id': 'int32','old_click_id': 'int32'}, engine='c',
+                na_filter=False,memory_map=True)
 
-# Read Data
-data = pd.read_csv('../input/melb_data.csv')
-cols_to_use = ['Rooms', 'Distance', 'Landsize', 'BuildingArea', 'YearBuilt']
-X = data[cols_to_use]
-y = data.Price
-train_X, test_X, train_y, test_y = train_test_split(X, y)
-
-
-
-# 
-# You have a modeling process that uses an Imputer to fill in missing values, followed by a RandomForestRegressor to make predictions.  These can be bundled together with the **make_pipeline** function as shown below.
 
 # In[ ]:
 
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import Imputer
+print('click id min {}'.format(mapping.click_id.min()))
+print('click id max {}'.format(mapping.click_id.max()))
+print('click id count {}'.format(mapping.click_id.count()))
+print('click id unique count {}'.format(mapping.click_id.unique().shape[0]))
 
-my_pipeline = make_pipeline(Imputer(), RandomForestRegressor())
-
-
-# You can now fit and predict using this pipeline as a fused whole.
 
 # In[ ]:
 
 
-my_pipeline.fit(train_X, train_y)
-predictions = my_pipeline.predict(test_X)
+print('old click id min {}'.format(mapping.old_click_id.min()))
+print('old click id max {}'.format(mapping.old_click_id.max()))
+print('old click id count {}'.format(mapping.old_click_id.count()))
+print('old click id unique count {}'.format(mapping.old_click_id.unique().shape[0]))
 
-
-# For comparison, here is the code to do the same thing without pipelines
-
-# In[ ]:
-
-
-my_imputer = Imputer()
-my_model = RandomForestRegressor()
-
-imputed_train_X = my_imputer.fit_transform(train_X)
-imputed_test_X = my_imputer.transform(test_X)
-my_model.fit(imputed_train_X, train_y)
-predictions = my_model.predict(imputed_test_X)
-
-
-# This particular pipeline was only a small improvement in code elegance. But pipelines become increasingly valuable as your data processing becomes increasingly sophisticated.
-
-# # Understanding Pipelines
-# Most scikit-learn objects are either **transformers** or **models.** 
-# 
-# **Transformers** are for pre-processing before modeling.  The Imputer class (for filling in missing values) is an example of a transformer.  Over time, you will learn many more transformers, and you will frequently use multiple transformers sequentially. 
-# 
-# **Models** are used to make predictions. You will usually preprocess your data (with transformers) before putting it in a model.  
-# 
-# You can tell if an object is a transformer or a model by how you apply it.  After fitting a transformer, you apply it with the *transform* command.  After fitting a model, you apply it with the *predict* command. Your pipeline must start with transformer steps and end with a model.  This is what you'd want anyway.
-# 
-# Eventually you will want to apply more transformers and combine them more flexibly.  We will cover this later in an Advanced Pipelines tutorial.
-# 
-# # Your Turn
-# Take your modeling code and convert it to use pipelines.  For now, you'll need to do one-hot encoding of categorical variables outside of the pipeline (i.e. before putting the data in the pipeline).

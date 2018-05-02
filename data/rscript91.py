@@ -1,154 +1,108 @@
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.preprocessing import LabelEncoder
+from sklearn.random_projection import GaussianRandomProjection
+from sklearn.random_projection import SparseRandomProjection
 
-# coding: utf-8
-
-
-from pathlib import Path
-import time
-
-from scipy.io import wavfile
-import numpy as np
-import pandas as pd
-from scipy import signal
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelBinarizer
-
-import keras
-
-from keras.layers import Conv2D, BatchNormalization, MaxPooling2D, Dense, Input, Dropout, Flatten
-from keras.models import Model
-from keras.optimizers import Adam
-from keras.callbacks import TensorBoard
+# read datasets
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
 
-def get_data(path):
-    ''' Returns dataframe with columns: 'path', 'word'.'''
-    datadir = Path(path)
-    files = [(str(f), f.parts[-2]) for f in datadir.glob('**/*.wav') if f]
-    df = pd.DataFrame(files, columns=['path', 'word'])
-    
-    return df
+# process columns, apply LabelEncoder to categorical features
+for c in train.columns:
+    if train[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(train[c].values) + list(test[c].values))
+        train[c] = lbl.transform(list(train[c].values))
+        test[c] = lbl.transform(list(test[c].values))
+
+# shape
+print('Shape train: {}\nShape test: {}'.format(train.shape, test.shape))
 
 
-def prepare_data(df):
-    '''Transform data into something more useful.'''
-    train_words = ['yes', 'no', 'up', 'down', 'left', 'right', 'on', 'off', 'stop', 'go']
-    words = df.word.unique().tolist()
-    silence = ['_background_noise_']
-    unknown = [w for w in words if w not in silence + train_words]
+##Add decomposed components: PCA / ICA etc.
+from sklearn.decomposition import PCA, FastICA
+from sklearn.decomposition import TruncatedSVD
+n_comp = 12
 
-    # there are only 6 silence files. Mark them as unknown too.
-    df.loc[df.word.isin(silence), 'word'] = 'unknown'
-    df.loc[df.word.isin(unknown), 'word'] = 'unknown'
-    
-    return df
+# tSVD
+tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
+tsvd_results_train = tsvd.fit_transform(train.drop(["y"], axis=1))
+tsvd_results_test = tsvd.transform(test)
 
+# PCA
+pca = PCA(n_components=n_comp, random_state=420)
+pca2_results_train = pca.fit_transform(train.drop(["y"], axis=1))
+pca2_results_test = pca.transform(test)
 
-def get_specgrams(paths, nsamples=16000):
-    '''
-    Given list of paths, return specgrams.
-    '''
-    
-    # read the wav files
-    wavs = [wavfile.read(x)[1] for x in paths]
+# ICA
+ica = FastICA(n_components=n_comp, random_state=420)
+ica2_results_train = ica.fit_transform(train.drop(["y"], axis=1))
+ica2_results_test = ica.transform(test)
 
-    # zero pad the shorter samples and cut off the long ones.
-    data = [] 
-    for wav in wavs:
-        if wav.size < 16000:
-            d = np.pad(wav, (nsamples - wav.size, 0), mode='constant')
-        else:
-            d = wav[0:nsamples]
-        data.append(d)
+# GRP
+grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
+grp_results_train = grp.fit_transform(train.drop(["y"], axis=1))
+grp_results_test = grp.transform(test)
 
-    # get the specgram
-    specgram = [signal.spectrogram(d, nperseg=256, noverlap=128)[2] for d in data]
-    specgram = [s.reshape(129, 124, -1) for s in specgram]
-    
-    return specgram
+# SRP
+srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
+srp_results_train = srp.fit_transform(train.drop(["y"], axis=1))
+srp_results_test = srp.transform(test)
 
+# Append decomposition components to datasets
+for i in range(1, n_comp+1):
+    train['pca_' + str(i)] = pca2_results_train[:,i-1]
+    test['pca_' + str(i)] = pca2_results_test[:, i-1]
 
-def batch_generator(X, y, batch_size=16):
-    '''
-    Return a random image from X, y
-    '''
-    
-    while True:
-        # choose batch_size random images / labels from the data
-        idx = np.random.randint(0, X.shape[0], batch_size)
-        im = X[idx]
-        label = y[idx]
-        
-        specgram = get_specgrams(im)
+    train['ica_' + str(i)] = ica2_results_train[:,i-1]
+    test['ica_' + str(i)] = ica2_results_test[:, i-1]
 
+    train['tsvd_' + str(i)] = tsvd_results_train[:,i-1]
+    test['tsvd_' + str(i)] = tsvd_results_test[:, i-1]
 
-        yield np.concatenate([specgram]), label
+    train['grp_' + str(i)] = grp_results_train[:,i-1]
+    test['grp_' + str(i)] = grp_results_test[:, i-1]
 
+    train['srp_' + str(i)] = srp_results_train[:,i-1]
+    test['srp_' + str(i)] = srp_results_test[:, i-1]
 
-def get_model(shape):
-    '''Create a keras model.'''
-    inputlayer = Input(shape=shape)
-
-    model = BatchNormalization()(inputlayer)
-    model = Conv2D(16, (3, 3), activation='elu')(model)
-    model = Dropout(0.25)(model)
-    model = MaxPooling2D((2, 2))(model)
-
-    model = Flatten()(model)
-    model = Dense(32, activation='elu')(model)
-    model = Dropout(0.25)(model)
-    
-    # 11 because background noise has been taken out
-    model = Dense(11, activation='sigmoid')(model)
-    
-    model = Model(inputs=inputlayer, outputs=model)
-    
-    return model
-
-
-train = prepare_data(get_data('../input/train/audio/'))
-shape = (129, 124, 1)
-model = get_model(shape)
-model.compile(loss='binary_crossentropy', optimizer=Adam(), metrics=['accuracy'])
-
-
-# create training and test data.
-
-labelbinarizer = LabelBinarizer()
-X = train.path
-y = labelbinarizer.fit_transform(train.word)
-X, Xt, y, yt = train_test_split(X, y, test_size=0.3, stratify=y)
-
-tensorboard = TensorBoard(log_dir='./logs/{}'.format(time.time()), batch_size=32)
+y_train = train["y"]
+y_mean = np.mean(y_train)
 
 
 
-train_gen = batch_generator(X.values, y, batch_size=32)
-valid_gen = batch_generator(Xt.values, yt, batch_size=32)
+### Regressor
+import xgboost as xgb
 
-model.fit_generator(
-    generator=train_gen,
-    epochs=1,
-    steps_per_epoch=X.shape[0] // 32,
-    validation_data=valid_gen,
-    validation_steps=Xt.shape[0] // 32,
-    callbacks=[tensorboard])
+# prepare dict of params for xgboost to run with
+xgb_params = {
+    'n_trees': 520,
+    'eta': 0.0045,
+    'max_depth': 4,
+    'subsample': 0.98,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'base_score': y_mean, # base prediction = mean(target)
+    'silent': 1
+}
+
+# form DMatrices for Xgboost training
+dtrain = xgb.DMatrix(train.drop('y', axis=1), y_train)
+dtest = xgb.DMatrix(test)
+
+num_boost_rounds = 1350
+# train model
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
 
 
-# Create a submission
+# check f2-score (to get higher score - increase num_boost_round in previous cell)
+from sklearn.metrics import r2_score
+print(r2_score(dtrain.get_label(),model.predict(dtrain)))
 
-test = prepare_data(get_data('../input/test/'))
+# make predictions and save results
+y_pred = model.predict(dtest)
 
-predictions = []
-paths = test.path.tolist()
-
-for path in paths:
-    specgram = get_specgrams([path])
-    pred = model.predict(np.array(specgram))
-    predictions.extend(pred)
-
-
-labels = [labelbinarizer.inverse_transform(p.reshape(1, -1), threshold=0.5)[0] for p in predictions]
-test['labels'] = labels
-test.path = test.path.apply(lambda x: str(x).split('/')[-1])
-submission = pd.DataFrame({'fname': test.path.tolist(), 'label': labels})
-submission.to_csv('submission.csv', index=False)
+output = pd.DataFrame({'id': test['ID'].astype(np.int32), 'y': y_pred})
+output.to_csv('sub_611baseLine.csv', index=False)

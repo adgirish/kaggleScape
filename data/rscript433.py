@@ -1,280 +1,289 @@
-import kagglegym
+# Starter code for multiple regressors implemented by Leandro dos Santos Coelho
+# Source code based on Forecasting Favorites, 1owl
+# https://www.kaggle.com/the1owl/forecasting-favorites , version 10
+
+
 import numpy as np
 import pandas as pd
+from sklearn import preprocessing, linear_model, metrics
+import gc; gc.enable()
+import random
+
+# classical tree approach
+from sklearn.tree import DecisionTreeRegressor
+
+# ensemble approaches
 from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.linear_model import Ridge
-from sklearn.base import TransformerMixin
-from sklearn.pipeline import FeatureUnion, make_pipeline
-from gc import collect
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 
-###################################
-### Settings
-###################################
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_rows', 50)
-pd.set_option('display.float_format', '{:.4f}'.format)
+# linear approaches
+from sklearn.linear_model import ElasticNetCV, LassoLarsCV
+from sklearn.linear_model import Ridge, HuberRegressor
 
-N_THREADS = -1
-Y_CLIP_LO, Y_CLIP_HI = -0.085, 0.085
-TS_ADJ_CLIP_LO, TS_ADJ_CLIP_HI = 0.01, 3
-TS_ADJ_RATIO = 0.022
-CUMMED_ADJ_RATIO = 0.15
-MIN_ADJ_DATA = 100
-RANDOM_SEED = 20170303
+import time
 
-cols_na = ['technical_' + str(i) for i in [0, 9, 13, 16, 20, 30, 32, 38, 44]]
-cols_diff = ['technical_' + str(i) for i in [11, 13, 20, 22, 27, 30, 34, 44]] + ['derived_0']
-cols_backshift = cols_diff + ['ma', 'fundamental_11']
-cols_ts = ['ma', 'y_lag', 'sign_change']
+np.random.seed(757)
 
-env = kagglegym.make()
-o = env.reset()
-cols_excl = ([env.ID_COL_NAME, env.SAMPLE_COL_NAME, env.TARGET_COL_NAME, env.TIME_COL_NAME]
-             + [c + '_B' for c in cols_backshift] + ['ti', 'y_lag_prod', 'sign_change_sum'])
-cols_orig = [c for c in o.train.columns if c not in cols_excl] + ['ma']
-cols_na_count = [c + '_nan' for c in cols_orig if c not in cols_excl]
+# store the total processing time
+start_time = time.time()
+tcurrent   = start_time
 
-###################################
-### Classes
-###################################
-class CountFillMissing(TransformerMixin):
-    '''Create NA indicator columns, NA counts, and fill with median.'''
-    def __init__(self, cols_orig, cols_na, cols_medians):
-        self.cols_orig = cols_orig
-        self.cols_na = cols_na
-        self.cols_medians = cols_medians
-
-    def fit(self, X=None):
-        return self
-
-    def transform(self, X):
-        X['ma'] = X['technical_20'] + X['technical_13'] - X['technical_30']
-        X = X.assign(nas=0, nas1=0)
-        for c in self.cols_orig:
-            X[c + '_nan'] = pd.isnull(X[c])
-            X['nas'] += X[c + '_nan']
-            if c in self.cols_na:
-                X['nas1'] += X[c + '_nan']
-        X.fillna(self.cols_medians, inplace=True)
-        return X
-
-    def fit_transform(self, X, y=None, **fit_params):
-        return self.transform(X)
+print('Multiple regressors\n')
+print('Datasets reading')
 
 
-class MovingAverage(TransformerMixin):
-    '''Track previous values in order to calculate lags and differences.'''
-    def __init__(self, cols_backshift, cols_diff, cols_medians):
-        self.cols_backshift = cols_backshift
-        self.cols_diff = cols_diff
-        self.cols_medians = cols_medians
-        self.cols_keep = list({'id', 'ma', 'y_lag', 'y_lag_prod', 'sign_change_sum', 'ti'}
-                              | set(self.cols_backshift) | set(self.cols_diff))
-        # Store latest features for differences and cumulative columns
-        self.previous = None
-
-    def fit(self, X=None):
-        return self
-
-    def transform(self, X):
-        # Previous values
-        X = pd.merge(X, self.previous, how='left', on='id', suffixes=['', '_B'], sort=False)
-        for c in self.cols_backshift:
-            X[c + '_B'].fillna(self.cols_medians[c], inplace=True)
-            if c in self.cols_diff:
-                X[c + '_D'] = X[c] - X[c + '_B']
-
-        # Fill if no previous value
-        X.ti.fillna(-1, inplace=True)
-        X.loc[X.y_lag.isnull(), 'y_lag'] = X.loc[X.y_lag.isnull(), 'ma']
-        X.loc[X.y_lag_prod.isnull(), 'y_lag_prod'] = X.y_lag.loc[X.y_lag_prod.isnull()] + 1.0
-        X.sign_change_sum.fillna(0, inplace=True)
-
-        # Moving Averages
-        X['ti'] += 1
-        X.rename(columns={'y_lag_prod': 'y_lag_prod_B', 'y_lag': 'y_lag_B'}, inplace=True)
-        X['y_lag'] = 15.0 * X['ma'] - 14.0 * X['ma_B']
-        X['y_lag_prod'] = X['y_lag_prod_B'] * (1.0 + X['y_lag'])
-        X['y_lag_diff'] = X['y_lag_prod'] - X['y_lag_prod_B']
-        X['sign_change'] = X['y_lag'] == X['y_lag_B']
-        X['sign_change_sum'] += X['sign_change']
-        X['sign_change_cum'] = X['sign_change_sum'] / X['ti']
-        X.loc[X.ti < 10, 'sign_change_cum'] = 0.5
-        X.drop(['y_lag_prod_B', 'y_lag_B'], axis=1, inplace=True)
-
-        # Need to keep previous ids not present in current timestamp
-        self.previous = pd.concat([X[self.cols_keep], self.previous.loc[~self.previous.id.isin(X.id)]])
-        return X
-
-    def fit_transform(self, X, y=None, **fit_params):
-        # Previous values
-        X.sort_values(['id', 'timestamp'], inplace=True)
-        X.reset_index(drop=True, inplace=True)
-        g = X.groupby('id')
-        X['ti'] = g.cumcount()
-        for c in self.cols_backshift:
-            X[c + '_B'] = g[c].shift(1)
-            X[c + '_B'].fillna(self.cols_medians[c], inplace=True)
-            if c in self.cols_diff:
-                X[c + '_D'] = X[c] - X[c + '_B']
-        del g
-
-        # Lagged target
-        X['y_lag'] = 15.0 * X['ma'] - 14.0 * X['ma_B']
-
-        # Cumulative Values
-        X['y_lag_prod'] = X['y_lag'] + 1.0
-        X['y_lag_prod'] = X.groupby('id')['y_lag_prod'].cumprod()
-        X['y_lag_diff'] = X['y_lag_prod'] - X.groupby('id')['y_lag_prod'].shift(1)
-        X['y_lag_diff'].fillna(0.0, inplace=True)
-
-        # Sign Change
-        g = X.groupby('id')['y_lag']
-        X['sign_change'] = np.sign(X.y_lag) != np.sign(g.shift(1).fillna(0.0))
-        g = X.groupby('id')
-        X['sign_change_sum'] = g['sign_change'].cumsum()
-        X['sign_change_cum'] = X['sign_change_sum'] / X['ti']
-        X.loc[X.ti < 10, 'sign_change_cum'] = 0.5
-
-        self.previous = g[self.cols_keep].last().reset_index(drop=True)
-        del g
-        return X
+# read datasets
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8', 'onpromotion':str}
+data = {
+    'tra': pd.read_csv('../input/train.csv', dtype=dtypes, parse_dates=['date']),
+    'tes': pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date']),
+    'ite': pd.read_csv('../input/items.csv'),
+    'sto': pd.read_csv('../input/stores.csv'),
+    'trn': pd.read_csv('../input/transactions.csv', parse_dates=['date']),
+    'hol': pd.read_csv('../input/holidays_events.csv', dtype={'transferred':str}, parse_dates=['date']),
+    'oil': pd.read_csv('../input/oil.csv', parse_dates=['date']),
+    }
 
 
-class ExtremeValues(TransformerMixin):
-    '''Indicator for likely extreme values.'''
-    def fit(self):
-        return self
+# dataset processing
+print('Datasets processing')
 
-    def transform(self, X):
-        X['extreme0'] = (
-            (X.technical_21 < -1.6).astype(int)
-            + (X.technical_35 < -1.0).astype(int)
-            + (X.technical_36 < -1.0).astype(int)
-            + (X.technical_21 > 2.0).astype(int)
-            + (X.technical_27 < -1.3).astype(int)
-            + (X.fundamental_53 < -1.0).astype(int))
-        return X
+train = data['tra'][(data['tra']['date'].dt.month == 8) & (data['tra']['date'].dt.day > 15)]
+del data['tra']; gc.collect();
+target = train['unit_sales'].values
+target[target < 0.] = 0.001
+train['unit_sales'] = np.log1p(target)
 
-    def fit_transform(self, X, y=None, **fit_params):
-        return self.transform(X)
+def df_lbl_enc(df):
+    for c in df.columns:
+        if df[c].dtype == 'object':
+            lbl = preprocessing.LabelEncoder()
+            df[c] = lbl.fit_transform(df[c])
+            print(c)
+    return df
 
+def df_transform(df):
+    df['date'] = pd.to_datetime(df['date'])
+    df['yea'] = df['date'].dt.year
+    df['mon'] = df['date'].dt.month
+    df['day'] = df['date'].dt.day
+    df['date'] = df['date'].dt.dayofweek
+    df['onpromotion'] = df['onpromotion'].map({'False': 0, 'True': 1})
+    df['perishable'] = df['perishable'].map({0:1.0, 1:1.25})
+    df = df.fillna(-1)
+    return df
 
-class ModelTransformer(TransformerMixin):
-    '''Hack to use row and column filters in model pipeline.'''
-    def __init__(self, model, cols, rows):
-        self.model = model
-        self.cols = cols
-        self.rows = rows
+data['ite'] = df_lbl_enc(data['ite'])
+train = pd.merge(train, data['ite'], how='left', on=['item_nbr'])
+test = pd.merge(data['tes'], data['ite'], how='left', on=['item_nbr'])
+del data['tes']; gc.collect();
+del data['ite']; gc.collect();
 
-    def fit(self, X, y):
-        self.model.fit(X.loc[self.rows, self.cols], y.loc[self.rows])
-        return self
+train = pd.merge(train, data['trn'], how='left', on=['date','store_nbr'])
+test = pd.merge(test, data['trn'], how='left', on=['date','store_nbr'])
+del data['trn']; gc.collect();
+target = train['transactions'].values
+target[target < 0.] = 0.001
+train['transactions'] = np.log1p(target)
 
-    def transform(self, X, **transform_params):
-        return pd.DataFrame(self.model.predict(X.loc[:, self.cols]))
+data['sto'] = df_lbl_enc(data['sto'])
+train = pd.merge(train, data['sto'], how='left', on=['store_nbr'])
+test = pd.merge(test, data['sto'], how='left', on=['store_nbr'])
+del data['sto']; gc.collect();
 
+data['hol'] = data['hol'][data['hol']['locale'] == 'National'][['date','transferred']]
+data['hol']['transferred'] = data['hol']['transferred'].map({'False': 0, 'True': 1})
+train = pd.merge(train, data['hol'], how='left', on=['date'])
+test = pd.merge(test, data['hol'], how='left', on=['date'])
+del data['hol']; gc.collect();
 
-###################################
-### Preprocess
-###################################
-print('### Preprocess')
-# train = pd.read_hdf('../input/train.h5')
-train = o.train
-print('train before preprocess:', train.shape)
-print('timestamps:', train["timestamp"].nunique())
+train = pd.merge(train, data['oil'], how='left', on=['date'])
+test = pd.merge(test, data['oil'], how='left', on=['date'])
+del data['oil']; gc.collect();
 
-train['ma'] = train['technical_20'] + train['technical_13'] - train['technical_30']
-cols_medians = train[cols_orig].median(axis=0).to_dict()
+train = df_transform(train)
+test = df_transform(test)
+col = [c for c in train if c not in ['id', 'unit_sales','perishable','transactions']]
 
-preprocess_pipe = make_pipeline(
-    CountFillMissing(cols_orig, cols_na, cols_medians)
-    , MovingAverage(cols_backshift, cols_diff, cols_medians)
-    , ExtremeValues()
-)
-train = preprocess_pipe.fit_transform(train)
-print('train after preprocess:', train.shape)
+x1 = train[(train['yea'] != 2016)]
+x2 = train[(train['yea'] == 2016)]
+del train; gc.collect();
 
-print('Store previous targets for cumulative median')
-y_lag_meds = train.loc[:, ['id', 'y_lag']]
+y1 = x1['transactions'].values
+y2 = x2['transactions'].values
 
-
-###################################
-### Models
-###################################
-cols_et = [c for c in train.columns if c not in cols_excl]
-cols_lr0 = ['y_lag', 'ma', 'technical_11', 'fundamental_11', 'technical_11_B', 'fundamental_11_B']
-cols_lr1 = ['y_lag', 'technical_22', 'technical_34', 'technical_22_B', 'technical_34_B']
-cols_lr2 = ['ma', 'y_lag_prod', 'y_lag_diff']
-
-post_ts10 = (train.timestamp > 10)
-y_is_within_cut = (post_ts10) & (Y_CLIP_LO < train.y) & (train.y < Y_CLIP_HI)
-
-print('MODEL: Extra Trees')
-print('Features:', len(cols_et))
-rfr = ExtraTreesRegressor(n_estimators=75, max_depth=8, min_samples_split=30, min_samples_leaf=16, n_jobs=N_THREADS, random_state=RANDOM_SEED)
-model_et = rfr.fit(train.loc[post_ts10, cols_et], train.loc[post_ts10, 'y'])
-
-print('Linear Regression')
-model_lr0 = Ridge(fit_intercept=False)
-model_lr0.fit(train.loc[y_is_within_cut, cols_lr0], train.loc[y_is_within_cut, 'y'])
-
-model_lr1 = Ridge(fit_intercept=False)
-model_lr1.fit(train.loc[y_is_within_cut, cols_lr1], train.loc[y_is_within_cut, 'y'])
-
-model_lr2 = Ridge(fit_intercept=False)
-model_lr2.fit(train.loc[y_is_within_cut, cols_lr2], train.loc[y_is_within_cut, 'y'])
-
-models = {'et': model_et, 'lr0': model_lr0, 'lr1': model_lr1, 'lr2': model_lr2}
-model_cols = {'et': cols_et, 'lr0': cols_lr0, 'lr1': cols_lr1, 'lr2': cols_lr2}
-model_weights = {'et': 0.6, 'lr0': 0.22, 'lr1': 0.03, 'lr2': 0.15}
+def NWRMSLE(y, pred, w):
+    return metrics.mean_squared_error(y, pred, sample_weight=w)**0.5
 
 
-# Clean up
-train.drop([c for c in train.columns if c not in ['id', 'timestamp', 'y']], axis=1, inplace=True)
-del train, post_ts10, y_is_within_cut
-collect()
+#------------------- forecasting based on multiple regressors (r) models
+    
+print('\nRunning the basic regressors ...')    
 
-while True:
-    # Preprocess
-    test = o.features    
-    test = preprocess_pipe.transform(test)
+number_regressors_to_test = 12
 
-    # Predict
-    test['y_hat'] = 0.0
-    for n, m in models.items():
-        test['y_hat'] += m.predict(test[model_cols[n]]) * model_weights[n]
+for method in range(1, number_regressors_to_test+1):
+    
+    # set the seed to generate random numbers
+    ra1 = round(method + 32*method + 92*method) 
+    np.random.seed(ra1)
+    
+    
+    print('\nmethod = ', method)
+    
+    if (method==1):
+        print('Linear model (classical)')
+        str_method = 'Linear model'    
+        r = linear_model.LinearRegression(n_jobs=-1)
 
-    # Adjust y_hat by timestamp variability
-    if len(test) > MIN_ADJ_DATA:
-        y_lag_med_ts = abs(test.y_lag).median()
-        y_hat_med_ts = abs(test.y_hat).median()
-        if y_lag_med_ts > 1e-6 and y_hat_med_ts > 1e-6:
-            adj = y_lag_med_ts / y_hat_med_ts * TS_ADJ_RATIO
-            adj = np.clip(adj, TS_ADJ_CLIP_LO, TS_ADJ_CLIP_HI)
-            test['y_hat'] *= adj
+    if (method==2):
+        print('Extra trees 01')
+        str_method = 'ExtraTrees01'
+        r = ExtraTreesRegressor(n_estimators=105, max_depth=6, n_jobs=-1, 
+                                 random_state=ra1, verbose=0, warm_start=True)
 
-    # Adjust y_hat by cumulative median
-    y_lag_meds = pd.concat([y_lag_meds, test[['id', 'y_lag']]])
-    y_lag_med = y_lag_meds.groupby('id').median().reset_index(drop=False)
-    test = pd.merge(test, y_lag_med, how='left', on='id', suffixes=['', '_med'])
-    test.loc[test.ti<10, 'y_lag_med'] = 0.0
-    test['y_hat'] = test['y_hat'] * (1 - CUMMED_ADJ_RATIO) + test['y_lag_med'] * (CUMMED_ADJ_RATIO)
+    if (method==3):
+        print('Extra trees 02')
+        str_method = 'ExtraTrees02'
+        r = ExtraTreesRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
+                                 random_state=ra1, verbose=0, warm_start=True)
 
-    # Clip
-    test['y_hat'] = test['y_hat'].clip(Y_CLIP_LO, Y_CLIP_HI)
+    if (method==4):
+        print('Random forest 01')
+        str_method = 'RandomForest01'
+        r = RandomForestRegressor(n_estimators=80 , max_depth=5, n_jobs=-1, 
+                                   random_state=ra1, verbose=0, warm_start=True)
 
-    # Cleanup
-    pred = o.target
-    pred['y'] = test['y_hat']
-    test.drop([c for c in test.columns if c not in ['id', 'timestamp', 'y_hat']], axis=1, inplace=True)
-    del y_lag_med
-    collect()
+    if (method==5):
+        print('Random forest 02')
+        str_method = 'RandomForest02'
+        r = RandomForestRegressor(n_estimators=90, max_depth=4, n_jobs=-1, 
+                                   random_state=ra1, verbose=0, warm_start=True)
+        
+    if (method==6):
+        print('ElasticNet')
+        str_method = 'Elastic Net'
+        r = ElasticNetCV()
+        
+    if (method==7):
+        print('GradientBoosting 01')
+        str_method = 'GradientBoosting01'
+        r = GradientBoostingRegressor(n_estimators=80, max_depth=5, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.6, max_features = 0.6)
+    if (method==8):
+        print('GradientBoosting 02')
+        str_method = 'GradientBoosting02'
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.8, max_features = 0.5)        
+                                       
+    if (method==9):
+        print('GradientBoosting 03')
+        str_method = 'GradientBoosting03'
+        r = GradientBoostingRegressor(n_estimators=110, max_depth=3, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.85, max_features = 0.74)   
+                                       
+    if (method==10):
+        print('Decision Tree')
+        str_method = 'DecisionTree'
+        r = DecisionTreeRegressor(max_depth=3)
 
-    o, reward, done, info = env.step(pred)
+    if (method==11):
+        print('Ridge')
+        str_method = 'Ridge'
+        r = Ridge()
+        
+    if (method==12):
+        print('Huber')
+        str_method = 'Huber'
+        r = HuberRegressor(fit_intercept=True, alpha=0.065, max_iter=160, epsilon=1.2)
+        
+        
+    r.fit(x1[col], y1)
 
-    if done:
-        print("el fin ...", info["public_score"])
-        break
-    if o.features.timestamp[0] % 100 == 0:
-        print(o.features.timestamp[0], reward, adj)
+
+    a1 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N1 = str(a1)
+    
+    test['transactions'] = r.predict(test[col])
+    test['transactions'] = test['transactions'].clip(lower=0.+1e-15)
+
+    col = [c for c in x1 if c not in ['id', 'unit_sales','perishable']]
+    y1 = x1['unit_sales'].values
+    y2 = x2['unit_sales'].values
+
+
+    # set a new seed to generate random numbers
+    ra2 = round(method + 57*method + 182*method) 
+    np.random.seed(ra2)
+
+    if (method==1):
+        r = linear_model.LinearRegression(n_jobs=-1)
+ 
+    if (method==2):
+        r = ExtraTreesRegressor(n_estimators=60, max_depth=6, n_jobs=-1, 
+                                 random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==3):
+        r = ExtraTreesRegressor(n_estimators=90, max_depth=2, n_jobs=-1, 
+                                 random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==4):
+        r = RandomForestRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
+                                   random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==5):
+        r = RandomForestRegressor(n_estimators=80, max_depth=5, n_jobs=-1, 
+                                   random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==6):
+        r = ElasticNetCV()
+        
+    if (method==7):
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=3, learning_rate = 0.05, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.6, max_features = 0.2)
+    if (method==8):
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.055, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.8, max_features = 0.3)
+                                       
+    if (method==9):
+        r = GradientBoostingRegressor(n_estimators=110, max_depth=2, learning_rate = 0.05, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.7, max_features = 0.5)    
+                        
+    if (method==10):
+        r = DecisionTreeRegressor(max_depth=4)
+        
+    if (method==11):
+        r = Ridge() 
+        
+    if (method==12):
+        r = HuberRegressor(fit_intercept=True, alpha=0.075, max_iter=100, epsilon=1.3)
+        
+
+    r.fit(x1[col], y1)
+    
+    a2 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N2 = str(a2)
+
+    print('Performance: NWRMSLE(1) = ',a1,'NWRMSLE(2) = ',a2)
+
+    test['unit_sales'] = r.predict(test[col])
+    cut = 0.+1e-13 # 0.+1e-15
+    test['unit_sales'] = (np.exp(test['unit_sales']) - 1).clip(lower=cut)
+
+    output_file = 'sub v12 ' + str(str_method) + ' method ' + str(method) + N1 + ' - ' + N2 + '.csv'
+ 
+    test[['id','unit_sales']].to_csv(output_file, index=False, float_format='%.2f')
+
+
+print( "\nFinished ...")
+nm=(time.time() - start_time)/60
+print ("Total time %s min" % nm)

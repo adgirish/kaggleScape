@@ -1,773 +1,545 @@
 
 # coding: utf-8
 
-# <h1> Welcome to my Titanic Kernel! </h1>
-# <h2>This kernel will provide a analysis through the Titanic Disaster to understand the Survivors patterns</h2><br>
+# # 0. First of all
 # 
-# I will handle with data (<i>transform, missings, manipulation</i>), explore the data (<i>descritive and visual</i>) and also create a Deep Learning model
-
-# Are you looking for another interesting Kernels? <a href="https://www.kaggle.com/kabure/kernels">CLICK HERE</a> <br>
-# Give me your feedback and if yo like this kernel, votes up
-
-# <i>*I'm from Brazil, so english is not my first language, sorry about some mistakes</i>
-
-# # Table of Contents:
+# This kernel is the tutorial to explore and visualize datasets and train Convolutional Neural Network (CNN) on keras.
 # 
-# **1. [Introduction](#Introduction)** <br>
-# **2. [Librarys](#Librarys)** <br>
-# **3. [Knowning the data](#Known)** <br>
-# **4. [Exploring some Variables](#Explorations)** <br>
-# **5. [Preprocessing](#Prepocess)** <br>
-# **6. [Modelling](#Model)** <br>
-# **7. [Validation](#Validation)** <br>
+# I'm not good at English. So, **please post a comment if there are any unknown points:)**  
+# 
+# Additionally, this kernel is unfinished, still writing. I will do my best!  
+# This kernel is getting better little by little. **Many thanks to all of the comments.**
+
+# # 1. Environment construction
+# 
+# In this kernel, you will mainly compute with python on Colfax Cluster.  
+# 
+# The datasets (test, train, additional) had extracted and placed in /data/kaggle/ directory on Colfax Cluster.  
+# So, you don't have to download datasets on your local machine.  
+# Of course, you can download them while reading this kernel for killing time.
+# 
+# Datasets are here: 
+# [https://www.kaggle.com/c/intel-mobileodt-cervical-cancer-screening/data](https://www.kaggle.com/c/intel-mobileodt-cervical-cancer-screening/data)
+# 
+# Note:  
+# You can use extracted datasets on kaggle's kernel too.  
+# But I recommend using Colfax Cluster from the point of computing speed and making your original submission.
+
+# ## 1-1. Setting ssh connection to Colfax Cluster
+# 
+# Sign up to Colfax Cluster:
+# [https://www.kaggle.com/c/intel-mobileodt-cervical-cancer-screening#Intel-Tutorial](https://www.kaggle.com/c/intel-mobileodt-cervical-cancer-screening#Intel-Tutorial)  
+# 
+# Reference to ssh connection:[https://access.colfaxresearch.com/?p=connect](https://access.colfaxresearch.com/?p=connect)  
+# 
+# Remember:
+# 
+#     chmod 600 ~/Downloads/colfax-access-key-****
+# 
 # 
 
-# <a id="Introduction"></a> <br> 
-# # **1. Introduction:** 
-# <h3> The data have 891 entries on train dataset and 418 on test dataset</h3>
-# - 10 columns in train_csv and 9 columns in train_test
+# ## 1-2. Build enviroment after connect to Colfax Cluster by ssh colfax
+# 
+# Make own environment, install opencv, etc.
+# 
+#     ssh colfax
+#     conda create --name test_env jupyter
+#     source activate test_env
+#     conda install numpy pandas opencv scikit-learn matplotlib tensorflow keras jupyter
+# 
 # 
 
-# <h2>Competition Description: </h2>
-# The sinking of the RMS Titanic is one of the most infamous shipwrecks in history.  On April 15, 1912, during her maiden voyage, the Titanic sank after colliding with an iceberg, killing 1502 out of 2224 passengers and crew. This sensational tragedy shocked the international community and led to better safety regulations for ships.
+# ## 1-3. Configure Jupyter Notebook, port and password (Thanks to everyone commented)
 # 
-# One of the reasons that the shipwreck led to such loss of life was that there were not enough lifeboats for the passengers and crew. Although there was some element of luck involved in surviving the sinking, some groups of people were more likely to survive than others, such as women, children, and the upper-class.
+# For avoid port collision and access by other user's access.
 # 
-# In this challenge, we ask you to complete the analysis of what sorts of people were likely to survive. In particular, we ask you to apply the tools of machine learning to predict which passengers survived the tragedy.
-
-# <h3>Data Dictionary</h3><br>
-# Variable	Definition	Key<br>
-# <b>survival</b>	Survival	0 = No, 1 = Yes<br>
-# <b>pclass</b>	Ticket class	1 = 1st, 2 = 2nd, 3 = 3rd<br>
-# <b>sex</b>	Sex	<br>
-# <b>Age</b>	Age in years	<br>
-# <b>sibsp</b>	# of siblings / spouses aboard the Titanic	<br>
-# <b>parch</b>	# of parents / children aboard the Titanic	<br>
-# <b>ticket</b>	Ticket number	<br>
-# <b>fare</b>	Passenger fare	<br>
-# <b>cabin</b>	Cabin number	<br>
-# <b>embarked	</b>Port of Embarkation	C = Cherbourg, Q = Queenstown, S = Southampton<br>
-# <h3>Variable Notes</h3><br>
-# <b>pclass: </b>A proxy for socio-economic status (SES)<br>
-# 1st = Upper<br>
-# 2nd = Middle<br>
-# 3rd = Lower<br>
-# <b>age: </b>Age is fractional if less than 1. If the age is estimated, is it in the form of xx.5<br>
-# <b>sibsp:</b> The dataset defines family relations in this way...<br>
-# - <b>Sibling </b>= brother, sister, stepbrother, stepsister<br>
-# - <b>Spouse </b>= husband, wife (mistresses and fiancés were ignored)<br>
+# ### Select port (recommended)
 # 
-# <b>parch: </b>The dataset defines family relations in this way...<br>
-# - <b>Parent</b> = mother, father<br>
-# - <b>Child </b>= daughter, son, stepdaughter, stepson<br>
+# Select port number, not likely to make collision. Default is 8888.  
+# If port collides, another port will be used (like 8888 -> 8889).    
+# It's a hassle, so use unique port.
 # 
-# Some children travelled only with a nanny, therefore parch=0 for them.<br>
+# If you are not familiar with network port configurations, I think ephemeral ports (49152 - 65535) are useful.  
+# Here is the script to choose random ephemeral ports.
+# Of course, you can choose your favorite number in 49152 - 65535.
+# 
+#     python -c "import random; ports = range(49152, 65535 + 1); random.shuffle(ports); print ports[0]"
+# 
+# ### Make Password hash (recommended)
+# 
+# Run the bellow command, input password twice, then you get hashed-password.
+# 
+#     python -c "from notebook.auth import passwd; print passwd()"
+#     # e.g.) => sha1:237ca8abda58:9aef98cbcbae988caab4b9f86084ff22a1b2b373
+# 
+# ### Generate and edit config file
+# 
+# Generate config file (~/.jupyter/jupyter_notebook_config.py)
+# 
+#     jupyter notebook --generate-config
+# 
+# Edit via vi like this
+# 
+#     vi ~/.jupyter/jupyter_notebook_config.py
+#     ....
+#     # c.NotebookApp.password = u''
+#     c.NotebookApp.password = u'sha1:237ca8abda58:9aef98cbcbae988caab4b9f86084ff22a1b2b373'
+#     ....
+#     # c.NotebookApp.port = 8888
+#     c.NotebookApp.port = 1234
+# 
+# If you are not familiar with vi, use the bellow scripts (need to edit)
+# 
+#     echo "c.NotebookApp.password = u'sha1:237ca8abda58:9aef98cbcbae988caab4b9f86084ff22a1b2b373'\n" >> ~/.jupyter/jupyter_notebook_config.py
+#     echo "c.NotebookApp.port = 1234\n" >> ~/.jupyter/jupyter_notebook_config.py
+# 
+# If you missed something, you can regenerate (over-write) config file.
+# 
+#     jupyter notebook --generate-config
+# 
+# Note: If your setting port makes port collision unfortunately, another port will be used.
+# 
+# 
 
-# I am using the beapproachs as possible but if you think I can do anything another best way, please, let me know.
+# ## 1-4. Connect to Colfax Cluster by ssh tunneling, and run Jupyter Notebook
+# 
+# Before runnig Jupyter Notebook, once logout.
+# 
+#     logout
+# 
+# And, runnig Jupyter Notebook via ssh tunneling
+# 
+#     ssh -L 1234:localhost:1234 colfax -Y
+#     source activate test_env
+#     jupyter notebook --no-browser
+# 
+# **Note: The window (ran command) should be kept opened!**
+# 
+# Note: You can change port this step (Special thanks to Sriracha's comment)
+# 
+#     ssh -L 4321:localhost:4321 colfax -Y
+#     source activate test_env
+#     jupyter notebook --no-browser --port=4321
+# 
 
-# <a id="Librarys"></a> <br> 
-# # **2. Librarys:** 
+# ## 1-5. Access to Jupyter Notebook on Colfax Cluste by your local machine's browser
+# 
+#     Access by your web browser (e.g. Google Chrome) on your local machine (e.g. Windows, Mac...)
+# 
+# [http://localhost:1234/](http://localhost:1234/)
+#  or [http://127.0.0.1:1234/](http://127.0.0.1:1234/) (if you can't)
 
-# In[ ]:
+# # 2. Listing dataset image files
 
-
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from matplotlib import rcParams
-import re
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-rcParams['figure.figsize'] = 10,8
-
-
-# In[ ]:
-
-
-df_train = pd.read_csv("../input/train.csv")
-df_test = pd.read_csv("../input/test.csv")
-
-
-# <a id="Known"></a> <br> 
-# # **3. First look at the data:** 
-
-# I will start looking the type and informations of the datasets
-
-# In[ ]:
-
-
-#Looking data format and types
-print(df_train.info())
-print(df_test.info())
-
-
-# In[ ]:
-
-
-#Some Statistics
-df_train.describe()
-
-
-# In[ ]:
-
-
-#Take a look at the data
-print(df_train.head())
-
-
-# <a id="Known"></a> <br> 
-# # **4. Exploring the data:** 
-
-# <h2>To try a new approach in the data, I will start the data analysis by the Name column
-
-# In[ ]:
-
-
-#Looking how the data is and searching for a re patterns
-df_train["Name"].head()
-
-
-# In[ ]:
-
-
-#GettingLooking the prefix of all Passengers
-df_train['Title'] = df_train.Name.apply(lambda x: re.search(' ([A-Z][a-z]+)\.', x).group(1))
-
-#Plotting the result
-sns.countplot(x='Title', data=df_train, palette="hls")
-plt.xticks(rotation=45)
-plt.show()
-
+# ## 2-0. Setting of dataset's directories
 
 # In[ ]:
 
 
-#Do the same on df_test
-df_test['Title'] = df_test.Name.apply(lambda x: re.search(' ([A-Z][a-z]+)\.', x).group(1))
+import platform
+import os
 
+if 'c001' in platform.node(): 
+    # platform.node() => 'c001' or like 'c001-n030' on Colfax
+    abspath_dataset_dir_train_1 = '/data/kaggle/train/Type_1'
+    abspath_dataset_dir_train_2 = '/data/kaggle/train/Type_2'
+    abspath_dataset_dir_train_3 = '/data/kaggle/train/Type_3'
+    abspath_dataset_dir_test    = '/data/kaggle/test/'
+    abspath_dataset_dir_add_1   = '/data/kaggle/additional/Type_1'
+    abspath_dataset_dir_add_2   = '/data/kaggle/additional/Type_2'
+    abspath_dataset_dir_add_3   = '/data/kaggle/additional/Type_3'
+elif '.local' in platform.node():
+    # platform.node() => '*.local' on my local MacBook Air
+    abspath_dataset_dir_train_1 = '/abspath/to/train/Type_1'
+    abspath_dataset_dir_train_2 = '/abspath/to/train/Type_2'
+    abspath_dataset_dir_train_3 = '/abspath/to/train/Type_3'
+    abspath_dataset_dir_test    = '/abspath/to/test/'
+    abspath_dataset_dir_add_1   = '/abspath/to/additional/Type_1'
+    abspath_dataset_dir_add_2   = '/abspath/to/additional/Type_2'
+    abspath_dataset_dir_add_3   = '/abspath/to/additional/Type_3'
+else:
+    # For kaggle's kernels environment (docker container?)
+    abspath_dataset_dir_train_1 = '/kaggle/input/train/Type_1'
+    abspath_dataset_dir_train_2 = '/kaggle/input/train/Type_2'
+    abspath_dataset_dir_train_3 = '/kaggle/input/train/Type_3'
+    abspath_dataset_dir_test    = '/kaggle/input/test/'
+    abspath_dataset_dir_add_1   = '/kaggle/input/additional/Type_1'
+    abspath_dataset_dir_add_2   = '/kaggle/input/additional/Type_2'
+    abspath_dataset_dir_add_3   = '/kaggle/input/additional/Type_3'
 
-# In[ ]:
-
-
-#Now, I will identify the social status of each title
-
-Title_Dictionary = {
-        "Capt":       "Officer",
-        "Col":        "Officer",
-        "Major":      "Officer",
-        "Dr":         "Officer",
-        "Rev":        "Officer",
-        "Jonkheer":   "Royalty",
-        "Don":        "Royalty",
-        "Sir" :       "Royalty",
-        "the Countess":"Royalty",
-        "Dona":       "Royalty",
-        "Lady" :      "Royalty",
-        "Mme":        "Mrs",
-        "Ms":         "Mrs",
-        "Mrs" :       "Mrs",
-        "Mlle":       "Miss",
-        "Miss" :      "Miss",
-        "Mr" :        "Mr",
-        "Master" :    "Master"
-                   }
     
-# we map each title to correct category
-df_train['Title'] = df_train.Title.map(Title_Dictionary)
-df_test['Title'] = df_test.Title.map(Title_Dictionary)
+def get_list_abspath_img(abspath_dataset_dir):
+    list_abspath_img = []
+    for str_name_file_or_dir in os.listdir(abspath_dataset_dir):
+        if ('.jpg' in str_name_file_or_dir) == True:
+            list_abspath_img.append(os.path.join(abspath_dataset_dir, str_name_file_or_dir))
+    list_abspath_img.sort()
+    return list_abspath_img
 
 
-# In[ ]:
+list_abspath_img_train_1 = get_list_abspath_img(abspath_dataset_dir_train_1)
+list_abspath_img_train_2 = get_list_abspath_img(abspath_dataset_dir_train_2)
+list_abspath_img_train_3 = get_list_abspath_img(abspath_dataset_dir_train_3)
+list_abspath_img_train   = list_abspath_img_train_1 + list_abspath_img_train_2 + list_abspath_img_train_3
+
+list_abspath_img_test    = get_list_abspath_img(abspath_dataset_dir_test)
+
+list_abspath_img_add_1   = get_list_abspath_img(abspath_dataset_dir_add_1)
+list_abspath_img_add_2   = get_list_abspath_img(abspath_dataset_dir_add_2)
+list_abspath_img_add_3   = get_list_abspath_img(abspath_dataset_dir_add_3)
+list_abspath_img_add     = list_abspath_img_add_1   + list_abspath_img_add_2   + list_abspath_img_add_3
+
+# 0: Type_1, 1: Type_2, 2: Type_3
+list_answer_train        = [0] * len(list_abspath_img_train_1) + [1] * len(list_abspath_img_train_2) + [2] * len(list_abspath_img_train_3)
+list_answer_add          = [0] * len(list_abspath_img_add_1) + [1] * len(list_abspath_img_add_2) + [2] * len(list_abspath_img_add_3)
 
 
-print("Chances to survive based on titles: ")
-print(df_train.groupby("Title")["Survived"].mean())
-
-#Plotting the results
-sns.countplot(x='Title', data=df_train, palette="hls",hue="Survived")
-plt.xticks(rotation=45)
-plt.show()
-
-
-# It's interesting... Children's and ladys first, huh?
-
-# <h1> Now I will handle the Age variable that has a high number of NaN's, using some columns to correctly input he missing Age's
-
-# In[ ]:
-
-
-#First I will look my distribuition without NaN's
-#I will create a df to look distribuition 
-age_high_zero_died = df_train[(df_train["Age"] > 0) & 
-                              (df_train["Survived"] == 0)]
-age_high_zero_surv = df_train[(df_train["Age"] > 0) & 
-                              (df_train["Survived"] == 1)]
-
-
-sns.distplot(age_high_zero_surv["Age"], bins=24, color='g')
-sns.distplot(age_high_zero_died["Age"], bins=24, color='r')
-plt.title("Distribuition and density by Age",fontsize=15)
-plt.xlabel("Age",fontsize=12)
-plt.ylabel("Density Died and Survived",fontsize=12)
-plt.show()
-
+# ## 2-1. Check the (small part of) absolute paths
 
 # In[ ]:
 
 
-#Let's group the median age by sex, pclass and title, to have any idea and maybe input in Age NAN's
+print(list_abspath_img_train_1[0:2])
+print(list_abspath_img_train_2[0:2])
+print(list_abspath_img_train_3[0:2])
+print(list_abspath_img_train[0:4])
+print(list_abspath_img_test[0:3])
+print(list_abspath_img_add_1[0:2])
+print(list_abspath_img_add_2[0:2])
+print(list_abspath_img_add_3[0:2])
+print(list_abspath_img_add[0:4])
 
-age_group = df_train.groupby(["Sex","Pclass","Title"])["Age"]
 
-print(age_group.median())
-
-
-# This might show us a better way to input the NAN's 
+# ## 2-2. Counting number of image files
 # 
-# <b>For example: </b> an male in 2 class that is a Officer the median Age is 42. <br>
-# And we will use that to complete the missing data
+# Pandas is powerful data analysis toolkit. It is very useful to input, output and analyze csv files.
 # 
+# Check [10 Minutes to pandas](http://pandas.pydata.org/pandas-docs/stable/10min.html) if you have time.
 
 # In[ ]:
 
 
-#inputing the values on Age Na's
-df_train.loc[df_train.Age.isnull(), 'Age'] = df_train.groupby(['Sex','Pclass','Title']).Age.transform('median')
-
-print(df_train["Age"].isnull().sum())
+import pandas
 
 
-# In[ ]:
+pandas_columns = ['Number of image files']
+pandas_index   = ['train_1', 'train_2', 'train_3', 'train', 'test', 'add_1', 'add_2', 'add_3', 'add', 'train + add', 'total']
+pandas_data    = [len(list_abspath_img_train_1), len(list_abspath_img_train_2), len(list_abspath_img_train_3), len(list_abspath_img_train), len(list_abspath_img_test), len(list_abspath_img_add_1), len(list_abspath_img_add_2), len(list_abspath_img_add_3), len(list_abspath_img_add), len(list_abspath_img_train) + len(list_abspath_img_add), len(list_abspath_img_train) + len(list_abspath_img_test) + len(list_abspath_img_add)]
+
+pandas.DataFrame(pandas_data, index = pandas_index, columns = pandas_columns)
 
 
-#Let's see the result of the inputation
-sns.distplot(df_train["Age"], bins=24)
-plt.title("Distribuition and density by Age")
-plt.xlabel("Age")
-plt.show()
-
-
-# In[ ]:
-
-
-#separate by survivors or not
-g = sns.FacetGrid(df_train, col='Survived',size=5)
-g = g.map(sns.distplot, "Age")
-plt.show()
-
-
-# Now let's categorize them 
-
-# In[ ]:
-
-
-#df_train.Age = df_train.Age.fillna(-0.5)
-
-interval = (0, 5, 12, 18, 25, 35, 60, 120)
-cats = ['babies', 'Children', 'Teen', 'Student', 'Young', 'Adult', 'Senior']
-
-df_train["Age_cat"] = pd.cut(df_train.Age, interval, labels=cats)
-
-df_train["Age_cat"].head()
-
-
-# In[ ]:
-
-
-#Do the same to df_test
-
-interval = (0, 5, 12, 18, 25, 35, 60, 120)
-cats = ['babies', 'Children', 'Teen', 'Student', 'Young', 'Adult', 'Senior']
-
-df_test["Age_cat"] = pd.cut(df_test.Age, interval, labels=cats)
-
-
-# In[ ]:
-
-
-#Describe of categorical Age
-print(pd.crosstab(df_train.Age_cat, df_train.Survived))
-
-#Plotting the result
-sns.countplot("Age_cat",data=df_train,hue="Survived", palette="hls")
-plt.xlabel("Categories names")
-plt.title("Age Distribution ")
-
-
-# It look's better
-
-# In[ ]:
-
-
-#Looking the Fare distribuition to survivors and not survivors
-
-sns.distplot(df_train[df_train.Survived == 0]["Fare"], 
-             bins=50, color='r')
-sns.distplot(df_train[df_train.Survived == 1]["Fare"], 
-             bins=50, color='g')
-plt.title("Fare Distribuition by Survived", fontsize=15)
-plt.xlabel("Fare", fontsize=12)
-plt.ylabel("Density",fontsize=12)
-plt.show()
-
-
-# <br>
-# Description of Fare variable<br>
-# - Min: 0<br>
-# - Median: 14.45<br>
-# - Mean: 32.20<br>
-# - Max: 512.32<br> 
-# - Std: 49.69<br>
+# ## 2-3. Showing the ratio (Type 1, Type 2, Type 3)
 # 
-# <h3>I will create a categorical variable to treat the Fare expend</h3><br>
-# I will use the same technique used in Age but now I will use the quantiles to binning
+# It’s usually a good idea to check the deviation of dataset.  
+# In my experience of another competition, my model's training accuracy was more than 80%, but all prediction were same  
+# (my bullshit model was the master of selecting the majority 😭 ).
+
+# In[ ]:
+
+
+pandas_columns = ['Type_1', 'Type_2', 'Type_3']
+pandas_index   = ['train', 'test', 'add']
+
+ratio_train    = [x / len(list_abspath_img_train) for x in [len(list_abspath_img_train_1), len(list_abspath_img_train_2), len(list_abspath_img_train_3)]]
+ratio_test     = ['?', '?', '?']
+ratio_add      = [x / len(list_abspath_img_add) for x in [len(list_abspath_img_add_1), len(list_abspath_img_add_2), len(list_abspath_img_add_3)]]
+
+pandas_data    = [ratio_train, ratio_test, ratio_add]
+
+pandas.DataFrame(pandas_data, index = pandas_index, columns = pandas_columns)
+
+
+# # Check dataset image pixel sizes
+
+# In[ ]:
+
+
+'''
+import cv2
+
+
+abspath_output_csv = './check_img_shape.csv'
+
+file_output_csv = open(abspath_output_csv, 'w')
+file_output_csv.write('abspath,shape_1,shape_2,shape_3\n')
+file_output_csv.close()
+
+for abspath_img in (list_abspath_img_train + list_abspath_img_test):
+    str_shape = str(cv2.imread(abspath_img).shape)
+    str_shape = str_shape.replace('(', '').replace(')', '').replace(' ', '')
+    file_output_csv = open(abspath_output_csv, 'a')
+    file_output_csv.write('%s,%s\n' % (abspath_img, str_shape))
+    file_output_csv.close()
+'''
+
+'''
+It will spend a lot of time to run. So I comment-out in the kernel notebook.
+I uploaded './check_img_shape.csv' on Google Drive.
+'''
+
+"https://drive.google.com/open?id=0B2kJp7wSl9SIZTgtOWlTSmtDT2s"
+
+
+# # 3. Show images by matplotlib
+
+# In[ ]:
+
+
+import cv2
+import matplotlib.pyplot
+
+
+def sub_func_load_img(abspath_img):
+    img_rgb = cv2.cvtColor(cv2.imread(abspath_img), cv2.COLOR_BGR2RGB)
+    return img_rgb
+
+def show_img(abspath_img):
+    matplotlib.pyplot.imshow(sub_func_load_img(abspath_img))
+    matplotlib.pyplot.show()
+
+
+# In[ ]:
+
+
+# Show the first image
+
+show_img(list_abspath_img_train[0])
+
+
+# In[ ]:
+
+
+# Another Usage, using string of image file's path
+
+if 'c001' in platform.node():
+    abspath_img = '/data/kaggle/test/81.jpg' # on Colfax Cluster
+else:
+    abspath_img = '../input/test/81.jpg' # on Kaggle's Kernel
+
+show_img(abspath_img)
+
+
+# ## Resampling images
 # 
+# For input CNN, unify all images into 640 * 480 RGB images
+#  (fixed aspect-ratio and filled blank with black color).
 # 
-
-# In[ ]:
-
-
-#Filling the NA's with -0.5
-df_train.Fare = df_train.Fare.fillna(-0.5)
-
-#intervals to categorize
-quant = (-1, 0, 8, 15, 31, 600)
-
-#Labels without input values
-label_quants = ['NoInf', 'quart_1', 'quart_2', 'quart_3', 'quart_4']
-
-#doing the cut in fare and puting in a new column
-df_train["Fare_cat"] = pd.cut(df_train.Fare, quant, labels=label_quants)
-
-#Description of transformation
-print(pd.crosstab(df_train.Fare_cat, df_train.Survived))
-
-#Plotting the new feature
-sns.countplot(x="Fare_cat", hue="Survived", data=df_train, palette="hls")
-plt.title("Count of survived x Fare expending")
-
-
-# In[ ]:
-
-
-# Replicate the same to df_test
-df_test.Fare = df_test.Fare.fillna(-0.5)
-
-quant = (-1, 0, 8, 15, 31, 1000)
-label_quants = ['NoInf', 'quart_1', 'quart_2', 'quart_3', 'quart_4']
-
-df_test["Fare_cat"] = pd.cut(df_test.Fare, quant, labels=label_quants)
-
-
-# <h2>To complete this part, I will now work on "Names"
-
-# In[ ]:
-
-
-#Now lets drop the variable Fare, Age and ticket that is irrelevant now
-del df_train["Fare"]
-del df_train["Ticket"]
-del df_train["Age"]
-del df_train["Cabin"]
-del df_train["Name"]
-
-#same in df_test
-del df_test["Fare"]
-del df_test["Ticket"]
-del df_test["Age"]
-del df_test["Cabin"]
-del df_test["Name"]
-
-
-# In[ ]:
-
-
-#Looking the result of transformations
-df_train.head()
-
-
-# <h1>It's looking ok
-
-# Now, lets start explore the data
-
-# In[ ]:
-
-
-# Let see how many people die or survived
-print("Total of Survived or not: ")
-print(df_train.groupby("Survived")["PassengerId"].count())
-sns.countplot(x="Survived", data=df_train,palette="hls")
-plt.title('Total Distribuition by survived or not')
-
-
-# In[ ]:
-
-
-print(pd.crosstab(df_train.Survived, df_train.Sex))
-sns.countplot(x="Sex", data=df_train, hue="Survived",palette="hls")
-plt.title('Sex Distribuition by survived or not')
-
-
-# <h2>We can look that % dies to mens are much higher than female
-
-# <h1>Now, lets do some exploration in Pclass and Embarked to see if might have some information to build the model
-
-# In[ ]:
-
-
-# Distribuition by class
-print(pd.crosstab(df_train.Pclass, df_train.Embarked))
-sns.countplot(x="Embarked", data=df_train, hue="Pclass",palette="hls")
-plt.title('Embarked x Pclass')
-
-
-# In[ ]:
-
-
-#lets input the NA's with the highest frequency
-df_train["Embarked"] = df_train["Embarked"].fillna('S')
-
-
-# In[ ]:
-
-
-# Exploring Survivors vs Embarked
-print(pd.crosstab(df_train.Survived, df_train.Embarked))
-sns.countplot(x="Embarked", data=df_train, hue="Survived",palette="hls")
-plt.title('Class Distribuition by survived or not')
-
-
-# In[ ]:
-
-
-# Exploring Survivors vs Pclass
-print(pd.crosstab(df_train.Survived, df_train.Pclass))
-sns.countplot(x="Pclass", data=df_train, hue="Survived",palette="hls")
-plt.title('Class Distribuition by survived or not')
-
-
-# <b>Looking the graphs, is clear that 3st class and Embarked at Southampton have a high probabilities to not survive</b>
-
-# To finish the analysis I let's look the Sibsp and Parch variables
-
-# In[ ]:
-
-
-g = sns.factorplot(x="SibSp",y="Survived",data=df_train,kind="bar", size = 6, palette = "hls")
-g = g.set_ylabels("Probability(Survive)")
-
-
-# Interesting. With 1 or 2 siblings/spouses have more chance to survived the disaster
-
-# In[ ]:
-
-
-# Explore Parch feature vs Survived
-g  = sns.factorplot(x="Parch",y="Survived",data=df_train, kind="bar", size = 6,palette = "hls")
-g = g.set_ylabels("survival probability")
-
-
-# We can see a high standard deviation in the survival with 3 parents/children person's <br>
-# Also that small families (1~2) have more chance to survival than single or big families
-
-# So to Finish our exploration I will create a new column to with familiees size
-
-# In[ ]:
-
-
-#Create a new column and sum the Parch + SibSp + 1 that refers the people self
-df_train["FSize"] = df_train["Parch"] + df_train["SibSp"] + 1
-
-df_test["FSize"] = df_test["Parch"] + df_test["SibSp"] + 1
-
-
-# In[ ]:
-
-
-print(pd.crosstab(df_train.FSize, df_train.Survived))
-sns.factorplot(x="FSize",y="Survived", data=df_train, kind="bar",size=6)
-plt.show()
-
-
-# In[ ]:
-
-
-del df_train["SibSp"]
-del df_train["Parch"]
-
-del df_test["SibSp"]
-del df_test["Parch"]
-
-
-# OK, its might be enough to start with the preprocess and builting the model
+# This is just only one example out of many.
 # 
 
-# <a id="Preprocess"></a> <br> 
-# # **5. Preprocessing :** 
-
-# In[ ]:
-
-
-df_train.head()
-
-
-# Now we might have information enough to think about the model structure
-
-# In[ ]:
-
-
-df_train = pd.get_dummies(df_train, columns=["Sex","Embarked","Age_cat","Fare_cat","Title"],                          prefix=["Sex","Emb","Age","Fare","Prefix"], drop_first=True)
-
-df_test = pd.get_dummies(df_test, columns=["Sex","Embarked","Age_cat","Fare_cat","Title"],                         prefix=["Sex","Emb","Age","Fare","Prefix"], drop_first=True)
-
-
-# In[ ]:
-
-
-#Finallt, lets look the correlation of df_train
-plt.figure(figsize=(15,12))
-plt.title('Correlation of Features for Train Set')
-sns.heatmap(df_train.astype(float).corr(),vmax=1.0,  annot=True)
-plt.show()
-
-
-# In[ ]:
-
-
-df_train.shape
-
-
-# In[ ]:
-
-
-train = df_train.drop(["Survived","PassengerId"],axis=1)
-train_ = df_train["Survived"]
-
-test_ = df_test.drop(["PassengerId"],axis=1)
-
-X_train = train.values
-y_train = train_.values
-
-X_test = test_.values
-X_test = X_test.astype(np.float64, copy=False)
-
-
-# In[ ]:
-
-
-# Feature Scaling
-from sklearn.preprocessing import StandardScaler
-sc = StandardScaler()
-X_train = sc.fit_transform(X_train)
-X_test = sc.fit_transform(X_test)
-
-
-# <a id="Model"></a> <br> 
-# # **6. Modelling : ** 
-
-# <h3>Titanic survivors prediction: <br>
-# a binary classification example</h3>
-# Two-class classification, or binary classification, may be the most widely applied kind of machine-learning problem.
-
-# In[ ]:
-
-
-from keras.models import Sequential
-from keras.layers import Dense, Activation, Dropout
-import keras
-from keras.optimizers import SGD
-import graphviz
-
-
-# <h1>Anatomy of a neural network: </h1>
+# ## Step 0:  Unify sidelong images into vertically long images 
 # 
-# As you saw in the previous chapters, training a neural network revolves around the following
-# objects:
-# - Layers, which are combined into a network (or model)
-# - The input data and corresponding targets
-# - The loss function, which defines the feedback signal used for learning
-# - The optimizer, which determines how learning proceeds
-# 
-# 
-# 
-# 
-# <h2> Layers: the building blocks of deep learning</h2>
-# from keras import layers<br>
-# layer = layers.Dense(32, input_dim=data_dimension)) 
-# 
-# - We can think of layers as the LEGO bricks of deep learning, a metaphor that is
-# made explicit by frameworks like Keras. Building deep-learning models in Keras is
-# done by clipping together compatible layers to form useful data-transformation pipelines.
-# 
-# 
-# <h2>What are activation functions, and why are they necessary?</h2>
-# Without an activation function like relu (also called a non-linearity), the Dense layer would consist of two linear operations—a dot product and an addition: <br><br>
-# <i>output = dot(W, input) + b</i><br><br>
-# 
-# So the layer could only learn linear transformations (affine transformations) of the
-# input data: the hypothesis space of the layer would be the set of all possible linear
-# transformations of the input data into a 16-dimensional space. 
-# 
-# 
-# <h2>Loss functions and optimizers:<br>
-# keys to configuring the learning process</h2>
-# Once the network architecture is defined, you still have to choose two more things:
-# - <b>Loss function (objective function) </b>- The quantity that will be minimized during
-# training. It represents a measure of success for the task at hand.
-# - <b>Optimizer</b> - Determines how the network will be updated based on the loss function.
-# It implements a specific variant of stochastic gradient descent (SGD).
+# This step can be skipped.
 
 # In[ ]:
 
 
-# Creating the model
-model = Sequential()
-
-# Inputing the first layer with input dimensions
-model.add(Dense(18, 
-                activation='relu',  
-                input_dim=20,
-                kernel_initializer='uniform'))
-#The argument being passed to each Dense layer (18) is the number of hidden units of the layer. 
-# A hidden unit is a dimension in the representation space of the layer.
-
-#Stacks of Dense layers with relu activations can solve a wide range of problems
-#(including sentiment classification), and you’ll likely use them frequently.
-
-# Adding an Dropout layer to previne from overfitting
-model.add(Dropout(0.50))
-
-#adding second hidden layer 
-model.add(Dense(12,
-                kernel_initializer='uniform',
-                activation='relu'))
-
-# Adding another Dropout layer
-model.add(Dropout(0.50))
-
-# adding the output layer that is binary [0,1]
-model.add(Dense(1,
-                kernel_initializer='uniform',
-                activation='sigmoid'))
-#With such a scalar sigmoid output on a binary classification problem, the loss
-#function you should use is binary_crossentropy
-
-#Visualizing the model
-model.summary()
+import numpy
 
 
-# Stacks of Dense layers with relu activations can solve a wide range of problems (including sentiment classification), and you’ll likely use them frequently.
+def sub_func_rotate_img_if_need(img_rgb):
+    if img_rgb.shape[0] >= img_rgb.shape[1]:
+        return img_rgb
+    else:
+        return numpy.rot90(img_rgb)
 
-# Finally, we need to choose a loss function and an optimizer. 
+
+
+if 'c001' in platform.node():
+    abspath_img = '/data/kaggle/test/81.jpg' # on Colfax Cluster
+else:
+    abspath_img = '../input/test/81.jpg' # on Kaggle Kernel
+
+    
+img_rgb = sub_func_load_img(abspath_img)
+
+matplotlib.pyplot.imshow(img_rgb)
+matplotlib.pyplot.show()
+
+matplotlib.pyplot.imshow(sub_func_rotate_img_if_need(img_rgb))
+matplotlib.pyplot.show()
+
+
+# ## Step 1: Resize image with same aspect-ratio
+# 
+# sidelong images -> (640, *, 3)
+# 
+# vertically long images -> (*, 480, 3)
 
 # In[ ]:
 
 
-#Creating an Stochastic Gradient Descent
-sgd = SGD(lr = 0.01, momentum = 0.9)
-
-# Compiling our model
-model.compile(optimizer = sgd, 
-                   loss = 'binary_crossentropy', 
-                   metrics = ['accuracy'])
-#optimizers list
-#optimizers['SGD', 'RMSprop', 'Adagrad', 'Adadelta', 'Adam', 'Adamax', 'Nadam']
-
-# Fitting the ANN to the Training set
-model.fit(X_train, y_train, 
-               batch_size = 60, 
-               epochs = 30, verbose=2)
+def sub_func_resize_img_same_ratio(img_rgb):
+    if img_rgb.shape[0] / 640.0 >= img_rgb.shape[1] / 480.0:
+        img_resized_rgb = cv2.resize(img_rgb, (int(640.0 * img_rgb.shape[1] / img_rgb.shape[0]), 640)) # (640, *, 3)
+    else:
+        img_resized_rgb = cv2.resize(img_rgb, (480, int(480.0 * img_rgb.shape[0] / img_rgb.shape[1]))) # (*, 480, 3)
+    return img_resized_rgb
 
 
-# Because you’re facing a binary classification problem and the output of your network is a probability (you end your network with a single-unit layer with a sigmoid activation), it’s best to use the <i>binary_crossentropy</i> loss.
+if 'c001' in platform.node():
+    abspath_img = '/data/kaggle/test/81.jpg' # on Colfax Cluster
+else:
+    abspath_img = '../input/test/81.jpg' # on Kaggle Kernel
 
-# <h1>Evaluating the model</h1>
+    
+img_rgb = sub_func_load_img(abspath_img)
 
-# In[ ]:
+matplotlib.pyplot.imshow(img_rgb)
+matplotlib.pyplot.show()
+print(img_rgb.shape)
 
+matplotlib.pyplot.imshow(sub_func_resize_img_same_ratio(img_rgb))
+matplotlib.pyplot.show()
+print(sub_func_resize_img_same_ratio(img_rgb).shape)
 
-scores = model.evaluate(X_train, y_train, batch_size=30)
-print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
-
-
-# Not bad result to a simple model! Let's now verify the validation of our model, to see and understand the learning curve
-
-# <a id="Validation"></a> <br> 
-# # **7. Validation: ** 
-
-# In[ ]:
-
-
-# Fit the model
-history = model.fit(X_train, y_train, validation_split=0.20, 
-                    epochs=180, batch_size=10, verbose=0)
-
-# list all data in history
-print(history.history.keys())
+# Step 0 + Step 1 -> (*, 480, 3), Accidentally this example -> (640 ,480, 3)
+matplotlib.pyplot.imshow(sub_func_resize_img_same_ratio(sub_func_rotate_img_if_need(img_rgb)))
+matplotlib.pyplot.show()
+print(sub_func_resize_img_same_ratio(sub_func_rotate_img_if_need(img_rgb)).shape)
 
 
-# Let's look this keys values further
+# Step 2: Fill blank with black-color
 
 # In[ ]:
 
 
-# summarizing historical accuracy
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('Model Accuracy')
-plt.ylabel('Accuracy')
-plt.xlabel('Epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
+def sub_func_fill_img(img_rgb):
+    if img_rgb.shape[0] == 640:
+        int_resize_1    = img_rgb.shape[1]
+        int_fill_1      = (480 - int_resize_1 ) // 2
+        int_fill_2      =  480 - int_resize_1 - int_fill_1
+        numpy_fill_1    =  numpy.zeros((640, int_fill_1, 3), dtype=numpy.uint8)
+        numpy_fill_2    =  numpy.zeros((640, int_fill_2, 3), dtype=numpy.uint8)
+        img_filled_rgb = numpy.concatenate((numpy_fill_1, img_rgb, numpy_fill_1), axis=1)
+    elif img_rgb.shape[1] == 480:
+        int_resize_0    = img_rgb.shape[0]
+        int_fill_1      = (640 - int_resize_0 ) // 2
+        int_fill_2      =  640 - int_resize_0 - int_fill_1
+        numpy_fill_1 =  numpy.zeros((int_fill_1, 480, 3), dtype=numpy.uint8)
+        numpy_fill_2 =  numpy.zeros((int_fill_2, 480, 3), dtype=numpy.uint8)
+        img_filled_rgb = numpy.concatenate((numpy_fill_1, img_rgb, numpy_fill_1), axis=0)
+    else:
+        raise ValueError
+    return img_filled_rgb
 
 
-# Why this occurs and how to solve this problem in graph? it's a overffiting? 
+matplotlib.pyplot.imshow(img_rgb)
+matplotlib.pyplot.show()
+print(img_rgb.shape)
+
+# Step 1 + Step 2
+matplotlib.pyplot.imshow(sub_func_fill_img(sub_func_resize_img_same_ratio(img_rgb)))
+matplotlib.pyplot.show()
+print(sub_func_fill_img(sub_func_resize_img_same_ratio(img_rgb)).shape)
+
+
+# Step 0 + Step 1 + Step 2
+matplotlib.pyplot.imshow(sub_func_fill_img(sub_func_resize_img_same_ratio(sub_func_rotate_img_if_need(img_rgb))))
+matplotlib.pyplot.show()
+print(sub_func_fill_img(sub_func_resize_img_same_ratio(sub_func_rotate_img_if_need(img_rgb))).shape)
+
+
+# ## Finally: Step 0 + Step 1 + Step 2
 
 # In[ ]:
 
 
+def sub_func_resample_img(abspath_img):
+    img = sub_func_load_img(abspath_img)
+    img = sub_func_rotate_img_if_need(img)
+    img = sub_func_resize_img_same_ratio(img)
+    img = sub_func_fill_img(img)
+    return img
 
-# summarize history for loss
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
+def show_resample_img(abspath_img):
+    matplotlib.pyplot.imshow(sub_func_resample_img(abspath_img))
+    matplotlib.pyplot.show()
 
 
 # In[ ]:
 
 
-y_pred = model.predict(X_test)
+show_img(list_abspath_img_train[0])
+print(sub_func_load_img(list_abspath_img_train[0]).shape)
 
+show_resample_img(list_abspath_img_train[0])
+print(sub_func_resample_img(list_abspath_img_train[0]).shape)
 
-# <h1>It's my first Deep Learning implementation... I am studying about this and I will continue editing this Kernel to improve the results</h1>
+if 'c001' in platform.node():
+    abspath_img = '/data/kaggle/test/81.jpg' # on Colfax Cluster
+else:
+    abspath_img = '../input/test/81.jpg' # on Kaggle Kernel
 
-# Give me your feedback how can I increase this model =) 
+show_img(abspath_img)
+print(sub_func_load_img(abspath_img).shape)
+
+show_resample_img(abspath_img)
+print(sub_func_resample_img(abspath_img).shape)
+
 
 # In[ ]:
 
 
-# Trying to implementing the TensorBoard to evaluate the model
+matplotlib.pyplot.imshow(cv2.resize(sub_func_resample_img(abspath_img), (224, 224)))
+matplotlib.pyplot.show()
 
-callbacks = [
-    keras.callbacks.TensorBoard(log_dir='my_log_dir',
-                                histogram_freq=1,
-                                embeddings_freq=1,
-                               )
-]
 
-#history = classifier.fit(X_train, y_train,
-#                         epochs=80,
-#                         batch_size=10,
-#                         validation_split=0.2,
-#                         callbacks=callbacks)
+# ## Parallel computation
+# 
+#     multiprocessing.cpu_count() -> 8   # Jupyter Notebook on Colfax Cluster
+#     multiprocessing.cpu_count() -> 256 # on Colfax Cluster, using `qsub` to run script
 
-#Its backing an error 
-#ValueError: No variables to save
+# In[ ]:
 
-#How to solve this ?
 
+import multiprocessing
+
+
+def multi_func_resample_img(list_abspath_img):
+    multiprocessing_pool = multiprocessing.Pool(max(1, multiprocessing.cpu_count() - 1))
+    return multiprocessing_pool.map(sub_func_resample_img, list_abspath_img)
+
+
+list_img_train = multi_func_resample_img(list_abspath_img_train[0:4])
+
+for resample_img in list_img_train:
+    matplotlib.pyplot.imshow(resample_img)
+    matplotlib.pyplot.show()
+
+
+# ## To Be Continued...
+
+# ## Run script on Colfax Cluster (MEMO, Re-write at training section)
+# 
+# We can run `python ./check_img_shape.py` on terminal directory.  
+# But this method can use only 8 cpu-core, and the process will be terminated if spent long-time.  
+# 
+# If you run `qsub ./check_img_shape.sh`, you can use 256 cpu-core.  
+# 
+# ### Make check_img_shape.sh (via `vi`, `echo -e`, etc.).  
+# 
+# The contents of check_img_shape.sh is bellow.    
+# u???? is your user name like u2000.    
+# 
+#     source activate test_env
+#     python /home/u????/check_img_shape.py
+# 
+# ### Compute by qsub
+# 
+#     qsub ./check_img_shape.sh
+# 
+# ### Check runnning status:
+# 
+#     qstat
+# 
+# ### After runnning:
+# 
+#     STDOUT -> ./check_img_shape.sh.o0000
+#     STDERR -> ./check_img_shape.sh.e0000
+# 
+# If you need, check it:
+# 
+#     cat ./check_img_shape.sh.o*
+#     cat ./check_img_shape.sh.e*y 

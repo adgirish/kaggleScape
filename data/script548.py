@@ -1,263 +1,313 @@
 
 # coding: utf-8
 
-# Vladimir Demidov has [an excellent kernel](https://www.kaggle.com/yekenot/simple-stacker-lb-0-284) that shows how to do stacking elegantly and also shows (via its public leaderboard score) why to do stacking.  But there were a couple of things I wanted to do differently, so I decided to release my own version.  Aside from being a notebook, this is almost identical to the original, except for two substantive changes (and a few minor cosmetic ones).
-# 
-# First, I apply a log-odds transformation to the base models' predictions.  Since the top-level model is a logistic regression, it takes a linear combination of its inputs and then applies a logistic transformation (the inverse of log-odds) to the result.  If the inputs are themselves expressed as probabilities, then it's kind of like doing the logistic transformation twice (and if one of the base models were a logistic regression, it would be exactly like doing the logistic transformation twice), which would be hard to justify.  To put the base model predictions in "units that a linear model understands," I express them as log odds ratios rather than probabilities.
-# 
-# Second, I fit the logistic regression without an intercept.  Although the intercept might be necessary without the log-odds transformation, the regression with log odds gives reasonable results without it, and it's not clear why it should be there.  In my view, since the gini coefficient depends on order, an added constant has no substantive meaning, and the opportunity to add one is simply an opportunity to overfit.  (If we cared about the actual probabilities, you could make a case for using a constant term as being sort of like adding another base model that always predicts the same number, but here that justification doesn't apply.)
-# 
-# My model (as you should be able to see by comparing this notebook to his log) produces a very slightly higher CV score ("Stacker score") than Vladimir's.  I haven't submitted the output, but I expect it would get the same public leaderboard score.  But this is one of those cases where you have to make a judgment based on what you think is a better modeling practice rather than what results it gets in limited tests.
-
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
+from sklearn.cross_validation import train_test_split
 
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from catboost import CatBoostClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier
-from sklearn.metrics import roc_auc_score
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Regularized Greedy Forest
-from rgf.sklearn import RGFClassifier     # https://github.com/fukatani/rgf_python
+import math
 
 
-# In[ ]:
-
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
 # In[ ]:
 
 
-# Preprocessing 
-id_test = test['id'].values
-target_train = train['target'].values
-
-train = train.drop(['target','id'], axis = 1)
-test = test.drop(['id'], axis = 1)
-
-
-col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
-train = train.drop(col_to_drop, axis=1)  
-test = test.drop(col_to_drop, axis=1)  
-
-
-train = train.replace(-1, np.nan)
-test = test.replace(-1, np.nan)
-
-
-cat_features = [a for a in train.columns if a.endswith('cat')]
-
-# Make sure both train & test have a full set of dummies
-train['intrain'] = True  
-test['intrain'] = False
-both = pd.concat([train,test],axis=0)
-for column in cat_features:
-	temp = pd.get_dummies(pd.Series(both[column]))
-	both = pd.concat([both,temp],axis=1)
-	both = both.drop([column],axis=1)
-train = both[both.intrain==True].drop(['intrain'],axis=1)
-test = both[both.intrain==False].drop(['intrain'],axis=1)
-
-print(train.values.shape, test.values.shape)
+def rmsle(y, y_pred):
+    assert len(y) == len(y_pred)
+    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
+    return (sum(to_sum) * (1.0/len(y))) ** 0.5
+#Source: https://www.kaggle.com/marknagelberg/rmsle-function
 
 
 # In[ ]:
 
 
-class Ensemble(object):
-    def __init__(self, n_splits, stacker, base_models):
-        self.n_splits = n_splits
-        self.stacker = stacker
-        self.base_models = base_models
-
-    def fit_predict(self, X, y, T):
-        X = np.array(X)
-        y = np.array(y)
-        T = np.array(T)
-
-        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
-
-        S_train = np.zeros((X.shape[0], len(self.base_models)))
-        S_test = np.zeros((T.shape[0], len(self.base_models)))
-        for i, clf in enumerate(self.base_models):
-
-            S_test_i = np.zeros((T.shape[0], self.n_splits))
-
-            for j, (train_idx, test_idx) in enumerate(folds):
-                X_train = X[train_idx]
-                y_train = y[train_idx]
-                X_holdout = X[test_idx]
-#                y_holdout = y[test_idx]
-
-                print ("Fit %s fold %d" % (str(clf).split('(')[0], j+1))
-                clf.fit(X_train, y_train)
-#                cross_score = cross_val_score(clf, X_train, y_train, cv=self.n_splits, scoring='roc_auc')
-#                print("    cross_score: %.5f" % (cross_score.mean()))
-                y_pred = clf.predict_proba(X_holdout)[:,1]                
-
-                S_train[test_idx, i] = y_pred
-                S_test_i[:, j] = clf.predict_proba(T)[:,1]
-            S_test[:, i] = S_test_i.mean(axis=1)
-
-            print("     Model score: %.5f\n" % roc_auc_score(y, S_train[:,i]))
-
-        self.base_preds = S_test
-        
-        # Log odds transformation
-        almost_zero = 1e-12
-        almost_one = 1 - almost_zero  # To avoid division by zero
-        S_train[S_train>almost_one] = almost_one
-        S_train[S_train<almost_zero] = almost_zero
-        S_train = np.log(S_train/(1-S_train))
-        S_test[S_test>almost_one] = almost_one
-        S_test[S_test<almost_zero] = almost_zero
-        S_test = np.log(S_test/(1-S_test))
-        
-        results = cross_val_score(self.stacker, S_train, y, cv=self.n_splits, scoring='roc_auc')
-        print("Stacker score: %.5f" % (results.mean()))
-
-        self.stacker.fit(S_train, y)
-        print( 'Coefficients:', self.stacker.coef_ )
-
-        res = self.stacker.predict_proba(S_test)[:,1]
-        return res
+#LOAD DATA
+print("Loading data...")
+train = pd.read_table("../input/train.tsv")
+test = pd.read_table("../input/test.tsv")
+print(train.shape)
+print(test.shape)
 
 
 # In[ ]:
 
 
-# LightGBM params
-lgb_params = {}
-lgb_params['learning_rate'] = 0.02
-lgb_params['n_estimators'] = 650
-lgb_params['max_bin'] = 10
-lgb_params['subsample'] = 0.8
-lgb_params['subsample_freq'] = 10
-lgb_params['colsample_bytree'] = 0.8   
-lgb_params['min_child_samples'] = 500
-lgb_params['random_state'] = 99
+#HANDLE MISSING VALUES
+print("Handling missing values...")
+def handle_missing(dataset):
+    dataset.category_name.fillna(value="missing", inplace=True)
+    dataset.brand_name.fillna(value="missing", inplace=True)
+    dataset.item_description.fillna(value="missing", inplace=True)
+    return (dataset)
 
-
-lgb_params2 = {}
-lgb_params2['n_estimators'] = 1090
-lgb_params2['learning_rate'] = 0.02
-lgb_params2['colsample_bytree'] = 0.3   
-lgb_params2['subsample'] = 0.7
-lgb_params2['subsample_freq'] = 2
-lgb_params2['num_leaves'] = 16
-lgb_params2['random_state'] = 99
-
-
-lgb_params3 = {}
-lgb_params3['n_estimators'] = 1100
-lgb_params3['max_depth'] = 4
-lgb_params3['learning_rate'] = 0.02
-lgb_params3['random_state'] = 99
-
-
-# RandomForest params
-#rf_params = {}
-#rf_params['n_estimators'] = 650
-#rf_params['max_depth'] = 14
-#rf_params['min_samples_split'] = 40
-#rf_params['min_samples_leaf'] = 35
-
-
-# ExtraTrees params
-#et_params = {}
-#et_params['n_estimators'] = 300
-#et_params['max_features'] = .2
-#et_params['max_depth'] = 10
-#et_params['min_samples_split'] = 7
-#et_params['min_samples_leaf'] = 40
-
-
-# XGBoost params
-#xgb_params = {}
-#xgb_params['objective'] = 'binary:logistic'
-#xgb_params['learning_rate'] = 0.04
-#xgb_params['n_estimators'] = 490
-#xgb_params['max_depth'] = 4
-#xgb_params['subsample'] = 0.9
-#xgb_params['colsample_bytree'] = 0.9  
-#xgb_params['min_child_weight'] = 10
-
-
-# CatBoost params
-#cat_params = {}
-#cat_params['iterations'] = 900
-#cat_params['depth'] = 8
-#cat_params['rsm'] = 0.95
-#cat_params['learning_rate'] = 0.03
-#cat_params['l2_leaf_reg'] = 3.5  
-#cat_params['border_count'] = 8
-#cat_params['gradient_iterations'] = 4
-
-
-# Regularized Greedy Forest params
-#rgf_params = {}
-#rgf_params['max_leaf'] = 2000
-#rgf_params['learning_rate'] = 0.5
-#rgf_params['algorithm'] = "RGF_Sib"
-#rgf_params['test_interval'] = 100
-#rgf_params['min_samples_leaf'] = 3 
-#rgf_params['reg_depth'] = 1.0
-#rgf_params['l2'] = 0.5  
-#rgf_params['sl2'] = 0.005
+train = handle_missing(train)
+test = handle_missing(test)
+print(train.shape)
+print(test.shape)
 
 
 # In[ ]:
 
 
-lgb_model = LGBMClassifier(**lgb_params)
-
-lgb_model2 = LGBMClassifier(**lgb_params2)
-
-lgb_model3 = LGBMClassifier(**lgb_params3)
-
-#rf_model = RandomForestClassifier(**rf_params)
-
-#et_model = ExtraTreesClassifier(**et_params)
-        
-#xgb_model = XGBClassifier(**xgb_params)
-
-#cat_model = CatBoostClassifier(**cat_params)
-
-#rgf_model = RGFClassifier(**rgf_params) 
-
-#gb_model = GradientBoostingClassifier(max_depth=5)
-
-#ada_model = AdaBoostClassifier()
-
-log_model = LogisticRegression(fit_intercept=False)
+train.head(3)
 
 
 # In[ ]:
 
 
-stack = Ensemble(n_splits=3,
-        stacker = log_model,
-        base_models = (lgb_model, lgb_model2, lgb_model3))        
-        
-y_pred = stack.fit_predict(train, target_train, test)        
+#PROCESS CATEGORICAL DATA
+print("Handling categorical variables...")
+le = LabelEncoder()
+
+le.fit(np.hstack([train.category_name, test.category_name]))
+train.category_name = le.transform(train.category_name)
+test.category_name = le.transform(test.category_name)
+
+le.fit(np.hstack([train.brand_name, test.brand_name]))
+train.brand_name = le.transform(train.brand_name)
+test.brand_name = le.transform(test.brand_name)
+del le
+
+train.head(3)
 
 
 # In[ ]:
 
 
-sub = pd.DataFrame()
-sub['id'] = id_test
-sub['target'] = y_pred
-sub.to_csv('stacked_1.csv', index=False)
+#PROCESS TEXT: RAW
+print("Text to seq process...")
+from keras.preprocessing.text import Tokenizer
+raw_text = np.hstack([train.item_description.str.lower(), train.name.str.lower()])
 
+print("   Fitting tokenizer...")
+tok_raw = Tokenizer()
+tok_raw.fit_on_texts(raw_text)
+print("   Transforming text to seq...")
+
+train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
+test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
+train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
+test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
+train.head(3)
+
+
+# In[ ]:
+
+
+#SEQUENCES VARIABLES ANALYSIS
+max_name_seq = np.max([np.max(train.seq_name.apply(lambda x: len(x))), np.max(test.seq_name.apply(lambda x: len(x)))])
+max_seq_item_description = np.max([np.max(train.seq_item_description.apply(lambda x: len(x)))
+                                   , np.max(test.seq_item_description.apply(lambda x: len(x)))])
+print("max name seq "+str(max_name_seq))
+print("max item desc seq "+str(max_seq_item_description))
+
+
+# In[ ]:
+
+
+train.seq_name.apply(lambda x: len(x)).hist()
+
+
+# In[ ]:
+
+
+train.seq_item_description.apply(lambda x: len(x)).hist()
+
+
+# In[ ]:
+
+
+#EMBEDDINGS MAX VALUE
+#Base on the histograms, we select the next lengths
+MAX_NAME_SEQ = 10
+MAX_ITEM_DESC_SEQ = 75
+MAX_TEXT = np.max([np.max(train.seq_name.max())
+                   , np.max(test.seq_name.max())
+                  , np.max(train.seq_item_description.max())
+                  , np.max(test.seq_item_description.max())])+2
+MAX_CATEGORY = np.max([train.category_name.max(), test.category_name.max()])+1
+MAX_BRAND = np.max([train.brand_name.max(), test.brand_name.max()])+1
+MAX_CONDITION = np.max([train.item_condition_id.max(), test.item_condition_id.max()])+1
+
+
+# In[ ]:
+
+
+#SCALE target variable
+train["target"] = np.log(train.price+1)
+target_scaler = MinMaxScaler(feature_range=(-1, 1))
+train["target"] = target_scaler.fit_transform(train.target.reshape(-1,1))
+pd.DataFrame(train.target).hist()
+
+
+# In[ ]:
+
+
+#EXTRACT DEVELOPTMENT TEST
+dtrain, dvalid = train_test_split(train, random_state=123, train_size=0.99)
+print(dtrain.shape)
+print(dvalid.shape)
+
+
+# In[ ]:
+
+
+#KERAS DATA DEFINITION
+from keras.preprocessing.sequence import pad_sequences
+
+def get_keras_data(dataset):
+    X = {
+        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
+        ,'item_desc': pad_sequences(dataset.seq_item_description, maxlen=MAX_ITEM_DESC_SEQ)
+        ,'brand_name': np.array(dataset.brand_name)
+        ,'category_name': np.array(dataset.category_name)
+        ,'item_condition': np.array(dataset.item_condition_id)
+        ,'num_vars': np.array(dataset[["shipping"]])
+    }
+    return X
+
+X_train = get_keras_data(dtrain)
+X_valid = get_keras_data(dvalid)
+X_test = get_keras_data(test)
+
+
+# In[ ]:
+
+
+#KERAS MODEL DEFINITION
+from keras.layers import Input, Dropout, Dense, BatchNormalization, Activation, concatenate, GRU, Embedding, Flatten, BatchNormalization
+from keras.models import Model
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from keras import backend as K
+
+def get_callbacks(filepath, patience=2):
+    es = EarlyStopping('val_loss', patience=patience, mode="min")
+    msave = ModelCheckpoint(filepath, save_best_only=True)
+    return [es, msave]
+
+def rmsle_cust(y_true, y_pred):
+    first_log = K.log(K.clip(y_pred, K.epsilon(), None) + 1.)
+    second_log = K.log(K.clip(y_true, K.epsilon(), None) + 1.)
+    return K.sqrt(K.mean(K.square(first_log - second_log), axis=-1))
+
+def get_model():
+    #params
+    dr_r = 0.1
+    
+    #Inputs
+    name = Input(shape=[X_train["name"].shape[1]], name="name")
+    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
+    brand_name = Input(shape=[1], name="brand_name")
+    category_name = Input(shape=[1], name="category_name")
+    item_condition = Input(shape=[1], name="item_condition")
+    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
+    
+    #Embeddings layers
+    emb_name = Embedding(MAX_TEXT, 50)(name)
+    emb_item_desc = Embedding(MAX_TEXT, 50)(item_desc)
+    emb_brand_name = Embedding(MAX_BRAND, 10)(brand_name)
+    emb_category_name = Embedding(MAX_CATEGORY, 10)(category_name)
+    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
+    
+    #rnn layer
+    rnn_layer1 = GRU(16) (emb_item_desc)
+    rnn_layer2 = GRU(8) (emb_name)
+    
+    #main layer
+    main_l = concatenate([
+        Flatten() (emb_brand_name)
+        , Flatten() (emb_category_name)
+        , Flatten() (emb_item_condition)
+        , rnn_layer1
+        , rnn_layer2
+        , num_vars
+    ])
+    main_l = Dropout(dr_r) (Dense(128) (main_l))
+    main_l = Dropout(dr_r) (Dense(64) (main_l))
+    
+    #output
+    output = Dense(1, activation="linear") (main_l)
+    
+    #model
+    model = Model([name, item_desc, brand_name
+                   , category_name, item_condition, num_vars], output)
+    model.compile(loss="mse", optimizer="adam", metrics=["mae", rmsle_cust])
+    
+    return model
+
+    
+model = get_model()
+model.summary()
+    
+
+
+# In[ ]:
+
+
+#FITTING THE MODEL
+BATCH_SIZE = 20000
+epochs = 5
+
+model = get_model()
+model.fit(X_train, dtrain.target, epochs=epochs, batch_size=BATCH_SIZE
+          , validation_data=(X_valid, dvalid.target)
+          , verbose=1)
+
+
+# In[ ]:
+
+
+#EVLUEATE THE MODEL ON DEV TEST: What is it doing?
+val_preds = model.predict(X_valid)
+val_preds = target_scaler.inverse_transform(val_preds)
+val_preds = np.exp(val_preds)+1
+
+#mean_absolute_error, mean_squared_log_error
+y_true = np.array(dvalid.price.values)
+y_pred = val_preds[:,0]
+v_rmsle = rmsle(y_true, y_pred)
+print(" RMSLE error on dev test: "+str(v_rmsle))
+
+
+# In[ ]:
+
+
+#CREATE PREDICTIONS
+preds = model.predict(X_test, batch_size=BATCH_SIZE)
+preds = target_scaler.inverse_transform(preds)
+preds = np.exp(preds)-1
+
+submission = test[["test_id"]]
+submission["price"] = preds
+
+
+# In[ ]:
+
+
+submission.to_csv("./myNNsubmission.csv", index=False)
+submission.price.hist()
+
+
+# This was just an example how nn can solve this problems. Potencial improvements of the kernel:
+#     - Increase the embeddings factos
+#     - Decrease the batch size
+#     - Add Batch Normalization
+#     - Try LSTM, Bidirectional RNN, stack RNN
+#     - Try with more dense layers or more rnn outputs
+#     -  etc. Or even try a new architecture!
+#     
+# Any comment will be welcome. Thanks!
+#  
+#     

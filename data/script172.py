@@ -1,579 +1,226 @@
 
 # coding: utf-8
 
-# Hello everyone!
-# 
-# My main aim is to explore this dataset and find some interesting speciality in Data.
+# ## Introduction
 
-# In this Notebook I'll show you an analysis of the most common incidents and their specialty. 
+# In this kernel I provide an exploration of the Mercare Price Suggestion Challenge dataset Investigating how brands and products categories are related and affect the product prices. I will also provide a compared analysis of categories and brands with standard prices against those with outlier prices
+
+# ## Data Overview
 
 # In[ ]:
 
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import plotly
-plotly.offline.init_notebook_mode()
-from plotly import __version__
-from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-import numpy as np
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
 import seaborn as sns
-import calendar
-get_ipython().run_line_magic('matplotlib', 'inline')
-df = pd.read_csv('../input/911.csv')
+import matplotlib.pyplot as plt
+
+df = pd.read_csv('../input/train.tsv',sep='\t')
 df.head()
 
 
 # In[ ]:
 
 
-reason = np.unique(df['title'])
+print("There are",len(df.brand_name.unique()),"brand names")
 
 
 # In[ ]:
 
 
-reason.size
-
-
-# As you can see above, there are 117 reasons of 911-calls.
-
-# In[ ]:
-
-
-DATA = np.zeros((df.shape[0],6),dtype='O')
-DATA[:,0] = df['lng'].values
-DATA[:,1] = df['lat'].values
-DATA[:,4] = df['title'].values
-DATA[:,5] = df['twp'].values
-for i in range(DATA.shape[0]):
-    DATA[i,2] = df['timeStamp'].values[i][:10]
-    DATA[i,3] = df['timeStamp'].values[i][10:]
-    sp = DATA[i,3].split(':')
-    DATA[i,3] = (int(sp[0])*3600 + int(sp[1])*60 + int(sp[2]))/3600
+print("There are",len(df.category_name.unique()),"categories")
 
 
 # In[ ]:
 
 
-new_data = np.zeros(reason.size,dtype = 'O')
-for i in range(reason.size):
-    new_data[i] = DATA[np.where(DATA[:,4] == reason[i])]
+df.item_condition_id.unique()
 
 
-# In[ ]:
-
-
-week = np.array(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
-
+# The 20 top sellers categories are the following:
 
 # In[ ]:
 
 
-for i in range(new_data.shape[0]):
-    for j in range(new_data[i].shape[0]):
-        w = np.array(new_data[i][j,2].split('-')).astype(int)
-        new_data[i][j,0] = week[calendar.weekday(w[0],w[1],w[2])]
-
-
-# On plots below you can see dependence between day of the week and type of incident. I'am going to show you just the most common types of incidents. The most common types of incidents are those, which have more than 2000 calls. So, here it is:
-
-# In[ ]:
-
-
-for i in range(reason.size):
-    if new_data[i][:,3].size > 1700:
-        sns.plt.figure(figsize=(12,4))
-        sns.plt.title(new_data[i][0][-2])
-        sns.plt.xlabel("Week day")
-        sns.plt.ylabel(new_data[i][0][-2])
-        print("Number of calls with " + new_data[i][0][-2] + " "+ str(new_data[i][:,3].size))
-        sns.countplot((new_data[i][:,0]),order = week)
-
-
-# On plots below you can see dependence between the reason of 911-call and time of the day.
-
-# In[ ]:
-
-
-for i in range(reason.size):
-    if new_data[i][:,3].size > 1700:
-        sns.plt.figure(figsize=(12,4))
-        sns.plt.title(new_data[i][0][-2])
-        sns.plt.xlabel("Time(hour)")
-        sns.plt.ylabel(new_data[i][0][-2])
-        sns.plt.xlim(0,24)
-        sns.countplot((new_data[i][:,3]).astype(int))
-
-
-# In[ ]:
-
-
-for i in range(DATA.shape[0]):
-    DATA[i,2] = DATA[i,2][:-3]
-
-
-# In[ ]:
-
-
-for i in range(reason.size):
-    new_data[i] = DATA[np.where(DATA[:,4] == reason[i])]
-
-
-# On plots below you can see dependence between the reason of 911-call and month.
-
-# In[ ]:
-
-
-for i in range(reason.size):
-    if new_data[i][:,2].size > 1700:
-        sns.plt.figure(figsize=(12,4))
-        sns.plt.title(new_data[i][0][-2])
-        sns.plt.xlabel("month")
-        sns.plt.ylabel(new_data[i][0][-2])
-        sns.countplot(new_data[i][:,2])
-
-
-# In[ ]:
-
-
-all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
-for i in range(all_.size):
-    all_[i] = df['timeStamp'].values[i][:7]
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.title("All situations by month")
-sns.countplot(all_)
-
-
-# In[ ]:
-
-
-all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
-for i in range(all_.size):
-    all_[i] = df['timeStamp'].values[i][:10]
-
-
-# In[ ]:
-
-
-for i in range(all_.size):
-    w = np.array(all_[i].split('-')).astype(int)
-    all_[i] = week[calendar.weekday(w[0],w[1],w[2])]
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("Week day")
-sns.plt.title("All Situations by Week day")
-sns.countplot(all_,order = week)
-
-
-# In[ ]:
-
-
-labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
-sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
-colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
-explode = (0, 0, 0, 0, 0.3, 0, 0)  # explode 1st slice
-plt.figure(figsize=(8,8))
-# Plot
-plt.title('Week day')
-plt.pie(sizes, explode=explode, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=140)
- 
-plt.axis('equal')
+import matplotlib
+f,ax = plt.subplots(1,1,figsize=(15,20))
+hist = df.groupby(['category_name'],as_index=False).count().sort_values(by='train_id',ascending=False)[0:25]
+sns.barplot(y=hist['category_name'],x=hist['train_id'],orient='h')
+matplotlib.rcParams.update({'font.size': 22})
 plt.show()
 
 
 # In[ ]:
 
 
-all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
-for i in range(all_.size):
-    h = np.array(df['timeStamp'].values[i][11:].split(":")).astype(int)
-    all_[i] = (h[0] * 3600 + h[1] * 60 + h[2])/3600
+hist['train_id'].values[0]/np.sum(hist['train_id'].values[1:])
 
 
 # In[ ]:
 
 
-all_ = all_.astype(int)
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("hour")
-sns.plt.title("All Situations by time")
-sns.countplot(all_)
-
-
-# In[ ]:
-
-
-city = list()
-d = set()
-for i in range(all_.size):
-    city.append(df['twp'].values[i])
-    d.add(city[i])
-d.discard(np.nan)
-for i in range(all_.size):
-    if df['twp'].values[i] in d:
-        city.append(df['twp'].values[i])
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("City")
-sns.plt.title("ALL Situations by time")
-sns.countplot(city,order = d) #alphabet order
-
-
-# In[ ]:
-
-
-d
-
-
-# In[ ]:
-
-
-TIME = np.zeros(all_.size, dtype = "O")
-for i in range(all_.size):
-    for j in range(len(df['desc'][i])):
-        if df['desc'][i][j] == ':':
-            TIME[i] = (df['desc'][i][j-2:j+6])
-            break
-idx = []
-for i in range(TIME.size):
-    try:
-        TIME[i] = (int((TIME[i]).split(':')[0])*3600 + int((TIME[i]).split(':')[1])*60 + int((TIME[i]).split(':')[2]))/3600
-    except:
-        TIME[i] = DATA[i,3]
-diff = np.zeros(all_.size)
-for i in range(all_.size):
-    diff[i] = min(np.abs(DATA[i,3] - TIME[i]),24 - np.abs(DATA[i,3] - TIME[i]))
-
-
-# I noticed that we have difference between time in Description of incident and timeStump. So below you can see plot, which shows this difference.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-plt.ylabel("difference between time in desc and timeStamp(in hours)")
-plt.xlabel("number of incident")
-plt.plot(diff)
-
-
-# In general, on the plot above this difference belongs to the segment [0,1]. But there are some cases, where this difference is 3,4,5,6 and even 8 hours.
-
-# In[ ]:
-
-
-number_ = np.zeros(reason.size)
-for i in range(number_.size):
-    number_[i] = new_data[i].shape[0]
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,4))
-plt.xlabel("Reason")
-plt.plot(number_)
-
-
-# In[ ]:
-
-
-data_matrix = []
-for i in range(reason.size):
-    data_matrix.append(tuple([np.hstack((reason.reshape(-1,1),number_.reshape(-1,1).astype(int)))][0][i]))
-
-
-# In[ ]:
-
-
-dtype = [('name', 'S80'), ('number', int)]
-a = np.array(data_matrix,dtype=dtype)
-sorted_a = np.sort(a, order='number')  
-sorted_a = sorted_a[::-1]
-
-
-# In[ ]:
-
-
-data_matrix = [['reason','number of incidents']]
-for i in range(reason.size):
-    data_matrix.append([str(sorted_a[i][0])[2:-1],int((sorted_a[i][1]))])
-
-
-# The table below shows us that Vehicle Accident is the most common reason of 911-calls.
-
-# In[ ]:
-
-
-pd.DataFrame(data_matrix)
-
-
-# In[ ]:
-
-
-type_of_reason_ = np.zeros(DATA.shape[0],dtype='O')
-for i in range(type_of_reason_.size):
-    type_of_reason_[i] = DATA[i][4].split(' ')[0][:-1]
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("type of incident")
-sns.plt.title("All Situations by time")
-sns.countplot(type_of_reason_)
-
-
-# As you can see on the plot above "emergency medical service" - calls exceeds other types of incidents.
-
-# In[ ]:
-
-
-Traffic = DATA[type_of_reason_ == 'Traffic']
-EMS = DATA[type_of_reason_ == 'EMS']
-Fire = DATA[type_of_reason_ == 'Fire']
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("hour")
-sns.plt.title("All Traffic incidents")
-sns.countplot(Traffic[:,3].astype(int))
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("hour")
-sns.plt.title("All EMS incidents")
-sns.countplot(EMS[:,3].astype(int))
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("hour")
-sns.plt.title("All Fire incidents")
-sns.countplot(Fire[:,3].astype(int))
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("month")
-sns.plt.title("All Traffic incidents")
-sns.countplot(Traffic[:,2])
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("month")
-sns.plt.title("All EMS incidents")
-sns.countplot(EMS[:,2])
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("month")
-sns.plt.title("All Fire incidents")
-sns.countplot(Fire[:,2])
-
-
-# In[ ]:
-
-
-DATA = np.zeros((df.shape[0],6),dtype='O')
-DATA[:,0] = df['lng'].values
-DATA[:,1] = df['lat'].values
-DATA[:,4] = df['title'].values
-DATA[:,5] = df['twp'].values
-for i in range(DATA.shape[0]):
-    DATA[i,2] = df['timeStamp'].values[i][:10]
-    DATA[i,3] = df['timeStamp'].values[i][10:]
-    sp = DATA[i,3].split(':')
-    DATA[i,3] = (int(sp[0])*3600 + int(sp[1])*60 + int(sp[2]))/3600
-Traffic = DATA[type_of_reason_ == 'Traffic']
-EMS = DATA[type_of_reason_ == 'EMS']
-Fire = DATA[type_of_reason_ == 'Fire']
-
-
-# In[ ]:
-
-
-week_traffic = np.zeros(Traffic.shape[0],dtype = 'O')
-for i in range(week_traffic.size):
-    w = np.array(Traffic[i][2].split('-')).astype(int)
-    week_traffic[i] = week[calendar.weekday(w[0],w[1],w[2])]
-
-
-# In[ ]:
-
-
-week_EMS = np.zeros(EMS.shape[0],dtype = 'O')
-for i in range(week_EMS.size):
-    w = np.array(EMS[i][2].split('-')).astype(int)
-    week_EMS[i] = week[calendar.weekday(w[0],w[1],w[2])]
-
-
-# In[ ]:
-
-
-week_fire = np.zeros(Fire.shape[0],dtype = 'O')
-for i in range(week_fire.size):
-    w = np.array(Fire[i][2].split('-')).astype(int)
-    week_fire[i] = week[calendar.weekday(w[0],w[1],w[2])]
-
-
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("week day")
-sns.plt.title("All Traffic incidents")
-sns.countplot(week_traffic,order=week)
-
-
-# In[ ]:
-
-
-all_ = week_traffic
-labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
-sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
-colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
-explode = (0, 0, 0.1, 0, 0.1, 0, 0)  # explode 1st slice
-plt.figure(figsize=(8,8))
-# Plot
-plt.title('Traffic by Week day')
+import matplotlib.pyplot as plt
+labels = hist['category_name'].values[0], hist['category_name'].values[1],hist['category_name'].values[2],hist['category_name'].values[3],'Others'
+sizes = [hist['train_id'].values[0], hist['train_id'].values[1], hist['train_id'].values[2], hist['train_id'].values[3],np.sum(hist['train_id'].values[4:])]
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','brown']
+explode = (0.1, 0, 0, 0,0)  # explode 1st slice
 plt.pie(sizes, explode=explode, labels=labels, colors=colors,
         autopct='%1.1f%%', shadow=True, startangle=140)
- 
 plt.axis('equal')
 plt.show()
 
 
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("week day")
-sns.plt.title("All EMS incidents")
-sns.countplot(week_EMS,order=week)
-
+# The top 20 categories account for the 87% of the whole.
 
 # In[ ]:
 
 
-all_ = week_EMS
-labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
-sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
-colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
-explode = (0, 0, 0, 0, 0.1, 0, 0)  # explode 1st slice
-plt.figure(figsize=(8,8))
-# Plot
-plt.title('EMS by Week day')
+import matplotlib.pyplot as plt
+labels =  'Top 20','Others'
+sizes = [np.sum(hist['train_id'].values[0:20]),np.sum(hist['train_id'].values[20:])]
+colors = ['gold', 'yellowgreen']
+explode = (0.1, 0)  # explode 1st slice
 plt.pie(sizes, explode=explode, labels=labels, colors=colors,
         autopct='%1.1f%%', shadow=True, startangle=140)
- 
 plt.axis('equal')
 plt.show()
 
 
-# In[ ]:
-
-
-sns.plt.figure(figsize=(12,4))
-sns.plt.xlabel("week day")
-sns.plt.title("All Fire incidents")
-sns.countplot(week_fire,order=week)
-
+# ## Standard Prices and Outliers
 
 # In[ ]:
 
 
-all_ = week_fire
-labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
-sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
-colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
-explode = (0, 0, 0.1, 0, 0., 0, 0)  # explode 1st slice
-plt.figure(figsize=(8,8))
-# Plot
-plt.title('Fire by Week day')
-plt.pie(sizes, explode=explode, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=140)
- 
-plt.axis('equal')
-plt.show()
+def nol(data, m=2):
+    return data[abs(data - np.mean(data)) < m * np.std(data)]
 
 
 # In[ ]:
 
 
-CITY = np.unique((city))
-city = np.array(city)
+def ol(data, m=3):
+    return data[(data - np.mean(data)) >= m * np.std(data)]
+
+
+# Now we are going to plot the price distributions of the top 10 categories excluding their outliers
+
+# In[ ]:
+
+
+k = 10
+f,axarr = plt.subplots(5,2,figsize=(15,50))
+matplotlib.rcParams.update({'font.size': 14})
+for i in range(k):
+    sns.distplot(nol(df[df['category_name']==hist['category_name'].values[i]].price),ax=axarr[int(i/2)][i%2])
+    axarr[int(i/2)][i%2].set_title(hist['category_name'].values[i])
+
+
+# Let's check out the outliers instead !
+
+# In[ ]:
+
+
+
+k = 10
+f,axarr = plt.subplots(5,2,figsize=(15,50))
+matplotlib.rcParams.update({'font.size': 14})
+for i in range(k):
+    sns.distplot(ol(df[df['category_name']==hist['category_name'].values[i]].price),ax=axarr[int(i/2)][i%2])
+    axarr[int(i/2)][i%2].set_title(hist['category_name'].values[i])
+
+
+# My hipothesis is that price outliers are producs of specific brands. Let's check it out!
+
+# Here follow a nice representation of how the brands are distributed between price outliers and within the average for the top 10 categoriers. As you can see, regardless  the category, there are more brands with standard price products, some brands with standard and expensive products and few brands with expensive products only.
+
+# In[ ]:
+
+
+from matplotlib_venn import venn2
+k=10
+f,axarr = plt.subplots(5,2,figsize=(15,30))
+for i in range(k):
+    obrand = set(df.iloc[(ol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    nobrand = set(df.iloc[(nol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    venn2(subsets = (len(obrand), len(nobrand),len(obrand.intersection(nobrand))),ax=axarr[int(i/2)][i%2],set_labels=('Price Outliers Brands','Standard Price Brands'))
+    axarr[int(i/2)][i%2].set_title(df['category_name'][i])
+    
+    #print (obrand.intersection(nobrand))
+
+
+# ### Items condition
+
+# I am now interest to check out how the item condition relate to the price. I will plot the item conditions histogram for the price outliers of the top 10 categories and for the products with standard prices
+
+# In[ ]:
+
+
+from matplotlib_venn import venn2
+k=10
+f,axarr = plt.subplots(5,2,figsize=(15,35))
+for i in range(k):
+    obrand = set(df.iloc[(ol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    nobrand = set(df.iloc[(nol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    ohist = df.iloc[(ol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].groupby(['item_condition_id'],as_index=False).count()
+    sns.barplot(x=ohist['item_condition_id'],y= ohist['train_id'],ax = axarr[int(i/2)][i%2])
+    axarr[int(i/2)][i%2].set_title(df['category_name'][i])
 
 
 # In[ ]:
 
 
-CITY_matrix = []
-for i in range(CITY.size - 1):
-    CITY_matrix.append(tuple((CITY[i],np.sum(city == CITY[i]))))
+from matplotlib_venn import venn2
+k=10
+f,axarr = plt.subplots(5,2,figsize=(15,35))
+for i in range(k):
+    obrand = set(df.iloc[(ol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    nobrand = set(df.iloc[(nol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].brand_name.unique())
+    nohist = df.iloc[(nol(df[df['category_name']==hist['category_name'].values[i]].price).index).values].groupby(['item_condition_id'],as_index=False).count() 
+    sns.barplot(x=nohist['item_condition_id'],y= nohist['train_id'],ax = axarr[int(i/2)][i%2])
+    axarr[int(i/2)][i%2].set_title(df['category_name'][i])
 
 
-# In[ ]:
+# ## Brands
 
-
-dtype = [('name', 'S80'), ('number', int)]
-a = np.array(CITY_matrix,dtype=dtype)
-sorted_a = np.sort(a, order='number')  
-sorted_a = sorted_a[::-1]
-
-
-# In[ ]:
-
-
-CITY_matrix = [['Township','number of incidents']]
-for i in range(CITY.size-1):
-    CITY_matrix.append([str(sorted_a[i][0])[2:-1],int((sorted_a[i][1]))])
-
-
-# In[ ]:
-
-
-pd.DataFrame(CITY_matrix)
-
-
-# So, let's summarize all our results. When we see our results on separated plots we can understand which time is the most common for definite reason, which day of week, month. The majority of Traffic incidents most popular at 16:00 and 17:00, EMS - from 10:00 till 13:00, Fire - 18:00. Also we can see, that Sunday is the most calm week day.
-# Also, in the table above we can see locations in Pennsylvania and number of incidents. According to this information, we can see which townships in  Pennsylvania  are bigger and more developed. 
-# There are a lot of plots in this notebook, and I didn'tin  describe all of them and it is not necessary, because if you see these plots, you'll understand everything.
 # 
-# Thanks for attention! =)
+# The 20 top sellers brands are the following:
+
+# In[ ]:
+
+
+import matplotlib
+f,ax = plt.subplots(1,1,figsize=(15,20))
+hist = df.groupby(['brand_name'],as_index=False).count().sort_values(by='train_id',ascending=False)[0:25]
+sns.barplot(y=hist['brand_name'],x=hist['train_id'],orient='h')
+matplotlib.rcParams.update({'font.size': 22})
+plt.show()
+
+
+# In[ ]:
+
+
+df.groupby(['brand_name'],as_index=True).std().price.sort_values(ascending=False)[0:10]
+
+
+# In[ ]:
+
+
+df.groupby(['category_name'],as_index=True).std().price.sort_values(ascending=False)[0:10]
+

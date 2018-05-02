@@ -1,138 +1,237 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from catboost import CatBoostRegressor
-from tqdm import tqdm
+"""
+Acknowledgements:
+    - This kernel was forked from Alexey Pronin's LightGBM code, so many thanks
+      for his work:
+          https://www.kaggle.com/graf10a/lightgbm-lb-0-9675/code
+
+What's new:
+    - Creation of a feature processing function to remove the need to append the
+      test and train sets for processing. I therefore don't need the (huge) test
+      set in memory whilst training the LightGBM model, and as such can load
+      more training data --> better generalisation.
+
+    - Use of (optional) cross validation instead of a validation set to know when to 
+      stop boosting. This allows me to train on the full training set and also checks
+      performance against more than one fold --> even better generalisation.
+
+    - Together, these two changes let me train on ~75m rows.
+
+    - Additional features tested:
+        - (REJECTED) n_ip_clicks: Count of clicks per IP address
+        - (REJECTED) day_section: 'hour' binned into morning, work hours etc.
+
+    - Hyperparameter optimisation. Changes are described where the lightgbm
+      parameters are set below.
+"""
+
+import os
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+import lightgbm as lgb
 import gc
-import datetime as dt
+os.environ['OMP_NUM_THREADS'] = '4'  # Number of threads on the Kaggle server
 
-print('Loading Properties ...')
-properties2016 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
-properties2017 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
+"""
+0. Run Params
+"""
+run_cv = False  # Run CV to get opt boost rounds
+OPT_BOOST_ROUNDS = 349  # Found through CV on my machine to save Kaggle server time
 
-print('Loading Train ...')
-train2016 = pd.read_csv('../input/train_2016_v2.csv', parse_dates=['transactiondate'], low_memory=False)
-train2017 = pd.read_csv('../input/train_2017.csv', parse_dates=['transactiondate'], low_memory=False)
+"""
+1. Load data
+"""
 
-def add_date_features(df):
-    df["transaction_year"] = df["transactiondate"].dt.year
-    df["transaction_month"] = (df["transactiondate"].dt.year - 2016)*12 + df["transactiondate"].dt.month
-    df["transaction_day"] = df["transactiondate"].dt.day
-    df["transaction_quarter"] = (df["transactiondate"].dt.year - 2016)*4 +df["transactiondate"].dt.quarter
-    df.drop(["transactiondate"], inplace=True, axis=1)
+path_train = os.path.join(os.pardir, 'input', 'train.csv')
+path_test = os.path.join(os.pardir, 'input', 'test.csv')
+
+train_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
+test_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time']
+
+dtypes = {
+    'ip'            : 'uint32',
+    'app'           : 'uint16',
+    'device'        : 'uint16',
+    'os'            : 'uint16',
+    'channel'       : 'uint16',
+    'is_attributed' : 'uint8',
+    'click_id'      : 'uint32'
+}
+
+n_rows_in_train_set = 184903891  # Roughly
+n_rows_to_skip = 110000000
+
+print('Loading the training data...')
+train = pd.read_csv(path_train, dtype=dtypes, skiprows = range(1, n_rows_to_skip), usecols=train_cols)
+
+len_train = len(train)
+print('The initial size of the train set is', len_train)
+gc.collect()
+
+"""
+2. Feature engineering function
+"""
+
+def process_data(df):
+
+    print("Creating new time features: 'hour', 'day'")
+    df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
+    df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
+    day_section = 0
+    for start_time, end_time in zip([0, 6, 12, 18], [6, 12, 18, 24]):
+        df.loc[(df['hour'] >= start_time) & (df['hour'] < end_time), 'day_section'] = day_section
+        day_section += 1
+    df['day_section'] = df['day_section'].astype('uint8')
+    gc.collect()
+
+    print("Creating new click count features...")
+
+    print('Computing the number of clicks associated with a given IP address...')
+    ip_clicks = df[['ip','channel']].groupby(by=['ip'])[['channel']]\
+        .count().reset_index().rename(columns={'channel': 'n_ip_clicks'})
+
+    print('Merging the IP clicks data with the main data set...')
+    df = df.merge(ip_clicks, on=['ip'], how='left')
+    del ip_clicks
+    gc.collect()
+    
+    print('Computing the number of clicks associated with a given app per hour...')
+    app_clicks = df[['app', 'day', 'hour', 'channel']].groupby(by=['app', 'day', 'hour'])[['channel']]\
+        .count().reset_index().rename(columns={'channel': 'n_app_clicks'})
+
+    print('Merging the IP clicks data with the main data set...')
+    df = df.merge(app_clicks, on=['app', 'day', 'hour'], how='left')
+    del app_clicks
+    gc.collect()
+
+
+    print('Computing the number of channels associated with\n'
+          'a given IP address within each hour...')
+    n_chans = df[['ip','day','hour','channel']].groupby(by=['ip','day',
+              'hour'])[['channel']].count().reset_index().rename(columns={'channel': 'n_channels'})
+
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','day','hour'], how='left')
+    del n_chans
+    gc.collect()
+
+    print('Computing the number of channels associated with ')
+    print('a given IP address and app...')
+    n_chans = df[['ip','app', 'channel']].groupby(by=['ip',
+              'app'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_count'})
+
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','app'], how='left')
+    del n_chans
+    gc.collect()
+
+    print('Computing the number of channels associated with ')
+    print('a given IP address, app, and os...')
+    n_chans = df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app',
+              'os'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_os_count'})
+
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','app', 'os'], how='left')
+    del n_chans
+    gc.collect()
+
+    print("Adjusting the data types of the new count features... ")
+    df.info()
+    for feat in ['n_channels', 'ip_app_count', 'ip_app_os_count', 'n_ip_clicks']:
+        df[feat] = df[feat].astype('uint16')
+
     return df
 
-train2016 = add_date_features(train2016)
-train2017 = add_date_features(train2017)
+"""
+3. Training & validation
+"""
 
-print('Loading Sample ...')
-sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
+# Apply processing function to the train set
+train = process_data(df=train)
 
-print('Merge Train with Properties ...')
-train2016 = pd.merge(train2016, properties2016, how = 'left', on = 'parcelid')
-train2017 = pd.merge(train2017, properties2017, how = 'left', on = 'parcelid')
+target = 'is_attributed'
+train[target] = train[target].astype('uint8')
+train.info()
 
-print('Tax Features 2017  ...')
-train2017.iloc[:, train2017.columns.str.startswith('tax')] = np.nan
+predictors = ['ip', 'device', 'app', 'os', 'channel', 'hour', 'n_channels',
+    'ip_app_count', 'ip_app_os_count']
+categorical = ['ip', 'app', 'device', 'os', 'channel', 'hour']
+gc.collect()
 
-print('Concat Train 2016 & 2017 ...')
-train_df = pd.concat([train2016, train2017], axis = 0)
-test_df = pd.merge(sample_submission[['ParcelId']], properties2016.rename(columns = {'parcelid': 'ParcelId'}), how = 'left', on = 'ParcelId')
-
-del properties2016, properties2017, train2016, train2017
-gc.collect();
-
-print('Remove missing data fields ...')
-
-missing_perc_thresh = 0.98
-exclude_missing = []
-num_rows = train_df.shape[0]
-for c in train_df.columns:
-    num_missing = train_df[c].isnull().sum()
-    if num_missing == 0:
-        continue
-    missing_frac = num_missing / float(num_rows)
-    if missing_frac > missing_perc_thresh:
-        exclude_missing.append(c)
-print("We exclude: %s" % len(exclude_missing))
-
-del num_rows, missing_perc_thresh
-gc.collect();
-
-print ("Remove features with one unique value !!")
-exclude_unique = []
-for c in train_df.columns:
-    num_uniques = len(train_df[c].unique())
-    if train_df[c].isnull().sum() != 0:
-        num_uniques -= 1
-    if num_uniques == 1:
-        exclude_unique.append(c)
-print("We exclude: %s" % len(exclude_unique))
-
-print ("Define training features !!")
-exclude_other = ['parcelid', 'logerror','propertyzoningdesc']
-train_features = []
-for c in train_df.columns:
-    if c not in exclude_missing \
-       and c not in exclude_other and c not in exclude_unique:
-        train_features.append(c)
-print("We use these for training: %s" % len(train_features))
-
-print ("Define categorial features !!")
-cat_feature_inds = []
-cat_unique_thresh = 1000
-for i, c in enumerate(train_features):
-    num_uniques = len(train_df[c].unique())
-    if num_uniques < cat_unique_thresh \
-       and not 'sqft' in c \
-       and not 'cnt' in c \
-       and not 'nbr' in c \
-       and not 'number' in c:
-        cat_feature_inds.append(i)
-        
-print("Cat features are: %s" % [train_features[ind] for ind in cat_feature_inds])
-
-print ("Replacing NaN values by -999 !!")
-train_df.fillna(-999, inplace=True)
-test_df.fillna(-999, inplace=True)
-
-print ("Training time !!")
-X_train = train_df[train_features]
-y_train = train_df.logerror
-print(X_train.shape, y_train.shape)
-
-test_df['transactiondate'] = pd.Timestamp('2016-12-01') 
-test_df = add_date_features(test_df)
-X_test = test_df[train_features]
-print(X_test.shape)
-
-num_ensembles = 5
-y_pred = 0.0
-for i in tqdm(range(num_ensembles)):
-    model = CatBoostRegressor(
-        iterations=630, learning_rate=0.03,
-        depth=6, l2_leaf_reg=3,
-        loss_function='MAE',
-        eval_metric='MAE',
-        random_seed=i)
-    model.fit(
-        X_train, y_train,
-        cat_features=cat_feature_inds)
-    y_pred += model.predict(X_test)
-y_pred /= num_ensembles
-
-submission = pd.DataFrame({
-    'ParcelId': test_df['ParcelId'],
-})
-test_dates = {
-    '201610': pd.Timestamp('2016-09-30'),
-    '201611': pd.Timestamp('2016-10-31'),
-    '201612': pd.Timestamp('2016-11-30'),
-    '201710': pd.Timestamp('2017-09-30'),
-    '201711': pd.Timestamp('2017-10-31'),
-    '201712': pd.Timestamp('2017-11-30')
+print("Preparing the datasets for training...")
+params = {
+    'boosting_type': 'gbdt',  # I think dart would be better, but takes too long to run
+    # 'drop_rate': 0.09,  # Rate at which to drop trees
+    'objective': 'binary',
+    'metric': 'auc',
+    'learning_rate': 0.1,
+    'num_leaves': 11,  # Was 255: Reduced to control overfitting
+    'max_depth': -1,  # Was 8: LightGBM splits leaf-wise, so control depth via num_leaves
+    'min_child_samples': 100,
+    'max_bin': 100,
+    'subsample': 0.9,  # Was 0.7
+    'subsample_freq': 1,
+    'colsample_bytree': 0.7,
+    'min_child_weight': 0,
+    'subsample_for_bin': 200000,
+    'min_split_gain': 0,
+    'reg_alpha': 0,
+    'reg_lambda': 0,
+    'nthread': 4,
+    'verbose': 0,
+    'scale_pos_weight': 99.76
 }
-for label, test_date in test_dates.items():
-    print("Predicting for: %s ... " % (label))
-    submission[label] = y_pred
-    
-submission.to_csv('Only_CatBoost.csv', float_format='%.6f',index=False)
+
+dtrain = lgb.Dataset(train[predictors].values, label=train[target].values,
+                      feature_name=predictors,
+                      categorical_feature=categorical
+                      )
+del train
+gc.collect()
+print('Datasets ready.')
+
+if run_cv:
+    print('Cross validating...')
+    cv_results = lgb.cv(params=params,
+                        train_set=dtrain,
+                        nfold=3,
+                        num_boost_round=350,
+                        early_stopping_rounds=30,
+                        verbose_eval=20,
+                        categorical_feature=categorical)
+    OPT_BOOST_ROUNDS = np.argmax(cv_results['auc-mean'])
+    print('CV complete. Optimum boost rounds = {}'.format(OPT_BOOST_ROUNDS))
+
+print('Training model...')
+lgb_model = lgb.train(params=params, train_set=dtrain, num_boost_round=OPT_BOOST_ROUNDS,
+                      categorical_feature=categorical)
+print('Model trained.')
+
+# Feature names:
+print('Feature names:', lgb_model.feature_name())
+
+# Feature importances:
+print('Feature importances:', list(lgb_model.feature_importance()))
+
+"""
+4. Infer and submit
+"""
+
+# Clear up after training
+del dtrain
+gc.collect()
+
+print('Loading the test data...')
+test = pd.read_csv(path_test, dtype=dtypes, header=0, usecols=test_cols)
+test = process_data(test)
+
+print("Preparing data for submission...")
+submit = pd.read_csv(path_test, dtype='int', usecols=['click_id'])
+
+print("Predicting the submission data...")
+submit['is_attributed'] = lgb_model.predict(test[predictors], num_iteration=lgb_model.best_iteration)
+
+print("Writing the submission data into a csv file...")
+submit.to_csv('submission.csv', index=False)
+
+print("Writing complete.")

@@ -1,304 +1,194 @@
 
 # coding: utf-8
 
-# Was inspired by the Udacity Deep Learning Course.  Fairly new to Tensorflow so wanted to repurpose the NotMNIST-ConvNet from the course for this Cats & Dogs competition.  This ConvNet gets >72% accuracy after only using a small fraction of the training data and very few epochs.  To prevent overfitting you should probably add (a) hinton dropout (b) perform data augmentation.  To provide better accuracy you can (a) train using all data  (b) increase # of epochs/training time  (c) build out full VGG-16 like architecture.
+# # Time-series plotting (Optional)
+# 
+# In all of the sections thus far our visualizations have focused on and used numeric variables: either categorical variables, which fall into a set of buckets, or interval variables, which fall into an interval of values. In this notebook we will explore another type of variable: a time-series variable.
 
-# In[ ]:
+# In[1]:
 
 
-# These are all the modules we'll be using later. Make sure you can import them
-# before proceeding further.
-import matplotlib.pyplot as plt
+import pandas as pd
+pd.set_option('max_columns', None)
 import numpy as np
-import os
-from IPython.display import display, Image, HTML
-import cv2
-
-TRAIN_DIR = '../input/train/'
-TEST_DIR = '../input/test/'
 
 
-# - To run within a Kaggle Kernel, only use 2000 samples from TRAIN_DIR and 500 samples from TEST_DIR
-# - Set image size to 96x96 since Kaggle Kernel was running out of memory with 224
+# ## Types of time series variables
+# 
+# Time-series variables are populated by values which are specific to a point in time. Time is linear and infinitely fine-grained, so really time-series values are a kind of special case of interval variables.
+# 
+# Dates can show up in your dataset in a few different ways. We'll examine the two most common ways in this notebook.
+# 
+# In the "strong case" dates act as an explicit index on your dataset. A good example is the following dataset on stock prices:
 
-# In[ ]:
-
-
-# used for scaling/normalization
-IMAGE_SIZE = 150; # 150x150.  Also, 224, 96, 64, and 32 are also common
-CHANNELS = 3
-pixel_depth = 255.0  # Number of levels per pixel.
-
-# for small-sample testing
-OUTFILE = '/Users/pal004/Desktop/CatsVsDogsRedux/CatsAndDogs_pal15Jan2017_SmallerTest.npsave.bin'
-TRAINING_AND_VALIDATION_SIZE_DOGS = 1000 
-TRAINING_AND_VALIDATION_SIZE_CATS = 1000 
-TRAINING_AND_VALIDATION_SIZE_ALL  = 2000
-TRAINING_SIZE = 1600  # TRAINING_SIZE + VALID_SIZE must equal TRAINING_AND_VALIDATION_SIZE_ALL
-VALID_SIZE = 400
-TEST_SIZE_ALL = 500
-
-if (TRAINING_SIZE + VALID_SIZE != TRAINING_AND_VALIDATION_SIZE_ALL):
-   print ("Error, check that TRAINING_SIZE+VALID_SIZE is equal to TRAINING_AND_VALIDATION_SIZE_ALL")
-   exit ()
-
-train_images = [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR)] 
-train_dogs =   [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR) if 'dog' in i]
-train_cats =   [TRAIN_DIR+i for i in os.listdir(TRAIN_DIR) if 'cat' in i]
-test_images =  [TEST_DIR+i for i in os.listdir(TEST_DIR)]
-
-train_images = train_dogs[:TRAINING_AND_VALIDATION_SIZE_DOGS] + train_cats[:TRAINING_AND_VALIDATION_SIZE_CATS]
-train_labels = np.array ((['dogs'] * TRAINING_AND_VALIDATION_SIZE_DOGS) + (['cats'] * TRAINING_AND_VALIDATION_SIZE_CATS))
-test_images =  test_images[:TEST_SIZE_ALL]
-test_labels = np.array (['unknownclass'] * TEST_SIZE_ALL)
+# In[2]:
 
 
-# a.  Resize images to the same IMAGE_SIZE (150 x 150) set above
-# b.  Don't change the aspect ratio of the image.  So if it doesn't fit in the 150x150 square, add 0-value padding to the right and bottom as appropriate
-# c.  Normalize each of the color (R, B, G) layers indendently
-
-# In[ ]:
+stocks = pd.read_csv("../input/nyse/prices.csv", parse_dates=['date'])
+stocks = stocks[stocks['symbol'] == "GOOG"].set_index('date')
+stocks.head()
 
 
-# resizes to IMAGE_SIZE/IMAGE_SIZE while keeping aspect ratio the same.  pads on right/bottom as appropriate 
-def read_image(file_path):
-    img = cv2.imread(file_path, cv2.IMREAD_COLOR) #cv2.IMREAD_GRAYSCALE
-    if (img.shape[0] >= img.shape[1]): # height is greater than width
-       resizeto = (IMAGE_SIZE, int (round (IMAGE_SIZE * (float (img.shape[1])  / img.shape[0]))));
-    else:
-       resizeto = (int (round (IMAGE_SIZE * (float (img.shape[0])  / img.shape[1]))), IMAGE_SIZE);
-    
-    img2 = cv2.resize(img, (resizeto[1], resizeto[0]), interpolation=cv2.INTER_CUBIC)
-    img3 = cv2.copyMakeBorder(img2, 0, IMAGE_SIZE - img2.shape[0], 0, IMAGE_SIZE - img2.shape[1], cv2.BORDER_CONSTANT, 0)
-        
-    return img3[:,:,::-1]  # turn into rgb format
+# This dataset which is indexed by the date: the data being collected is being collected in the "period" of a day. The values in the record provide information about that stock within that period.
+# 
+# For daily data like this using a date like this is convenient. But a period can technically be for any length of time. `pandas` provides a whole dedicated type, the `pandas.Period` `dtype` (documented [here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.Period.html)), for this concept.
+# 
+# In the "weak case", dates act as timestamps: they tell us something about when an observation occurred. For example, in the following dataset of animal shelter outcomes, there are two columns, `datetime` and `date_of_birth`, which describe facts about the animal in the observation.
 
-def prep_data(images):
-    count = len(images)
-    data = np.ndarray((count, IMAGE_SIZE, IMAGE_SIZE, CHANNELS), dtype=np.float32)
-
-    for i, image_file in enumerate(images):
-        image = read_image(image_file);
-        image_data = np.array (image, dtype=np.float32);
-        image_data[:,:,0] = (image_data[:,:,0].astype(float) - pixel_depth / 2) / pixel_depth
-        image_data[:,:,1] = (image_data[:,:,1].astype(float) - pixel_depth / 2) / pixel_depth
-        image_data[:,:,2] = (image_data[:,:,2].astype(float) - pixel_depth / 2) / pixel_depth
-        
-        data[i] = image_data; # image_data.T
-        if i%250 == 0: print('Processed {} of {}'.format(i, count))    
-    return data
-
-train_normalized = prep_data(train_images)
-test_normalized = prep_data(test_images)
-
-print("Train shape: {}".format(train_normalized.shape))
-print("Test shape: {}".format(test_normalized.shape))
+# In[3]:
 
 
-# Just for visualization fun, print original image (first 3 dogs & first 3 cats) then image after resizing and normalization.  
-
-# In[ ]:
-
-
-plt.imshow (train_normalized[0,:,:,:], interpolation='nearest')
-plt.figure ()
-plt.imshow (train_normalized[1,:,:,:], interpolation='nearest')
-plt.figure ()
-plt.imshow (train_normalized[2,:,:,:], interpolation='nearest')
-plt.figure ()
-plt.imshow (train_normalized[1000,:,:,:], interpolation='nearest')
-plt.figure ()
-plt.imshow (train_normalized[1001,:,:,:], interpolation='nearest')
-plt.figure ()
-plt.imshow (train_normalized[1002,:,:,:], interpolation='nearest')
+shelter_outcomes = pd.read_csv(
+    "../input/austin-animal-center-shelter-outcomes-and/aac_shelter_outcomes.csv", 
+    parse_dates=['date_of_birth', 'datetime']
+)
+shelter_outcomes = shelter_outcomes[
+    ['outcome_type', 'age_upon_outcome', 'datetime', 'animal_type', 'breed', 
+     'color', 'sex_upon_outcome', 'date_of_birth']
+]
+shelter_outcomes.head()
 
 
-# Randomize the samples from TRAIN_DIR and TEST_DIR.  Split the TRAIN_DIR samples for a train/validation split.
+# To put this another way, the stock data is aggregated over a certain period of time, so changing the time significantly changes the data. In the animal outcomes case, information is "record-level"; the dates are descriptive facts and it doesn't make sense to change them.
 
-# In[ ]:
+# ## Visualizing by grouping
+# 
+# I said earlier that time is a "special case" of an interval variable. Does that mean that we can use the tools and techniques familiar to us from earlier sections with time series data as well? Of course!
+# 
+# For example, here's a line plot visualizing which birth dates are the most common in the dataset.
 
-
-np.random.seed (133)
-def randomize(dataset, labels):
-  permutation = np.random.permutation(labels.shape[0])
-  shuffled_dataset = dataset[permutation,:,:,:]
-  shuffled_labels = labels[permutation]
-  return shuffled_dataset, shuffled_labels
-
-train_dataset_rand, train_labels_rand = randomize(train_normalized, train_labels)
-test_dataset, test_labels = randomize(test_normalized, test_labels)
-
-# split up into training + valid
-valid_dataset = train_dataset_rand[:VALID_SIZE,:,:,:]
-valid_labels =   train_labels_rand[:VALID_SIZE]
-train_dataset = train_dataset_rand[VALID_SIZE:VALID_SIZE+TRAINING_SIZE,:,:,:]
-train_labels  = train_labels_rand[VALID_SIZE:VALID_SIZE+TRAINING_SIZE]
-print ('Training', train_dataset.shape, train_labels.shape)
-print ('Validation', valid_dataset.shape, valid_labels.shape)
-print ('Test', test_dataset.shape, test_labels.shape)
+# In[4]:
 
 
-# Start the TensorFlow portions and 1-hot-encode the labels
-
-# In[ ]:
+shelter_outcomes['date_of_birth'].value_counts().sort_values().plot.line()
 
 
-import tensorflow as tf
-image_size = IMAGE_SIZE # TODO: redundant, consolidate
-num_labels = 2
-num_channels = 3 # rg
+# It looks like birth dates for the animals in the dataset peak at around 2015, but it's hard to tell for sure because the data is rather noisy.
+# 
+# Currently the data is by day, but what if we globbed all the dates together into years? This is known as **resampling**. We can do this to tweak the dataset, generating a result that's aggregated by year. The method for doing this in `pandas`, `resample`, is pretty simple. There are lots of potential resampling options: we'll use `Y`, which is short for "year".
 
-def reformat(dataset, labels):
-  dataset = dataset.reshape(
-    (-1, image_size, image_size, num_channels)).astype(np.float32)
-  labels = (labels=='cats').astype(np.float32); # set dogs to 0 and cats to 1
-  labels = (np.arange(num_labels) == labels[:,None]).astype(np.float32)
-  return dataset, labels
-train_dataset, train_labels = reformat(train_dataset, train_labels)
-valid_dataset, valid_labels = reformat(valid_dataset, valid_labels)
-test_dataset, test_labels = reformat(test_dataset, test_labels)
-print ('Training set', train_dataset.shape, train_labels.shape)
-print ('Validation set', valid_dataset.shape, valid_labels.shape)
-print ('Test set', test_dataset.shape, test_labels.shape)
+# In[5]:
 
 
-# Define ConvNet Graph Model
-
-# In[ ]:
+shelter_outcomes['date_of_birth'].value_counts().resample('Y').sum().plot.line()
 
 
-batch_size = 16
-patch_size = 5
-depth = 16
-num_hidden = 64
+# Much clearer! It looks like, actually, 2014 and 2015 have an almost equal presence in the dataset.
+# 
+# This demonstrates the data visualization benefit of resampling: by choosing certain periods you can more clearly visualize certain aspects of the dataset.
+# 
+# Notice that `pandas` is automatically adapting the labels on the x-axis to match our output type. This is because `pandas` is "datetime-aware"; it knows that when we have data points spaced out one year apart from one another, we only want to see the years in the labels, and nothing else!
+# 
+# Usually the value of time-series data is exposed through this sort of grouping. For example, here's a similar simple bar chart which looks at the trade volume of the `GOOG` stock:
 
-graph = tf.Graph()
-
-with graph.as_default():
-
-  # Input data.
-  tf_train_dataset = tf.placeholder(
-    tf.float32, shape=(batch_size, image_size, image_size, num_channels))
-  tf_train_labels = tf.placeholder(tf.float32, shape=(batch_size, num_labels))
-  tf_valid_dataset = tf.constant(valid_dataset)
-  tf_test_dataset = tf.constant(test_dataset)
-
-  # variables 
-  kernel_conv1 = tf.Variable(tf.truncated_normal([3, 3, 3, 32], dtype=tf.float32,
-                                            stddev=1e-1), name='weights_conv1')
-  biases_conv1 = tf.Variable(tf.constant(0.0, shape=[32], dtype=tf.float32),
-                        trainable=True, name='biases_conv1')
-  kernel_conv2 = tf.Variable(tf.truncated_normal([3, 3, 32, 32], dtype=tf.float32,
-                                            stddev=1e-1), name='weights_conv2')
-  biases_conv2 = tf.Variable(tf.constant(0.0, shape=[32], dtype=tf.float32),
-                        trainable=True, name='biases_conv2')
-  kernel_conv3 = tf.Variable(tf.truncated_normal([3, 3, 32, 64], dtype=tf.float32,
-                                            stddev=1e-1), name='weights_conv3')
-  biases_conv3 = tf.Variable(tf.constant(0.0, shape=[64], dtype=tf.float32),
-                        trainable=True, name='biases_conv3')
-  fc1w = tf.Variable(tf.truncated_normal([23104, 64], 
-                                                dtype=tf.float32,
-                                                stddev=1e-1), name='weights') # 23104 from pool3.gete_shape () of 19*19*64
-  fc1b = tf.Variable(tf.constant(1.0, shape=[64], dtype=tf.float32),
-                        trainable=True, name='biases')
-  fc2w = tf.Variable(tf.truncated_normal([64, 2],
-                                                dtype=tf.float32,
-                                                stddev=1e-1), name='weights')
-  fc2b = tf.Variable(tf.constant(1.0, shape=[2], dtype=tf.float32),
-                        trainable=True, name='biases')
- 
-  
-  def model(data):
-     parameters = []
-     with tf.name_scope('conv1_1') as scope:
-         conv = tf.nn.conv2d(data, kernel_conv1, [1, 1, 1, 1], padding='SAME')
-         out = tf.nn.bias_add(conv, biases_conv1)
-         conv1_1 = tf.nn.relu(out, name=scope)
-         parameters += [kernel_conv1, biases_conv1]
-         
-     # pool1
-     pool1 = tf.nn.max_pool(conv1_1,
-                            ksize=[1, 2, 2, 1],
-                            strides=[1, 2, 2, 1],
-                            padding='SAME',
-                            name='pool1')
-     
-     with tf.name_scope('conv2_1') as scope:
-         conv = tf.nn.conv2d(pool1, kernel_conv2, [1, 1, 1, 1], padding='SAME')
-         out = tf.nn.bias_add(conv, biases_conv2)
-         conv2_1 = tf.nn.relu(out, name=scope)
-         parameters += [kernel_conv2, biases_conv2]
-         
-     # pool2
-     pool2 = tf.nn.max_pool(conv2_1,
-                            ksize=[1, 2, 2, 1],
-                            strides=[1, 2, 2, 1],
-                            padding='SAME',
-                            name='pool2')
-     
-     with tf.name_scope('conv3_1') as scope:
-         conv = tf.nn.conv2d(pool2, kernel_conv3, [1, 1, 1, 1], padding='SAME')
-         out = tf.nn.bias_add(conv, biases_conv3)
-         conv3_1 = tf.nn.relu(out, name=scope)
-         parameters += [kernel_conv3, biases_conv3]
-         
-     # pool3
-     pool3 = tf.nn.max_pool(conv3_1,
-                            ksize=[1, 2, 2, 1],
-                            strides=[1, 2, 2, 1],
-                            padding='SAME',
-                            name='pool3')
-         
-     # fc1
-     with tf.name_scope('fc1') as scope:
-         shape = int(np.prod(pool3.get_shape()[1:])) # except for batch size (the first one), multiple the dimensions
-         pool3_flat = tf.reshape(pool3, [-1, shape])
-         fc1l = tf.nn.bias_add(tf.matmul(pool3_flat, fc1w), fc1b)
-         fc1 = tf.nn.relu(fc1l)
-         parameters += [fc1w, fc1b]
-
-     # fc3
-     with tf.name_scope('fc3') as scope:
-         fc2l = tf.nn.bias_add(tf.matmul(fc1, fc2w), fc2b)
-         parameters += [fc2w, fc2b]
-     return fc2l;
-  
-  # Training computation.
-  logits = model(tf_train_dataset)
-  loss = tf.reduce_mean(
-    tf.nn.softmax_cross_entropy_with_logits(logits, tf_train_labels))
-    
-  # Optimizer.
-  optimizer = tf.train.RMSPropOptimizer(0.0001).minimize(loss)
-  
-  # Predictions for the training, validation, and test data.
-  train_prediction = tf.nn.softmax(logits)
-  valid_prediction = tf.nn.softmax(model(tf_valid_dataset))
-  test_prediction = tf.nn.softmax(model(tf_test_dataset))
+# In[6]:
 
 
-# Take training data through graph and evaluate performance
-
-# In[ ]:
+stocks['volume'].resample('Y').mean().plot.bar()
 
 
-def accuracy(predictions, labels):
-   return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(labels, 1)) / predictions.shape[0])
+# Most of the "new stuff" to using dates in your visualization comes down to a handful of new data processing techniques. Because timestampls are "just" interval variables, understanding date-time data don't require any newfangled visualization techniques!
 
-num_steps = 1001
-with tf.Session(graph=graph) as session:
-  tf.initialize_all_variables().run()
-  print ("Initialized")
-  for step in range(num_steps):
-    offset = (step * batch_size) % (train_labels.shape[0] - batch_size)
-    batch_data = train_dataset[offset:(offset + batch_size), :, :, :]
-    batch_labels = train_labels[offset:(offset + batch_size), :]
-    feed_dict = {tf_train_dataset : batch_data, tf_train_labels : batch_labels}
-    _, l, predictions = session.run(
-      [optimizer, loss, train_prediction], feed_dict=feed_dict)
-    if (step % 50 == 0):
-      print ("Minibatch loss at step", step, ":", l)
-      print ("Minibatch accuracy: %.1f%%" % accuracy(predictions, batch_labels))
-      print ("Validation accuracy: %.1f%%" % accuracy(valid_prediction.eval(), valid_labels))
-  #print ("Test accuracy: %.1f%%" % accuracy(test_prediction.eval(), test_labels))
+# ## Some new plot types
+# 
+# ### Lag plot
+# 
+# One of these plot types is the lag plot. A lag plot compares data points from each observation in the dataset against data points from a previous observation. So for example, data from December 21st will be compared with data from December 20th, which will in turn be compared with data from December 19th, and so on. For example, here is what we see when we apply a lag plot to the volume (number of trades conducted) in the stock data:
+
+# In[7]:
+
+
+from pandas.plotting import lag_plot
+
+lag_plot(stocks['volume'].sample(250))
+
+
+# It looks like days when volume is high are only very loosely correlated with one another. In other words, a day of frantic trading does not necessarily signal that the next day will also involve frantic trading. In fact, there seem to be quite a few days of *extremely* high trading activity which stand out all alone!
+# 
+# Time-series data tends to exhibit a behavior called **periodicity**: rises and peaks in the data that are correlated with time. For example, a gym would likely see an increase in attendance at the end of every workday, hence exhibiting a periodicity of a day. A bar would likely see a bump in sales on Friday, exhibiting periodicity over the course of a week. And so on.
+# 
+# Lag plots are extremely useful because they are a simple way of checking datasets for this kind of periodicity.
+# 
+# Note that they only work on "strong case" timeseries data.
+# 
+# ### Autocorrelation plot
+# 
+# A plot type that takes this concept and goes even further with it is the autocorrelation plot. The autocorrelation plot is a multivariate summarization-type plot that lets you check *every* periodicity at the same time. It does this by computing a summary statistic&mdash;the correlation score&mdash;across every possible lag in the dataset. This is known as autocorrelation.
+# 
+# In an autocorrelation plot the lag is on the x-axis and the autocorrelation score is on the y-axis. The farther away the autocorrelation is from 0, the greater the influence that records that far away from each other exert on one another.
+# 
+# Here is what an autocorrelation plot looks like when applied to the stock volume data:
+
+# In[8]:
+
+
+from pandas.plotting import autocorrelation_plot
+
+autocorrelation_plot(stocks['volume'])
+
+
+# It seems like the volume of trading activity is weakly descendingly correlated with trading volume from the year prior. There aren't any significant non-random peaks in the dataset, so this is good evidence that there isn't much of a time-series pattern to the volume of trade activity over time.
+# 
+# Of course, in this short optional section we're only scratching the surface of what you can do with do with time-series data. There's an entire literature around how to work with time-series variables that we are not discussing here. But these are the basics, and hopefully enough to get you started analyzing your own time-dependent data!
+
+# ## Exercises
+# 
+
+# In[21]:
+
+
+import pandas as pd
+
+crypto = pd.read_csv("../input/all-crypto-currencies/crypto-markets.csv")
+crypto = crypto[crypto['name'] == 'Bitcoin']
+crypto['date'] = pd.to_datetime(crypto['date'])
+crypto.head()
+
+
+# Try answering the following questions. Click the "Output" button on the cell below to see the answers.
+# 
+# * Time-series variables are really a special case of what other type of variable?
+# * Why is resampling useful in a data visualization context?
+# * What is lag? What is autocorrelation?
+
+# In[19]:
+
+
+from IPython.display import HTML
+
+HTML("""
+<ol>
+<li>Time-series data is really a special case of interval data.</li>
+<br/>
+<li>Resampling is often useful in data visualization because it can help clean up and denoise our plots by aggregating on a different level.</li>
+<br/>
+<li>Lag is the time-difference for each observation in the dataset. Autocorrelation is correlation applied to lag.</li>
+</ol>
+""")
+
+
+# For the exercises that follow, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
+
+# A line chart depicting the `datetime` column in `shelter_outcomes` aggregated by year.
+
+# In[31]:
+
+
+shelter_outcomes['datetime'].value_counts().resample('Y').count().plot.line()
+
+
+# A lag plot of cryptocurrency (`crypto`) trading `volume`.
+
+# In[32]:
+
+
+lag_plot(crypto['volume'].sample(250))
+
+
+# An autocorrelation plot of cryptocurrency (`crypto`) trading `volume`.
+
+# In[34]:
+
+
+autocorrelation_plot(crypto['volume'])
 

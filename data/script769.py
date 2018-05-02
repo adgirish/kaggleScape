@@ -1,207 +1,288 @@
 
 # coding: utf-8
 
-# ## Gradient boosting from scratch
-# ### Medium post with explaination: https://medium.com/@pgrover3/gradient-boosting-from-scratch-1e317ae4587d
-# 
+# ### Tested: 
+# ######## the resulting file is 85GB , run time on 8 cores: 53 minutes
+# <img src="https://sites.google.com/site/sgdysregulation/img/imag.png" >
 
-# The logic of **gradient boosting** is very simple (if explained intuitively, without using mathematical notation). I expect that whoever is reading this would have done simple linear regression modeling.
-# One of the very basic assumption of linear regression is that it's sum of residuals is 0. Although, tree based models are not based on any of such assumptions, but if we think logic (not statistics) behind these assumptions, we might argue that, if sum of residuals is not 0, then most probably there is some pattern in the residuals of our model which can be leveraged to make our model better.
-# So, the intuition behind gradient boosting algorithm is to `leverage the pattern in residuals and strenghten a weak prediction model, until our residuals become randomly (maybe random normal too) distributed`. Once we reach a stage that residuals do not have any pattern that could be modeled, we can stop modeling residuals (otherwise it might lead to overfitting). Algorithmically, we are minimizing our loss function, such that test loss reach it’s minima.
+# ### Multiprocessing imporvement inspired by 
+# [StackOverflow:Understanding Multiprocessing: Shared Memory Management, Locks and Queues in Python](https://stackoverflow.com/questions/20742637/understanding-multiprocessing-shared-memory-management-locks-and-queues-in-pyt)
 
 # In[ ]:
 
-
-get_ipython().run_line_magic('matplotlib', 'inline')
 
 import pandas as pd
 import numpy as np
-from IPython.display import display
-from fastai.imports import *
-from sklearn import metrics
+import bson
+import h5py
+
+import os
+
+
+import multiprocessing as mp
+
+
+import cv2 #opencv helpful for storing image as array
+import itertools #helps in parallel processing
+
+import scipy as scp
+
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import time
+import base64
 
 
 # In[ ]:
 
 
-class DecisionTree():
-    def __init__(self, x, y, idxs = None, min_leaf=2):
-        if idxs is None: idxs=np.arange(len(y))
-        self.x,self.y,self.idxs,self.min_leaf = x,y,idxs,min_leaf
-        self.n,self.c = len(idxs), x.shape[1]
-        self.val = np.mean(y[idxs])
-        self.score = float('inf')
-        self.find_varsplit()
-        
-    def find_varsplit(self):
-        for i in range(self.c): self.find_better_split(i)
-        if self.score == float('inf'): return
-        x = self.split_col
-        lhs = np.nonzero(x<=self.split)[0]
-        rhs = np.nonzero(x>self.split)[0]
-        self.lhs = DecisionTree(self.x, self.y, self.idxs[lhs])
-        self.rhs = DecisionTree(self.x, self.y, self.idxs[rhs])
+REC_SIZE = 7069896
+path = '../input/'
+kaggle =True
+# path='./'
+# kaggle = False
+get_ipython().system('ls "$path"')
 
-    def find_better_split(self, var_idx):
-        x,y = self.x.values[self.idxs,var_idx], self.y[self.idxs]
-        sort_idx = np.argsort(x)
-        sort_y,sort_x = y[sort_idx], x[sort_idx]
-        rhs_cnt,rhs_sum,rhs_sum2 = self.n, sort_y.sum(), (sort_y**2).sum()
-        lhs_cnt,lhs_sum,lhs_sum2 = 0,0.,0.
 
-        for i in range(0,self.n-self.min_leaf-1):
-            xi,yi = sort_x[i],sort_y[i]
-            lhs_cnt += 1; rhs_cnt -= 1
-            lhs_sum += yi; rhs_sum -= yi
-            lhs_sum2 += yi**2; rhs_sum2 -= yi**2
-            if i<self.min_leaf or xi==sort_x[i+1]:
-                continue
+# #### seprerate lock and queue used for reading/writing
 
-            lhs_std = std_agg(lhs_cnt, lhs_sum, lhs_sum2)
-            rhs_std = std_agg(rhs_cnt, rhs_sum, rhs_sum2)
-            curr_score = lhs_std*lhs_cnt + rhs_std*rhs_cnt
-            if curr_score<self.score: 
-                self.var_idx,self.score,self.split = var_idx,curr_score,xi
+# In[ ]:
 
-    @property
-    def split_name(self): return self.x.columns[self.var_idx]
+
+def process_batch(args):
+    """
+    INPUT: args where args[0] is a list of tuples of size 4
+    (itr,CHUNK_SIZE ,in_file,out_file)
+    reads a batch of data from the BSON file "in_file" 
+    puts the part of the input itr into a read queue.
+    converts the images to base64
+    write the images to dataset "imgs" in h5 file out_file
+    writes the columns [category_id, _id, img_num] 
+    corresponding to the imgs into dataset "meta" in h5 file out_file
+    finally puts the part of the input itr into a write queue.
+    """
+    t0 = time.time()
     
-    @property
-    def split_col(self): return self.x.values[self.idxs,self.var_idx]
-
-    @property
-    def is_leaf(self): return self.score == float('inf')
+    itr,CHUNK_SIZE ,in_file,out_file= args[0]
+    if not os.path.exists(in_file):
+        return
+    print('Processing Batch {} , Batch size: {}'.format(itr,CHUNK_SIZE))
     
-    def __repr__(self):
-        s = f'n: {self.n}; val:{self.val}'
-        if not self.is_leaf:
-            s += f'; score:{self.score}; split:{self.split}; var:{self.split_name}'
-        return s
-
-    def predict(self, x):
-        return np.array([self.predict_row(xi) for xi in x])
-
-    def predict_row(self, xi):
-        if self.is_leaf: return self.val
-        t = self.lhs if xi[self.var_idx]<=self.split else self.rhs
-        return t.predict_row(xi)
-
-
-# ## Data simulation
-
-# In[ ]:
-
-
-x = np.arange(0,50)
-x = pd.DataFrame({'x':x})
-
-
-# In[ ]:
-
-
-# just random uniform distributions in differnt range
-
-y1 = np.random.uniform(10,15,10)
-y2 = np.random.uniform(20,25,10)
-y3 = np.random.uniform(0,5,10)
-y4 = np.random.uniform(30,32,10)
-y5 = np.random.uniform(13,17,10)
-
-y = np.concatenate((y1,y2,y3,y4,y5))
-y = y[:,None]
-
-
-# ## Scatter plot of data
-
-# In[ ]:
-
-
-x.shape, y.shape
+    lock_r = args[1]
+    queue_r = args[2]
+    lock_w = args[3] 
+    queue_w = args[4] 
+    
+    lock_r.acquire()
+    with open(in_file,'rb') as b:
+        iterator = bson.decode_file_iter(b)
+        df = pd.DataFrame(list(itertools.islice(iterator,
+                                itr*CHUNK_SIZE,
+                                (itr+1)*CHUNK_SIZE))).set_index(['category_id','_id'])
+    lock_r.release()
+    queue_r.put(itr)
+    
+    df = df['imgs'].apply(pd.Series).stack().apply(
+        lambda x: base64.b64encode(x['picture']))
+    data = df.index.to_frame().reset_index(drop=True),np.vstack(df.values)
+    df = None
+    lock_w.acquire()
+    try:
+        with h5py.File(out_file) as hdf:
+            if 'imgs' not in hdf.keys():
+                dt = h5py.special_dtype(vlen=bytes)
+                dset = hdf.create_dataset('imgs', shape= (data[1].shape),
+                                          maxshape=(None, data[1].shape[1]), chunks=True,
+                                          compression="lzf",dtype=dt)
+                iset = hdf.create_dataset(name = 'meta', shape= data[0].shape,
+                                          maxshape=(None,data[0].shape[1]),
+                                          chunks=True,
+                                          dtype=np.int64,compression="lzf")
+            else:
+                dset = hdf['imgs']
+                dset.resize((dset.shape[0]+data[1].shape[0],1)) 
+                iset = hdf['meta']
+                iset.resize((iset.shape[0]+data[0].shape[0],iset.shape[1])) 
+            dset[-data[1].shape[0]:,...] = data [1]
+            iset[-data[0].shape[0]:,...] = data [0]
+            hdf.close()
+    except Exception as e:
+        print('write failed',e)
+    data = None
+    lock_w.release()
+    t1= time.time()-t0
+    print('Batch {} processing Done! Time: {:} mins, {:.2f}secs'.format(itr, t1//60,t1%60))
+    queue_w.put(itr)
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(7,5))
-plt.plot(x,y, 'o')
-plt.title("Scatter plot of x vs. y")
-plt.xlabel("x")
-plt.ylabel("y")
-plt.show()
 
-
-# ## Gradient Boosting (DecisionTrees in a loop)
-# 
-
-# In[ ]:
-
-
-def std_agg(cnt, s1, s2): return math.sqrt((s2/cnt) - (s1/cnt)**2)
+def read_queue(queue):
+    """Turns a qeue into a normal python list."""
+    results = []
+    while not queue.empty():
+        result = queue.get()
+        results.append(result)
+    return results
 
 
 # In[ ]:
 
 
-xi = x # initialization of input
-yi = y # initialization of target
-# x,y --> use where no need to change original y
-ei = 0 # initialization of error
-n = len(yi)  # number of rows
-predf = 0 # initial prediction 0
-
-for i in range(30): # like n_estimators
-    tree = DecisionTree(xi,yi)
-    tree.find_better_split(0)
-    
-    r = np.where(xi == tree.split)[0][0]    
-    
-    left_idx = np.where(xi <= tree.split)[0]
-    right_idx = np.where(xi > tree.split)[0]
-    
-    predi = np.zeros(n)
-    np.put(predi, left_idx, np.repeat(np.mean(yi[left_idx]), r))  # replace left side mean y
-    np.put(predi, right_idx, np.repeat(np.mean(yi[right_idx]), n-r))  # right side mean y
-    
-    predi = predi[:,None]  # make long vector (nx1) in compatible with y
-    predf = predf + predi  # final prediction will be previous prediction value + new prediction of residual
-    
-    ei = y - predf  # needed originl y here as residual always from original y    
-    yi = ei # update yi as residual to reloop
-    
-    
-    # plotting after prediction
-    xa = np.array(x.x) # column name of x is x 
-    order = np.argsort(xa)
-    xs = np.array(xa)[order]
-    ys = np.array(predf)[order]
-    
-    #epreds = np.array(epred[:,None])[order]
-
-    f, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize = (13,2.5))
-
-    ax1.plot(x,y, 'o')
-    ax1.plot(xs, ys, 'r')
-    ax1.set_title(f'Prediction (Iteration {i+1})')
-    ax1.set_xlabel('x')
-    ax1.set_ylabel('y / y_pred')
-
-    ax2.plot(x, ei, 'go')
-    ax2.set_title(f'Residuals vs. x (Iteration {i+1})')
-    ax2.set_xlabel('x')
-    ax2.set_ylabel('Residuals')
-    
-    
+def make_iterator(args, lock_r, queue_r,lock_w, queue_w):
+    """Makes an iterator over args and passes the lock an queue to each element."""
+    return ((arg, lock_r, queue_r,lock_w, queue_w) for arg in args)
 
 
-# Errors are not changing much after `20th iteration` and pattern in residuals is also removed. Residuals look distributed around the mean
+# In[ ]:
 
-# ### Maths behind this logic
 
-# $ Predictions = y_i^p $  
-# $ Loss = L(y_i, y_i^p) $  
-# $ Loss = MSE = \sum {(y_i - y_i^p)}^2 $  
-# $ y_i^p = y_i^p + \alpha * \delta {L(y_i, y_i^p)}/ \delta{y_i^p } $  
-# $ y_i^p = y_i^p + \alpha * \delta {\sum {(y_i - y_i^p)}^2}/ \delta{y_i^p } $  
-# $ y_i^p = y_i^p - \alpha * 2*{\sum {(y_i - y_i^p)}} $  
+def start_processing(in_file,
+                     out_file, 
+                     CHUNK_SIZE,
+                     EP,
+                     SP,
+                     ncores=4):
+    """Starts the manager
+    
+    :param in_file the BSON file with byte images
+    :param out_file the HDF file with base64 images 
+    in "image" dataset and meta data in "meta" dataset
+    :param CHUNK_SIZE the batch size per process
+    :param  EP the end postion (last batch)
+    :param  SP the start postion (first batch)
+    :param  ncores the number of CPU cores to use
+    """
+    
+    args = list(zip(range(EP-1,SP-1,-1),
+                    [CHUNK_SIZE]*(EP-SP),
+                    [in_file]*(EP-SP),
+                    [out_file]*(EP-SP)))
 
-# where, $y_i$ = ith target value, $y_i^p$ = ith prediction, $ L(y_i, y_i^p) $ is Loss function, $\alpha$ is learning rate. So the last equation tells us that, we need to adjust predictions based on our residuals, i.e. $\sum {(y_i - y_i^p)}$. This is what we did, we adjusted our predictions using the fit on residuals. (accordingly adjusting value of $\alpha$
+    result =  manager(process_batch, args, ncores)
+    return result
+
+
+# In[ ]:
+
+
+def manager(jobfunc, args, ncores):
+    """Runs a pool of processes WITH a Manager for the lock and queue.
+
+    """
+    mypool = mp.Pool(ncores)
+    lock_r = mp.Manager().Lock()
+    queue_r = mp.Manager().Queue()
+    lock_w = mp.Manager().Lock()
+    queue_w = mp.Manager().Queue()
+    iterator = make_iterator(args, lock_r, queue_r,lock_w, queue_w)
+    mypool.map(jobfunc, iterator)
+    mypool.close()
+    mypool.join()
+
+    return read_queue(queue_r),read_queue(queue_w)
+
+
+# In[ ]:
+
+
+"""Run """
+
+in_file= '{}train.bson'.format(path)
+out_file= 'train.h5'
+CHUNK_SIZE = 2**17
+#default values
+EP = 1+(REC_SIZE//CHUNK_SIZE)
+SP = 0
+if kaggle:
+    get_ipython().system('rm "$out_file"')
+    CHUNK_SIZE = 2**8
+    EP = 1+(REC_SIZE//CHUNK_SIZE)
+    SP = EP-16
+print(SP,':',EP)
+
+t0 = time.time()
+try:
+    res = start_processing(in_file = in_file,
+                     out_file = out_file,
+                     CHUNK_SIZE = CHUNK_SIZE,
+                     EP = EP,
+                    SP = SP,ncores = min(mp.cpu_count(),8))
+except Exception as e:
+    print('Failed:',e)
+t1= time.time()-t0
+print('-'*40)
+print('Done! Total Processing Time: {:} mins, {:.2f}secs'.format(t1//60,t1%60))
+
+
+# ### Retrieve files
+
+# In[ ]:
+
+
+def read_h5(file,num_of_rec,frRec=0):
+    """
+    retrieves certain number of records `num_od_rec` from the file `file`
+    records start at `frRec` 
+    """
+    cols =['category_id','_id','img_num']
+    with h5py.File(file) as hdf:
+
+        data = hdf['imgs'][frRec:num_of_rec]
+        index = hdf['meta'][frRec:num_of_rec]
+        hdf.close()
+    df = pd.DataFrame(index,columns= cols)
+    df['imgs'] = data
+    df['imgs'] = df['imgs'].apply(
+        lambda bStr: cv2.imdecode(
+                            np.fromstring(
+                                base64.b64decode(bStr),
+                                dtype='uint8'),
+                            cv2.IMREAD_COLOR))
+    return df.set_index(cols)
+df = read_h5(out_file,10)
+
+
+# In[ ]:
+
+
+df.head()
+
+
+# In[ ]:
+
+
+df.info()
+
+
+# In[ ]:
+
+
+n=np.random.randint(0,len(df))
+img= df.iloc[n,-1]
+imgVSH = cv2.cvtColor(img,cv2.COLOR_RGB2HSV)[...,::-1] #change back to RGB
+
+fig,axs = plt.subplots(2,2,figsize=(16,8))
+axs = axs.flatten()
+
+titles = ['Intensity(Value)','Saturation','Hue']
+cmaps = ['gray',mpl.cm.GnBu,mpl.cm.GnBu]
+for i,ax in enumerate(axs[1:]):
+    ax.imshow(imgVSH[...,i],cmap=cmaps[i])
+    ax.set_title(titles[i])
+    ax.axis('off')
+axs[0].imshow(img[...,::-1])
+axs[0].set_title('Original')
+axs[0].axis('off');
+
+plt.tight_layout();
+plt.show();
+
+
+# In[ ]:
+
+
+# TODO show how to process data on disk
+

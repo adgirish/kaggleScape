@@ -1,224 +1,375 @@
 
 # coding: utf-8
 
-# Hi, Kagglers!
+# This kernel is an extension of the EDA notebook: [Stop the S@#$ - Toxic Comments EDA](https://www.kaggle.com/jagangupta/stop-the-s-toxic-comments-eda)
 # 
-# Hereafter I will try to create **some baselines for your submissions to start from.**
-# <br> This Kernel touches **submission part mostly AND ONE WELL-KNOWN FILM :)**
-# <br/>For more details about Dataset - please check my **[Data Exploration Kernel](https://www.kaggle.com/frednavruzov/instacart-exploratory-data-analysis/)**
 # 
-# **Brief description**
+# # Topic Modeling: 
 # 
-# The Dataset is an anonymized sample of over 3,000,000 grocery orders from more than 200,000 Instacart users. 
-# <br>The goal of a competition is to predict which previously purchased products will be in a user’s next order. 
+# Topic modeling can be a useful tool to summarize the context of a huge corpus(text) by guessing what the "Topic" or the general theme of the sentence. 
 # 
-# ### Stay tuned, this notebook will be updated on a regular basis
-# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
+# This can also be used as inputs to our classifier if they can identify patterns or "Topics" that indicate toxicity.
+# 
+# Let's find out!
+# 
+# The steps followed in this kernel:
+# * Preprocessing (Tokenization using gensim's simple_preprocess)
+# * Cleaning
+#     * Stop word removal
+#     * Bigram collation
+#     * Lemmatization
+# *  Creation of dictionary (list of all words in the cleaned text)
+# * Topic modeling using LDA
+# * Visualization with pyLDAviz
+# * Convert topics to sparse vectors
+# * Feed sparse vectors to the model
 
 # In[ ]:
 
 
-import pandas as pd # dataframes
-import numpy as np # algebra & calculus
-import nltk # text preprocessing & manipulation
-# from textblob import TextBlob
-import matplotlib.pyplot as plt # plotting
-import seaborn as sns # plotting
+#import required packages
+#basic
+import pandas as pd 
+import numpy as np
 
-from functools import partial # to reduce df memory consumption by applying to_numeric
-
-color = sns.color_palette() # adjusting plotting style
+#misc
+import gc
+import time
 import warnings
-warnings.filterwarnings('ignore') # silence annoying warnings
+#viz
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec 
+import seaborn as sns
+import pyLDAvis.gensim
+#nlp
+import string
+import re     #for regex
+from nltk.tokenize.toktok import ToktokTokenizer
+from nltk.stem.wordnet import WordNetLemmatizer 
+from nltk.corpus import stopwords
+from nltk.corpus import wordnet
+import gensim
+from gensim.models import CoherenceModel, LdaModel, LsiModel, HdpModel
+from gensim.models.wrappers import LdaMallet
+from gensim.corpora import Dictionary
+
+
+#Modeling
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.utils.validation import check_X_y, check_is_fitted
+from sklearn.linear_model import LogisticRegression
+from sklearn import metrics
+from sklearn.metrics import log_loss
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
+from scipy import sparse
+
+#settings
+start_time=time.time()
+color = sns.color_palette()
+sns.set_style("dark")
+
+#constants
+eng_stopwords = set(stopwords.words("english"))
+#settings
+warnings.filterwarnings("ignore")
+lem = WordNetLemmatizer()
+tokenizer=ToktokTokenizer()
+
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-# aisles
-aisles = pd.read_csv('../input/aisles.csv', engine='c')
-print('Total aisles: {}'.format(aisles.shape[0]))
-aisles.head()
+start_time=time.time()
+#importing the dataset
+train=pd.read_csv("../input/train.csv")
+test=pd.read_csv("../input/test.csv")
+end_import=time.time()
+print("Time till import:",end_import-start_time,"s")
 
 
 # In[ ]:
 
 
-# departments
-departments = pd.read_csv('../input/departments.csv', engine='c')
-print('Total departments: {}'.format(departments.shape[0]))
-departments.head()
+#to seperate sentenses into words
+def preprocess(comment):
+    """
+    Function to build tokenized texts from input comment
+    """
+    return gensim.utils.simple_preprocess(comment, deacc=True, min_len=3)
 
 
 # In[ ]:
 
 
-# products
-products = pd.read_csv('../input/products.csv', engine='c')
-print('Total products: {}'.format(products.shape[0]))
-products.head(5)
+#tokenize the comments
+train_text=train.comment_text.apply(lambda x: preprocess(x))
+test_text=test.comment_text.apply(lambda x: preprocess(x))
+all_text=train_text.append(test_text)
+end_preprocess=time.time()
+print("Time till pre-process:",end_preprocess-start_time,"s")
 
 
 # In[ ]:
 
 
-# combine aisles, departments and products (left joined to products)
-goods = pd.merge(left=pd.merge(left=products, right=departments, how='left'), right=aisles, how='left')
-# to retain '-' and make product names more "standard"
-goods.product_name = goods.product_name.str.replace(' ', '_').str.lower() 
-print(goods.info())
-
-goods.head()
+#checks
+print("Total number of comments:",len(all_text))
+print("Before preprocessing:",train.comment_text.iloc[30])
+print("After preprocessing:",all_text.iloc[30])
 
 
 # In[ ]:
 
 
-# load datasets
-
-# train dataset
-op_train = pd.read_csv('../input/order_products__train.csv', engine='c', 
-                       dtype={'order_id': np.int32, 'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 'reordered': np.int8})
-print('Total ordered products(train): {}'.format(op_train.shape[0]))
-op_train.head(10)
+#Phrases help us group together bigrams :  new + york --> new_york
+bigram = gensim.models.Phrases(all_text)
 
 
 # In[ ]:
 
 
-# test dataset (submission)
-test = pd.read_csv('../input/sample_submission.csv', engine='c')
-print('Total orders(test): {}'.format(test.shape[0]))
-test.head()
+#check bigram collation functionality 
+bigram[all_text.iloc[30]]
 
 
 # In[ ]:
 
 
-#prior dataset
-op_prior = pd.read_csv('../input/order_products__prior.csv', engine='c', 
-                       dtype={'order_id': np.int32, 
-                              'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 
-                              'reordered': np.int8})
-
-print('Total ordered products(prior): {}'.format(op_prior.shape[0]))
-op_prior.head()
-
-
-# In[ ]:
-
-
-# orders
-orders = pd.read_csv('../input/orders.csv', engine='c', dtype={'order_id': np.int32, 
-                                                           'user_id': np.int32, 
-                                                           'order_number': np.int32, 
-                                                           'order_dow': np.int8, 
-                                                           'order_hour_of_day': np.int8, 
-                                                           'days_since_prior_order': np.float16})
-print('Total orders: {}'.format(orders.shape[0]))
-print(orders.info())
-orders.head()
-
-
-# ### Combine (orders, order details, product hierarchy) into 1 dataframe order_details 
-# **(be careful, high memory consumption, about 3GB RAM itself)**
-
-# In[ ]:
-
-
-from functools import partial
-
-# merge train and prior together iteratively, to fit into 8GB kernel RAM
-# split df indexes into parts
-indexes = np.linspace(0, len(op_prior), num=10, dtype=np.int32)
-
-# initialize it with train dataset
-order_details = pd.merge(
-                left=op_train,
-                 right=orders, 
-                 how='left', 
-                 on='order_id'
-        ).apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))
-
-# add order hierarchy
-order_details = pd.merge(
-                left=order_details,
-                right=goods[['product_id', 
-                             'aisle_id', 
-                             'department_id']].apply(partial(pd.to_numeric, 
-                                                             errors='ignore', 
-                                                             downcast='integer')),
-                how='left',
-                on='product_id'
-)
-
-print(order_details.shape, op_train.shape)
-
-# delete (redundant now) dataframes
-del op_train
-
-order_details.head()
+def clean(word_list):
+    """
+    Function to clean the pre-processed word lists 
+    
+    Following transformations will be done
+    1) Stop words removal from the nltk stopword list
+    2) Bigram collation (Finding common bigrams and grouping them together using gensim.models.phrases)
+    3) Lemmatization (Converting word to its root form : babies --> baby ; children --> child)
+    """
+    #remove stop words
+    clean_words = [w for w in word_list if not w in eng_stopwords]
+    #collect bigrams
+    clean_words = bigram[clean_words]
+    #Lemmatize
+    clean_words=[lem.lemmatize(word, "v") for word in clean_words]
+    return(clean_words)    
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "# update by small portions\nfor i in range(len(indexes)-1):\n    order_details = pd.concat(\n        [   \n            order_details,\n            pd.merge(left=pd.merge(\n                            left=op_prior.loc[indexes[i]:indexes[i+1], :],\n                            right=goods[['product_id', \n                                         'aisle_id', \n                                         'department_id' ]].apply(partial(pd.to_numeric, \n                                                                          errors='ignore', \n                                                                          downcast='integer')),\n                            how='left',\n                            on='product_id'\n                            ),\n                     right=orders, \n                     how='left', \n                     on='order_id'\n                ) #.apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))\n        ]\n    )\n        \nprint('Datafame length: {}'.format(order_details.shape[0]))\nprint('Memory consumption: {:.2f} Mb'.format(sum(order_details.memory_usage(index=True, \n                                                                         deep=True) / 2**20)))\n# check dtypes to see if we use memory effectively\nprint(order_details.dtypes)\n\n# make sure we didn't forget to retain test dataset :D\ntest_orders = orders[orders.eval_set == 'test']\n\n# delete (redundant now) dataframes\ndel op_prior, orders")
+#check clean function
+print("Before clean:",all_text.iloc[1])
+print("After clean:",clean(all_text.iloc[1]))
 
 
-# ### 1. Greedy Dumb Submission :) <br>(0.2164845 Public LB Score)
-# ![Lloyd level, still better than banana baseline][1]
+# In[ ]:
+
+
+#scale it to all text
+all_text=all_text.apply(lambda x:clean(x))
+end_clean=time.time()
+print("Time till cleaning corpus:",end_clean-start_time,"s")
+
+
+# In[ ]:
+
+
+#create the dictionary
+dictionary = Dictionary(all_text)
+print("There are",len(dictionary),"number of words in the final dictionary")
+
+
+# In[ ]:
+
+
+#convert into lookup tuples within the dictionary using doc2bow
+print(dictionary.doc2bow(all_text.iloc[1]))
+print("Wordlist from the sentence:",all_text.iloc[1])
+#to check
+print("Wordlist from the dictionary lookup:", 
+      dictionary[21],dictionary[22],dictionary[23],dictionary[24],dictionary[25],dictionary[26],dictionary[27])
+
+
+# In[ ]:
+
+
+#scale it to all text
+corpus = [dictionary.doc2bow(text) for text in all_text]
+end_corpus=time.time()
+print("Time till corpus creation:",end_clean-start_time,"s")
+
+
+# In[ ]:
+
+
+#create the LDA model
+ldamodel = LdaModel(corpus=corpus, num_topics=15, id2word=dictionary)
+end_lda=time.time()
+print("Time till LDA model creation:",end_lda-start_time,"s")
+
+
+# In[ ]:
+
+
+pyLDAvis.enable_notebook()
+
+
+# In[ ]:
+
+
+pyLDAvis.gensim.prepare(ldamodel, corpus, dictionary)
+
+
+# In[ ]:
+
+
+end_viz=time.time()
+print("Time till viz:",end_viz-start_time,"s")
+
+
+# **Chart Desc:** 
 # 
+# The above visuals are from the awesome pyLDAviz package which is the python version of R package LDAviz.
 # 
-#   [1]: http://www.punchnels.com/wp-content/uploads/Jim_Carrey_Dumb-and-Dumber-Inside.jpg
+# The Left side shows the multi-dimensional "word-space" superimposed on two "Principal components" and the relative positions of all the topics.
+# 
+# The size of the circle represents what % of the corpus it contains.
+# 
+# The right side shows the word frequencies within the topic and in the whole corpus.
+# 
+# Clearly, some of the topics show a pattern of toxicity (ie) have a high contribution from toxic words.
+# 
+# Now let's feed these topics into a model.
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb_submission.csv', encoding='utf-8', index=False)")
+#creating the topic probability matrix 
+topic_probability_mat = ldamodel[corpus]
 
-
-# ### Still Greedy But Smarter (Customer Will Take All Reordered) <br>(0.2996690 Public LB Score)
-# ![Lloyd appreciates this][1]
-# 
-# 
-#   [1]: https://i.ytimg.com/vi/CHCmLxqTPOs/hqdefault.jpg
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id)) \n                             & (order_details.reordered == 1)]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb2_subm.csv', encoding='utf-8', index=False)")
+#split it to test and train
+train_matrix=topic_probability_mat[:train.shape[0]]
+test_matrix=topic_probability_mat[train.shape[0]:]
 
-
-# ### Less Dumb - Repeat Last Order<br>(0.3276746 Public LB Score)
-# ![Lloyd appreciates this][1]
-# 
-# 
-#   [1]: https://www.spin1038.com/content/000/images/000052/54551_60_news_hub_multi_630x0.png
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history,\n                    how='inner',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders().to_csv('less_dumb_subm_last_order.csv', encoding='utf-8', index=False)")
+del(topic_probability_mat)
+del(corpus)
+del(all_text)
+gc.collect()
 
-
-# ### Less Dumb - Repeat Last Order (Reordered Products Only)<br>(0.3276826 Public LB Score)
-# ![America is great again!][1]
-# 
-# 
-#   [1]: http://www.totalprosports.com/wp-content/uploads/2016/11/lloyd-and-harry-dumb-and-dumber.jpg
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders_reordered():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history[test_history.reordered == 1],\n                    how='left',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).fillna(-1).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(int(e)) for e in set(x)]) \n                                                  ).reset_index().replace(to_replace='-1', \n                                                                          value='None')\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders_reordered().to_csv('less_dumb_subm_last_order_reordered_only.csv', \n                         encoding='utf-8', \n                         index=False)")
+#convert to sparse format (Csr matrix)
+train_sparse=gensim.matutils.corpus2csc(train_matrix)
+test_sparse=gensim.matutils.corpus2csc(test_matrix)
+end_time=time.time()
+print("total time till Sparse mat creation",end_time-start_time,"s")
 
 
-# ### To be continued... 
-# 
-# **(TODO: more creative baselines)**
+# In[ ]:
 
-# ### Stay tuned, this notebook will be updated on a regular basis
-# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
+
+#custom NB model
+class NbSvmClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, C=1.0, dual=False, n_jobs=1):
+        self.C = C
+        self.dual = dual
+        self.n_jobs = n_jobs
+
+    def predict(self, x):
+        # Verify that model has been fit
+        check_is_fitted(self, ['_r', '_clf'])
+        return self._clf.predict(x.multiply(self._r))
+
+    def predict_proba(self, x):
+        # Verify that model has been fit
+        check_is_fitted(self, ['_r', '_clf'])
+        return self._clf.predict_proba(x.multiply(self._r))
+
+    def fit(self, x, y):
+        # Check that X and y have correct shape
+        y = y.values
+        x, y = check_X_y(x, y, accept_sparse=True)
+
+        def pr(x, y_i, y):
+            p = x[y==y_i].sum(0)
+            return (p+1) / ((y==y_i).sum()+1)
+
+        self._r = sparse.csr_matrix(np.log(pr(x,1,y) / pr(x,0,y)))
+        x_nb = x.multiply(self._r)
+        self._clf = LogisticRegression(C=self.C, dual=self.dual, n_jobs=self.n_jobs).fit(x_nb, y)
+        return self
+    
+
+model = NbSvmClassifier(C=2, dual=True, n_jobs=-1)
+
+
+# In[ ]:
+
+
+#set the target columns
+target_x=train_sparse.transpose()
+TARGET_COLS=['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+target_y=train[TARGET_COLS]
+
+
+# In[ ]:
+
+
+del(train_sparse)
+gc.collect()
+
+
+# In[ ]:
+
+
+model = NbSvmClassifier(C=4, dual=True, n_jobs=-1)
+X_train, X_valid, y_train, y_valid = train_test_split(target_x, target_y, test_size=0.33, random_state=2018)
+train_loss = []
+valid_loss = []
+preds_train = np.zeros((X_train.shape[0], y_train.shape[1]))
+preds_valid = np.zeros((X_valid.shape[0], y_train.shape[1]))
+for i, j in enumerate(TARGET_COLS):
+    print('Class:= '+j)
+    model.fit(X_train,y_train[j])
+    preds_valid[:,i] = model.predict_proba(X_valid)[:,1]
+    preds_train[:,i] = model.predict_proba(X_train)[:,1]
+    train_loss_class=log_loss(y_train[j],preds_train[:,i])
+    valid_loss_class=log_loss(y_valid[j],preds_valid[:,i])
+    print('Trainloss=log loss:', train_loss_class)
+    print('Validloss=log loss:', valid_loss_class)
+    train_loss.append(train_loss_class)
+    valid_loss.append(valid_loss_class)
+print('mean column-wise log loss:Train dataset', np.mean(train_loss))
+print('mean column-wise log loss:Validation dataset', np.mean(valid_loss))
+
+
+end_time=time.time()
+print("total time till NB base model creation",end_time-start_time)
+
+
+# In[ ]:
+
+
+#credits
+#pyLDAviz
+#https://nlp.stanford.edu/events/illvi2014/papers/sievert-illvi2014.pdf
+
+#to be continued 
+#to do next
+#paragraph vectors
+#https://arxiv.org/abs/1507.07998
+#https://github.com/RaRe-Technologies/gensim/blob/develop/docs/notebooks/doc2vec-IMDB.ipynb
+

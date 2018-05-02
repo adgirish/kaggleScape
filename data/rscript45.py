@@ -1,165 +1,157 @@
-__author__ = 'n01z3'
+# -*- coding: utf-8 -*-
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-from keras.models import Model
-from keras.layers import Input, Dense, BatchNormalization, Dropout, merge
-from keras.layers.advanced_activations import LeakyReLU
-import numpy as np
-import pandas as pd
-import glob
-import os
+import operator
+from num2words import num2words
 
-from time import time
+INPUT_PATH = "../input/"
+SUBM_PATH = "./"
 
-import tensorflow as tf
-from multiprocessing import Pool
+SUB = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+SUP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+OTH = str.maketrans("፬", "4")
 
-FOLDER = '/media/n01z3/DATA/dataset/yt8m/' #path to: train, val, test folders with *tfrecord files
+def solve():
+    print('Train start...')
+    
+    # Work with primary dataset
+    file = "en_train.csv"
+    train = open(INPUT_PATH + file, encoding='UTF8')
+    line = train.readline()
+    res = dict()
+    total = 0
+    not_same = 0
+    while 1:
+        line = train.readline().strip()
+        if line == '':
+            break
+        total += 1
+        pos = line.find('","')
+        text = line[pos + 2:]
+        if text[:3] == '","':
+            continue
+        text = text[1:-1]
+        arr = text.split('","')
+        if arr[0] != arr[1]:
+            not_same += 1
+        if arr[0] not in res:
+            res[arr[0]] = dict()
+            res[arr[0]][arr[1]] = 1
+        else:
+            if arr[1] in res[arr[0]]:
+                res[arr[0]][arr[1]] += 1
+            else:
+                res[arr[0]][arr[1]] = 1
+    train.close()
+    print(file + ':\tTotal: {} Have diff value: {}'.format(total, not_same))
 
+    # Work with additional dataset from https://www.kaggle.com/google-nlu/text-normalization
+    files = ['output_1.csv', 'output_6.csv', 'output_11.csv', 'output_16.csv', \
+        'output_21.csv', 'output_91.csv', 'output_96.csv']
 
-def ap_at_n(data):
-    # based on https://github.com/google/youtube-8m/blob/master/average_precision_calculator.py
-    predictions, actuals = data
-    n = 20
-    total_num_positives = None
+    for file in files:
+        train = open(INPUT_PATH + file, encoding='UTF8')
+        line = train.readline()
+        while 1:
+            line = train.readline().strip()
+            if line == '':
+                break
+            line = line.replace(',NA,', ',"NA",')
+            total += 1
+            pos = line.find('","')
+            text = line[pos + 2:]
+            if text[:3] == '","':
+                continue
+            text = text[1:-1]
+            arr = text.split('","')
+            if arr[0] == '<eos>':
+                continue
+            if arr[1] != '<self>':
+                not_same += 1
 
-    if len(predictions) != len(actuals):
-        raise ValueError("the shape of predictions and actuals does not match.")
+            if arr[1] == '<self>' or arr[1] == 'sil':
+                arr[1] = arr[0]
 
-    if n is not None:
-        if not isinstance(n, int) or n <= 0:
-            raise ValueError("n must be 'None' or a positive integer."
-                             " It was '%s'." % n)
+            if arr[0] not in res:
+                res[arr[0]] = dict()
+                res[arr[0]][arr[1]] = 1
+            else:
+                if arr[1] in res[arr[0]]:
+                    res[arr[0]][arr[1]] += 1
+                else:
+                    res[arr[0]][arr[1]] = 1
+        train.close()
+        print(file + ':\tTotal: {} Have diff value: {}'.format(total, not_same))
+    
+    sdict = {}
+    sdict['km2'] = 'square kilometers'
+    sdict['km'] = 'kilometers'
+    sdict['kg'] = 'kilograms'
+    sdict['lb'] = 'pounds'
+    sdict['dr'] = 'doctor'
+    sdict['m²'] = 'square meters'
 
-    ap = 0.0
+    total = 0
+    changes = 0
+    out = open(SUBM_PATH + 'baseline4_en.csv', "w", encoding='UTF8')
+    out.write('"id","after"\n')
+    test = open(INPUT_PATH + "en_test.csv", encoding='UTF8')
+    line = test.readline().strip()
+    while 1:
+        line = test.readline().strip()
+        if line == '':
+            break
 
-    sortidx = np.argsort(predictions)[::-1]
+        pos = line.find(',')
+        i1 = line[:pos]
+        line = line[pos + 1:]
 
-    if total_num_positives is None:
-        numpos = np.size(np.where(actuals > 0))
-    else:
-        numpos = total_num_positives
+        pos = line.find(',')
+        i2 = line[:pos]
+        line = line[pos + 1:]
 
-    if numpos == 0:
-        return 0
+        line = line[1:-1]
+        out.write('"' + i1 + '_' + i2 + '",')
+        if line in res:
+            srtd = sorted(res[line].items(), key=operator.itemgetter(1), reverse=True)
+            out.write('"' + srtd[0][0] + '"')
+            changes += 1
+        else:
+            # line.split(' ')
+            if len(line) > 1:
+                val = line.split(',')
+                if len(val) == 2 and val[0].isdigit and val[1].isdigit:
+                    line = ''.join(val)
 
-    if n is not None:
-        numpos = min(numpos, n)
-    delta_recall = 1.0 / numpos
-    poscount = 0.0
+            if line.isdigit():
+                srtd = line.translate(SUB)
+                srtd = srtd.translate(SUP)
+                srtd = srtd.translate(OTH)
+                out.write('"' + num2words(float(srtd)) + '"')
+                changes += 1
+            elif len(line.split(' ')) > 1:
+                val = line.split(' ')
+                for i, v in enumerate(val): 
+                    if v.isdigit():
+                        srtd = v.translate(SUB)
+                        srtd = srtd.translate(SUP)
+                        srtd = srtd.translate(OTH)
+                        val[i] = num2words(float(srtd))
+                    elif v in sdict:
+                        val[i] = sdict[v]
 
-    # calculate the ap
-    r = len(sortidx)
-    if n is not None:
-        r = min(r, n)
-    for i in range(r):
-        if actuals[sortidx[i]] > 0:
-            poscount += 1
-            ap += poscount / (i + 1) * delta_recall
-    return ap
+                out.write('"' + ' '.join(val) + '"')
+                changes += 1
+            else:
+                out.write('"' + line + '"')
 
+        out.write('\n')
+        total += 1
 
-def gap(pred, actual):
-    lst = zip(list(pred), list(actual))
-
-    with Pool() as pool:
-        all = pool.map(ap_at_n, lst)
-
-    return np.mean(all)
-
-
-def tf_itr(tp='test', batch=1024):
-    tfiles = sorted(glob.glob(os.path.join(FOLDER, tp, '*tfrecord')))
-    print('total files in %s %d' % (tp, len(tfiles)))
-    ids, aud, rgb, lbs = [], [], [], []
-    for fn in tfiles:
-        for example in tf.python_io.tf_record_iterator(fn):
-            tf_example = tf.train.Example.FromString(example)
-
-            ids.append(tf_example.features.feature['video_id'].bytes_list.value[0].decode(encoding='UTF-8'))
-            rgb.append(np.array(tf_example.features.feature['mean_rgb'].float_list.value))
-            aud.append(np.array(tf_example.features.feature['mean_audio'].float_list.value))
-
-            yss = np.array(tf_example.features.feature['labels'].int64_list.value)
-            out = np.zeros(4716).astype(np.int8)
-            for y in yss:
-                out[y] = 1
-            lbs.append(out)
-            if len(ids) >= batch:
-                yield np.array(ids), np.array(aud), np.array(rgb), np.array(lbs)
-                # yield np.array(rgb), np.array(lbs)
-                ids, aud, rgb, lbs = [], [], [], []
-
-
-def fc_block(x, n=1024, d=0.2):
-    x = Dense(n, init='glorot_normal')(x)
-    x = BatchNormalization()(x)
-    x = LeakyReLU()(x)
-    x = Dropout(d)(x)
-    return x
-
-
-def build_mod():
-    in1 = Input((128,), name='x1')
-    x1 = fc_block(in1)
-
-    in2 = Input((1024,), name='x2')
-    x2 = fc_block(in2)
-
-    x = merge([x1, x2], mode='concat', concat_axis=1)
-    x = fc_block(x)
-    out = Dense(4716, activation='sigmoid', name='output')(x)
-
-    model = Model(input=[in1, in2], output=out)
-    model.compile(optimizer='adam', loss='categorical_crossentropy')
-    # model.summary()
-    return model
-
-
-def train():
-    if not os.path.exists('weights'): os.mkdir('weights')
-    batch = 10 * 1024
-    n_itr = 10
-    n_eph = 100
-
-    _, x1_val, x2_val, y_val = next(tf_itr('val', 10000))
-
-    model = build_mod()
-    cnt = 0
-    for e in range(n_eph):
-        for d in tf_itr('train', batch):
-            _, x1_trn, x2_trn, y_trn = d
-            model.train_on_batch({'x1': x1_trn, 'x2': x2_trn}, {'output': y_trn})
-            cnt += 1
-            if cnt % n_itr == 0:
-                y_prd = model.predict({'x1': x1_val, 'x2': x2_val}, verbose=False, batch_size=100)
-                g = gap(y_prd, y_val)
-                print('val GAP %0.5f; epoch: %d; iters: %d' % (g, e, cnt))
-                model.save_weights('weights/%0.5f_%d_%d.h5' % (g, e, cnt))
-
-def conv_pred(el):
-    t = 20
-    idx = np.argsort(el)[::-1]
-    return ' '.join(['{} {:0.5f}'.format(i, el[i]) for i in idx[:t]])
-
-
-def predict():
-    model = build_mod()
-
-    wfn = sorted(glob.glob('weights/*.h5'))[-1]
-    model.load_weights(wfn)
-    print('loaded weight file: %s' % wfn)
-    idx, x1_val, x2_val, _ = next(tf_itr('test', 700640))
-
-    ypd = model.predict({'x1': x1_val, 'x2': x2_val}, verbose=1, batch_size=32)
-    del x1_val, x2_val
-
-    with Pool() as pool:
-        out = pool.map(conv_pred, list(ypd))
-
-    df = pd.DataFrame.from_dict({'VideoId': idx, 'LabelConfidencePairs': out})
-    df.to_csv('subm1', header=True, index=False, columns=['VideoId', 'LabelConfidencePairs'])
+    print('Total: {} Changed: {}'.format(total, changes))
+    test.close()
+    out.close()
 
 
 if __name__ == '__main__':
-    train()
-    predict()
+    solve()

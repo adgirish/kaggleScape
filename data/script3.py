@@ -1,406 +1,344 @@
 
 # coding: utf-8
 
-# # **Recruit Restaurant EDA**
-# *Fabien Daniel (December 2017)*
-# ___
-# This notebook aims at providing a first glance at the data provided for the *"Recruit Restaurant Visitor Forecasting"* challenge. The purpose of this competition is to predict the number of people that will make reservations during 5 weeks, from April 2017 to May 2017. Historical data for a period $\sim$1 year prior to April 2017 is provided in order get some insights on customers' habits.
-# ___
-# **1. Load the data** <br>
-# **2. Restaurant locations** <br>
-# **3. Reservations against visits** <br>
-# - 3.1 A global view of all *air* restaurants
-# - 3.2 A spot check
-#     * 3.2.1 case 1: the ideal case
-#     * 3.2.2 case 2
-# - 3.3 Test set reservations
-# ___
+# In this simple exploration notebook, let us try and explore the dataset given for this competition.
 # 
-# ## 1. Load the data
+# **Update on 25 May 2017: Since there are a couple of leaky features now, let us explore the same as well in the notebook** 
 # 
-# First, I load all the packages that will be used throughout this notebook and set a few parameters related to display:
+# **Objective:**
+# 
+# To classify whether question pairs are duplicate or not. 
+# 
+# Let us start with importing the necessary modules for exploring the data.
 
 # In[ ]:
 
 
-import numpy as np
-import datetime
-import pandas as pd
-import matplotlib as mpl
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
 import seaborn as sns
-import math, warnings
-from mpl_toolkits.basemap import Basemap
-plt.rcParams["patch.force_edgecolor"] = True
-plt.style.use('fivethirtyeight')
-mpl.rc('patch', edgecolor = 'dimgray', linewidth=1)
-from IPython.core.interactiveshell import InteractiveShell
-from IPython.display import display, HTML
-InteractiveShell.ast_node_interactivity = "last_expr"
-pd.options.display.max_columns = 50
+from nltk.corpus import stopwords
+from nltk import word_tokenize, ngrams
+from sklearn import ensemble
+from sklearn.model_selection import KFold
+from sklearn.metrics import log_loss
+import xgboost as xgb
+
+eng_stopwords = set(stopwords.words('english'))
+color = sns.color_palette()
+
 get_ipython().run_line_magic('matplotlib', 'inline')
-warnings.filterwarnings('ignore')
+
+pd.options.mode.chained_assignment = None  # default='warn'
 
 
-# The various files which are provided for this challenge are the following:
-
-# In[ ]:
-
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-file_list = check_output(["ls", "../input"]).decode("utf8")
-file_list = file_list.strip().split('\n')
-
-
-# As a first step, I examine the content of these files by looking e.g at the variable types and the number of entries and null values. Some variables correspond to dates and times and for further use, I convert the corresponding variables to the `datetime`
-#  format:
+# Let us read both the train and test dataset and check the number of rows.
 
 # In[ ]:
 
 
-def get_info(df):
-    print('Shape:',df.shape)
-    print('Size: {:5.2f} MB'.format(df.memory_usage().sum()/1024**2))
-    tab_info=pd.DataFrame(df.dtypes).T.rename(index={0:'column type'})
-    tab_info=tab_info.append(pd.DataFrame(df.isnull().sum()).T.rename(index={0:'null values'}))
-    tab_info=tab_info.append(pd.DataFrame(df.isnull().sum()/df.shape[0]*100).T.
-                         rename(index={0:'null values (%)'}))
-    display(tab_info)
-    display(df[:5])
+train_df = pd.read_csv("../input/train.csv")
+test_df = pd.read_csv("../input/test.csv")
+print(train_df.shape)
+print(test_df.shape)
 
 
-# In[ ]:
-
-
-#_____________________________________________________________
-# Read all the .csv files and show some info on their contents
-for index, file in enumerate(file_list):
-    var_name = file.rstrip('.csv')
-    print(file)
-    locals()[var_name] = pd.read_csv('../input/'+file)
-    #____________________
-    # convert to datetime
-    for col in locals()[var_name].columns:
-        if col.endswith('datetime') or col.endswith('date'):
-            locals()[var_name][col] = pd.to_datetime(locals()[var_name][col])
-    #__________________
-    get_info(locals()[var_name])
-
-
-# For these various dataframes, the meaning of the variables is given on the [competition home page](https://www.kaggle.com/c/recruit-restaurant-visitor-forecasting/data). As a reminder, I recall the content of each dataframe:
-# - **air_reserve.csv, hpg_reserve.csv**: reservations made in the air (*AirREGI*) or hpg (*Hot Pepper Gourmet*) systems
-# - **air_store_info.csv, hpg_store_info.csv**: information about *air* and *hpg* restaurants
-# - **store_id_relation.csv**: link the restaurants ids of the air and hpg systems
-# - **air_visit_data.csv**: historical visit data for the air restaurants
-# - **date_info.csv**: information about the calendar dates in the dataset
+# Okay. So there are about 400K rows in train set and about 2.35M rows in test set.
 # 
-# It is interesting to note that there are no missing values in this dataset. Moreover, as stated in [this forum discussion](https://www.kaggle.com/c/recruit-restaurant-visitor-forecasting/discussion/44502), there is not hpg couterpart to the **air_visit_data.csv** file. In other words, *we are not provided with the visit history for the restaurants which are only defined in the hpg system*.
-# 
-# ___
-# ## 2. Restaurant locations
-# 
-# At first, in order to have a global view of the geo-localisation of the restaurants in Japan, I put locate them on a map, for both the hpg and air restaurants. At that point, we have to keep in mind that these localisations are only approximations of the true locations in order to keep the data anonymous:
+# Also there are 6 columns in train set but only 3 of them are in test set. So we shall first look at the top few lines to understand the columns that are missing in the test set.
 
 # In[ ]:
 
 
-def draw_map(df, title):
-    plt.figure(figsize=(11,6))
-    map = Basemap(resolution='i',llcrnrlon=127, urcrnrlon=147,
-                  llcrnrlat=29, urcrnrlat=47, lat_0=0, lon_0=0,)
-    map.shadedrelief()
-    map.drawcoastlines()
-    map.drawcountries(linewidth = 3)
-    map.drawstates(color='0.3')
-    parallels = np.arange(0.,360,10.,)
-    map.drawparallels(parallels, labels = [True for s in range(len(parallels))])
-    meridians = np.arange(0.,360,10.,)
-    map.drawmeridians(meridians, labels = [True for s in range(len(meridians))])
-    #______________________
-    # put restaurants on map
-    for index, (y,x) in df[['latitude','longitude']].iterrows():
-        x, y = map(x, y)
-        map.plot(x, y, marker='o', markersize = 5, markeredgewidth = 1, color = 'red',
-                 markeredgecolor='k')
-    plt.title(title, y = 1.05)
+train_df.head()
 
+
+# **Data fields**
+# 
+# id - the id of a training set question pair
+# 
+# qid1, qid2 - unique ids of each question (only available in train.csv)
+# 
+# question1, question2 - the full text of each question
+# 
+# is_duplicate - the target variable, set to 1 if question1 and question2 have essentially the same meaning, and 0 otherwise.
 
 # In[ ]:
 
 
-#draw_map(hpg_store_info, 'hpg store restaurant locations')
-draw_map(air_store_info, 'air store restaurant locations')
+test_df.head()
 
 
-# ___
-# ## 3. Reservations against visists
+# So we do not have question ids for the test set. I hope the reason is as follows:
 # 
-# First, I define a class that I will subsequently use to make the figures. I previously defined this class in [another notebook](https://www.kaggle.com/fabiendaniel/predicting-flight-delays-tutorial) that dealt with time series analysis and where the aim was to predict flight delays.
+# *As an anti-cheating measure, Kaggle has supplemented the test set with computer-generated question pairs. Those rows do not come from Quora, and are not counted in the scoring. All of the questions in the training set are genuine examples from Quora.*
 # 
+# Since some questions are not from Quora, question ids are not present I think.
+
+# **Target Variable Exploration:**
+# 
+# First let us look at the target variable distribution.
 
 # In[ ]:
 
 
-class Figure_style():
-    #_________________________________________________________________
-    def __init__(self, size_x = 11, size_y = 5, nrows = 1, ncols = 1):
-        sns.set_style("white")
-        sns.set_context("notebook", font_scale=1.2, rc={"lines.linewidth": 2.5})
-        self.fig, axs = plt.subplots(nrows = nrows, ncols = ncols, figsize=(size_x,size_y,))
-        #________________________________
-        # convert self.axs to 2D array
-        if nrows == 1 and ncols == 1:
-            self.axs = np.reshape(axs, (1, -1))
-        elif nrows == 1:
-            self.axs = np.reshape(axs, (1, -1))
-        elif ncols == 1:
-            self.axs = np.reshape(axs, (-1, 1))
-    #_____________________________
-    def pos_update(self, ix, iy):
-        self.ix, self.iy = ix, iy
-    #_______________
-    def style(self):
-        self.axs[self.ix, self.iy].spines['right'].set_visible(False)
-        self.axs[self.ix, self.iy].spines['top'].set_visible(False)
-        self.axs[self.ix, self.iy].yaxis.grid(color='lightgray', linestyle=':')
-        self.axs[self.ix, self.iy].xaxis.grid(color='lightgray', linestyle=':')
-        self.axs[self.ix, self.iy].tick_params(axis='both', which='major',
-                                               labelsize=10, size = 5)
-    #________________________________________
-    def draw_legend(self, location='upper right'):
-        legend = self.axs[self.ix, self.iy].legend(loc = location, shadow=True,
-                                        facecolor = 'g', frameon = True)
-        legend.get_frame().set_facecolor('whitesmoke')
-    #_________________________________________________________________________________
-    def cust_plot(self, x, y, color='b', linestyle='-', linewidth=1, marker=None, label=''):
-        if marker:
-            markerfacecolor, marker, markersize = marker[:]
-            self.axs[self.ix, self.iy].plot(x, y, color = color, linestyle = linestyle,
-                                linewidth = linewidth, marker = marker, label = label,
-                                markerfacecolor = markerfacecolor, markersize = markersize)
-        else:
-            self.axs[self.ix, self.iy].plot(x, y, color = color, linestyle = linestyle,
-                                        linewidth = linewidth, label=label)
-        self.fig.autofmt_xdate()
-    #________________________________________________________________________
-    def cust_plot_date(self, x, y, color='lightblue', linestyle='-',
-                       linewidth=1, markeredge=False, label=''):
-        markeredgewidth = 1 if markeredge else 0
-        self.axs[self.ix, self.iy].plot_date(x, y, color='lightblue', markeredgecolor='grey',
-                                  markeredgewidth = markeredgewidth, label=label)
-    #________________________________________________________________________
-    def cust_scatter(self, x, y, color = 'lightblue', markeredge = False, label=''):
-        markeredgewidth = 1 if markeredge else 0
-        self.axs[self.ix, self.iy].scatter(x, y, color=color,  edgecolor='grey',
-                                  linewidths = markeredgewidth, label=label)    
-    #___________________________________________
-    def set_xlabel(self, label, fontsize = 14):
-        self.axs[self.ix, self.iy].set_xlabel(label, fontsize = fontsize)
-    #___________________________________________
-    def set_ylabel(self, label, fontsize = 14):
-        self.axs[self.ix, self.iy].set_ylabel(label, fontsize = fontsize)
-    #____________________________________
-    def set_xlim(self, lim_inf, lim_sup):
-        self.axs[self.ix, self.iy].set_xlim([lim_inf, lim_sup])
-    #____________________________________
-    def set_ylim(self, lim_inf, lim_sup):
-        self.axs[self.ix, self.iy].set_ylim([lim_inf, lim_sup])  
+is_dup = train_df['is_duplicate'].value_counts()
 
-
-# First, I make a census of the restaurant ids which are common to both the *hpg* and *air* systems and only keep in the **hpg_reserve** dataframe the restaurants which are common to both reservations systems:
-
-# In[ ]:
-
-
-convert_hpg = {k:v for k,v in list(zip(store_id_relation['hpg_store_id'].values,
-                                       store_id_relation['air_store_id'].values))}
-hpg_reserve["hpg_store_id"].replace(convert_hpg, inplace = True)
-hpg_reserve = hpg_reserve[hpg_reserve['hpg_store_id'].str.startswith('air')]
-
-
-# I create new variables that indicate the delay between the reservation and the visit dates and merge the **air_reserve** and **hpg_reserve** dataframes in the **total_reserve** dataframe:
-
-# In[ ]:
-
-
-def delta_reservation(df):
-    df['delta_reservation'] = df['visit_datetime'] - df['reserve_datetime']
-    df['delta_2days'] = df['delta_reservation'].apply(lambda x: int(x.days < 2))
-    df['delta_7days'] = df['delta_reservation'].apply(lambda x: int(2 <= x.days < 7))
-    df['delta_long'] = df['delta_reservation'].apply(lambda x: int(x.days >= 7))
-    return df
-#______________
-air_reserve = delta_reservation(air_reserve)
-hpg_reserve = delta_reservation(hpg_reserve)
-#__________________________________________________________________________
-air_reserve.rename(columns = {'air_store_id':'store_id'}, inplace = True)
-hpg_reserve.rename(columns = {'hpg_store_id':'store_id'}, inplace = True)
-total_reserve = pd.concat([air_reserve, hpg_reserve])
-total_reserve['date'] = total_reserve['visit_datetime'].apply(lambda x:x.date())
-
-
-# Considering the *air* restaurants, the **total_reserve** and **air_visit_data** dataframes respectively give informations on the number of visits and the reservations that were previously made. At first, I look at the number of unique restaurants in each dataframe:
-
-# In[ ]:
-
-
-list_visit_ids   = air_visit_data['air_store_id'].unique()
-list_reserve_ids = total_reserve['store_id'].unique()
-print("nb. of restaurants visited: {}".format(len(list_visit_ids)))
-print("nb. of restaurants with reservations: {}".format(len(list_reserve_ids)))
-print("intersections of ids: {}".format(len(set(list_visit_ids).intersection(set(list_reserve_ids)))))
-
-
-# Hence, for all the restaurants where there is a record of the reservations, we also have the effective number of visitors. However, there is ~ 500 restaurants for which we don't have any informations on reservations. 
-# 
-# ### 3.1 A global view of all *air* restaurants
-# 
-# First, I consider the overall visits and reservations made in the *air* restaurants.
-
-# In[ ]:
-
-
-df1 = total_reserve[['date', 'reserve_visitors']].groupby('date').sum().reset_index()
-df2 = air_visit_data.groupby('visit_date').sum().reset_index()
-
-fig1 = Figure_style(11, 5, 1, 1)
-fig1.pos_update(0, 0)
-fig1.cust_plot(df2['visit_date'], df2['visitors'], linestyle='-', label = 'nb. of visits')
-fig1.cust_plot(df1['date'], df1['reserve_visitors'], color = 'r', linestyle='-', label = 'nb. of reservations')
-fig1.style() 
-fig1.draw_legend(location = 'upper left')
-fig1.set_ylabel('Visitors', fontsize = 14)
-fig1.set_xlabel('Date', fontsize = 14)
-#________
-# limits
-date_1 = datetime.datetime(2015,12,1)
-date_2 = datetime.datetime(2017,6,1)
-fig1.set_xlim(date_1, date_2)
-fig1.set_ylim(-50, 25000)
-
-
-# Here we can note a few things:
-# - the number of reservations only account for a small fraction of the total number of visits (typically a factor 10). This partly comes from the fact that only ~1/3 of the total number of restaurants visited are present in the **total_reserve** dataframe. Additionally, many clients will probably go directly to the restaurants without reserving.
-# - another interesting thing to note is that there is a clear high frequency peridocity and without looking at the data in details, we can infer that this periodicity arise from the day of the week, since it seems quite logical that the restaurant frequentation rises during the week-end.
-# - finally, **_we see that for the dates that correspond to the test set_**, the number of visits is quite low: this point will be adressed later but we can infer that for the 5 weeks covered by the test set, **_we don't have the data that deal with the 'last minute' reservations._**
-# 
-# ___
-# ### 3.2 A spot check
-# 
-# Now, we can examine the same thing but for a few selected restaurants.
-# 
-# #### 3.2.1 Case 1: the ideal case
-# 
-# We select a first restaurant in the **air_reserve** dataframe and compare the number of visits and number of reservations:
-
-# In[ ]:
-
-
-restaurant_id = air_reserve['store_id'][0]
-
-
-# In[ ]:
-
-
-df2 = air_visit_data[air_visit_data['air_store_id'] == restaurant_id]
-df0 = total_reserve[total_reserve['store_id'] == restaurant_id]
-df1 = df0[['date', 'reserve_visitors']].groupby('date').sum().reset_index()
-
-
-# In[ ]:
-
-
-fig1 = Figure_style(11, 5, 1, 1)
-fig1.pos_update(0, 0)
-fig1.cust_plot(df2['visit_date'], df2['visitors'], linestyle='-', label = 'nb. of visits')
-fig1.cust_plot(df1['date'], df1['reserve_visitors'], color = 'r', linestyle='-', label = 'nb. of reservations')
-fig1.style() 
-fig1.draw_legend(location = 'upper left')
-fig1.set_ylabel('Visitors', fontsize = 14)
-fig1.set_xlabel('Date', fontsize = 14)
-#________
-# limits
-date_1 = datetime.datetime(2015,12,21)
-date_2 = datetime.datetime(2017,6,1)
-fig1.set_xlim(date_1, date_2)
-fig1.set_ylim(-3, 39)
-
-
-# Here, we see that contrary to the case where we considered all the restaurants, the number of reservations closely follows the numbers of visits (when the reservations are available).
-# 
-# #### 3.2.2 Case 2
-# 
-# We select a second restaurant and proceed as before (except that I zoom on the data from Nov. 2016 to May 2017):
-
-# In[ ]:
-
-
-restaurant_id = air_reserve['store_id'][2]
-
-
-# In[ ]:
-
-
-df2 = air_visit_data[air_visit_data['air_store_id'] == restaurant_id]
-df0 = total_reserve[total_reserve['store_id'] == restaurant_id]
-df1 = df0[['date', 'reserve_visitors']].groupby('date').sum().reset_index()
-
-
-# In[ ]:
-
-
-fig1 = Figure_style(11, 5, 1, 1)
-fig1.pos_update(0, 0)
-fig1.cust_plot(df2['visit_date'], df2['visitors'], linestyle='-', label = 'nb. of visits')
-fig1.cust_plot(df1['date'], df1['reserve_visitors'], color = 'r', linestyle='-',
-               marker = ['r', 'o', 5], label = 'nb. of reservations')
-fig1.style() 
-fig1.draw_legend(location = 'upper left')
-fig1.set_ylabel('Visitors', fontsize = 14)
-fig1.set_xlabel('Date', fontsize = 14)
-#________
-# limits
-date_1 = datetime.datetime(2016,11,1)
-date_2 = datetime.datetime(2017,5,1)
-fig1.set_xlim(date_1, date_2)
-fig1.set_ylim(-3, 45)
-
-
-# Here, we see that number of visits *usually*  exceeds the number of reservations.
-# 
-# Hence, we will be faced with two categories of restaurants: for some restaurants, it will be easy to predict the number of visitors since they will only attend people that reserved beforehand. Other restaurants will on the contrary attend everybody.
-# 
-# ### 3.3 Test set reservations
-# 
-# As commented earlier, there's a lack of information for the test set reservations. This is can be clearly seen in the graph below:
-
-# In[ ]:
-
-
-fig1 = Figure_style(11, 5, 1, 1)
-fig1.pos_update(0, 0)
-
-color = ['r', 'b', 'g']
-label = ['delay < 2 days', '2 days < delay < 7 days', 'delay > 7 days']
-for j, colonne in enumerate(['delta_2days', 'delta_7days', 'delta_long']):
-    df0 = total_reserve[total_reserve[colonne] == 1]
-    df1 = df0[['date', 'reserve_visitors']].groupby('date').sum().reset_index()
-    fig1.cust_plot(df1['date'], df1['reserve_visitors'], linestyle='-', label = label[j], color = color[j])
-
-fig1.style() 
-fig1.draw_legend(location = 'upper left')
-fig1.set_ylabel('Visitors', fontsize = 14)
-fig1.set_xlabel('Date', fontsize = 14)
-#________
-# limits
-date_1 = datetime.datetime(2017,2,1)
-date_2 = datetime.datetime(2017,5,31)
-fig1.set_xlim(date_1, date_2)
-fig1.set_ylim(-3, 3000)
+plt.figure(figsize=(8,4))
+sns.barplot(is_dup.index, is_dup.values, alpha=0.8, color=color[1])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Is Duplicate', fontsize=12)
 plt.show()
 
 
-# On this graph, we see that after April 22, the number of reservations starts to decrease with time. Naturally, after a few days, we don't have any information concerning the resevations made 2 days before the visit. After April 29, we don't have any information on the reservations made 7 days before the visit. We see that long term reservations are avaliable for all the test set. However, their number tends to decrease with time and would thus correspond to a lower limit. 
+# In[ ]:
+
+
+is_dup / is_dup.sum()
+
+
+# So we have about 63% non-duplicate questions and 37% duplicate questions in the training data set.
+
+# **Questions Exploration:**
 # 
-# As [outlined by BreakfastPirate](https://www.kaggle.com/c/recruit-restaurant-visitor-forecasting/discussion/45120), this point is crucial in the prediction since most presumably, the public LB would correspond to the April 23 to April 28 period, for which we still have some information concerning the number of reservations. If the number of reservations is taken into account in the modeling, the models will probably perform reasonably well on the public LB. However, after April 28, there's a lack of information concerning the number of reservations. Models should take this into account and otherwise, we may expect that models that give good public LB scores would perform poorly on the private dataset.
+# Now let us explore the question fields present in the train data. First let us check the number of words distribution in the questions.
+
+# In[ ]:
+
+
+all_ques_df = pd.DataFrame(pd.concat([train_df['question1'], train_df['question2']]))
+all_ques_df.columns = ["questions"]
+
+all_ques_df["num_of_words"] = all_ques_df["questions"].apply(lambda x : len(str(x).split()))
+
+
+# In[ ]:
+
+
+cnt_srs = all_ques_df['num_of_words'].value_counts()
+
+plt.figure(figsize=(12,6))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[0])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Number of words in the question', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# So the distribution is right skewed with upto 237 words in a question. There are also few questions with 1 or 2 words as well.
+# 
+# Now let us explore the number of characters distribution as well.
+
+# In[ ]:
+
+
+all_ques_df["num_of_chars"] = all_ques_df["questions"].apply(lambda x : len(str(x)))
+cnt_srs = all_ques_df['num_of_chars'].value_counts()
+
+plt.figure(figsize=(50,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[3])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Number of characters in the question', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()      
+
+del all_ques_df
+
+
+# Number of characters distribution as well is right skewed.
+# 
+# One interesting point is the sudden dip at the 150 character mark. Not sure why is that so.!
+# 
+# Now let us look at the distribution of common unigrams between the given question pairs.
+
+# In[ ]:
+
+
+def get_unigrams(que):
+    return [word for word in word_tokenize(que.lower()) if word not in eng_stopwords]
+
+def get_common_unigrams(row):
+    return len( set(row["unigrams_ques1"]).intersection(set(row["unigrams_ques2"])) )
+
+def get_common_unigram_ratio(row):
+    return float(row["unigrams_common_count"]) / max(len( set(row["unigrams_ques1"]).union(set(row["unigrams_ques2"])) ),1)
+
+train_df["unigrams_ques1"] = train_df['question1'].apply(lambda x: get_unigrams(str(x)))
+train_df["unigrams_ques2"] = train_df['question2'].apply(lambda x: get_unigrams(str(x)))
+train_df["unigrams_common_count"] = train_df.apply(lambda row: get_common_unigrams(row),axis=1)
+train_df["unigrams_common_ratio"] = train_df.apply(lambda row: get_common_unigram_ratio(row), axis=1)
+
+
+# In[ ]:
+
+
+cnt_srs = train_df['unigrams_common_count'].value_counts()
+
+plt.figure(figsize=(12,6))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Common unigrams count', fontsize=12)
+plt.show()
+
+
+# It is interesting to see that there are very few question pairs with no common words. 
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+sns.boxplot(x="is_duplicate", y="unigrams_common_count", data=train_df)
+plt.xlabel('Is duplicate', fontsize=12)
+plt.ylabel('Common unigrams count', fontsize=12)
+plt.show()
+
+
+# There is some good difference between 0 and 1 class using the common unigram count variable. Let us look at the same graph using common unigrams ratio.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+sns.boxplot(x="is_duplicate", y="unigrams_common_ratio", data=train_df)
+plt.xlabel('Is duplicate', fontsize=12)
+plt.ylabel('Common unigrams ratio', fontsize=12)
+plt.show()
+
+
+# **Leaky Features Exploration:**
+# 
+# Now let us get into the leaky data exploration part. We have a couple of leaky features which seem to improve the score significantly. 
+# 
+#  1. [Frequency based feature by Jared Turkewitz][1]
+#  2. [Intersection of common neighbors by Krzysztof Dziedzic implemented by tour1st][2]
+# 
+# 
+#   [1]: https://www.kaggle.com/jturkewitz/magic-features-0-03-gain
+#   [2]: https://www.kaggle.com/tour1st/magic-feature-v2-0-045-gain
+
+# In[ ]:
+
+
+ques = pd.concat([train_df[['question1', 'question2']],         test_df[['question1', 'question2']]], axis=0).reset_index(drop='index')
+ques.shape
+
+
+# In[ ]:
+
+
+from collections import defaultdict
+q_dict = defaultdict(set)
+for i in range(ques.shape[0]):
+        q_dict[ques.question1[i]].add(ques.question2[i])
+        q_dict[ques.question2[i]].add(ques.question1[i])
+
+
+# In[ ]:
+
+
+def q1_freq(row):
+    return(len(q_dict[row['question1']]))
+    
+def q2_freq(row):
+    return(len(q_dict[row['question2']]))
+    
+def q1_q2_intersect(row):
+    return(len(set(q_dict[row['question1']]).intersection(set(q_dict[row['question2']]))))
+
+train_df['q1_q2_intersect'] = train_df.apply(q1_q2_intersect, axis=1, raw=True)
+train_df['q1_freq'] = train_df.apply(q1_freq, axis=1, raw=True)
+train_df['q2_freq'] = train_df.apply(q2_freq, axis=1, raw=True)
+
+
+# **Q1-Q2 neighbor intersection count:**
+# 
+# Let us first do simple count plots and see the distribution.
+
+# In[ ]:
+
+
+cnt_srs = train_df['q1_q2_intersect'].value_counts()
+
+plt.figure(figsize=(12,6))
+sns.barplot(cnt_srs.index, np.log1p(cnt_srs.values), alpha=0.8)
+plt.xlabel('Q1-Q2 neighbor intersection count', fontsize=12)
+plt.ylabel('Log of Number of Occurrences', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# In[ ]:
+
+
+grouped_df = train_df.groupby('q1_q2_intersect')['is_duplicate'].aggregate(np.mean).reset_index()
+plt.figure(figsize=(12,8))
+sns.pointplot(grouped_df["q1_q2_intersect"].values, grouped_df["is_duplicate"].values, alpha=0.8, color=color[2])
+plt.ylabel('Mean is_duplicate', fontsize=12)
+plt.xlabel('Q1-Q2 neighbor intersection count', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# Wow. This explains why this variable is super predictive.!
+# 
+# **Question1 Frequency:**
+
+# In[ ]:
+
+
+cnt_srs = train_df['q1_freq'].value_counts()
+
+plt.figure(figsize=(12,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
+plt.xlabel('Q1 frequency', fontsize=12)
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# We could see a long tail here as well. Now let us check the target variable distribution.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+grouped_df = train_df.groupby('q1_freq')['is_duplicate'].aggregate(np.mean).reset_index()
+sns.barplot(grouped_df["q1_freq"].values, grouped_df["is_duplicate"].values, alpha=0.8, color=color[4])
+plt.ylabel('Mean is_duplicate', fontsize=12)
+plt.xlabel('Q1 frequency', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# Here as well, we can see an increase in the mean target rate as the frequency increases.! Hopefully this is the case with question 2 as well. 
+# 
+# Let us now do a heat map between q1_freq and q2_freq to see the target variable distribution.
+
+# In[ ]:
+
+
+pvt_df = train_df.pivot_table(index="q1_freq", columns="q2_freq", values="is_duplicate")
+plt.figure(figsize=(12,12))
+sns.heatmap(pvt_df)
+plt.title("Mean is_duplicate value distribution across q1 and q2 frequency")
+plt.show()
+
+
+# Let us also check the correlation between the three fields.
+
+# In[ ]:
+
+
+cols_to_use = ['q1_q2_intersect', 'q1_freq', 'q2_freq']
+temp_df = train_df[cols_to_use]
+corrmat = temp_df.corr(method='spearman')
+f, ax = plt.subplots(figsize=(8, 8))
+
+# Draw the heatmap using seaborn
+sns.heatmap(corrmat, vmax=1., square=True)
+plt.title("Leaky variables correlation map", fontsize=15)
+plt.show()
+
+
+# Stay tuned.! Yet to complete. Please upvote if you find this useful.!

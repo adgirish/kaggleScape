@@ -1,1013 +1,549 @@
 
 # coding: utf-8
 
-# # How big is French Industry? [Data Visualization]
-# ***
-
-# ***Piotr Skalski - 26.10.2017***
-
-# <img src='https://upload.wikimedia.org/wikipedia/commons/e/e6/Paris_Night.jpg'>
-
-# # Table of Contents
-
-# * [1. Importing dataset and data preprocessing](#importing_dataset_and_data_preprocessing) <br>
-#    * [1.1. Dataset import](#dataset_import) <br>
-#    * [1.2. Let's summarize the Dataset](#lets_summarize_the_dataset) <br>
-#    * [1.3. Data preprocessing & feature engineering](#data_preprocessing) <br>
-#       * [1.3.1. Geography dataset preprocessing](#geography_dataset_preprocessing) <br>
-#       * [1.3.2. Industry dataset preprocessing](#industry_dataset_preprocessing) <br>
-#       * [1.3.3. Salary dataset preprocessing](#salary_dataset_preprocessing) <br>
-#       * [1.3.4. Merging datasets](#lets_look_at_it_from_a_birds_eye_view) <br>
-# <br>
-# * [2. Industry data visualization](#data_visualization) <br>
-#    * [2.1. Let's look at it from a bird's eye view](#lets_look_at_it_from_a_birds_eye_view) <br>
-#    * [2.2. French Riviera](#french_riviera) <br>
-#    * [2.3. Economic powerhouses!](#economic_powerhouses) <br>
-#    * [2.4. Driving force](#driving_force) <br>
-# <br>   
-# * [3. Wage data visualization](#data_visualization) <br>
-#    * [3.1. The Simple Truth about the Gender Pay Gap](#the_simple_truth_about_the_gender_pay_gap) <br>
-#    * [3.2. Wealth inequality](#wealth inequality) <br>
-# <br>
-# * [4. Epilogue](#epilogue) <br>   
-
-# ## 1. Importing dataset and data preprocessing
-# <a id="importing_dataset_and_data_preprocessing"></a>
-
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-from scipy.optimize import curve_fit
-import seaborn as sns
+import numpy as np
 
-from mpl_toolkits.basemap import Basemap
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-get_ipython().run_line_magic('matplotlib', 'inline')
 
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-
-
-# <b>NOTE:</b> Firstly we import data from files. So far, we can use the data in three separate CSV files. The first one contains geographic information about cities in France. It will provide us with the coordinates, the region and the department for each city. The second file provides information on the size of the industry in each city and the latest on the size of the earnings.
-
-# In[ ]:
-
-
-geography = pd.read_csv("../input/name_geographic_information.csv")
-industry = pd.read_csv("../input/base_etablissement_par_tranche_effectif.csv")
-salary = pd.read_csv("../input/net_salary_per_town_categories.csv")
-
-
-# ### 1.2. Let's try to summarize the Dataset
-# <a id="lets_summarize_the_dataset"></a>
-
-# In[ ]:
-
-
-geography.head(3)
-
-
-# In[ ]:
-
-
-geography.info()
-
-
-# In[ ]:
-
-
-industry.head(3)
-
-
-# In[ ]:
-
-
-industry.info()
-
-
-# In[ ]:
-
-
-salary.head(3)
-
-
-# In[ ]:
-
-
-salary.info()
-
-
-# ### 1.3. Data preprocessing & feature engineering|
-# <a id="data_preprocessing"></a>
-
-# ### 1.3.1. Geography dataset preprocessing
-# <a id="geography_dataset_preprocessing"></a>
-
-# <b>NOTE:</b> Before we start any operations on Data Frames let's drop columns that will not be useful to us.
-
-# In[ ]:
-
-
-geography.drop(['EU_circo', 'code_région', 'éloignement', 'numéro_département', 'nom_département', 'préfecture', 'numéro_circonscription', 'codes_postaux'], axis=1, inplace=True)
-
-
-# <b>NOTE:</b> Now let's translate columns names to english.
-
-# In[ ]:
-
-
-geography.rename(columns={'nom_région': 'region_name',
-                          'chef.lieu_région': 'region_capital',
-                          'nom_commune': 'common_name',
-                          'codes_postaux': 'postcodes'}, inplace=True)
-
-
-# <b>NOTE:</b> Unfortunately, some of the data in geography DataFrame is incorrect or incomplete. First we will focus on longitude column. We will convert commas to dots to create a correct number [1]. Then we will delete the incorrect entries [2] and empty fields [3]. Finally, we will switch the column type to float [4].
-
-# In[ ]:
-
-
-# 1
-geography["longitude"] = geography["longitude"].apply(lambda x: str(x).replace(',','.'))
-# 2
-mask = geography["longitude"] == '-'
-geography.drop(geography[mask].index, inplace=True)
-# 3
-geography.dropna(subset = ["longitude", "latitude"], inplace=True)
-# 4
-geography["longitude"] = geography["longitude"].astype(float)
-
-
-# <b>NOTE:</b> Now we will drop duplicates.
-
-# In[ ]:
-
-
-geography.drop_duplicates(subset=["code_insee"], keep="first", inplace=True)
-
-
-# <b>NOTE:</b> Let's create new feature and count the distance in a straight line to the center of Paris.  We will define an auxiliary function that will help us to calculate distances based on coordinates.
-
-# In[ ]:
-
-
-paris_lat = geography.loc[geography["common_name"] == "Paris"].iloc[0]["latitude"]
-paris_lon = geography.loc[geography["common_name"] == "Paris"].iloc[0]["longitude"]
-
-
-# In[ ]:
-
-
-from math import radians, cos, sin, asin, sqrt
-
-def haversine(lon1, lat1, lon2, lat2):
-    # convert decimal degrees to radians 
-    lon1 = radians(lon1)
-    lat1 = radians(lat1)
-    lon2 = radians(lon2)
-    lat2 = radians(lat2)
-    #lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-    # haversine formula 
-    dlon = lon2 - lon1 
-    dlat = lat2 - lat1 
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a)) 
-    # Radius of earth in kilometers is 6371
-    km = 6371* c
-    return km
-
-distances = []
-
-for index, row in geography.iterrows():
-    distances.append(haversine(row["longitude"], row["latitude"], paris_lon, paris_lat))
-
-
-# In[ ]:
-
-
-geography["distance"] = pd.Series(distances, index=geography.index)
-
-
-# ### 1.3.2. Industry dataset preprocessing
-# <a id="industry_dataset_preprocessing"></a>
-
-# <b>NOTE:</b> We are going to switch "CODGEO" column type from object (string) to int, but first we need to get rid of incorrect rows. Some of rows contain non numeric characters. We will select only those values that can be transformed into numbers.
-
-# In[ ]:
-
-
-industry = industry[industry["CODGEO"].apply(lambda x: str(x).isdigit())]
-
-
-# In[ ]:
-
-
-industry["CODGEO"] = industry["CODGEO"].astype(int)
-
-
-# <b>NOTE:</b> The criteria for defining the size of a business differ from country to country. According to the European Commission, we can divide enterprises info five categories based on number of employees: Micro < 10, Small < 50, Medium < 250, Large < 1000 and Enterprise > 1000. Let's create new columns that will be closer to representing those oficial categories. We will also create columns that will represent percentage of total number of businesses that is represented by each category.
+# <h1>Introduction</h1>
 # 
-# We will ignore 'E14TS0ND' column becouse we don't know enything concrete about those firms.
+# In this tutorial I'd like to illustrate some advanced uses of pipelines. Some readers might have used them in work already, or could be totally unfamiliar with them - no worries, I'll cover basic uses as well as some advanced tricks.
+
+# <h2>Advantages of pipelines</h2>
+# 1. Use of pipelines gives you a kind of meta-language to describe your model and abstract from some implementation details.
+# 2. With pipelines, you don't need to carry test dataset transformation along with your train features - this is taken care of automatically.
+# 3. Hyperparameter tuning made easy - set new parameters on any estimator in the pipeline, and refit - in 1 line. Or use GridSearchCV on the pipeline.
+
+# <h2>Simple illustrations</h2>
+# 
+# Let's start with simple illustrations.
+
+# <h3>Data preparation</h3>
+# 
+# I assume you are familiar with the data structure from other hot tutorials, so I'll be brief here.
 
 # In[ ]:
 
 
-industry['Micro'] = industry['E14TS1'] + industry['E14TS6']
-industry['Small'] = industry['E14TS10'] + industry['E14TS20']
-industry['Medium'] = industry['E14TS50'] + industry['E14TS100']
-industry['Large_and_Enterprise'] = industry['E14TS200'] + industry['E14TS500']
-
-industry['Sum'] = industry['E14TS1'] + industry['E14TS6'] + industry['E14TS10'] + industry['E14TS20'] + industry['E14TS50'] + industry['E14TS100'] + industry['E14TS200'] + industry['E14TS500']
-
-
-# In[ ]:
-
-
-industry['Micro%'] = industry['Micro'] * 100 / industry['Sum']
-industry['Small%'] = industry['Small'] * 100 / industry['Sum']
-industry['Medium%'] = industry['Medium'] * 100 / industry['Sum']
-industry['Large_and_Enterprise%'] = industry['Large_and_Enterprise'] * 100 / industry['Sum']
-
-
-# In[ ]:
-
-
-relevant_columns = [
-    'CODGEO',
-    'LIBGEO', 'REG', 'DEP',
-    'Sum', 'Micro', 'Small', 'Medium', 'Large_and_Enterprise',
-    'Micro%', 'Small%', 'Medium%', 'Large_and_Enterprise%'
-]
-industry = industry[relevant_columns]
+#read the data in
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
 
 # In[ ]:
 
 
-industry["DEP"] = industry["DEP"].astype(int)
+#encode labels to integer classes
+from sklearn.preprocessing import LabelEncoder
 
+lb = LabelEncoder().fit(train['author'])
 
-# ### 1.3.3. Salary dataset preprocessing
-# <a id="salary_dataset_preprocessing"></a>
-
-# <b>NOTE:</b> Similary like in industry dataset "CODGEO" column has bean loaded as object type. We need to conduct the same operation of converting int to int.
-
-# In[ ]:
-
-
-salary = salary[salary["CODGEO"].apply(lambda x: str(x).isdigit())]
+#Original labels are stored in a class property
+#and binarized labels correspond to indexes of this array - 0,1,2 in our case of three classes
+lb.classes_
 
 
 # In[ ]:
 
 
-salary["CODGEO"] = salary["CODGEO"].astype(int)
+#after transformation the label will look like an array of integer taking values 0,1,2
+lb.transform(train['author'])
 
 
-# ### 1.3.4. Merging datasets
-# <a id="merging_datasets"></a>
-
-# In[ ]:
-
-
-full_data = industry.merge(geography, how="left", left_on = "CODGEO", right_on="code_insee")
-
-
-# In[ ]:
-
-
-full_data.head(3)
-
-
-# ## 2. Industry data visualization
-# <a id="industry_data_visualization"></a>
-
-# ### 2.1. Let's look at it from a bird's eye view
-# <a id="lets_look_at_it_from_a_birds_eye_view"></a>
-
-# <b>NOTE:</b> First of all, let's make a map of France, on which we mark all the cities from the dataset. For this task we will use Basemap library. Each city is represented by a separate circle. The radius and color of the circles will reflect the number of jobs in the city. When the dataset will be expanded, the color can reflect the value of another feature. Due to the disproportionate value for Paris we use a logarithmic scale.
+# Split the thain dataset into two parts: the large one is used for training models,
+# the smaller one serves as a validation dataset - which is not seen during training, but has labels.
+# 
+# Here our new testing data set will be 0.7 of original train dataset (test_size=0.3),
+# we want proportion of classes to be kept in the new test (stratify=train['author']), 
+# and we set the random state for reproducability (random_state=17).
 
 # In[ ]:
 
 
-# Creating DataFrame containing cities with the highiest number of workplaces
-top_industry = full_data.sort_values(by=["Sum"], ascending=False).head(10)
+from sklearn.model_selection import train_test_split
+
+X_train_part, X_valid, y_train_part, y_valid =    train_test_split(train['text'], 
+                     lb.transform(train['author']), 
+                test_size=0.3,random_state=17, stratify=train['author'])
 
 
-# In[ ]:
-
-
-# Preparing information to mark cities with highiest number of workplaces
-top_industry_names = top_industry["LIBGEO"].values.tolist()
-top_industry_lons = top_industry["longitude"].values.tolist()
-top_industry_lats = top_industry["latitude"].values.tolist()
-
+# <h3>Preparing a pipeline</h3>
+# 
+# Let's create our fist model.
 
 # In[ ]:
 
 
-lons = full_data["longitude"].values.tolist()
-lats = full_data["latitude"].values.tolist()
-size = (full_data["Sum"]/5).values.tolist()
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from sklearn.linear_model import LogisticRegression
+
+pipe1 = Pipeline([
+    ('cv', CountVectorizer()),
+    ('tfidf', TfidfTransformer()),
+    ('logit', LogisticRegression()),
+])
 
 
-# In[ ]:
+# In this pipeline, input data comes first to `CountVectorizer`, which creates a sparse matrix of word counts in each sentence. This matrix then serves as input to `TfidfTransformer` which massages the data and handles it to the LogisticRegression estimator for training and prediction.
 
-
-# Creating new plot
-plt.figure(figsize=(20,20))
-# Load map of France
-map = Basemap(projection='lcc', 
-            lat_0=46.2374,
-            lon_0=2.375,
-            resolution='h',
-            llcrnrlon=-4.76, llcrnrlat=41.39,
-            urcrnrlon=10.51, urcrnrlat=51.08)
-
-# Draw parallels.
-parallels = np.arange(40.,52,2.)
-map.drawparallels(parallels,labels=[1,0,0,0],fontsize=10)
-# Draw meridians
-meridians = np.arange(-6.,10.,2.)
-map.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
-
-map.drawcoastlines()
-map.drawcountries()
-map.drawmapboundary()
-map.drawrivers()
-
-# Draw scatter plot with all cities
-x,y = map(lons, lats)
-map.scatter(x, y, s=size, alpha=0.6, c=size, norm=colors.LogNorm(vmin=1, vmax=max(size)), cmap='hsv')
-map.colorbar(location="bottom", pad="4%")
-
-# Draw scatter plot of cities with highiest number of workplaces
-x1, y1 = map(top_industry_lons, top_industry_lats)
-map.scatter(x1, y1, c="black")
-
-for i in range(len(top_industry_names)):
-    plt.annotate(top_industry_names[i], xy=(map(top_industry_lons[i] + 0.25,  top_industry_lats[i])), fontsize=25)
-
-plt.title("French Industry from a bird's eye view", fontsize=40, fontweight='bold', y=1.05)   
-
-plt.show()
-
-
-# <b>NOTE:</b> Right awey we see that Paris is city with the highiest number of workplaces in France. I also marked nine other cities that are top job providers. Traditionally, the large city was founded near the river and on the coast. Three of top ten cities from our dataset [Mintpellier, Marseille and Nice] are located on French Riviera. Let's take a closer look at this part of France.
-
-# ### 2.2. French Riviera
-# <a id="french_riviera"></a>
+# <h3>Fitting the Model</h3>
+# 
+# Our pipe1 object has all the properties of an estimator, so we can treat it as such. Hence, we call the `fit()` method.
+# 
+# Note that Pipeline "knows" that the first tho steps are transformers, so it will only call `fit()` and `transform()` on them, or just `fit_transform()` if it's defined for the class. For the `LogisticRegression` instance - our final model - only `fit()` will be called.
 
 # In[ ]:
 
 
-# Lets cut smaller cut of the map and focus on  French Riviera
-lons_min = 3
-lons_max = 8
-lats_min = 42.5
-lats_max = 45
+pipe1.fit(X_train_part, y_train_part)
 
-mask_lons = (full_data["longitude"] > lons_min) & (full_data["longitude"] < lons_max)
-mask_lats = (full_data["latitude"] > lats_min) & (full_data["latitude"] < lats_max)
-franch_riviera = full_data[mask_lons & mask_lats]
 
-lons = franch_riviera["longitude"].values.tolist()
-lats = franch_riviera["latitude"].values.tolist()
-size = (franch_riviera["Sum"]/2).values.tolist()
-
-# Creating DataFrame containing cities with the highiest number of workplaces
-top_industry = franch_riviera.sort_values(by=["Sum"], ascending=False).head(5)
-
-# Preparing information to mark cities with highiest number of workplaces
-top_industry_names = top_industry["LIBGEO"].values.tolist()
-top_industry_lons = top_industry["longitude"].values.tolist()
-top_industry_lats = top_industry["latitude"].values.tolist()
-
+# Let's stop here for a moment and check what we've got. 
+# 
+# 
+# We can look up all the steps of the pipeline, and all the parameters of the steps: 
 
 # In[ ]:
 
 
-# Creating new plot
-plt.figure(figsize=(20,20))
-# Load map of France
-map = Basemap(projection='lcc', 
-            lat_0=(lats_min + lats_max)/2,
-            lon_0=(lons_min + lons_max)/2,
-            resolution='h',
-            llcrnrlon=lons_min, llcrnrlat=lats_min,
-            urcrnrlon=lons_max, urcrnrlat=lats_max)
-
-# Draw parallels.
-parallels = np.arange(40.,52,2.)
-map.drawparallels(parallels,labels=[1,0,0,0],fontsize=10)
-# Draw meridians
-meridians = np.arange(-6.,10.,2.)
-map.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
-
-map.drawcoastlines()
-map.drawcountries()
-map.drawmapboundary()
-map.drawrivers()
-
-# Draw scatter plot with all cities
-x,y = map(lons, lats)
-map.scatter(x, y, s=size, alpha=0.6, c=size, norm=colors.LogNorm(vmin=1, vmax=max(size)), cmap='hsv')
-map.colorbar(location="bottom", pad="4%")
-
-# Draw scatter plot of cities with highiest number of workplaces
-x1, y1 = map(top_industry_lons, top_industry_lats)
-map.scatter(x1, y1, c="black")
-
-for i in range(len(top_industry_names)):
-    plt.annotate(top_industry_names[i], xy=(map(top_industry_lons[i] + 0.25,  top_industry_lats[i])), fontsize=25)
-
-plt.title("French Riviera", fontsize=40, fontweight='bold', y=1.05)  
-
-plt.show()
+pipe1.steps
 
 
-# ### 2.3. Paris is economic powerhouse!
-# <a id="paris_is_economic_powerhouse"></a>
-
-# <b>NOTE:</b> Let's choose the ten cities with the most jobs. The line graph reflects the total number of jobs in the city. Bar charts reflect the distribution of companies according to their size for each city separately.
+# We can access each step's parameters by name, as well as any of its methods and properties:
 
 # In[ ]:
 
 
-# Creating DataFrame containing cities with the highiest number of workplaces
-powerhouse = full_data.sort_values(by=["Sum"], ascending=False).head(10)
+pipe1.named_steps['logit'].coef_
+
+
+# <h3>Making predictions</h3>
+# 
+# This is as easy as with a 'regular' model. We just call `predict()` or `predict_proba()`.
+# Let's use our hold-out data for validation:
+
+# In[ ]:
+
+
+from sklearn.metrics import log_loss
+
+pred = pipe1.predict_proba(X_valid)
+log_loss(y_valid, pred)
+
+
+# <h3>Playing with parameters</h3>
+# That was not a winner! But hold on, we are not there yet!
+# We can improve the score by tuning some parameters. As I have shown earlier, we can check every step's paramters by its name:
+
+# In[ ]:
+
+
+pipe1.named_steps['logit'].get_params()
+
+
+# But we can also check and set them all at once:
+
+# In[ ]:
+
+
+pipe1.get_params()
+
+
+# You can see here, that the Pipeline class has all steps' parameters with their respective names prepended. We can set them as well and fit the model.
+
+# In[ ]:
+
+
+#set_params(cv__lowercase=True)
+pipe1.set_params(cv__min_df=6, 
+                 cv__lowercase=False).fit(X_train_part, y_train_part)
+pred = pipe1.predict_proba(X_valid)
+log_loss(y_valid, pred)
+
+
+# A little bit better! You get the idea. Thinking `GridSearchCV` or `cross_val_score`? Yes, will work on the pipeline too. Fork this kernel and implement it yourself!
+
+# <h3>Playing with a model</h3>
+# Would you like to try another classifier? Naive Bayes seems to be in favor across winning kernels. Replacing a pipeline step is easy:
+
+# In[ ]:
+
+
+from sklearn.naive_bayes import MultinomialNB, BernoulliNB
+
+pipe1 = Pipeline([
+    ('cv', CountVectorizer()),
+    ('tfidf', TfidfTransformer()),
+    #('logit', LogisticRegression()),
+    ('bnb', BernoulliNB()),
+   
+])
 
 
 # In[ ]:
 
 
-trace1 = go.Bar(
-    x = powerhouse["LIBGEO"].tolist(),
-    y = powerhouse["Micro%"].tolist(),
-    name='Micro %',
-    marker=dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace2 = go.Bar(
-    x = powerhouse["LIBGEO"].tolist(),
-    y = powerhouse["Small%"].tolist(),
-    name='Small %',
-    marker=dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace3 = go.Bar(
-    x = powerhouse["LIBGEO"].tolist(),
-    y = powerhouse["Medium%"].tolist(),
-    name='Medium %',
-    marker=dict(
-        color='rgba(0, 168, 107, 0.7)',
-        line=dict(
-            color='rgba(0, 168, 107, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace4 = go.Bar(
-    x = powerhouse["LIBGEO"].tolist(),
-    y = powerhouse['Large_and_Enterprise%'].tolist(),
-    name='Large and Enterprise %',
-    marker=dict(
-        color='rgba(250, 92, 0, 0.7)',
-        line=dict(
-            color='rgba(250, 92, 0, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace5 = go.Scatter(
-    x = powerhouse["LIBGEO"].tolist(),
-    y = powerhouse['Sum'].tolist(),
-    name='Total number of businesses',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2, trace3, trace4, trace5]
-
-layout = go.Layout(
-    title = 'Paris is economic powerhouse',
-    titlefont=dict(size=25),
-    width=850,
-    height=600,
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Percentage of total businesses per city',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    xaxis = dict(title= 'Major french cities'),
-    yaxis2=dict(
-        title='Number of businesses per city',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 13000
-    ),
-    #legend=dict(x=-.1, y=1.2)
-    legend=dict(x=0.65, y=0.45)
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
+pipe1.fit(X_train_part, y_train_part)
+pred = pipe1.predict_proba(X_valid)
+log_loss(y_valid, pred)
 
 
-# ### 2.4. Driving force
-# <a id="driving_force"></a>
+# Best score so far! Have more ideas? Fork this kernel and try them out!
+# 
+# Also, for more examples and a gentle intro, read another great Spooky pipeline tutorial: [pipeline for the beginners](https://www.kaggle.com/baghern/a-deep-dive-into-sklearn-pipelines)
+# 
 
-# <b>NOTE:</b> Let's group the data on the basis of region name, sum up the number of jobs in all cities in the given region and sort descendingly. Then mark the regions on the map. The color of the bar graph corresponds to the color on the map.
+# <h3>Feature Union</h3>
+# 
+# Another strong side of pipelines come from its brother class - `FeatureUnion`. It will help us to combine together some new features that we create as part of EDA. Let's, for example, take a statistics on parts of speech used in each sentence,  and see if it can help to improve the score.
+
+# <h3>NLTK Part-of-Speech tagger</h3>
+# 
+# Suppose we assume that authors could be distinguished by some statistics of use of some parts of speech. May be frequency of conjugatoin is a significant feature? Or use of punctuation?
+# 
+# NLTK can help to tag words in sentences.
 
 # In[ ]:
 
 
-regions = full_data[["region_name", "Sum"]].groupby("region_name").sum().sort_values("Sum", ascending=False).reset_index().reset_index()
-regions.rename(columns={'index': 'region_rank',}, inplace=True)
-regions_labels = regions["region_name"].tolist()
-regions_sums = regions["Sum"].tolist()
+import nltk
+
+text = "And now we are up for 'something' completely different;"
+tokens = nltk.word_tokenize(text)
+tagged = nltk.pos_tag(tokens)
+tagged
+
+
+# Puzzled about all the tags? `CC` means conjunction, coordinated. Take a look at the complete description with `nltk.help.upenn_tagset()` that I don't run here to keep the clutter down.
+# 
+
+# So, in order to tag our text in the pipeline, we will create an estimator class of our own. Don't be afraid - this is simple. We just have to inherit some base classes and overload very few functions that we are actually going to use:
+
+# In[ ]:
+
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from collections import Counter
+
+class PosTagMatrix(BaseEstimator, TransformerMixin):
+    #normalise = True - devide all values by a total number of tags in the sentence
+    #tokenizer - take a custom tokenizer function
+    def __init__(self, tokenizer=lambda x: x.split(), normalize=True):
+        self.tokenizer=tokenizer
+        self.normalize=normalize
+
+    #helper function to tokenize and count parts of speech
+    def pos_func(self, sentence):
+        return Counter(tag for word,tag in nltk.pos_tag(self.tokenizer(sentence)))
+
+    # fit() doesn't do anything, this is a transformer class
+    def fit(self, X, y = None):
+        return self
+
+    #all the work is done here
+    def transform(self, X):
+        X_tagged = X.apply(self.pos_func).apply(pd.Series).fillna(0)
+        X_tagged['n_tokens'] = X_tagged.apply(sum, axis=1)
+        if self.normalize:
+            X_tagged = X_tagged.divide(X_tagged['n_tokens'], axis=0)
+
+        return X_tagged
+
+
+# Now, our new pipeline:
+
+# In[ ]:
+
+
+from sklearn.pipeline import FeatureUnion
+
+pipe2 = Pipeline([
+    ('u1', FeatureUnion([
+        ('tfdif_features', Pipeline([
+            ('cv', CountVectorizer()),
+            ('tfidf', TfidfTransformer()),
+        ])),
+        ('pos_features', Pipeline([
+            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
+        ])),
+    ])),
+    ('logit', LogisticRegression()),
+
+])
 
 
 # In[ ]:
 
 
-trace1 = go.Bar(
-    x = regions_labels,
-    y = regions_sums,
-    name='Number of businesses',
-    marker=dict(
-        color=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-        colorscale='Jet',
-        line=dict(
-            color='rgb(0, 0, 0)',
-            width=1
-        )
-    ),
-    opacity=0.6
-)
+pipe2.fit(X_train_part, y_train_part)
+pred = pipe2.predict_proba(X_valid)
+log_loss(y_valid, pred)
 
-data = [trace1]
 
-layout = go.Layout(
-    barmode='stack',
-    title = 'Regions with the highiest number of workplaces',
-    titlefont=dict(size=25),
-    width=850,
-    height=500,
-    margin=go.Margin(
-        l=75,
-        r=75,
-        b=120,
-        t=100,
-        pad=10
-    ),
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Number of businesses per region',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-)
+# Not an improvements, but hey, we learned somthing new!
+# 
+# By this cell, the reader may already feel the power on the new instruments. Are there downsides? Read on.
 
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
+# <h2>What gets stuck in the pipes?</h2>
+# 
+# Ok, someone may comment - the way `CounterVectorizer` is usually fit is on the combined train+test datasets, so that the entire vocabulary is learnt. And pipeline accepts one dataset at a time. Yes, this is a problem. The `vocabulary` option won't help us, in case we want to play with ngrams. Is there a work around? Yes. Read on the advanced section
+# 
+# What about stacking? There are some complex worklfows, for example in [Simple Feature Engg Notebook - Spooky Author](https://www.kaggle.com/sudalairajkumar/simple-feature-engg-notebook-spooky-author) it is proposed to stack 7 models! Yes, we can do so with piplines, read on.
+# 
+# 
+# It could be slow to run all transformations all over again! True, and I'll show you the way to save time.
+# 
 
+# <h3>Overloading CountVectorizer class</h3>
 
 # In[ ]:
 
 
-by_regions = full_data.merge(regions[["region_name", "region_rank"]], how="left", on="region_name" )
-
-
-# In[ ]:
-
-
-lons = by_regions["longitude"].values.tolist()
-lats = by_regions["latitude"].values.tolist()
-size = (by_regions["Sum"]/5).values.tolist()
-region = by_regions["region_rank"].values.tolist()
-
-
-# In[ ]:
-
-
-regions_capitals = by_regions[by_regions["region_capital"] == by_regions["common_name"]]
-
-lons_capital = regions_capitals["longitude"].values.tolist()
-lats_capital = regions_capitals["latitude"].values.tolist()
-names_region = regions_capitals["region_name"].values.tolist()
-
-
-# In[ ]:
-
-
-# Creating new plot
-plt.figure(figsize=(20,20))
-# Load map of France
-map = Basemap(projection='lcc', 
-            lat_0=46.2374,
-            lon_0=2.375,
-            resolution='h',
-            llcrnrlon=-4.76, llcrnrlat=41.39,
-            urcrnrlon=10.51, urcrnrlat=51.08)
-
-# Draw parallels.
-parallels = np.arange(40.,52,2.)
-map.drawparallels(parallels,labels=[1,0,0,0],fontsize=10)
-# Draw meridians
-meridians = np.arange(-6.,10.,2.)
-map.drawmeridians(meridians,labels=[0,0,0,1],fontsize=10)
-
-map.drawcoastlines()
-map.drawcountries()
-map.drawmapboundary()
-map.drawrivers()
-
-# Draw scatter plot with all cities
-x,y = map(lons, lats)
-map.scatter(x, y, s=size, alpha=0.6, c=region, cmap='jet')
-map.colorbar(location="bottom", pad="4%")
-
-# Draw scatter plot of cities with highiest number of workplaces
-x1, y1 = map(lons_capital, lats_capital)
-map.scatter(x1, y1, c="black")
-
-for i in range(len(names_region)):
-    plt.annotate(names_region[i], xy=(map(lons_capital[i] - 0.07 * len(names_region[i]),  lats_capital[i] + 0.2)), fontsize=18)
-
-plt.title("Regions with the highiest number of workplaces", fontsize=30, fontweight='bold', y=1.05)   
-
-plt.show()
-
-
-# ## 3. Wage data visualization
-# <a id="wage_data_visualization"></a>
-
-# ### 3.1. The Simple Truth about the Gender Pay Gap
-# <a id="the_simple_truth_about_the_gender_pay_gap"></a>
-
-# <b>NOTE:</b> Let's see if the stereotype of women earning less is true. We will use the data in the salaries file and we calculate the average value of the average earnings in cities. Then we create graphs based on the occupied position and age.
-
-# In[ ]:
-
-
-positions = ["Executive", "Middle manager", "Employee", "Worker"]
-woman_positions = ["SNHMFC14", "SNHMFP14", "SNHMFE14", "SNHMFO14"]
-woman_salary_positions = salary[woman_positions].mean().tolist()
-man_positions = ["SNHMHC14", "SNHMHP14", "SNHMHE14", "SNHMHO14"]
-man_salary_positions = salary[man_positions].mean().tolist()
-
-dif_in_prc = []
-for w, m in zip(woman_salary_positions, man_salary_positions):
-    dif_in_prc.append(round(abs(w-m)/m * 100, 2))
-
-
-# In[ ]:
-
-
-trace1 = go.Bar(
-    x = positions,
-    y = woman_salary_positions,
-    name='Women',
-    marker=dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    )
-)
-trace2 = go.Bar(
-    x = positions,
-    y = man_salary_positions,
-    name='Men',
-    marker=dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace3 = go.Scatter(
-    x = positions,
-    y = dif_in_prc,
-    name='Earnings difference',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2, trace3]
-layout = go.Layout(
-    barmode='group',
-    title = 'Stereotype is real',
-    width=850,
-    height=500,
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Average earnings [€/hour]',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    xaxis = dict(title= 'Position'),
+class CountVectorizerPlus(CountVectorizer):
+    def __init__(self, *args, fit_add=None, **kwargs):
+        #this will store a reference to an extra data to include for fitting only
+        self.fit_add = fit_add
+        super().__init__(*args, **kwargs)
     
-    yaxis2=dict(
-        title='Earnings difference',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 8
-    ),
-    #legend=dict(x=-.1, y=1.2)
-    legend=dict(x=0.05, y=0.05)
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# <b>NOTE:</b> Let's see if this stereotype works well with age.
-
-# In[ ]:
-
-
-age = ["18-25 years old", "26-50 years old", ">50 years old"]
-woman_age = ["SNHMF1814", "SNHMF2614", "SNHMF5014"]
-woman_salary_age = salary[woman_age].mean().tolist()
-man_age = ["SNHMH1814", "SNHMH2614", "SNHMH5014"]
-man_salary_age = salary[man_age].mean().tolist()
-
-dif_in_prc_age = []
-for w, m in zip(woman_salary_age, man_salary_age):
-    dif_in_prc_age.append(round(abs(w-m)/m * 100, 2))
-
-
-# In[ ]:
-
-
-trace1 = go.Bar(
-    x = age,
-    y = woman_salary_age,
-    name='Women',
-    marker=dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    )
-)
-trace2 = go.Bar(
-    x = age,
-    y = man_salary_age,
-    name='Men',
-    marker=dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    )
-)
-
-trace3 = go.Scatter(
-    x = age,
-    y = dif_in_prc_age,
-    name='Earnings difference',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2, trace3]
-layout = go.Layout(
-    barmode='group',
-    title = 'Age make it even worse',
-    width=850,
-    height=500,
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Average earnings [€/hour]',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    xaxis = dict(title= 'Age'),
+    def transform(self, X):
+        U = super().transform(X)
+        return U
     
-    yaxis2=dict(
-        title='Earnings difference',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 7.3
-    ),
-    #legend=dict(x=-.1, y=1.2)
-    legend=dict(x=0.72, y=0.05)
-)
+    def fit_transform(self, X, y=None):
+        if self.fit_add is not None:
+            X_new = pd.concat([X, self.fit_add])
+        else:
+            X_new = X
+        #calling CountVectorizer.fit_transform()
+        super().fit_transform(X_new, y)
 
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# ### 3.2. Wealth inequality
-# <a id="wealth_inequality"></a>
-
-# <b>NOTE:</b> Let's check how much people earn across french cities.
-
-# In[ ]:
-
-
-salary_by_location = salary.sort_values("SNHM14", ascending=False)[["LIBGEO", "SNHM14"]]
-salary_by_location.drop_duplicates("LIBGEO", inplace=True)
-locations = salary_by_location["LIBGEO"].values
-wage = salary_by_location["SNHM14"].values
-samples = list(range(len(locations)))
+        U = self.transform(X)
+        return U
+    
 
 
 # In[ ]:
 
 
-trace1 = go.Bar(
-    x = locations,
-    y = wage,
-    name='Wealth inequality',
-    marker=dict(
-        color=samples,
-        colorscale='Jet',
-    ),
-    opacity=0.6
-)
-
-data = [trace1]
-
-layout = go.Layout(
-    barmode='stack',
-    title = 'Wealth inequality',
-    titlefont=dict(size=25),
-    width=850,
-    height=500,
-    margin=go.Margin(
-        l=75,
-        r=20,
-        b=60,
-        t=80,
-        pad=10
-    ),
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    xaxis=dict(
-        title= 'Cities',
-        autorange=True,
-        showgrid=False,
-        zeroline=False,
-        showline=False,
-        autotick=True,
-        ticks='',
-        showticklabels=False
-    ),
-    yaxis = dict(
-        title= 'Average earnings [€/hour]',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# <b>NOTE:</b> The vast majority of residents earn very similar wage, nevertheless there is a small group breaking out above average. Let's see if we can get some more information on the richest fraction of society. First we will link earnings and location information.
-
-# In[ ]:
-
-
-salary_location = salary.merge(geography, how="left", left_on='CODGEO', right_on="code_insee")
+pipe1a = Pipeline([
+    ('cv', CountVectorizerPlus(fit_add=test['text'])),
+    #('cv', CountVectorizerPlus()),
+    ('tfidf', TfidfTransformer()),
+    #('logit', LogisticRegression()),
+    ('bnb', BernoulliNB()),
+   
+])
 
 
 # In[ ]:
 
 
-salary_by_location = salary_location.sort_values("SNHM14", ascending=False)[["LIBGEO", "SNHM14", "distance"]]
+pipe1a.fit(X_train_part, y_train_part)
+pred = pipe1a.predict_proba(X_valid)
+print(log_loss(y_valid, pred))
 
 
-# <b>NOTE:</b> Let's select all locations with mean net salary over 30 €/hour.
+# <h3>Stacking with Pipelines</h3>
+# 
+# If you now try to fit the following pipeline below, with intermediate classifiers, whose output you would like to combine and pass onto the final Classifier, it's going to fail. Why? Pipeline does not like to have more than one final estimator. After all, it's called final because, well, it run as a final step in the pipeline.
+# 
+
+# _This cell is Markdown, so the kernel won't stop here._
+# ```
+# pipe3 = Pipeline([
+#     ('u1', FeatureUnion([
+#         ('tfdif_features', Pipeline([
+#             ('cv', CountVectorizer()),
+#             ('tfidf', TfidfTransformer()),
+#             ('tfidf_logit', LogisticRegression()),
+#         ])),
+#         ('pos_features', Pipeline([
+#             ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
+#             ('pos_logit', LogisticRegression()),
+#         ])),
+#     ])),
+#     ('xgb', XGBClassifier()),
+# 
+# ])
+# ```
+
+# Happily, there is a solution. We can _pretend_ that our classifier is a transformer class, while it will 'transform' the input data into class predictions. For this, we make a wrapper around an estimator class:
 
 # In[ ]:
 
 
-top_locations = salary_by_location[salary_by_location["SNHM14"] > 30]
-locations = top_locations["LIBGEO"].values
-wage = top_locations["SNHM14"].values
-distance = top_locations["distance"].values
+#stacking trick
+from sklearn.metrics import get_scorer
+class ClassifierWrapper(BaseEstimator, TransformerMixin):
+    
+    def __init__(self, estimator, verbose=None, fit_params=None, use_proba=True, scoring=None):
+        self.estimator = estimator
+        self.verbose = verbose #True = 1, False = 0, 1 - moderately verbose, 2- extra verbose    
+        if verbose is None:
+            self.verbose=0
+        else:
+            self.verbose=verbose
+        self.fit_params= fit_params
+        self.use_proba = use_proba #whether to use predict_proba in transform
+        self.scoring = scoring # calculate validation score, takes score function name
+        #TODO check if scorer imported?
+        self.score = None #variable to keep the score if scoring is set.
+
+    def fit(self,X,y):
+        fp=self.fit_params
+        if self.verbose==2: print("X: ", X.shape, "\nFit params:", self.fit_params)
+        
+        if fp is not None:
+            self.estimator.fit(X,y, **fp)
+        else:
+            self.estimator.fit(X,y)
+        
+        return self
+    
+    def transform(self, X):
+        if self.use_proba:
+            return self.estimator.predict_proba(X) #[:, 1].reshape(-1,1)
+        else:
+            return self.estimator.predict(X)
+    
+    def fit_transform(self,X,y,**kwargs):
+        self.fit(X,y)
+        p = self.transform(X)
+        if self.scoring is not None:
+            self.score = eval(self.scoring+"(y,p)")
+            #TODO print own instance name?
+            if self.verbose >0: print("score: ", self.score) 
+        return p
+    
+    def predict(self,X):
+        return self.estimator.predict(X)
+    
+    def predict_proba(self,X):
+        return self.estimator.predict_proba(X)
 
 
 # In[ ]:
 
 
-trace1 = go.Scatter(
-    x = top_locations["LIBGEO"].values,
-    y = top_locations["SNHM14"].values,
-    name='Mean net salary',
-    mode = 'lines+markers',
-)
-
-trace2 = go.Scatter(
-    x = top_locations["LIBGEO"].values,
-    y = top_locations["distance"].values,
-    name='Distance from the center of Paris',
-    mode = 'lines+markers',
-    yaxis='y2'
-)
-
-data = [trace1, trace2]
-
-layout = go.Layout(
-    title = 'Most expensive districts near Paris',
-    titlefont=dict(size=25),
-    width=850,
-    height=600,
-    margin=go.Margin(
-        l=75,
-        r=100,
-        b=100,
-        t=80,
-        pad=10
-    ),
-    paper_bgcolor='rgb(244, 238, 225)',
-    plot_bgcolor='rgb(244, 238, 225)',
-    yaxis = dict(
-        title= 'Average earnings [€/hour]',
-        anchor = 'x',
-        rangemode='tozero'
-    ),
-    yaxis2=dict(
-        title='Distance from the center of Paris [km]',
-        titlefont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        tickfont=dict(
-            color='rgb(148, 103, 189)'
-        ),
-        overlaying='y',
-        side='right',
-        anchor = 'x',
-        rangemode = 'tozero',
-        dtick = 9.27
-    ),
-    #legend=dict(x=-.1, y=1.2)
-    legend=dict(x=0.55, y=0.15)
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
+from xgboost import XGBClassifier
+#params are from the above mentioned tutorial
+xgb_params={
+    'objective': 'multi:softprob',
+    'eta': 0.1,
+    'max_depth': 3,
+    'silent' :1,
+    'num_class' : 3,
+    'eval_metric' : "mlogloss",
+    'min_child_weight': 1,
+    'subsample': 0.8,
+    'colsample_bytree': 0.3,
+    'seed':17,
+    'num_rounds':2000,
+}
 
 
-# ## 4. Epilogue
-# <a id="epilogue"></a>
+# In[ ]:
 
-# This completes my analysis of the data collection on wages and industry in France. Thank you for reading and I hope you are also got curious about this subject. I encourage you to see my others notebooks.
+
+pipe3 = Pipeline([
+    ('u1', FeatureUnion([
+        ('tfdif_features', Pipeline([
+            ('cv', CountVectorizer()),
+            ('tfidf', TfidfTransformer()),
+            ('tfidf_logit', ClassifierWrapper(LogisticRegression())),
+        ])),
+        ('pos_features', Pipeline([
+            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
+            ('pos_logit', ClassifierWrapper(LogisticRegression())),
+        ])),
+    ])),
+    ('xgb', XGBClassifier(**xgb_params)),
+])
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'pipe3.fit(X_train_part, y_train_part)\npred = pipe3.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
+
+
+# <h3>Caching pipeline results</h3>
+# 
+# This is possible with the `memory` parameter of the `Pipeline()` constructor. The argument is either path to a directory, or a `joblib` object.
+
+# In[ ]:
+
+
+pipe4 = Pipeline([
+    ('u1', FeatureUnion([
+        ('tfdif_features', Pipeline([
+            ('cv', CountVectorizer()),
+            ('tfidf', TfidfTransformer()),
+            ('tfidf_logit', ClassifierWrapper(LogisticRegression())),
+        ], memory="/tmp")),
+        ('pos_features', Pipeline([
+            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
+            ('pos_logit', ClassifierWrapper(LogisticRegression())),
+        ], memory="/tmp")),
+    ])),
+    ('xgb', XGBClassifier(**xgb_params)),
+])
+
+
+# **I run the same code twice - first time to fit&cache, second time to use cache only**
+# 
+# Notice the difference! I'd like to warn you however. The cache may not always get invalidated when you think it should. You may want to manually remove the directory of the cache.
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'pipe4.fit(X_train_part, y_train_part)\npred = pipe4.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'pipe4.fit(X_train_part, y_train_part)\npred = pipe4.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
+
+
+# <h2>Submission</h2>
+# 
+# Here we show how easy is it to train the model on the full train dataset and generate predictions for the test one.
+
+# In[ ]:
+
+
+#refit on the full train dataset
+pipe4.fit(train['text'], lb.transform(train['author']))
+
+# obtain predictions
+pred = pipe4.predict_proba(test['text'])
+
+#id,EAP,HPL,MWS
+#id07943,0.33,0.33,0.33
+#...
+pd.DataFrame(dict(zip(lb.inverse_transform(range(pred.shape[1])),
+                      pred.T
+                     )
+                 ),index=test.id).to_csv("submission.csv", index_label='id')
+
+
+# <h2>Conclusions and further reading</h2>
+# 
+# Ok, we didn't win, but I din't promice. :) I'll stop here and let the reader add his/her own features and models, stack them and hopefully, rocket to the top!
+# 
+# What else can you learn about pipelines?
+# 
+# - Go to the doc page, http://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html, and check out some examples linked to at the end of the page.
+# 
+# - Take a look at these tutorial and vote them up, if you like them.
+#     - [pipeline for the beginners](https://www.kaggle.com/baghern/a-deep-dive-into-sklearn-pipelines)
+#     - [Simple Feature Engg Notebook - Spooky Author](https://www.kaggle.com/sudalairajkumar/simple-feature-engg-notebook-spooky-author) - try to implement all the models in one pipeline.
+# - Fork this kernel and explore your own ideas!
+# 
+# <h2>Good luck!</h2>
+# 

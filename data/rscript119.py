@@ -1,127 +1,154 @@
-# -*- coding: utf-8 -*-
 """
-@author: Faron
+This is an upgraded version of Ceshine's LGBM starter script, simply adding more
+average features and weekly average features on it.
 """
-from collections import Counter
+from datetime import date, timedelta
 
-import numpy as np
 import pandas as pd
-import xgboost as xgb
-from scipy.sparse import csr_matrix
-from sklearn.model_selection import KFold
+import numpy as np
+from sklearn.metrics import mean_squared_error
+import lightgbm as lgb
 
-ID = 'id'
-TARGET = 'loss'
-DATA_DIR = "../input"
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
 
-TRAIN_FILE = "{0}/train.csv".format(DATA_DIR)
-TEST_FILE = "{0}/test.csv".format(DATA_DIR)
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-SEED = 0
-NFOLDS = 5
-NTHREADS = 4
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-xgb_params = {
-    'seed': 0,
-    'colsample_bytree': 1,
-    'silent': 1,
-    'subsample': 1.0,
-    'learning_rate': 1.0,
-    'objective': 'reg:linear',
-    'max_depth': 100,
-    'num_parallel_tree': 1,
-    'min_child_weight': 250,
-    'eval_metric': 'mae',
-    'nthread': NTHREADS,
-    'nrounds': 1
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
+
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
+
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
+
+items = items.reindex(df_2017.index.get_level_values(1))
+
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "day_1_2017": get_timespan(df_2017, t2017, 1, 1).values.ravel(),
+        "mean_3_2017": get_timespan(df_2017, t2017, 3, 3).mean(axis=1).values,
+        "mean_7_2017": get_timespan(df_2017, t2017, 7, 7).mean(axis=1).values,
+        "mean_14_2017": get_timespan(df_2017, t2017, 14, 14).mean(axis=1).values,
+        "mean_30_2017": get_timespan(df_2017, t2017, 30, 30).mean(axis=1).values,
+        "mean_60_2017": get_timespan(df_2017, t2017, 60, 60).mean(axis=1).values,
+        "mean_140_2017": get_timespan(df_2017, t2017, 140, 140).mean(axis=1).values,
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values
+    })
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    return X
+
+print("Preparing dataset...")
+t2017 = date(2017, 5, 31)
+X_l, y_l = [], []
+for i in range(6):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
+
+print("Training and predicting models...")
+params = {
+    'num_leaves': 31,
+    'objective': 'regression',
+    'min_data_in_leaf': 300,
+    'learning_rate': 0.1,
+    'feature_fraction': 0.8,
+    'bagging_fraction': 0.8,
+    'bagging_freq': 2,
+    'metric': 'l2',
+    'num_threads': 4
 }
 
+MAX_ROUNDS = 500
+val_pred = []
+test_pred = []
+cate_vars = []
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    dtrain = lgb.Dataset(
+        X_train, label=y_train[:, i],
+        categorical_feature=cate_vars,
+        weight=pd.concat([items["perishable"]] * 6) * 0.25 + 1
+    )
+    dval = lgb.Dataset(
+        X_val, label=y_val[:, i], reference=dtrain,
+        weight=items["perishable"] * 0.25 + 1,
+        categorical_feature=cate_vars)
+    bst = lgb.train(
+        params, dtrain, num_boost_round=MAX_ROUNDS,
+        valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100
+    )
+    print("\n".join(("%s: %.2f" % x) for x in sorted(
+        zip(X_train.columns, bst.feature_importance("gain")),
+        key=lambda x: x[1], reverse=True
+    )))
+    val_pred.append(bst.predict(
+        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+    test_pred.append(bst.predict(
+        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
 
-def get_data():
-    train = pd.read_csv(TRAIN_FILE)
-    test = pd.read_csv(TEST_FILE)
+print("Validation mse:", mean_squared_error(
+    y_val, np.array(val_pred).transpose()))
 
-    y_train = train[TARGET].ravel()
+print("Making submission...")
+y_test = np.array(test_pred).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
-    train.drop([ID, TARGET], axis=1, inplace=True)
-    test.drop([ID], axis=1, inplace=True)
-
-    ntrain = train.shape[0]
-    train_test = pd.concat((train, test)).reset_index(drop=True)
-
-    features = train.columns
-    cats = [feat for feat in features if 'cat' in feat]
-
-    train_test = train_test[cats]
-
-    for feat in cats:
-        train_test[feat] = pd.factorize(train_test[feat], sort=True)[0]
-
-    x_train = np.array(train_test.iloc[:ntrain, :])
-    x_test = np.array(train_test.iloc[ntrain:, :])
-
-    return x_train, y_train, x_test
-
-
-def get_oof(clf, x_train, y_train, x_test):
-    ntrain = x_train.shape[0]
-    oof_train = np.zeros((ntrain,))
-
-    kf = KFold(n_splits=NFOLDS, shuffle=True, random_state=SEED).split(x_train)
-
-    for i, (train_index, test_index) in enumerate(kf):
-        x_tr = x_train[train_index]
-        y_tr = y_train[train_index]
-        x_te = x_train[test_index]
-
-        clf.train(x_tr, y_tr)
-        oof_train[test_index] = clf.predict(x_te)
-
-    clf.train(x_train, y_train)
-    oof_test = clf.predict(x_test)
-    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
-
-
-def get_sparse_ohe(x_train, x_test, min_obs=10):
-    ntrain = x_train.shape[0]
-
-    train_test = np.concatenate((x_train, x_test)).reshape(-1, )
-
-    # replace infrequent values by nan
-    val = dict((k, np.nan if v < min_obs else k) for k, v in dict(Counter(train_test)).items())
-    k, v = np.array(list(zip(*sorted(val.items()))))
-    train_test = v[np.digitize(train_test, k, right=True)]
-
-    ohe = csr_matrix(pd.get_dummies(train_test, dummy_na=False, sparse=True))
-
-    x_train_ohe = ohe[:ntrain, :]
-    x_test_ohe = ohe[ntrain:, :]
-
-    return x_train_ohe, x_test_ohe
-
-
-class XgbWrapper(object):
-    def __init__(self, seed=0, params=None):
-        self.param = params
-        self.param['seed'] = seed
-        self.nrounds = params.pop('nrounds', 1000)
-
-    def train(self, x_train, y_train, x_valid=None, y_valid=None, sample_weights=None):
-        dtrain = xgb.DMatrix(x_train, label=y_train)
-        self.gbdt = xgb.train(self.param, dtrain, self.nrounds)
-    
-    # pred_leaf=True => getting leaf indices
-    def predict(self, x):
-        return self.gbdt.predict(xgb.DMatrix(x), pred_leaf=True).astype(int)
-
-
-x_train, y_train, x_test = get_data()
-
-dtrain = xgb.DMatrix(x_train, label=y_train)
-
-xg = XgbWrapper(seed=SEED, params=xgb_params)
-xg_cat_embedding_train, xg_cat_embedding_test = get_oof(xg, x_train, y_train, x_test)
-
-xg_cat_embedding_ohe_train, xg_cat_embedding_ohe_test = get_sparse_ohe(xg_cat_embedding_train, xg_cat_embedding_test)
-
-print("OneHotEncoded XG-Embeddings: {},{}".format(xg_cat_embedding_ohe_train.shape, xg_cat_embedding_ohe_test.shape))
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+submission.to_csv('lgb.csv', float_format='%.4f', index=None)

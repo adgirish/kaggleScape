@@ -1,62 +1,190 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+##-------------
+## First half of code is forked from Paulo Pinto's kernel found here:
+## https://www.kaggle.com/paulorzp/log-ma-and-days-of-week-means-lb-0-529/code
+##-------------
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import pandas as pd
+from datetime import timedelta
 
-from subprocess import check_output
-# print(check_output(["ls", "../input"]).decode("utf8"))
+dtypes = {'id':'uint32', 'item_nbr':'int32', 'store_nbr':'int8', 'unit_sales':'float32'}
 
-# Any results you write to the current directory are saved as output.
+train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                    skiprows=range(1, 86672217) #Skip dates before 2016-08-01
+                    )
 
-import cv2
-import tifffile as tiff
+train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
+train['dow'] = train['date'].dt.dayofweek
 
-def _align_two_rasters(img1,img2):
-    try:
-        p1 = img1[300:1900,300:2200,1].astype(np.float32)
-        p2 = img2[300:1900,300:2200,3].astype(np.float32)
-    except:
-        print("_align_two_rasters: can't extract patch, falling back to whole image")
-        p1 = img1[:,:,1]
-        p2 = img2[:,:,3]
+# creating records for all items, in all markets on all dates
+# for correct calculation of daily unit sales averages.
+u_dates = train.date.unique()
+u_stores = train.store_nbr.unique()
+u_items = train.item_nbr.unique()
+train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
+train = train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=['date','store_nbr','item_nbr']
+    )
+)
 
-    # lp1 = cv2.Laplacian(p1,cv2.CV_32F,ksize=5)
-    # lp2 = cv2.Laplacian(p2,cv2.CV_32F,ksize=5)
+del u_dates, u_stores, u_items
 
-    warp_mode = cv2.MOTION_EUCLIDEAN
-    warp_matrix = np.eye(2, 3, dtype=np.float32)
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000,  1e-7)
-    (cc, warp_matrix) = cv2.findTransformECC (p1, p2,warp_matrix, warp_mode, criteria)
-    print("_align_two_rasters: cc:{}".format(cc))
+train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
+train.reset_index(inplace=True) # reset index and restoring unique columns  
+lastdate = train.iloc[train.shape[0]-1].date
 
-    img3 = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-    img3[img3 == 0] = np.average(img3)
+#Days of Week Means
+#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
+ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw')
+ma_dw.reset_index(inplace=True)
+ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk')
+ma_wk.reset_index(inplace=True)
 
-    return img3
+#Moving Averages
+ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais226')
+for i in [112,56,28,14,7,3,1]:
+    tmp = train[train.date>lastdate-timedelta(int(i))]
+    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
+    ma_is = ma_is.join(tmpg, how='left')
+
+del tmp,tmpg,train
+
+ma_is['mais']=ma_is.median(axis=1)
+ma_is.reset_index(inplace=True)
+
+#Load test
+test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
+test['dow'] = test['date'].dt.dayofweek
+test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
+
+del ma_is, ma_wk, ma_dw
+
+#Forecasting Test
+test['unit_sales'] = test.mais 
+pos_idx = test['mawk'] > 0
+test_pos = test.loc[pos_idx]
+test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
+test.loc[:, "unit_sales"].fillna(0, inplace=True)
+test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) # restoring unit values 
+
+#50% more for promotion items
+test.loc[test['onpromotion'] == True, 'unit_sales'] *= 1.5
+
+sub1 = test[['id','unit_sales']]
+
+##-------------
+## Second half of code is forked from Nimesh's kernel found here:
+## https://www.kaggle.com/nimesh280/ma-forecasting-with-holiday-effect-lb-0-529
+##-------------
 
 
-image_id = "6120_2_2"
-img_3 = np.transpose(tiff.imread("../input/three_band/{}.tif".format(image_id)),(1,2,0))
-img_a = np.transpose(tiff.imread("../input/sixteen_band/{}_A.tif".format(image_id)),(1,2,0))
 
-raster_size = img_3.shape
-img_a = cv2.resize(img_a,(raster_size[1],raster_size[0]),interpolation=cv2.INTER_CUBIC)
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
 
-img_a_new = _align_two_rasters(img_3,img_a)
+train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                    skiprows=range(1, 60000000) 
+                    )
 
-img_a = 255 * (img_a.astype(np.float32)-300) / (np.max(img_a) * 1.1) + 40
-img_3 = 255 * img_3.astype(np.float32) / (np.max(img_3) * 0.9) + 60
-img_a_new = 255 * (img_a_new.astype(np.float32)-300) / (np.max(img_a_new) * 1.1) + 40
-
-img_orig = np.stack([img_a[:, :, 4], img_3[:, :, 1], img_3[:, :, 0]], axis=-1).astype(np.uint8)
-img_reg = np.stack([img_a_new[:, :, 4], img_3[:, :, 1], img_3[:, :, 0]], axis=-1).astype(np.uint8)
+holiday =  pd.read_csv('../input/holidays_events.csv')
+holiday = holiday.loc[holiday['transferred'] == False]
+holiday =holiday.rename(columns = {'locale_name':'city'})
 
 
-cv2.imwrite("original.png",img_orig[200:900,300:1200,:])
-cv2.imwrite("registered.png",img_reg[200:900,300:1200,:])
+train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
+train['dow'] = train['date'].dt.dayofweek
+
+
+#train['mon'] = train['date'].dt.month
+## Using Paulo Pinto's kernel
+## https://www.kaggle.com/paulorzp/log-ma-and-days-of-week-means-lb-0-532
+# creating records for all items, in all markets on all dates
+# for correct calculation of daily unit sales averages.
+u_dates = train.date.unique()
+u_stores = train.store_nbr.unique()
+u_items = train.item_nbr.unique()
+train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
+train = train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=['date','store_nbr','item_nbr']
+    )
+)
+
+del u_dates, u_stores, u_items
+
+train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
+train.reset_index(inplace=True) # reset index and restoring unique columns  
+lastdate = train.iloc[train.shape[0]-1].date
+
+#Load test
+test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
+test['dow'] = test['date'].dt.dayofweek
+#test['mon'] = test['date'].dt.month
+
+#Days of Week Means
+#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
+ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw')
+ma_dw.reset_index(inplace=True)
+ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk')
+ma_wk.reset_index(inplace=True)
+
+#Moving Averages
+ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais226')
+for i in [112,56,28,14,7,3,1]:
+    tmp = train[train.date>lastdate-timedelta(int(i))]
+    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
+    ma_is = ma_is.join(tmpg, how='left')
+
+del tmp,tmpg
+
+ma_is['mais']=ma_is.median(axis=1)
+ma_is.reset_index(inplace=True)
+
+test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
+
+del ma_is, ma_wk, ma_dw
+
+#Forecasting Test
+test['unit_sales'] = test.mais
+pos_idx = test['mawk'] > 0
+test_pos = test.loc[pos_idx]
+test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
+test.loc[:, "unit_sales"].fillna(0, inplace=True)
+test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) 
+test['date']= pd.to_datetime(test['date'])
+holiday['date']= pd.to_datetime(holiday['date'])
+test1 = pd.merge(test, holiday, how = 'left', on =['date'] )
+
+
+test1['transferred'].fillna(True, inplace=True)
+test1.loc[test1['transferred'] == False, 'unit_sales'] = test1.loc[test1['transferred'] == False, 'unit_sales'] * 1.2
+test1.loc[test1['onpromotion'] == True, 'unit_sales'] = test1.loc[test1['onpromotion'] == True, 'unit_sales']*1.5
+sub2 = test1[['id','unit_sales']]
+
+##-------------
+## Now we just take the min of the two unit_sales
+##-------------
+
+sub1 = sub1.add_suffix('_1')
+subnew = pd.concat([sub2, sub1], axis=1, join='inner')
+del subnew['id_1']
+subnew['unit_sales_min'] = subnew[['unit_sales_1','unit_sales']].min(axis=1)
+submin = subnew
+del submin['unit_sales_1']
+del submin['unit_sales']
+submin = submin.rename(columns={'unit_sales_min': 'unit_sales'})
+
+submin.to_csv('submin.csv.gz', index=False,
+float_format='%.3f', compression='gzip')
+
+
+
 

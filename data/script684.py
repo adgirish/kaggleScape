@@ -1,692 +1,683 @@
 
 # coding: utf-8
 
-# # Introduction 
+# # **Introduction**
 # 
-# SQL or Structured Query Language is the de-facto language used for interacting with ("querying" per industry speak) relational databases. A relational database consists of tables, where each table contains records, or rows of data organised by fields or columns. On the topic of relational databases,  there are many different flavours and forms of relational database management systems (RDMS) - SQL Server, MySQL, PostgreSQL etc. 
-# 
-# In this Kaggle dataset, the database that we are given to work with is a SQLite  database. SQLite is not your "classical" database in the sense that it is a self-contained, disk-based database that gets embedded in the application that uses it and hence does not require a separate server process.
-# 
-# There seems to be very few notebooks on Kaggle on integrating Python with raw SQL queries and therefore this notebook aims to bridge this gap. Of course one could be able to query a database with an ORM like SQLAlchemy along with the advantages of convenience, security etc that it brings, but there is still something to be had by learning pure SQL. 
-# 
-# so Let's go.
+# This is my first Kaggle, and my first foray into data analysis using python.  The following kernel contains the steps, including 3 approaches to this classification task, enumerated below for assessing the Titanic survival dataset:<br> <br> 
+# 1. [Import Data & Python Packages](#1-bullet) <br>
+# 2. [Assess Data Quality & Missing Values](#2-bullet)<br>
+#     * [2.1 Age - Missing Values](#2.1-bullet) <br>
+#     * [2.2 Cabin - Missing Values](#2.2-bullet) <br>
+#     * [2.3 Embarked - Missing Values](#2.3-bullet) <br>
+#     * [2.4 Final Adjustments to Data](#2.4-bullet) <br>
+#     * [2.4.1 Additional Variables](#2.5-bullet) <br> 
+# 3. [Exploratory Data Analysis](#3-bullet) <br>
+# 4. [Logistic Regression](#4-bullet) <br>
+#     * [4. 1 Hold-Out Testing & Logistic Model Assessment](#4.1-bullet) <br>
+#     * [4.2 Kaggle "Test" Dataset](#4.2-bullet) <br>
+#     * [4.3 Re-run Logistic Regression w/ 80-20 Split](#4.3-bullet) <br>
+#     * [4.4 Out-of-sample test results](#4.4-bullet) <br>
+#     * [4.5 Logistic Regression Conclusions](#4.5-bullet) <br>
+# 6. [Alternate Approach 1 : Random Forest Estimation](#6-bullet) <br>
+# 7. [Alternate Approach 2: Decision Tree](#7-bullet) <br>
+
+# ## 1. Import Data & Python Packages <a class="anchor" id="1-bullet"></a>
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import numpy as np 
+import pandas as pd 
+
+from sklearn import preprocessing
+import matplotlib.pyplot as plt 
+plt.rc("font", size=14)
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-import sqlite3
-import os
-from bokeh.plotting import figure, show
-from bokeh.io import output_notebook
-output_notebook()
-get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-import warnings
-warnings.filterwarnings('ignore')
+sns.set(style="white") #white background style for seaborn plots
+sns.set(style="whitegrid", color_codes=True)
 
-
-# Unlike my other notebooks, instead of reading data into a pandas dataframe from a csv (comma-separated value) file type right off the bat, we first will query the database (sqlite3) via SQL commands. I will also show how we can integrate Python with SQL by storing any of our relevant queries into a Pandas dataframe. 
-# 
-# To start off, we have to create a connection to the sqlite3 database as such:
-
-# In[ ]:
-
-
-conn = sqlite3.connect('../input/database.sqlite')
-
-
-# Once we have our connection setup in python, we can create a **Cursor** object from which we can call the execute( ) method and to perform SQL statements and queries. 
-
-# In[ ]:
-
-
-c = conn.cursor()
-
-
-# Having created our cursor object, we can now execute our SQL statement. If you are not too familiar with the following syntax, please bear with me until the following section where I will explain in detail what each SQL command does.
-# 
-# You can distinguish SQL commands in my code (from Python) as they will be embedded within a triple quotation mark """
-
-# In[ ]:
-
-
-for row in c.execute(
-                    # SQL statement 
-                    """
-                        SELECT   * 
-                        FROM     Country 
-                        LIMIT    2
-                        
-                     """ ):
-    print(row)
-
-
-# Now that's all and good that we have managed to print out the first two rows of the data from our Sqlite database. However I still have a niggling feeling that the current method is inconvenient in the sense that we have to use a for loop just to execute our SQL statement. 
-# 
-# Thankfully for us, the Pandas library comes with methods that allow one to interact with and query SQL databases and we will explore this in the upcoming section.
-
-# ### Basics of SQL Queries
-# 
-# Before we continue on with the notebook, I will list here the important SQL statements that are most widely used  
-# 
-# **SELECT** : Statement used to select rows and columns from a database. 
-# 
-# **FROM** :  Specifies which table in the database you want to direct your query to
-# 
-# **WHERE**: clause for filtering for a specified value(s)
-# 
-# **GROUP BY**: Aggregating data. Needs to be used in conjunction with SQL aggregating functions like SUM and COUNT.
-# 
-# **ORDER BY**: Sorting columns in the database 
-# 
-# **JOIN** : Joins are used to combine tables with one another. 
-# 
-# **UNION**, **INTERSECT/EXCEPT** : Set operations. Unioning in SQL allows one to append tables on top of one another. 
-
-# # 1. SQL and Pandas Equivalent statements
-# 
-# In this section I shall be comparing a particular SQL statement to its Pandas equivalent in the hope that if you are familiar with the Pandas syntax but not so much SQL, this may allow you to have a familiar reference point with which to familiarise yourself with.
-# 
-# First let us read in the **Country** table in our 
-
-# In[ ]:
-
-
-# Store Country data in a pandas dataframe via a SQL query
-Country = pd.read_sql(
-                       """
-                       
-                        SELECT  * 
-                        FROM    Country
-                        
-                       """, con=conn)
-
-
-# **A.) SELECT, LIMIT and head**
-# 
-# The SELECT statement in SQL is probably the most ubiquitous statement as one will need this statement to select records from a database. Normally you will see this being used very often in conjunction with the asterisk symbol : **SELECT *** .  What this does is to select all rows and columns with in the database. However if one wants to select only a certain number of rows, this is where LIMIT comes in
-# 
-# I think it is rather safe to assume that most Kagglers understand the use of invoking the head( ) call on a dataframe. It essentially returns the top (user-specified) number of rows in your data. Equivalently, one can also do the same thing via a SQL query with the use of the LIMIT statement as follows:
-
-# In[ ]:
-
-
-# Pandas code
-Country.head(3)
+#sklearn imports source: https://towardsdatascience.com/building-a-logistic-regression-in-python-step-by-step-becd4d56c9c8
 
 
 # In[ ]:
 
 
-# SQL query 
-pd.read_sql(
-            """
-                SELECT   * 
-                FROM     Country 
-                LIMIT    3 
-                
-            """, con=conn)
+# get titanic & test csv files as a DataFrame
 
+#developmental data (train)
+titanic_df = pd.read_csv("../input/train.csv")
 
-# **B.) WHERE and Boolean Indexing**
-# 
-# The SQL WHERE clause is mainly used for filtering records of interest. Therefore if the records fulfill the conditions as laid out by the WHERE clause, then that record will be returned. The equivalent of this in Python and Pandas is that of Boolean Indexing - a.k.a passing into the DataFrame another DataFrame in a comparison statement as follows:
+#cross validation data (hold-out testing)
+test_df    = pd.read_csv("../input/test.csv")
 
-# In[ ]:
-
-
-# Pandas Boolean Indexing
-Country[Country['CountryCode'] == 'AFG']
+# preview developmental data
+titanic_df.head(5)
 
 
 # In[ ]:
 
 
-# SQL WHERE clause
-pd.read_sql(
-        """ 
-            SELECT   * 
-            FROM     Country 
-            WHERE    CountryCode = 'AFG'
-            
-        """, con=conn)
+test_df.head(5)
 
 
-# **C.) GROUP BY and dataframe aggregation**
-# 
-# The GROUP BY clause is very useful when aggregations are required to be generated. When I say aggregations, these are taken to mean things (in SQL speak) such as COUNT, MAX, MIN, SUM etc. 
-# 
-# In the following example, I shall perform an aggregation on the Country dataset by counting (COUNT function) the number of records that belong to a certain Region. As a rule of thumb, to know what we have to add to our GROUP BY statement is simply the column that we want to aggregate on (Region in our case).
+# <font color=red>  Note: There is no target variable for the hold out data (i.e. "Survival" column is missing), so there's no way to use this as our cross validation sample.  Refer to Section 5.</font>
+
+# ## 2. Data Quality & Missing Value Assessment <a class="anchor" id="2-bullet"></a>
 
 # In[ ]:
 
 
-# SQL GROUP BY Clause
-pd.read_sql(
-        """ 
-            SELECT      Region
-                        ,COUNT(*) AS [Count]
-            FROM        Country 
-            GROUP BY    Region
-            ORDER BY    2 DESC
-            
-        """, con=conn)
+# check missing values in train dataset
+titanic_df.isnull().sum()
 
 
-# I snuck in an ORDER BY statement and what this does is to sort the data in descending order (DESC keyword). Anyway, we can see that this GROUP BY does counts all the records (aggregate) that belong to a particular region and and then outputs the result in a ordered tabular format. 
-# 
-# Particularly interesting is the fact that we have an empty string as one of our categories in Region and there are 33 records in the database that can be attributed to this. Perhaps this could be brought up as a data quality issue and definitely warrants further investigation.
-
-# **D.) SQL JOIN**
-# 
-# The JOIN clause in SQL is used to combine records from two or more tables and the way the records are combined are based on a related column between these tables. There are 4 main types of JOINs in SQL: 
-# 
-# INNER, LEFT, RIGHT and OUTER JOIN
-# 
-# INNER returns rows that are common to both tables while OUTER returns all records when there is a match in either the left or the right table. LEFT returns all the rows from the left table as well as all matching rows from the right (i.e for rows in the right table that are not matching, it will therefore return NULL values )
+# ### 2.1    Age - Missing Values <a class="anchor" id="2.1-bullet"></a>
 
 # In[ ]:
 
 
-# Let's do a LEFT JOIN on some subqueries 
-pd.read_sql(
-        """ 
-           
-            SELECT      A.CountryCode
-                        ,B.LatestPopulationCensus
-                        ,B.SourceOfMostRecentIncomeAndExpenditureData
-                        ,B.ShortName
-            FROM       ( 
-                            -- First subquery (i.e the Left table)
-                            
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                        ) AS A
-            LEFT JOIN   (
-                            -- Second subquery (i.e the right table )
-                            
-                            SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                            FROM        Country AS A
-                            WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-                            
-                          ) AS B
-            ON          A.CountryCode = B.CountryCode    
-            
-        """, con=conn)
-
-
-# So as we can see from the LEFT JOIN, it does return all the records from the left table ('AFG','ALB', 'ASM', 'BEL'). However nothing was returned from the right table for the codes 'ALB' and 'ASM' and hence value of None in the columns returned from that table.
-
-# **E) UNION, INTERSECT and EXCEPT**
-# 
-# SQL also comes with a handful of useful Set operations, namely that of UNION, INTERSECT and the EXCEPT statements. These statements perform exactly as their name suggests (set theory) - UNION combines the output from two or more SELECT - FROM statements (it removes duplication in rows while UNION ALL includes duplicates), INTERSECT returns rows common to both top and bottom query while EXCEPT returns rows from the top query not in the bottom query.
-
-# In[ ]:
-
-
-# UNION 
-pd.read_sql(
-        """ 
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                       
-                           UNION
-                           
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country AS A
-                           WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-            
-        """, con=conn)
+sum(pd.isnull(titanic_df['Age']))
 
 
 # In[ ]:
 
 
-# INTERSECT 
-pd.read_sql(
-        """ 
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                       
-                           INTERSECT
-                           
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country AS A
-                           WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-            
-        """, con=conn)
+# proportion of "Age" missing
+round(177/(len(titanic_df["PassengerId"])),4)
 
 
-# # 2. Data Analysis and Visualisations
-# 
-# Having discussed at some length to basic SQL statements and how we can interact and query SQL databases through Python let us now carry on with our World Developmental analysis. To start off, I shall create a dataframe via a query of the **Indicator** table with a handful of manually chosen indicators (as the full table contains too many indicators for this notebook)
-# 
-# A quick description of the indicators are as follows:
-# 
-# **AG.LND.PRCP.MM** :  Average precipitation in depth (mm per year)
-# 
-# **EG.ELC.ACCS.ZS** :  Access to electricity (% of population)
-# 
-# **EG.ELC.FOSL.ZS** :  Electricity production from oil, gas and coal sources (% of total)
-# 
-# **SG.VAW.REAS.ZS** : Women who believe that a husband is justified in beating his wife (any of the five reasons)
-# 
-# **SM.POP.NETM** : Net migration
+# ~20% of entries for passenger age are missing. Let's see what the 'Age' variable looks like in general.
 
 # In[ ]:
 
 
-Indicators = pd.read_sql(""" SELECT   * 
-                             FROM     Indicators 
-                             WHERE    IndicatorCode IN 
-                                      (  'AG.LND.PRCP.MM, AG.LND.FRST.K2'
-                                       , 'EG.ELC.ACCS.ZS', 'EG.ELC.FOSL.ZS'
-                                       , 'EN.POP.DNST', 'SG.VAW.REAS.ZS'
-                                       , 'SM.POP.NETM', 'SP.POP.65UP.TO.ZS'
-                                       , 'FI.RES.TOTL.DT.ZS', 'GC.DOD.TOTL.GD.ZS'
-                                       , 'MS.MIL.XPND.GD.ZS','SI.POV.GINI'
-                                       , 'IP.JRN.ARTC.SC', 'SE.ADT.1524.LT.ZS'
-                                      )  
-                        """, con=conn)
+ax = titanic_df["Age"].hist(bins=15, color='teal', alpha=0.8)
+ax.set(xlabel='Age', ylabel='Count')
+plt.show()
 
 
-# ### 2A. GINI Index analysis
-# 
-# Starting off with our analysis, we first take a look at the GINI index of some of the countries we have in our dataset. As a quick primer the GINI index (in its normalised form) is a statistical measure used to represent the income or wealth distribution of a nation's citizens. Therefore as a consequence, it has come to represent a very ubiquitous measure of inequality in a country. 
-# 
-# The data given in the index has not yet been normalised but we are primarily interested in the trend over the years given in the data. Anyway I'll start of by creating a gini dataframe that only store GINI data as follows:
+# Since "Age" is (right) skewed, using the mean might give us biased results by filling in ages that are older than desired.  To deal with this, we'll use the median to impute the missing values. 
 
 # In[ ]:
 
 
-#Regions = ['ARB', 'EUU', 'LCN' , 'NAC',  'EAS', 'SSF', 'World']
-gini = Indicators[Indicators['IndicatorCode']== 'SI.POV.GINI']
+# median age is 28 (as compared to mean which is ~30)
+titanic_df["Age"].median(skipna=True)
 
 
-# **Seaborn subplots**
-# 
-# Next, I will utilise the Seaborn plotting library to plot some scatter plots of the GINI index for various countries as follow:
+# ### 2.2 Cabin - Missing Values <a class="anchor" id="2.2-bullet"></a>
 
 # In[ ]:
 
 
-gini.CountryCode.unique()
+# proportion of "cabin" missing
+round(687/len(titanic_df["PassengerId"]),4)
 
 
-# In[ ]:
+# 77% of records are missing, which means that imputing information and using this variable for prediction is probably not wise.  We'll ignore this variable in our model.
 
-
-# Plotting a Subplot of the Seaborn regplot
-f, ((ax1, ax2, ax3), (ax4,ax5,ax6), (ax7, ax8, ax9)) = plt.subplots(3,3,figsize=(12,10))
-
-# Plot of GINI index of China
-points = ax1.scatter(gini[gini['CountryCode'] == 'CHN']["Year"], gini[gini['CountryCode'] == 'CHN']["Value"],
-                     c=gini[gini['CountryCode'] == 'CHN']["Value"], s=100, cmap="viridis")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'CHN'], ax=ax1)
-ax1.set_title("GINI Index of China")
-
-# Plot of GINI of Argentina
-points = ax2.scatter(gini[gini['CountryCode'] == 'ARG']["Year"], gini[gini['CountryCode'] == 'ARG']["Value"],
-                     c=gini[gini['CountryCode'] == 'ARG']["Value"], s=85, cmap="viridis")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'ARG'], ax=ax2)
-ax2.set_title("GINI Index of Argentina")
-
-points = ax3.scatter(gini[gini['CountryCode'] == 'UGA']["Year"], gini[gini['CountryCode'] == 'UGA']["Value"],
-                     c=gini[gini['CountryCode'] == 'UGA']["Value"], s=100, cmap="afmhot")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'UGA'], ax=ax3)
-ax3.set_title("GINI Index of Uganda")
-
-points = ax4.scatter(gini[gini['CountryCode'] == 'USA']["Year"], gini[gini['CountryCode'] == 'USA']["Value"],
-                     c=gini[gini['CountryCode'] == 'USA']["Value"], s=100, cmap="Purples_r")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'USA'], ax=ax4)
-ax4.set_title("GINI Index of USA")
-
-points = ax5.scatter(gini[gini['CountryCode'] == 'COL']["Year"], gini[gini['CountryCode'] == 'COL']["Value"],
-                     c=gini[gini['CountryCode'] == 'COL']["Value"], s=100, cmap="YlOrBr")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'COL'], ax=ax5)
-ax5.set_title("GINI Index of Colombia")
-
-points = ax6.scatter(gini[gini['CountryCode'] == 'RWA']["Year"], gini[gini['CountryCode'] == 'RWA']["Value"],
-                     c=gini[gini['CountryCode'] == 'RWA']["Value"], s=100, cmap="Blues")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'RWA'], ax=ax6)
-ax6.set_title("GINI Index of Rwanda")
-
-points = ax7.scatter(gini[gini['CountryCode'] == 'RUS']["Year"], gini[gini['CountryCode'] == 'RUS']["Value"],
-                     c=gini[gini['CountryCode'] == 'RUS']["Value"], s=100, cmap="Blues")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'RUS'], ax=ax7)
-ax7.set_title("GINI Index of Russia")
-
-points = ax8.scatter(gini[gini['CountryCode'] == 'ECU']["Year"], gini[gini['CountryCode'] == 'ECU']["Value"],
-                     c=gini[gini['CountryCode'] == 'ECU']["Value"], s=100, cmap="winter")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'ECU'], ax=ax8)
-ax8.set_title("GINI Index of Ecuador")
-
-points = ax9.scatter(gini[gini['CountryCode'] == 'CAF']["Year"], gini[gini['CountryCode'] == 'CAF']["Value"],
-                     c=gini[gini['CountryCode'] == 'CAF']["Value"], s=100, cmap="magma")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'CAF'], ax=ax9)
-ax9.set_title("GINI Index of Central African Republic")
-sns.set_style(style="dark")
-plt.tight_layout()
-
-
-# **Takeaway from the Plots**
-# 
-# As one can observe from the Seaborn subplots above, I have attempted to group countries accordingly column-wise. The left-most column contain countries which we would now think of as Global powers in the political scene (USA, China and Russia). It is interesting to note that for these countries, the measurement of inequality has been a clear and increasing trend over the decades. 
-# 
-# For the middle column, I have grouped three South American countries (Argentina, Colombia and Ecuador)  while the right-most column contains African countries.
-
-# ### 2B. Youth Literacy Rate (% of population)
-# 
-# Onto our next indicator, which has an indicator code of **SE.ADT.1524.LT.ZS** : Youth Literacy rates. Previously on one of my other Kernels, I had published a piece of analysis on global Youth unemployment and it seemed to hit quite a chord with readers, especially around the high rates of youth unemployment prevalent around European countries for the past half decade.
-# 
-# Let us plot an interactive barplot via the Plotly visualisation library to observe how Youth literacy rates have changed over two decades - from 1990 to 2010.
+# ### 2.3 Embarked - Missing Values <a class="anchor" id="2.3-bullet"></a>
 
 # In[ ]:
 
 
-# Barplots of Youth literacy rates in 1990
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS'][Indicators['Year'] == 1990]
-x, y = (list(x) for x in zip(*sorted(zip(data['Value'].values, data['CountryName'].values), 
-                                                            reverse = False)))
-
-# Plotting using Plotly 
-trace2 = go.Bar(
-    x=x ,
-    y=y,
-    marker=dict(
-        color=x,
-        colorscale = 'Portland',
-        reversescale = True
-    ),
-    name='Percentage of Youth Literacy Rate',
-    orientation='h',
-)
-
-layout = dict(
-    title='Barplot of Youth Literacy Rate in 1990',
-     width = 680, height = 1500,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
-
-# Barplot of Youth literacy rates in 2010
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS'][Indicators['Year'] == 2010]
-x, y = (list(x) for x in zip(*sorted(zip(data['Value'].values, data['CountryName'].values), 
-                                                            reverse = False)))
-
-# Plotting using Plotly 
-trace2 = go.Bar(
-    x=x ,
-    y=y,
-    marker=dict(
-        color=x,
-        colorscale = 'Portland',
-        reversescale = True
-    ),
-    name='Percentage of Youth Literacy Rate',
-    orientation='h',
-)
-
-layout = dict(
-    title='Barplot of Youth Literacy Rate in 2010',
-     width = 680, height = 1500,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
+# proportion of "Embarked" missing
+round(2/len(titanic_df["PassengerId"]),4)
 
 
-# ### 2C. Access to Electricity
-# 
-# Let's now inspect another very important indicator and that would be one of a country's access to electricity. For this, let us plot a heatmap and I will switch to using the visualisation library Bokeh for this task. 
+# There are only 2 missing values for "Embarked", so we can just impute with the port where most people boarded.
 
 # In[ ]:
 
 
-# Create some useful helper variables
-data = Indicators[Indicators['IndicatorCode'] == 'EG.ELC.ACCS.ZS']
-data['Year'] = [str(x) for x in data['Year']]
-years = list(data['Year'].unique())
-country = [
-     u'Jordan', u'Kazakhstan', u'Kenya', u'Kiribati',
-       u'Korea, Dem. Rep.', u'Korea, Rep.', u'Kosovo', u'Kuwait',
-       u'Kyrgyz Republic', u'Lao PDR', u'Latvia', u'Lebanon', u'Lesotho',
-       u'Liberia', u'Libya', u'Liechtenstein', u'Lithuania', u'Luxembourg',
-       u'Macao SAR, China', u'Macedonia, FYR', u'Madagascar', u'Malawi',
-       u'Malaysia', u'Maldives', u'Mali', u'Malta', u'Marshall Islands',
-       u'Mauritania', u'Mauritius', u'Mexico', u'Micronesia, Fed. Sts.',
-       u'Moldova', u'Monaco', u'Mongolia', u'Montenegro', u'Morocco',
-       u'Mozambique', u'Myanmar', u'Namibia', u'Nepal', u'Netherlands',
-       u'New Caledonia', u'New Zealand', u'Nicaragua', u'Niger',
-       u'Nigeria', u'Norway', u'Oman', u'Pakistan', u'Palau', u'Panama',
-       u'Papua New Guinea', u'Paraguay', u'Peru', u'Philippines',
-       u'Poland', u'Portugal', u'Puerto Rico', u'Qatar', u'Romania',
-       u'Russian Federation', u'Rwanda', u'Samoa', u'San Marino',
-       u'Sao Tome and Principe', u'Saudi Arabia', u'Senegal', u'Serbia',
-       u'Seychelles', u'Sierra Leone', u'Singapore', u'Slovak Republic',
-       u'Slovenia', u'Solomon Islands', u'Somalia', u'South Africa',
-       u'South Sudan', u'Spain', u'Sri Lanka' u'Sudan', u'Suriname',
-       u'Swaziland', u'Sweden', u'Switzerland', u'Syrian Arab Republic',
-       u'Tajikistan', u'Tanzania', u'Thailand', u'Timor-Leste', u'Togo',
-       u'Tonga', u'Trinidad and Tobago', u'Tunisia', u'Turkey',
-       u'Turkmenistan', u'Tuvalu', u'Uganda',
-       u'Ukraine', u'United Arab Emirates', u'United Kingdom',
-       u'United States', u'Uruguay'
-]
+sns.countplot(x='Embarked',data=titanic_df,palette='Set2')
+plt.show()
+
+
+# By far the most passengers boarded in Southhampton, so we'll impute those 2 NaN's w/ "S".
+
+# *References for graph creation:*<br>
+# https://matplotlib.org/1.2.1/examples/pylab_examples/histogram_demo.html <br>
+# https://seaborn.pydata.org/generated/seaborn.countplot.html
+
+# ### 2.4 Final Adjustments to Data (Train & Test) <a class="anchor" id="2.4-bullet"></a>
+
+# Based on my assessment of the missing values in the dataset, I'll make the following changes to the data:
+# * If "Age" is missing for a given row, I'll impute with 28 (median age).
+# * If "Embark" is missing for a riven row, I'll impute with "S" (the most common boarding port).
+# * I'll ignore "Cabin" as a variable.  There are too many missing values for imputation.  Based on the information available, it appears that this value is associated with the passenger's class and fare paid.
+
+# In[ ]:
+
+
+train_data = titanic_df
+train_data["Age"].fillna(28, inplace=True)
+train_data["Embarked"].fillna("S", inplace=True)
+train_data.drop('Cabin', axis=1, inplace=True)
+
+
+# ### 2.4.1 Additional Variables <a class="anchor" id="2.4.1-bullet"></a>
+
+# According to the Kaggle data dictionary, both SibSp and Parch relate to traveling with family.  For simplicity's sake (and to account for possible multicollinearity), I'll combine the effect of these variables into one categorical predictor: whether or not that individual was traveling alone.
+
+# In[ ]:
+
+
+## Create categorical variable for traveling alone
+
+train_data['TravelBuds']=train_data["SibSp"]+train_data["Parch"]
+train_data['TravelAlone']=np.where(train_data['TravelBuds']>0, 0, 1)
 
 
 # In[ ]:
 
 
-from math import pi
-
-from bokeh.io import show
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-# data = data.set_index('Year')
-# this is the colormap from the original NYTimes plot
-colors = ["#75968f", "#a5bab7", "#c9d9d3", "#e2e2e2", "#dfccce", "#ddb7b1", "#cc7878", "#933b41", "#550b1d"]
-mapper = LinearColorMapper(palette=colors)
-# Set up the data for plotting. We will need to have values for every
-# pair of year/month names. Map the rate to a color.
-countr = []
-year = []
-color = []
-rate = []
-for y in years:
-    for m in country:
-        countr.append(m)
-        year.append(y)
-#         d[(d['x']>2) & (d['y']>7)]
-        monthly_rate = data[(data['CountryName']==m) & (data['Year']==y)]['Value']
-        rate.append(monthly_rate)
-
-source = ColumnDataSource(
-    data=dict(country=countr, year=year, rate=rate)
-)
-
-TOOLS = "hover,save,pan,box_zoom,wheel_zoom"
-
-p = figure(title="Access to Electricity",
-           x_range=years, y_range=list(reversed(country)),
-           x_axis_location="above", plot_width=900, plot_height=900,
-           tools=TOOLS)
-
-p.grid.grid_line_color = None
-p.axis.axis_line_color = None
-p.axis.major_tick_line_color = None
-p.axis.major_label_text_font_size = "5pt"
-p.axis.major_label_standoff = 0
-p.xaxis.major_label_orientation = pi / 3
-
-p.rect(x="year", y="country", width=1, height=1,
-       source=source,
-       fill_color={'field': 'rate', 'transform': mapper},
-       line_color=None)
-
-p.select_one(HoverTool).tooltips = [
-#     ('date', '@countr @year'),
-    ('rate', '@rate'),
-]
-
-show(p)      # show the plot
+train_data.drop('SibSp', axis=1, inplace=True)
+train_data.drop('Parch', axis=1, inplace=True)
+train_data.drop('TravelBuds', axis=1, inplace=True)
 
 
-# As we can see, there are
+# I'll also create categorical variables for Passenger Class ("Pclass"), Gender ("Sex"), and Port Embarked ("Embarked"). 
 
-# ### 2 D. Women who believe husband is justified in beating the wife
+# In[ ]:
+
+
+#create categorical variable for Pclass
+
+train2 = pd.get_dummies(train_data, columns=["Pclass"])
+
+
+# In[ ]:
+
+
+train3 = pd.get_dummies(train2, columns=["Embarked"])
+
+
+# In[ ]:
+
+
+train4=pd.get_dummies(train3, columns=["Sex"])
+train4.drop('Sex_female', axis=1, inplace=True)
+
+
+# In[ ]:
+
+
+train4.drop('PassengerId', axis=1, inplace=True)
+train4.drop('Name', axis=1, inplace=True)
+train4.drop('Ticket', axis=1, inplace=True)
+train4.head(5)
+
+
+# In[ ]:
+
+
+df_final = train4
+
+
+# ### Now, apply the same changes to the test data. <br>
+# I will apply to same imputation for "Age" in the Test data as I did for my Training data (if missing, Age = 28).  <br> I'll also remove the "Cabin" variable from the test data, as I've decided not to include it in my analysis. <br> There were no missing values in the "Embarked" port variable. <br> I'll add the dummy variables to finalize the test set.  <br> Finally, I'll impute the 1 missing value for "Fare" with the median, 14.45.
+
+# In[ ]:
+
+
+test_df["Age"].fillna(28, inplace=True)
+test_df["Fare"].fillna(14.45, inplace=True)
+test_df.drop('Cabin', axis=1, inplace=True)
+
+
+# In[ ]:
+
+
+test_df['TravelBuds']=test_df["SibSp"]+test_df["Parch"]
+test_df['TravelAlone']=np.where(test_df['TravelBuds']>0, 0, 1)
+
+test_df.drop('SibSp', axis=1, inplace=True)
+test_df.drop('Parch', axis=1, inplace=True)
+test_df.drop('TravelBuds', axis=1, inplace=True)
+
+test2 = pd.get_dummies(test_df, columns=["Pclass"])
+test3 = pd.get_dummies(test2, columns=["Embarked"])
+
+test4=pd.get_dummies(test3, columns=["Sex"])
+test4.drop('Sex_female', axis=1, inplace=True)
+
+test4.drop('PassengerId', axis=1, inplace=True)
+test4.drop('Name', axis=1, inplace=True)
+test4.drop('Ticket', axis=1, inplace=True)
+final_test = test4
+
+
+# In[ ]:
+
+
+final_test.head(5)
+
+
+# *References for categorical variable creation: <br>
+# http://pbpython.com/categorical-encoding.html <br>
+# https://chrisalbon.com/python/data_wrangling/pandas_create_column_using_conditional/*
+
+# ## 3. Exploratory Data Analysis <a class="anchor" id="3-bullet"></a>
+
+# ## 3.1 Exploration of Age <a class="anchor" id="3.1-bullet"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+sns.kdeplot(titanic_df["Age"][df_final.Survived == 1], color="darkturquoise", shade=True)
+sns.kdeplot(titanic_df["Age"][df_final.Survived == 0], color="lightcoral", shade=True)
+plt.legend(['Survived', 'Died'])
+plt.title('Density Plot of Age for Surviving Population and Deceased Population')
+plt.show()
+
+
+# The age distribution for survivors and deceased is actually very similar.  One notable difference is that, of the survivors, a larger proportion were children.  The passengers evidently made an attempt to save children by giving them a place on the life rafts. 
+
+# In[ ]:
+
+
+plt.figure(figsize=(20,8))
+avg_survival_byage = df_final[["Age", "Survived"]].groupby(['Age'],as_index=False).mean()
+g = sns.barplot(x='Age', y='Survived', data=avg_survival_byage, color="LightSeaGreen")
+
+
+# Considering the survival rate of passengers under 16, I'll also include another categorical variable in my dataset: "Minor"
+
+# In[ ]:
+
+
+df_final['IsMinor']=np.where(train_data['Age']<=16, 1, 0)
+
+
+# In[ ]:
+
+
+final_test['IsMinor']=np.where(final_test['Age']<=16, 1, 0)
+
+
+# ## 3.2 Exploration of Fare <a class="anchor" id="3.2-bullet"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+sns.kdeplot(df_final["Fare"][titanic_df.Survived == 1], color="darkturquoise", shade=True)
+sns.kdeplot(df_final["Fare"][titanic_df.Survived == 0], color="lightcoral", shade=True)
+plt.legend(['Survived', 'Died'])
+plt.title('Density Plot of Fare for Surviving Population and Deceased Population')
+# limit x axis to zoom on most information. there are a few outliers in fare. 
+plt.xlim(-20,200)
+plt.show()
+
+
+# As the distributions are clearly different for the fares of survivors vs. deceased, it's likely that this would be a significant predictor in our final model.  Passengers who paid lower fare appear to have been less likely to survive.  This is probably strongly correlated with Passenger Class, which we'll look at next.
+
+# ## 3.3 Exploration of Passenger Class <a class="anchor" id="3.3-bullet"></a>
+
+# In[ ]:
+
+
+sns.barplot('Pclass', 'Survived', data=titanic_df, color="darkturquoise")
+plt.show()
+
+
+# Unsurprisingly, being a first class passenger was safest.
+
+# ## 3.4 Exploration of Embarked Port <a class="anchor" id="3.4-bullet"></a>
+
+# In[ ]:
+
+
+sns.barplot('Embarked', 'Survived', data=titanic_df, color="teal")
+plt.show()
+
+
+# Passengers who boarded in Cherbourg, France, appear to have the highest survival rate.  Passengers who boarded in Southhampton were marginally less likely to survive than those who boarded in Queenstown.  This is probably related to passenger class, or maybe even the order of room assignments (e.g. maybe earlier passengers were more likely to have rooms closer to deck). <br> It's also worth noting the size of the whiskers in these plots.  Because the number of passengers who boarded at Southhampton was highest, the confidence around the survival rate is the highest.  The whisker of the Queenstown plot includes the Southhampton average, as well as the lower bound of its whisker.  It's possible that Queenstown passengers were equally, or even more, ill-fated than their Southhampton counterparts.
+
+# ## 3.5 Exploration of Traveling Alone vs. With Family <a class="anchor" id="3.5-bullet"></a>
+
+# In[ ]:
+
+
+sns.barplot('TravelAlone', 'Survived', data=df_final, color="mediumturquoise")
+plt.show()
+
+
+# Individuals traveling without family were more likely to die in the disaster than those with family aboard.  Given the era, it's likely that individuals traveling alone were likely male.
+
+# ## 3.6 Exploration of Gender Variable <a class="anchor" id="3.6-bullet"></a>
+
+# In[ ]:
+
+
+sns.barplot('Sex', 'Survived', data=titanic_df, color="aquamarine")
+plt.show()
+
+
+# This is a very obvious difference.  Clearly being female greatly increased your chances of survival.
+
+# References: <br>
+# https://seaborn.pydata.org/generated/seaborn.barplot.html <br>
+# https://seaborn.pydata.org/generated/seaborn.kdeplot.html
+
+# ## 4. Logistic Regression and Results <a class="anchor" id="4-bullet"></a>
+
+# In[ ]:
+
+
+df_final.head(10)
+
+
+# In[ ]:
+
+
+cols=["Age", "Fare", "TravelAlone", "Pclass_1", "Pclass_2","Embarked_C","Embarked_S","Sex_male","IsMinor"] 
+X=df_final[cols]
+Y=df_final['Survived']
+
+
+# In[ ]:
+
+
+import statsmodels.api as sm
+from scipy import stats
+stats.chisqprob = lambda chisq, df: stats.chi2.sf(chisq, df)
+logit_model=sm.Logit(Y,X)
+result=logit_model.fit()
+print(result.summary())
+
+
+# Nearly all variables are significant at the 0.05 alpha level, but we'll run the model again without Fare and TravelAlone (removed one at a time, results didn't change much.  In the end removed both).  I also removed "IsMinor" from this regression, as the information provided is redundant to the Age variable.
+
+# In[ ]:
+
+
+cols2=["Age", "Pclass_1", "Pclass_2","Embarked_C","Embarked_S","Sex_male"]  
+X2=df_final[cols2]
+Y=df_final['Survived']
+
+logit_model=sm.Logit(Y,X2)
+result=logit_model.fit()
+
+print(result.summary())
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+
+logreg = LogisticRegression()
+logreg.fit(X2, Y)
+
+logreg.score(X2, Y)
+
+
+# ## Model's Predictive Score: 0.7935
+
+# *References:* <br>
+# https://github.com/statsmodels/statsmodels/issues/3931 <br>
+# https://towardsdatascience.com/building-a-logistic-regression-in-python-step-by-step-becd4d56c9c8
+
+# ## 4.1 . Hold-Out Testing <a class="anchor" id="4.1-bullet"></a>
+
+# ### 4.2 Using Kaggle's Titanic "Test" Data <a class="anchor" id="4.2-bullet"></a>
+
+# In[ ]:
+
+
+#from sklearn.linear_model import LogisticRegression
+#from sklearn import metrics
+#logreg = LogisticRegression()
+#logreg.fit(X2, Y)
+
+#X_test = final_test[cols2]
+#y_test = final_test['Survived']
+
+#y_pred = logreg.predict(X_test)
+#print('Accuracy of logistic regression classifier on test set: {:.2f}'.format(logreg.score(X_test, y_test)))
+
+
+# </div>
+#  <div class="alert alert-block alert-danger">
+# <font color=red> **Cross Validation: Turns out the test data doesn't have "survived" information, so this isn't helpful for our out-of-sample analysis.** </font>
 # 
-# Now this indicator is most controversial but also the one that really caught my attention. This indicator 
+# 
+
+# ## 4.3 Using 80-20 Split for Cross Validation <a class="anchor" id="4.3-bullet"></a>
 
 # In[ ]:
 
 
-data = Indicators[Indicators['IndicatorCode'] == 'SG.VAW.REAS.ZS']
+from sklearn.model_selection import train_test_split
+train, test = train_test_split(df_final, test_size=0.2)
 
+
+# *References:* <br>
+# https://stackoverflow.com/questions/24147278/how-do-i-create-test-and-train-samples-from-one-dataframe-with-pandas
 
 # In[ ]:
 
 
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS']
-data['Year'] = [str(x) for x in data['Year']]
-years = ['2000',
- '2001',
- '2002',
- '2003',
- '2004',
- '2005',
- '2006',
- '2007',
- '2008',
- '2009',
- '2010',
- '2011',
- '2012',
- '2013',
- '2014']
-country = ['Burkina Faso', 'Central African Republic', 'Kuwait', 'Turkey',
-       'United Arab Emirates', 'Uruguay', 'Bolivia', 'Cameroon',
-       'Egypt, Arab Rep.', 'Iran, Islamic Rep.', 'Mali', 'New Caledonia',
-       'Swaziland', 'Tonga', 'Maldives', 'Poland', 'Rwanda', 'Afghanistan',
-       'Benin', 'Burundi', 'Guinea-Bissau', 'Jordan', 'Vanuatu', 'Vietnam',
-       'American Samoa', 'Argentina', 'Brazil', 'Comoros', 'Guam',
-       'Hungary', 'Indonesia', 'Malaysia', 'Mexico', 'Mozambique', 'Palau',
-       'Panama', 'Philippines', 'Puerto Rico', 'Singapore', 'South Africa',
-       'Thailand', 'Trinidad and Tobago', 'Bahrain', 'Bangladesh',
-       'Brunei Darussalam', 'Cuba', 'Dominican Republic', 'Greece',
-       'India', 'Italy', 'Macao SAR, China', 'Nepal', 'Pakistan', 'Peru',
-       'Portugal', 'Sao Tome and Principe', 'Spain', 'Sri Lanka',
-       'Syrian Arab Republic', 'Venezuela, RB', 'Chile', 'China',
-       'Ecuador', 'Haiti', 'Morocco', 'Paraguay', 'Zimbabwe', 'Israel',
-       'Myanmar', 'Costa Rica', 'Liberia', 'Libya', 'Tunisia', 'Malta',
-       'Qatar', 'Algeria', 'Malawi', 'Seychelles', "Cote d'Ivoire",
-       'Senegal', 'Tanzania', 'Armenia', 'Belarus', 'Estonia',
-       'Kazakhstan', 'Latvia', 'Lithuania', 'Moldova','Lesotho', 'Madagascar', 'Mauritania', 'Mongolia',
-       'Papua New Guinea', 'Sudan', 'Togo', 'Uzbekistan', 'Albania',
-       'Angola', 'Bulgaria', 'Congo, Dem. Rep.', 'Honduras', 'Nicaragua',
-       'Niger', 'Ukraine', 'Eritrea', 'Georgia', 'Oman', 'Sierra Leone',
-       'Suriname', 'Bhutan', 'Cayman Islands', 'Lebanon',
-       'Korea, Dem. Rep.', 'South Sudan', 'Guyana', 'Timor-Leste',
-       'Congo, Rep.', 'Montenegro', 'Serbia', 'Austria']
+#re-fit logistic regression on new train sample
+
+cols2=["Age", "Pclass_1", "Pclass_2","Embarked_C","Embarked_S","Sex_male"] 
+X3=train[cols2]
+Y3=train['Survived']
+logit_model3=sm.Logit(Y3,X3)
 
 
 # In[ ]:
 
 
-from math import pi
+from sklearn.linear_model import LogisticRegression
+from sklearn import metrics
 
-from bokeh.io import show
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-# data = data.set_index('Year')
-# this is the colormap from the original NYTimes plot
-colors = ["#75968f", "#a5bab7", "#c9d9d3", "#e2e2e2", "#dfccce", "#ddb7b1", "#cc7878", "#933b41", "#550b1d"]
-mapper = LinearColorMapper(palette=colors)
-# Set up the data for plotting. We will need to have values for every
-# pair of year/month names. Map the rate to a color.
-countr = []
-year = []
-color = []
-rate = []
-for y in years:
-    for m in country:
-        countr.append(m)
-        year.append(y)
-#         d[(d['x']>2) & (d['y']>7)]
-        monthly_rate = data[(data['CountryName']==m) & (data['Year']==y)]['Value']
-        rate.append(monthly_rate)
+logreg = LogisticRegression()
+logreg.fit(X3, Y3)
+logreg.score(X3, Y3)
 
-source = ColumnDataSource(
-    data=dict(country=countr, year=year, rate=rate)
-)
 
-TOOLS = "hover,save,pan,box_zoom,wheel_zoom"
+# The score for the new training sample (80% of original) is very close to the original performance, which is good!<br>
+# Let's assess how well it scores on the 20% hold-out sample.
 
-p = figure(title="Women who believe Husbands are justified in beating wifes",
-           x_range=years, y_range=list(reversed(country)),
-           x_axis_location="above", plot_width=900, plot_height=900,
-           tools=TOOLS)
+# In[ ]:
 
-p.grid.grid_line_color = None
-p.axis.axis_line_color = None
-p.axis.major_tick_line_color = None
-p.axis.major_label_text_font_size = "5pt"
-p.axis.major_label_standoff = 0
-p.xaxis.major_label_orientation = pi / 3
 
-p.rect(x="year", y="country", width=1, height=1,
-       source=source,
-       fill_color={'field': 'rate', 'transform': mapper},
-       line_color=None)
+from sklearn import metrics
+logreg.fit(X3, Y3)
 
-p.select_one(HoverTool).tooltips = [
-#     ('date', '@countr @year'),
-    ('rate', '@rate'),
-]
+X3_test = test[cols2]
+Y3_test = test['Survived']
 
-show(p)      # show the plot
+Y3test_pred = logreg.predict(X3_test)
+print('Accuracy of logistic regression classifier on test set: {:.2f}'.format(logreg.score(X3_test, Y3_test)))
 
+
+# The model's out of sample performance does not show any deterioration.<br>
+# *Resources:* <br>
+# http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html <br>
+# https://towardsdatascience.com/building-a-logistic-regression-in-python-step-by-step-becd4d56c9c8
+
+# # 4.4 Out-of-sample Assessment <br> <a class="anchor" id="4.4-bullet"></a>
+
+# ### Assessing the model's performance based on Cross Validation ROC/AUC 
+
+# In[ ]:
+
+
+# Model's in sample AUC
+
+from sklearn.metrics import roc_auc_score
+logreg.fit(X3, Y3)
+Y3_pred = logreg.predict(X3)
+
+y_true = Y3
+y_scores = Y3_pred
+roc_auc_score(y_true, y_scores)
+
+
+# In[ ]:
+
+
+#Visualizing the model's ROC curve (**source for graph code given below the plot)
+from sklearn.metrics import roc_curve, auc
+logreg.fit(X3, Y3)
+
+y_test = Y3_test
+X_test = X3_test
+ 
+# Determine the false positive and true positive rates
+FPR, TPR, _ = roc_curve(y_test, logreg.predict_proba(X_test)[:,1])
+ 
+# Calculate the AUC
+
+roc_auc = auc(FPR, TPR)
+print ('ROC AUC: %0.3f' % roc_auc )
+ 
+# Plot of a ROC curve
+plt.figure(figsize=(10,10))
+plt.plot(FPR, TPR, label='ROC curve (area = %0.3f)' % roc_auc)
+plt.plot([0, 1], [0, 1], 'k--')
+plt.xlim([-0.05, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve (Test Sample Performance)')
+plt.legend(loc="lower right")
+plt.show()
+
+
+# An AUC score of 0.5 is effectively as good as the flip of a coin, and means that the model really has no classification power at all between the positive and negative occurences. The AUC for both the test and train samples when run on my logistic regression demonstrates relatively strong power of separation between positive and negative occurences (survived - 1, died - 0).
+# 
+# > ### "AUC of a classifier is equivalent to the probability that the classifier will rank a randomly chosen positive instance higher than a randomly chosen negative instance." -Majnik, Bosnic, 2011<br> 
+# 
+# <br> *References*: <br>
+# ROC Analysis of Classifiers in Machine Learning: A Survey, Matjaz Majnik, Zoran Bosnic, 2011: <br>
+# http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.301.969&rep=rep1&type=pdf<br>
+# 
+# https://stackoverflow.com/questions/25009284/how-to-plot-roc-curve-in-python
+# http://www.ultravioletanalytics.com/2014/12/16/kaggle-titanic-competition-part-x-roc-curves-and-auc/
+
+# # 4.5 Logistic Regression Conclusion<br> <a class="anchor" id="4.5-bullet"></a>
+# <br> 
+# Based on my analysis, if you were to be aboard the Titanic, your chances of survival were best if you fit the following criteria:<br>
+# * Female
+# * Young
+# * In First Class 
+# * Embarked in Cherbourg France
+# 
+
+# ## 5. Random Forest Estimation <a class="anchor" id="5-bullet"></a>
+
+# Our Logistic Regression is effective and easy to interpret, but there are other ML techniques which could provide a more accurate prediction.  Random forests, a tree-based machine learning technique, often provide more accurate results than Logistic Regression classifier models.  With respect to tree growth, performance tends to taper off after a certain number of trees are grown. <br> <br>
+# I conducted several iterations of a Random Forest model by adjusting the number of trees (n_estimators parameter) and submitted by results for scoring on Kaggle. I tested 40, 80, 100, and 120 trees, and the best out-of-sample predictictive power was achieved with 100 trees. <br> <br>
+# *Note*: I used the same variables I utilized in my first logistic regression to train my random forest. If I were to start this again from scratch, I might have tried testing a wider range of variables (e.g. leaving in the two variables on travel companions which I had reduced to a single categorical variable around traveling along).  
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+
+cols=["Age", "Fare", "TravelAlone", "Pclass_1", "Pclass_2","Embarked_C","Embarked_S","Sex_male","IsMinor"] 
+X=df_final[cols]
+Y=df_final['Survived']
+
+random_forest = RandomForestClassifier(n_estimators=100)
+random_forest.fit(X, Y)
+random_forest.score(X, Y)
+
+
+# *References*:<br>
+# http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestClassifier.html <br>
+# https://stats.stackexchange.com/questions/260460/optimization-of-a-random-forest-model<br>
+# https://en.wikipedia.org/wiki/Random_forest <br>
+# https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm
+
+# ## Final RF Submission
+
+# In[ ]:
+
+
+final_test_RF=final_test[cols]
+Y_pred_RF = random_forest.predict(final_test_RF)
+
+
+# In[ ]:
+
+
+submission = pd.DataFrame({
+        "PassengerId": test_df["PassengerId"],
+        "Survived": Y_pred_RF
+    })
+submission.to_csv('titanic.csv', index=False)
+
+
+# ## 6. Decision Tree <a class="anchor" id="6-bullet"></a>
+
+# Let's try another method- a decision tree.  There is a tradeoff for the additional complexity of utilizing a decision tree as compared to a logistic regression: growing your number of trees too much can subject your model to overfitting and reduce the predictive power of the model.  I've set parameters within the DecisionTreeClassifier from sklearn to help make sure my model is not overfit (too many branches based on the train data).  Some trial and error went into this to determine the optimal number of branches to "prune" to achieve strong out-of-sample results.<br><br>
+# *Note*: Again, I used the same variables for the decision tree as I did in my first logistic regression and in my random forest.
+
+# In[ ]:
+
+
+from sklearn import tree
+import graphviz
+tree1 = tree.DecisionTreeClassifier(criterion='gini', splitter='best',max_depth=3, min_samples_leaf=20)
+
+
+# *Resources*:<br>
+# http://scikit-learn.org/stable/modules/generated/sklearn.tree.DecisionTreeClassifier.html
+# http://benalexkeen.com/decision-tree-classifier-in-python-using-scikit-learn/
+# https://en.wikipedia.org/wiki/Pruning_(decision_trees)
+
+# In[ ]:
+
+
+cols=["Age", "Fare", "TravelAlone", "Pclass_1", "Pclass_2","Embarked_C","Embarked_S","Sex_male","IsMinor"] 
+X_DT=df_final[cols]
+Y_DT=df_final['Survived']
+
+tree1.fit(X_DT, Y_DT)
+
+
+# Let's see how our tree grew! What were the splits the model identified as being most significant in this classification task?
+
+# In[ ]:
+
+
+import graphviz 
+tree1_view = tree.export_graphviz(tree1, out_file=None, feature_names = X_DT.columns.values, rotate=True) 
+tree1viz = graphviz.Source(tree1_view)
+tree1viz
+
+
+# *Reference*:<br>http://scikit-learn.org/stable/modules/generated/sklearn.tree.export_graphviz.html
+
+# In[ ]:
+
+
+final_test_DT=final_test[cols]
+
+
+# In[ ]:
+
+
+Y_pred_DT = tree1.predict(final_test_DT)
+
+
+# In[ ]:
+
+
+# submission = pd.DataFrame({
+#        "PassengerId": test_df["PassengerId"],
+#        "Survived": Y_pred_DT
+#    })
+#submission.to_csv('titanic.csv', index=False)
+
+
+# **Final References:** <br>
+# *Editing Markdowns*: https://medium.com/ibm-data-science-experience/markdown-for-jupyter-notebooks-cheatsheet-386c05aeebed<br>
+# *Matplotlib color library:* https://matplotlib.org/examples/color/named_colors.html

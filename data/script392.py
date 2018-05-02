@@ -1,183 +1,170 @@
 
 # coding: utf-8
 
-# ELI5
+# This submission consists of a weighted average, the use of four kernels, and my imagination in adjusting the parameters.  Enjoy!
 # 
-# Or, explain like I'm 5, how does a linear model predict toxicity? I used RidgeClassifier but you can try any other model even XGBoost. You can find more complex example in this https://www.kaggle.com/lopuhin/eli5-for-mercari .
 # 
-# Many thanks for authors https://github.com/TeamHG-Memex/eli5 for their great stuff.
 # 
-# Preprocessing is based on Jeremy Howard's amazing script https://www.kaggle.com/jhoward/nb-svm-strong-linear-baseline
 
 # In[ ]:
 
 
-import eli5
-import pandas as pd, numpy as np
-from sklearn.linear_model import LogisticRegression, RidgeClassifier
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.model_selection import KFold
-from sklearn.metrics import roc_auc_score
-from sklearn.pipeline import FeatureUnion
-import re,string
+The first is a w
 
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv')
-COMMENT = 'comment_text'
-train[COMMENT].fillna("unknown", inplace=True)
-label_cols = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-train['none'] = 1-train[label_cols].max(axis=1)
-train.describe()
+#https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+import numpy as np, pandas as pd
+import glob, re
+
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):pd.read_csv(fn) for fn in glob.glob('../input/*.csv')}
+print('data frames read:{}'.format(list(dfs.keys())))
+
+print('local variables with the same names are created.')
+for k, v in dfs.items(): locals()[k] = v
+
+print('holidays at weekends are not special, right?')
+wkend_holidays = date_info.apply((lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+
+print('add decreasing weights from now')
+
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 8
 
 
 # In[ ]:
 
 
-ys = train[label_cols+['none']]
-ys.head(n=3)
+print('weighted mean visitors for each (air_store_id, day_of_week, holiday_flag) or (air_store_id, day_of_week)')
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
 
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
 
-# In[ ]:
+print('prepare to merge with date_info and visitors')
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
 
+# fill missings with (air_store_id, day_of_week)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), how='left')['visitors_y'].values
 
-train['comment_text_char'] = train.comment_text.values
-
-
-# In[ ]:
-
-
-train.head(n=3)
-
-
-# In[ ]:
-
-
-re_tok = re.compile(f'([{string.punctuation}“”¨«»®´·º½¾¿¡§£₤‘’])')
-def tokenize(s): return re_tok.sub(r' \1 ', s).split()
-
-# we need a custom pre-processor to extract correct field,
-# but want to also use default scikit-learn preprocessing (e.g. lowercasing)
-default_preprocessor = CountVectorizer().build_preprocessor()
-def build_preprocessor(field):
-    field_idx = list(train.columns).index(field)
-    return lambda x: default_preprocessor(x[field_idx])
+# fill missings with (air_store_id)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), on='air_store_id', how='left')['visitors_y'].values
     
-vectorizer = FeatureUnion([
-    ('comment_text', TfidfVectorizer(ngram_range=(1,2), tokenizer=tokenize,
-               min_df=3, max_df=0.9, strip_accents='unicode', use_idf=1,
-               smooth_idf=1, sublinear_tf=1, preprocessor=build_preprocessor('comment_text'))),
-    ('comment_text_char', TfidfVectorizer(sublinear_tf=True,  strip_accents='unicode',
-               analyzer='char', stop_words='english', ngram_range=(2, 6), 
-               max_features=20000, preprocessor=build_preprocessor('comment_text_char')))
-])
-X_train = vectorizer.fit_transform(train.values)
-X_train
-
-
-# Let's explain how our model recognizes toxic comments
-
-# In[ ]:
-
-
-classifier = RidgeClassifier(solver='sag')
-
-y = ys['toxic'].values
-
-kf = KFold(n_splits=5, shuffle=True, random_state=239)
-for train_index, test_index in kf.split(X_train):
-    classifier = RidgeClassifier(solver='sag')
-    classifier.fit(X_train[train_index], y[train_index])
-    predict = classifier.decision_function(X_train[test_index])
-    cv_score = roc_auc_score(y[test_index], predict)
-    print(cv_score)
-    break
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+print("done")
 
 
 # In[ ]:
 
 
-eli5.show_weights(classifier, vec=vectorizer)
+sample_submission2 = sample_submission.copy()
 
 
 # In[ ]:
 
 
-train[COMMENT].values[6]
+# https://www.kaggle.com/guoqiangliang/median-by-dow-lb-0-517
+test_df = pd.read_csv('../input/sample_submission.csv')
+test_df['store_id'], test_df['visit_date'] = test_df['id'].str[:20], test_df['id'].str[21:]
+test_df.drop(['visitors'], axis=1, inplace=True)
+test_df['visit_date'] = pd.to_datetime(test_df['visit_date'])
+
+air_data = pd.read_csv('../input/air_visit_data.csv', parse_dates=['visit_date'])
+air_data['dow'] = air_data['visit_date'].dt.dayofweek
+train = air_data[air_data['visit_date'] > '2017-01-28'].reset_index()
+train['dow'] = train['visit_date'].dt.dayofweek
+test_df['dow'] = test_df['visit_date'].dt.dayofweek
+aggregation = {'visitors' :{'total_visitors' : 'median'}}
+
+# Group by id and day of week - Median of the visitors is taken
+agg_data = train.groupby(['air_store_id', 'dow']).agg(aggregation).reset_index()
+agg_data.columns = ['air_store_id','dow','visitors']
+agg_data['visitors'] = agg_data['visitors']
+
+# Create the first intermediate submission file:
+merged = pd.merge(test_df, agg_data, how='left', left_on=[
+    'store_id','dow'], right_on=['air_store_id','dow'])
+final = merged[['id','visitors']]
+final.fillna(0, inplace=True)
+
+# originally from this kernel:
+# https://www.kaggle.com/zeemeen/weighted-mean-running-10-sec-lb-0-509
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):pd.read_csv(
+    fn) for fn in glob.glob('../input/*.csv')}
+for k, v in dfs.items(): locals()[k] = v
+
+weekend_hdays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') 
+    and x.holiday_flg==1), axis=1)
+date_info.loc[weekend_hdays, 'holiday_flg'] = 0
+date_info['weight'] = (date_info.index + 1) / len(date_info) 
+
+visit_data = air_visit_data.merge(
+    date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
+
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(
+    ['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) 
+
+sample_submission['air_store_id'] = sample_submission.id.map(
+    lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(
+    visitors, on=['air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+
+# fill missings with (air_store_id, day_of_week)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=(
+        'air_store_id', 'day_of_week'), how='left')['visitors_y'].values
+
+# fill missings with (air_store_id)
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
+    on='air_store_id', how='left')['visitors_y'].values
+    
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sample_submission = sample_submission[['id', 'visitors']]
+final['visitors'][final['visitors'] ==0] = sample_submission['visitors'][final['visitors'] ==0]
+sub_file = final.copy()
+
+## Harmonic Mean (from https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-497)
+sub_file['visitors'] = 2/(1/final['visitors'] + 1/sample_submission['visitors'])
 
 
 # In[ ]:
 
 
-eli5.show_prediction(classifier, doc=train.values[6], vec=vectorizer)
+new = sub_file.copy()
 
 
 # In[ ]:
 
 
-eli5.show_weights(classifier, vec=vectorizer, top=100, feature_filter=lambda x: x != '<BIAS>')
-
-
-# Now, look at identity_hate
-
-# In[ ]:
-
-
-classifier = RidgeClassifier(solver='sag')
-
-y = ys['identity_hate'].values
-
-kf = KFold(n_splits=5, shuffle=True, random_state=239)
-for train_index, test_index in kf.split(X_train):
-    classifier = RidgeClassifier(solver='sag')
-    classifier.fit(X_train[train_index], y[train_index])
-    predict = classifier.decision_function(X_train[test_index])
-    cv_score = roc_auc_score(y[test_index], predict)
-    print(cv_score)
-    break
+new['visitors'] = sub_file['visitors']*.2 + sample_submission2['visitors']*.8
 
 
 # In[ ]:
 
 
-eli5.show_weights(classifier, vec=vectorizer, top=100, feature_filter=lambda x: x != '<BIAS>')
-
-
-# In[ ]:
-
-
-train[COMMENT].values[42]
-
-
-# In[ ]:
-
-
-eli5.show_prediction(classifier, doc=train.values[42], vec=vectorizer)
-
-
-# What about other languages
-
-# In[ ]:
-
-
-#from langdetect import detect
-#def dl(s):
-#    try: return detect(s)
-#    except: return 'en'
-#train['lang'] = train.comment_text.apply(dl)
-#train.lang.unique()
-
-
-# In[ ]:
-
-
-train[COMMENT].values[156771]
-
-
-# In[ ]:
-
-
-eli5.show_prediction(classifier, doc=train.values[156771], vec=vectorizer)
+new.to_csv("four_kernel_weighted.csv", float_format='%.4f', index=None)
 

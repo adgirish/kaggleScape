@@ -1,187 +1,322 @@
 
 # coding: utf-8
 
-# In[ ]:
+# # More To Come. Stay Tuned. !!
+# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
+# 
+# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. **If you like it or it helps you , you can upvote and/or leave a comment :).**|
+# 
+
+# In[1]:
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+import IPython.display as ipd  # To play sound in the notebook
+from tqdm import tqdm_notebook
+import wave
+from scipy.io import wavfile
+SAMPLE_RATE = 44100
+
+import seaborn as sns # for making plots with seaborn
+color = sns.color_palette()
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.offline as offline
+offline.init_notebook_mode()
+import plotly.tools as tls
+# Math
+import numpy as np
+from scipy.fftpack import fft
+from scipy import signal
+from scipy.io import wavfile
+import librosa
+
+
+# In[2]:
 
 
 import os
-import numpy as np 
-import pandas as pd 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+print(os.listdir("../input"))
 
 
-# First thing first@
-# # Credits to the following awesome authors and kernels
-# 
-# Author: QuantScientist    
-# File: sub_200_ens_densenet.csv     
-# Link: https://www.kaggle.com/solomonk/pytorch-cnn-densenet-ensemble-lb-0-1538     
-# 
-# 
-# Author: wvadim     
-# File: sub_TF_keras.csv     
-# Link: https://www.kaggle.com/wvadim/keras-tf-lb-0-18     
-# 
-# 
-# Author: Ed Miller    
-# File: sub_fcn.csv    
-# Link: https://www.kaggle.com/bluevalhalla/fully-convolutional-network-lb-0-193     
-# 
-# 
-# Author: Chia-Ta Tsai    
-# File: sub_blend009.csv    
-# Link: https://www.kaggle.com/cttsai/ensembling-gbms-lb-203    
-# 
-# 
-# Author: DeveshMaheshwari    
-# File: sub_keras_beginner.csv    
-# Link: https://www.kaggle.com/devm2024/keras-model-for-beginners-0-210-on-lb-eda-r-d       
-# 
-# ### Without their truly dedicated efforts, this notebook will not be possible.     
-
-# # Data Load
-
-# In[ ]:
+# In[3]:
 
 
-sub_path = "../input/statoil-iceberg-submissions"
-all_files = os.listdir(sub_path)
-
-# Read and concatenate submissions
-outs = [pd.read_csv(os.path.join(sub_path, f), index_col=0) for f in all_files]
-concat_sub = pd.concat(outs, axis=1)
-cols = list(map(lambda x: "is_iceberg_" + str(x), range(len(concat_sub.columns))))
-concat_sub.columns = cols
-concat_sub.reset_index(inplace=True)
-concat_sub.head()
-
-
-# In[ ]:
+INPUT_LIB = '../input/'
+audio_train_files = os.listdir('../input/audio_train')
+audio_test_files = os.listdir('../input/audio_test')
+train = pd.read_csv('../input/train.csv')
+submission = pd.read_csv("../input/sample_submission.csv", index_col='fname')
+train_audio_path = '../input/audio_train/'
+filename = '/001ca53d.wav' # Hi-hat
+sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
+#sample_rate = 16000
 
 
-# check correlation
-concat_sub.corr()
+# In[4]:
 
 
-# In[ ]:
+print(samples)
 
 
-# get the data fields ready for stacking
-concat_sub['is_iceberg_max'] = concat_sub.iloc[:, 1:6].max(axis=1)
-concat_sub['is_iceberg_min'] = concat_sub.iloc[:, 1:6].min(axis=1)
-concat_sub['is_iceberg_mean'] = concat_sub.iloc[:, 1:6].mean(axis=1)
-concat_sub['is_iceberg_median'] = concat_sub.iloc[:, 1:6].median(axis=1)
+# In[5]:
 
 
-# In[ ]:
+print("Size of training data",train.shape)
 
 
-# set up cutoff threshold for lower and upper bounds, easy to twist 
-cutoff_lo = 0.8
-cutoff_hi = 0.2
+# In[6]:
 
 
-# # Mean Stacking
-
-# In[ ]:
+train.head()
 
 
-concat_sub['is_iceberg'] = concat_sub['is_iceberg_mean']
-concat_sub[['id', 'is_iceberg']].to_csv('stack_mean.csv', 
-                                        index=False, float_format='%.6f')
+# In[7]:
 
 
-# **LB 0.1698** , decent first try - still some gap comparing with our top-line model performance in stack.
-
-# # Median Stacking
-
-# In[ ]:
+submission.head()
 
 
-concat_sub['is_iceberg'] = concat_sub['is_iceberg_median']
-concat_sub[['id', 'is_iceberg']].to_csv('stack_median.csv', 
-                                        index=False, float_format='%.6f')
+# In[8]:
 
 
-# **LB 0.1575**, very close with our top-line model performance, but we want to see some improvement at least.
+def clean_filename(fname, string):   
+    file_name = fname.split('/')[1]
+    if file_name[:2] == '__':        
+        file_name = string + file_name
+    return file_name
 
-# # PushOut + Median Stacking 
-# 
-# Pushout strategy is a bit agressive given what it does...
-
-# In[ ]:
-
-
-concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 1, 
-                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-                                             0, concat_sub['is_iceberg_median']))
-concat_sub[['id', 'is_iceberg']].to_csv('stack_pushout_median.csv', 
-                                        index=False, float_format='%.6f')
+def load_wav_file(name, path):
+    _, b = wavfile.read(path + name)
+    assert _ == SAMPLE_RATE
+    return b
 
 
-# **LB 0.1940**, not very impressive results given the base models in the pipeline...
-
-# # MinMax + Mean Stacking
-# 
-# MinMax seems more gentle and it outperforms the previous one given its peformance score.
-
-# In[ ]:
+# In[9]:
 
 
-concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-                                    concat_sub['is_iceberg_max'], 
-                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-                                             concat_sub['is_iceberg_min'], 
-                                             concat_sub['is_iceberg_mean']))
-concat_sub[['id', 'is_iceberg']].to_csv('stack_minmax_mean.csv', 
-                                        index=False, float_format='%.6f')
+train_data = pd.DataFrame({'file_name' : train['fname'],
+                         'target' : train['label']})   
+train_data['time_series'] = train_data['file_name'].apply(load_wav_file, 
+                                                      path=INPUT_LIB + 'audio_train/')    
+train_data['nframes'] = train_data['time_series'].apply(len)  
 
 
-# **LB 0.1622**, need to stack with Median to see the results.
-
-# # MinMax + Median Stacking 
-
-# In[ ]:
+# In[10]:
 
 
-concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-                                    concat_sub['is_iceberg_max'], 
-                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-                                             concat_sub['is_iceberg_min'], 
-                                             concat_sub['is_iceberg_median']))
-concat_sub[['id', 'is_iceberg']].to_csv('stack_minmax_median.csv', 
-                                        index=False, float_format='%.6f')
+train_data.head()
 
 
-# **LB 0.1488** - **Great!** This is an improvement to our top-line model performance (LB 0.1538). But can we do better?
+# In[11]:
 
-# # MinMax + BestBase Stacking
+
+print("Size of training data after some preprocessing : ",train_data.shape)
+
+
+# In[12]:
+
+
+# missing data in training data set
+total = train_data.isnull().sum().sort_values(ascending = False)
+percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
+missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_train_data.head()
+
+
+# There is no missing data in training dataset
+
+# # Manually verified Audio
+
+# In[17]:
+
+
+temp = train['manually_verified'].value_counts()
+labels = temp.index
+sizes = (temp / temp.sum())*100
+trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
+layout = go.Layout(title='Manually varification of labels(0 - No, 1 - Yes)')
+data = [trace]
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# * Approximately 40 % labels are manually varified.
+
+# In[18]:
+
+
+plt.figure(figsize=(12,8))
+sns.distplot(train_data.nframes.values, bins=50, kde=False)
+plt.xlabel('nframes', fontsize=12)
+plt.title("Histogram of #frames")
+plt.show()
+
+
+# In[19]:
+
+
+plt.figure(figsize=(17,8))
+boxplot = sns.boxplot(x="target", y="nframes", data=train_data)
+boxplot.set(xlabel='', ylabel='')
+plt.title('Distribution of audio frames, per label', fontsize=17)
+plt.xticks(rotation=80, fontsize=17)
+plt.yticks(fontsize=17)
+plt.xlabel('Label name')
+plt.ylabel('nframes')
+plt.show()
+
+
+# In[20]:
+
+
+print("Total number of labels in training data : ",len(train_data['target'].value_counts()))
+print("Labels are : ", train_data['target'].unique())
+plt.figure(figsize=(15,8))
+audio_type = train_data['target'].value_counts().head(30)
+sns.barplot(audio_type.values, audio_type.index)
+for i, v in enumerate(audio_type.values):
+    plt.text(0.8,i,v,color='k',fontsize=12)
+plt.xticks(rotation='vertical')
+plt.xlabel('Frequency')
+plt.ylabel('Label Name')
+plt.title("Top 30 labels with their frequencies in training data")
+plt.show()
+
+
+# ### Total number of labels are 41
 
 # In[ ]:
 
 
-# load the model with best base performance
-sub_base = pd.read_csv('../input/statoil-iceberg-submissions/sub_200_ens_densenet.csv')
+temp = train_data.sort_values(by='target')
+temp.head()
+
+
+# ## Now look at  some labels waveform :
+#   1. Acoustic_guitar
+#   2. Applause
+#   3. Bark
+
+# ## 1. Acoustic_guitar
+
+# In[ ]:
+
+
+print("Acoustic_guitar : ")
+fig, ax = plt.subplots(10, 4, figsize = (12, 16))
+for i in range(40):
+    ax[i//4, i%4].plot(temp['time_series'][i])
+    ax[i//4, i%4].set_title(temp['file_name'][i][:-4])
+    ax[i//4, i%4].get_xaxis().set_ticks([])
+fig.savefig("AudioWaveform", dpi=900)     
+
+
+# ## 2. Applause
+
+# In[ ]:
+
+
+print("Applause : ")
+fig, ax = plt.subplots(10, 4, figsize = (12, 16))
+for i in range(40):
+    ax[i//4, i%4].plot(temp['time_series'][i+300])
+    ax[i//4, i%4].set_title(temp['file_name'][i+300][:-4])
+    ax[i//4, i%4].get_xaxis().set_ticks([])
+
+
+# ## 3. Bark
+
+# In[ ]:
+
+
+print("Bark : ")
+fig, ax = plt.subplots(10, 4, figsize = (12, 16))
+for i in range(40):
+    ax[i//4, i%4].plot(temp['time_series'][i+600])
+    ax[i//4, i%4].set_title(temp['file_name'][i+600][:-4])
+    ax[i//4, i%4].get_xaxis().set_ticks([])
 
 
 # In[ ]:
 
 
-concat_sub['is_iceberg_base'] = sub_base['is_iceberg']
-concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-                                    concat_sub['is_iceberg_max'], 
-                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-                                             concat_sub['is_iceberg_min'], 
-                                             concat_sub['is_iceberg_base']))
-concat_sub[['id', 'is_iceberg']].to_csv('stack_minmax_bestbase.csv', 
-                                        index=False, float_format='%.6f')
+from wordcloud import WordCloud
+wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(train_data.target))
+plt.figure(figsize=(15,8))
+plt.imshow(wordcloud)
+plt.title("Wordcloud for Labels", fontsize=35)
+plt.axis("off")
+plt.show() 
+#fig.savefig("LabelsWordCloud", dpi=900)
 
 
-# **LB 0.1463** - **Yes!** This is a decent score given none of the models in our ensemble pipeline has achieved thus better. I am sure there are more twisted ways to boost the score further, so will keep updating or just leave to more Kagglers to discover!
+# # Spectrogram
 
-# 
-# ### P.S. As I wrote along this work, deeply I think, building strong & roboust model is always the key component, stacking only comes last with the promise to surprise, sometimes, in an unpleasant direction@ 
-# 
-# 
-# 
+# In[ ]:
+
+
+def log_specgram(audio, sample_rate, window_size=20,
+                 step_size=10, eps=1e-10):
+    nperseg = int(round(window_size * sample_rate / 1e3))
+    noverlap = int(round(step_size * sample_rate / 1e3))
+    freqs, times, spec = signal.spectrogram(audio,
+                                    fs=sample_rate,
+                                    window='hann',
+                                    nperseg=nperseg,
+                                    noverlap=noverlap,
+                                    detrend=False)
+    return freqs, times, np.log(spec.T.astype(np.float32) + eps)
+
+
+# In[ ]:
+
+
+freqs, times, spectrogram = log_specgram(samples, sample_rate)
+
+fig = plt.figure(figsize=(18, 8))
+ax2 = fig.add_subplot(211)
+ax2.imshow(spectrogram.T, aspect='auto', origin='lower', 
+           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
+ax2.set_yticks(freqs[::40])
+ax2.set_xticks(times[::40])
+ax2.set_title('Spectrogram of Hi-hat ' + filename)
+ax2.set_ylabel('Freqs in Hz')
+ax2.set_xlabel('Seconds')
+
+
+# # Specgtrogram of "Hi-Hat" in 3d
+
+# If we use spectrogram as an input features for NN, we have to remember to normalize features.
+
+# In[ ]:
+
+
+mean = np.mean(spectrogram, axis=0)
+std = np.std(spectrogram, axis=0)
+spectrogram = (spectrogram - mean) / std
+
+
+# In[ ]:
+
+
+data = [go.Surface(z=spectrogram.T)]
+layout = go.Layout(
+    title='Specgtrogram of "Hi-Hat" in 3d',
+    scene = dict(
+    yaxis = dict(title='Frequencies', range=freqs),
+    xaxis = dict(title='Time', range=times),
+    zaxis = dict(title='Log amplitude'),
+    ),
+)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
+
+
+# # More To Come. Stayed Tuned !!

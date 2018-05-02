@@ -1,150 +1,330 @@
 
 # coding: utf-8
 
-# <table>
-# <tr>
-# <td><img src="https://i.imgur.com/BqJgyzB.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/ttYzMwD.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/WLmzj41.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/LjRTbCn.png" width="350px"/></td>
-# </tr>
-# <tr>
-# <td style="font-weight:bold; font-size:16px;">Scatter Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Choropleth</td>
-# <td style="font-weight:bold; font-size:16px;">Heatmap</td>
-# <td style="font-weight:bold; font-size:16px;">Surface Plot</td>
-# </tr>
-# <tr>
-# <td>go.Scatter()</td>
-# <td>go.Choropleth()</td>
-# <td>go.Heatmap()</td>
-# <td>go.Surface()</td>
-# </tr>
-# <!--
-# <tr>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for nominal and ordinal categorical data.</td>
-# <td>Good for ordinal categorical and interval data.</td>
-# </tr>
-# -->
-# </table>
-# 
-# # Introduction to plotly
-# 
-# So far in this tutorial we have been using `seaborn` and `pandas`, two mature libraries designed around `matplotlib`. These libraries all focus on building "static" visualizations: visualizations that have no moving parts. In other words, all of the plots we've built thus far could appear in a dead-tree journal article.
-# 
-# The web unlocks a lot of possibilities when it comes to interactivity and animations. There are a number of plotting libraries available which try to provide these features.
-# 
-# In this section we will examine `plotly`, an open-source plotting library that's one of the most popular of these libraries.
-
 # In[ ]:
 
 
+import tensorflow as tf
+import numpy as np
 import pandas as pd
-reviews = pd.read_csv("../input/wine-reviews/winemag-data-130k-v2.csv", index_col=0)
-reviews.head()
-
-
-# `plotly` provides both online and offline modes. The latter injects the `plotly` source code directly into the notebook; the former does not. I recommend using `plotly` in offline mode the vast majority of the time, and it's the only mode that works on Kaggle (which disables network access in Python).
-
-# In[ ]:
-
-
-from plotly.offline import init_notebook_mode, iplot
-init_notebook_mode(connected=True)
-
-
-# We'll start by creating a basic scatter plot.
-
-# In[ ]:
-
-
-import plotly.graph_objs as go
-
-iplot([go.Scatter(x=reviews.head(1000)['points'], y=reviews.head(1000)['price'], mode='markers')])
-
-
-# This chart is fully interactive. We can use the toolbar on the top-right to perform various operations on the data: zooming and panning, for example. When we hover over a data point, we get a tooltip. We can even save the plot as a PNG image.
-# 
-# This chart also demonstrates the *disadvantage* of this fancier plotting library. In order to keep performance reasonable, we had to limit ourselves to the first 1000 points in the dataset. While this was necessary anyway (to avoid too much overplotting) it's important to note that in general, interactive graphics are much, much more resource-intensive than static ones. It's easier to "max out" how many points of data you can show.
-# 
-# Notice the "shape" of the `plotly` API. `iplot` takes a list of plot objects and composes them for you, plotting the combined end result. This makes it easy to stack plots.
-# 
-# As another example, here's a KDE plot (what `plotly` refers to as a `Histogram2dContour`) *and* scatter plot of the same data.
-
-# In[ ]:
-
-
-iplot([go.Histogram2dContour(x=reviews.head(500)['points'], 
-                             y=reviews.head(500)['price'], 
-                             contours=go.Contours(coloring='heatmap')),
-       go.Scatter(x=reviews.head(1000)['points'], y=reviews.head(1000)['price'], mode='markers')])
-
-
-# `plotly` exposes several different APIs, ranging in complexity from low-level to high-level. `iplot` is the highest-level API, and hence, the most convenient one for general-purpose use.
-# 
-# Personally I've always found the `plotly` `Surface` its most impressive feature (albeit one of the hardest to get right):
-
-# In[ ]:
-
-
-df = reviews.assign(n=0).groupby(['points', 'price'])['n'].count().reset_index()
-df = df[df["price"] < 100]
-v = df.pivot(index='price', columns='points', values='n').fillna(0).values.tolist()
+import matplotlib.pyplot as plt
 
 
 # In[ ]:
 
 
-iplot([go.Surface(z=v)])
-
-
-# On Kaggle, `plotly` is often used to make **choropleths**. Choropleths are a type of map, where all of the entities (countries, US states, etc.) are colored according to some variable in the dataset. `plotly` is one of the most convenient plotting libraries available for making them.
-
-# In[ ]:
-
-
-df = reviews['country'].replace("US", "United States").value_counts()
-
-iplot([go.Choropleth(
-    locationmode='country names',
-    locations=df.index.values,
-    text=df.index,
-    z=df.values
-)])
-
-
-# Overall, `plotly` is a powerful, richly interactive data visualization library. It allows us to generate plots with more "pizazz" than standard `pandas` or `seaborn` output.
-# 
-# The tradeoff is that while `pandas` and `seaborn` are well-established, `plotly` is still new. As a result, and in particular, `plotly` documentation is much harder to and find and interpret; the office documentation on the `plotly` website uses a mix of different features for plotting, which makes it harder to use than it has to be.
-# 
-# Additionally, it's important to recognize when interactivity is useful, and when it is not. The most effective plots do not need to use hovers or tooltips to get their work done. As a result `plotly`, though extremely attractive, is rarely more *useful* than an equivalent plot in `pandas` or `seaborn`.
-
-# # Exercises
-# 
-# For the following exercise, try forking and running this notebook, and then reproducing the chart that follows. Hint: `Attack` on the x-axis, `Defense` on the y-axis.
-
-# In[ ]:
-
-
-import pandas as pd
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv")
-pokemon.head(3)
+# load data
+train_data = pd.read_csv(r"../input/train.csv")
+test_data = pd.read_csv(r"../input/test.csv")
 
 
 # In[ ]:
 
 
-import plotly.graph_objs as go
-
-iplot([go.Scatter(x=pokemon['Attack'], y=pokemon['Defense'], mode='markers')])
+train_data
 
 
-# # Conclusion
-# 
-# In this section we looked at `plotly`, an interactive plotting library that produces very attractive-looking charts. It is one of a number of alternatives to `matplotlib`-based tools that provide first-class interactivity (`bokeh` is another one worth mentioning).
-# 
-# In the next section we'll look at another plotting library, `plotnine`, which is designed around a peculiar but powerful idea called the **grammar of graphics**.
-# 
-# [Click here to go the next section, "Grammar of graphics with plotnine"](https://www.kaggle.com/residentmario/grammer-of-graphics-with-plotnine-optional).
+# In[ ]:
+
+
+test_data
+
+
+# In[ ]:
+
+
+# Feature Engineering
+from sklearn.preprocessing import Imputer
+
+def nan_padding(data, columns):
+    for column in columns:
+        imputer=Imputer()
+        data[column]=imputer.fit_transform(data[column].values.reshape(-1,1))
+    return data
+
+
+nan_columns = ["Age", "SibSp", "Parch"]
+
+train_data = nan_padding(train_data, nan_columns)
+test_data = nan_padding(test_data, nan_columns)
+
+
+# In[ ]:
+
+
+train_data
+
+
+# In[ ]:
+
+
+#save PassengerId for evaluation
+test_passenger_id=test_data["PassengerId"]
+
+
+# In[ ]:
+
+
+def drop_not_concerned(data, columns):
+    return data.drop(columns, axis=1)
+
+not_concerned_columns = ["PassengerId","Name", "Ticket", "Fare", "Cabin", "Embarked"]
+train_data = drop_not_concerned(train_data, not_concerned_columns)
+test_data = drop_not_concerned(test_data, not_concerned_columns)
+
+
+# In[ ]:
+
+
+train_data.head()
+
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# In[ ]:
+
+
+def dummy_data(data, columns):
+    for column in columns:
+        data = pd.concat([data, pd.get_dummies(data[column], prefix=column)], axis=1)
+        data = data.drop(column, axis=1)
+    return data
+
+
+dummy_columns = ["Pclass"]
+train_data=dummy_data(train_data, dummy_columns)
+test_data=dummy_data(test_data, dummy_columns)
+
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+def sex_to_int(data):
+    le = LabelEncoder()
+    le.fit(["male","female"])
+    data["Sex"]=le.transform(data["Sex"]) 
+    return data
+
+train_data = sex_to_int(train_data)
+test_data = sex_to_int(test_data)
+train_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+
+def normalize_age(data):
+    scaler = MinMaxScaler()
+    data["Age"] = scaler.fit_transform(data["Age"].values.reshape(-1,1))
+    return data
+train_data = normalize_age(train_data)
+test_data = normalize_age(test_data)
+train_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
+
+def split_valid_test_data(data, fraction=(1 - 0.8)):
+    data_y = data["Survived"]
+    lb = LabelBinarizer()
+    data_y = lb.fit_transform(data_y)
+
+    data_x = data.drop(["Survived"], axis=1)
+
+    train_x, valid_x, train_y, valid_y = train_test_split(data_x, data_y, test_size=fraction)
+
+    return train_x.values, train_y, valid_x, valid_y
+
+train_x, train_y, valid_x, valid_y = split_valid_test_data(train_data)
+print("train_x:{}".format(train_x.shape))
+print("train_y:{}".format(train_y.shape))
+print("train_y content:{}".format(train_y[:3]))
+
+print("valid_x:{}".format(valid_x.shape))
+print("valid_y:{}".format(valid_y.shape))
+
+
+# In[ ]:
+
+
+# Build Neural Network
+from collections import namedtuple
+
+def build_neural_network(hidden_units=10):
+    tf.reset_default_graph()
+    inputs = tf.placeholder(tf.float32, shape=[None, train_x.shape[1]])
+    labels = tf.placeholder(tf.float32, shape=[None, 1])
+    learning_rate = tf.placeholder(tf.float32)
+    is_training=tf.Variable(True,dtype=tf.bool)
+    
+    initializer = tf.contrib.layers.xavier_initializer()
+    fc = tf.layers.dense(inputs, hidden_units, activation=None,kernel_initializer=initializer)
+    fc=tf.layers.batch_normalization(fc, training=is_training)
+    fc=tf.nn.relu(fc)
+    
+    logits = tf.layers.dense(fc, 1, activation=None)
+    cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits)
+    cost = tf.reduce_mean(cross_entropy)
+    
+    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
+
+    predicted = tf.nn.sigmoid(logits)
+    correct_pred = tf.equal(tf.round(predicted), labels)
+    accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+    # Export the nodes 
+    export_nodes = ['inputs', 'labels', 'learning_rate','is_training', 'logits',
+                    'cost', 'optimizer', 'predicted', 'accuracy']
+    Graph = namedtuple('Graph', export_nodes)
+    local_dict = locals()
+    graph = Graph(*[local_dict[each] for each in export_nodes])
+
+    return graph
+
+model = build_neural_network()
+
+
+# In[ ]:
+
+
+def get_batch(data_x,data_y,batch_size=32):
+    batch_n=len(data_x)//batch_size
+    for i in range(batch_n):
+        batch_x=data_x[i*batch_size:(i+1)*batch_size]
+        batch_y=data_y[i*batch_size:(i+1)*batch_size]
+        
+        yield batch_x,batch_y
+
+
+# In[ ]:
+
+
+epochs = 200
+train_collect = 50
+train_print=train_collect*2
+
+learning_rate_value = 0.001
+batch_size=16
+
+x_collect = []
+train_loss_collect = []
+train_acc_collect = []
+valid_loss_collect = []
+valid_acc_collect = []
+
+saver = tf.train.Saver()
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    iteration=0
+    for e in range(epochs):
+        for batch_x,batch_y in get_batch(train_x,train_y,batch_size):
+            iteration+=1
+            feed = {model.inputs: train_x,
+                    model.labels: train_y,
+                    model.learning_rate: learning_rate_value,
+                    model.is_training:True
+                   }
+
+            train_loss, _, train_acc = sess.run([model.cost, model.optimizer, model.accuracy], feed_dict=feed)
+            
+            if iteration % train_collect == 0:
+                x_collect.append(e)
+                train_loss_collect.append(train_loss)
+                train_acc_collect.append(train_acc)
+
+                if iteration % train_print==0:
+                     print("Epoch: {}/{}".format(e + 1, epochs),
+                      "Train Loss: {:.4f}".format(train_loss),
+                      "Train Acc: {:.4f}".format(train_acc))
+                        
+                feed = {model.inputs: valid_x,
+                        model.labels: valid_y,
+                        model.is_training:False
+                       }
+                val_loss, val_acc = sess.run([model.cost, model.accuracy], feed_dict=feed)
+                valid_loss_collect.append(val_loss)
+                valid_acc_collect.append(val_acc)
+                
+                if iteration % train_print==0:
+                    print("Epoch: {}/{}".format(e + 1, epochs),
+                      "Validation Loss: {:.4f}".format(val_loss),
+                      "Validation Acc: {:.4f}".format(val_acc))
+                
+
+    saver.save(sess, "./titanic.ckpt")
+
+
+# In[ ]:
+
+
+plt.plot(x_collect, train_loss_collect, "r--")
+plt.plot(x_collect, valid_loss_collect, "g^")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.plot(x_collect, train_acc_collect, "r--")
+plt.plot(x_collect, valid_acc_collect, "g^")
+plt.show()
+
+
+# In[ ]:
+
+
+model=build_neural_network()
+restorer=tf.train.Saver()
+with tf.Session() as sess:
+    restorer.restore(sess,"./titanic.ckpt")
+    feed={
+        model.inputs:test_data,
+        model.is_training:False
+    }
+    test_predict=sess.run(model.predicted,feed_dict=feed)
+    
+test_predict[:10]
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import Binarizer
+binarizer=Binarizer(0.5)
+test_predict_result=binarizer.fit_transform(test_predict)
+test_predict_result=test_predict_result.astype(np.int32)
+test_predict_result[:10]
+
+
+# In[ ]:
+
+
+passenger_id=test_passenger_id.copy()
+evaluation=passenger_id.to_frame()
+evaluation["Survived"]=test_predict_result
+evaluation[:10]
+
+
+# In[ ]:
+
+
+evaluation.to_csv("evaluation_submission.csv",index=False)
+

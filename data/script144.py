@@ -1,344 +1,243 @@
 
 # coding: utf-8
 
-# # Visual Analysis 
+# # How far is China ahead of India ?
+# - It is well known that China and India are [re-emerging][1] as top economies in the world, but China is much ahead of India by most measures.
+# - So how long would it take for India to catch up with China?
 # 
-# In this notebook I will try to prove some graphical analysis so get a better picture of the database, the goals of the project and how you can improve your score using interesting characteristics of the features. Fisrt lets talk shortly about the databases.
+# Here we explore some key world development indicators to answer the question.
 # 
-# ### train dataframe
-# DonorsChose.org provide us a interesting dataset with a lot of string type variables. This means that the project and the submission that we made will depend conbsiderably on how we build categorical variables and create combinations of these categories to prdict with more accuracy the probability of each application of beeing aproved.
-# * **Variables:**
-#     * id: ID of the application. For each ID application we need to calculate the probability of this application being pproved.
-#     * **teacher_id: **ID of the teacher that is presenting the application. 
-#     * **teacher_prefix: ** The title is important, it give uys information about the  gender and the title of the teacher presenting the project.
-#         * ['Ms.', 'Mrs.', 'Mr.', 'Teacher', 'Dr.', nan].
-#     * **school_state: ** In which state the project will be develop in case it's accepted. I'm not sure but maybe there could be some budget restrictions per state so some states may accept more projects because they have more money.
-#     * **project_submitted_datetime: **  The submitted datetime of the project (No way!!) . This feature it's important for many reasons:
-#         * There could be some seasonality in the events.
-#         * We have to check for specific months in which we found more accpeted projects or a more accpetance rate.
-#         * Maybe the budget for all the projects it's assigned in a particular month , or every X months??
-#         * We should expect that during holydays and vacations there are less submitted projects (we should tottally include holyday information as external data!)
-#     * **project_grade_category: ** For which school grade the project it's oriented. Maybe most of the accepted projects are for small kids because they need special prgrams to learn better? Or maybe to older students that need special materials for science projects?
-#     * **project_subject_categories: **For which academic area the project was proposed? Is it math related? Music related? This is feature is interesting beacuse one application may have multiple areas. For example:
-#         * -Math & Science-, -Math & Science, Applied Learning-,  -Math & Science, Warmth, Care & Hunger-, -History & Civics, Warmth, Care & Hunger- are 4 different categories that share at least one academic area so we may need to apply some string transformations to get a list of academic areas instead of a single-value string. 
-#         EX:  -Math & Science, Applied Learning-, => [Math, Science, Applied Learning]
-#         * We have 51 different categories single-value.
-#         
-#     * **project_subject_subcategories: ** This is something more specific than the category feature. Then again we may need specific words or fields of the subcategory to identify more speciffic groups. Some examples of subcategories are:
-#        * 'ESL, Performing Arts', 'Gym & Fitness, Visual Arts',
-#        * 'Early Development, Health & Life Science',
-#        * 'Foreign Languages, Special Needs',
-#        * We have 407 different subcategories.
-#        
-#     * **project_title: ** Name of the project.
-#         * Just an interesting name:  "Wiggle While We Work" -> 149 different observations with the same name. 0.912751677852349 accpetance rate. Awesome name!! 
-#     * **project_essay_1: **  When presenting the project the teachers have to make a descrption of their application in 4 paragraphs.
-#         * 663.84 words average. 1st paragraph description.  
-#     * **project_essay_2: **
-#         * 833.552 words average  2nd paragraph description.  .
-#     * **project_essay_3: ** 
-#         * 19.70 words average 3rd paragraph description.  96.4% of teacher didn't include a third description paragraph.
-#     * **project_essay_4: **
-#         * 12.435 words average 4th paragraph description.  96.4% of teacher didn't include a third description paragraph.
-#     * **project_resource_summary: ** A description of the resources required for the project.
-#         * Example:   "My students need 6 Ipod Nano's to create and differentiated and engaging way to practice sight words during a literacy station." 
-#     * **teacher_number_of_previously_posted_projects: ** How many applications does the teacher had presented in the past.
-#         * Teachers had presented 11.23 in average.
-#     * **project_is_approved: ** 
-#         * 0.8476823374340949 accpetance rate. This value is really 
-# 
-# ### test dataframe
-# Same information of the train dataset without the  **project_is_approved** variable.
-# 
-# ### sample_submision dataframe
-# A datafarme with just two columns, id and project_is_approved. As mention in the details of the competition th order of the results doesn't matter. Also, you must predict a probability for the project_is_approved variable and the file should contain a header.
-# 
-# 
+#   [1]: http://www.economist.com/node/16834943
 
 # In[ ]:
 
 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns
-import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-
-import datetime
-import matplotlib.patches as mpatches
-
-
-# In[ ]:
-
-
-# Filepath to main training dataset.
-train_path = '../input/train.csv'
-test_path = '../input/test.csv'
-
-# Read data and store in DataFrame.
-train_data = pd.read_csv(train_path, sep=',', date_parser="project_submitted_datetime")
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import re
+plt.style.use('ggplot')
 
 
-# Using the train dataframe we can anwer some questions to select the variables that provide more information about the acceptance rate. For example, is there a correlation between the gender and the acceptance rate of the projects? Is there a correlation between the school state and the acceptance rate? 
+# ### Choosing Key Indicators
+# - Key topics for comparison are chosen using the [method discussed earlier][1] and then key indicators are hand-picked from those topics.
 # 
-# In the following Chunks I will try to answer this kind of questions following the order of the column variables.
+#   [1]: https://www.kaggle.com/kmravikumar/d/worldbank/world-development-indicators/choosing-topics-to-explore
 
 # In[ ]:
 
 
-train_data.head()
+# read in file as data frame
+df = pd.read_csv('../input/Indicators.csv')
+
+# Create list of unique indicators, indicator codes
+Indicator_array =  df[['IndicatorName','IndicatorCode']].drop_duplicates().values
 
 
-# ## Acceptance rates analysis.
+# In[ ]:
+
+
+modified_indicators = []
+unique_indicator_codes = []
+for ele in Indicator_array:
+    indicator = ele[0]
+    indicator_code = ele[1].strip()
+    if indicator_code not in unique_indicator_codes:
+        # delete , ( ) from the IndicatorNames
+        new_indicator = re.sub('[,()]',"",indicator).lower()
+        # replace - with "to" and make all words into lower case
+        new_indicator = re.sub('-'," to ",new_indicator).lower()
+        modified_indicators.append([new_indicator,indicator_code])
+        unique_indicator_codes.append(indicator_code)
+
+Indicators = pd.DataFrame(modified_indicators,columns=['IndicatorName','IndicatorCode'])
+Indicators = Indicators.drop_duplicates()
+print(Indicators.shape)
+
+
+# In[ ]:
+
+
+
+key_word_dict = {}
+key_word_dict['Demography'] = ['population','birth','death','fertility','mortality','expectancy']
+key_word_dict['Food'] = ['food','grain','nutrition','calories']
+key_word_dict['Trade'] = ['trade','import','export','good','shipping','shipment']
+key_word_dict['Health'] = ['health','desease','hospital','mortality','doctor']
+key_word_dict['Economy'] = ['income','gdp','gni','deficit','budget','market','stock','bond','infrastructure']
+key_word_dict['Energy'] = ['fuel','energy','power','emission','electric','electricity']
+key_word_dict['Education'] = ['education','literacy']
+key_word_dict['Employment'] =['employed','employment','umemployed','unemployment']
+key_word_dict['Rural'] = ['rural','village']
+key_word_dict['Urban'] = ['urban','city']
+
+
+# In[ ]:
+
+
+feature = 'Education'
+for indicator_ele in Indicators.values:
+    for ele in key_word_dict[feature]:
+        word_list = indicator_ele[0].split()
+        if ele in word_list or ele+'s' in word_list:
+            # Uncomment this line to print the indicators explicitely
+            #print(indicator_ele)
+            break
+
+
+# #### Important Features 
+
+# In[ ]:
+
+
+# Main indicators to compare contries
+chosen_indicators = ['NE.TRD.GNFS.ZS',                       'SI.POV.2DAY', 'SE.SEC.ENRL', 'SE.ADT.1524.LT.ZS',                      'SI.DST.10TH.10', 'SE.ADT.LITR.ZS', 'SP.DYN.LE00.IN',                      'NY.GDP.PCAP.PP.KD','SP.URB.TOTL.IN.ZS', 'SH.DTH.IMRT',                      'NE.EXP.GNFS.KD', 'NE.IMP.GNFS.KD' ]
+
+# Subset of data with the required features alone
+df_subset = df[df['IndicatorCode'].isin(chosen_indicators)]
+
+# Chose only India and China for Analysis
+df_India = df_subset[df['CountryName']=="India"]
+df_China = df_subset[df['CountryName']=="China"]
+
+
+# In[ ]:
+
+
+# PLotting function for comparing development indicators
+def plot_indicator(indicator,delta=10):
+    ds_India = df_India[['IndicatorName','Year','Value']][df_India['IndicatorCode']==indicator]
+    try:
+        title = ds_India['IndicatorName'].iloc[0]
+    except:
+        title = "None"
+
+    xindia = ds_India['Year'].values
+    yindia = ds_India['Value'].values
+    ds_China = df_China[['IndicatorName','Year','Value']][df_China['IndicatorCode']==indicator]
+    xchina = ds_China['Year'].values
+    ychina = ds_China['Value'].values
+    
+    plt.figure(figsize=(14,4))
+    
+    plt.subplot(121)
+    plt.plot(xindia,yindia,label='India')
+    plt.plot(xchina,ychina,label='China')
+    plt.title(title)
+    plt.legend(loc=2)
+
+    plt.subplot(122)
+    plt.plot(xindia,yindia,label='India')
+    plt.plot(xchina+delta,ychina,label='China')
+    plt.title(title + "\n Chinese Data Shifted by " +str(delta)+" Years")
+    plt.legend(loc=2)
+
+
+# # KEY FEATURES
+# Now let us explore the key features one-by-one.
 # 
-# ### Gender and titles.
+# ## 1) Trade as a percentage of GDP
+# - Note that by shifting the Chinese data by 10 years to the right it aligns well with the Indian data suggesting that India lags behind China by at least 10 years in terms of trade.
 
 # In[ ]:
 
 
-train_data.teacher_prefix.unique()
+plot_indicator(chosen_indicators[0],delta=10)
 
+
+# ## 2) Import and Export of goods and services
+# More specifically, we can look at total exports and imports.
+# - India lags behind China by 10 years 
 
 # In[ ]:
 
 
-prefixAceptance = train_data[["teacher_prefix","project_is_approved"]].groupby("teacher_prefix").mean()
-prefixAceptance["prefix"] = prefixAceptance.index
-
-genderDictionary = {"Ms.": "Female", "Mrs.":"Female", "Mr.":"Male", "Teacher":"Neutral", "Dr.":"Neutral", np.nan:"Neutral"  }
-train_data["gender"] = train_data.teacher_prefix.map( genderDictionary )
-genderAceptance = train_data[["gender","project_is_approved"]].groupby("gender").mean()
-
-titleDictionary = {"Ms.": "Na", "Mrs.":"Na", "Mr.":"Na", "Teacher":"Teacher", "Dr.":"Dr.", np.nan:"Na"  }
-train_data["title"] = train_data.teacher_prefix.map( titleDictionary )
-titleAceptance = train_data[["title","project_is_approved"]].groupby("title").mean()
+plot_indicator(chosen_indicators[10],delta=10)
 
 
 # In[ ]:
 
 
-fig  = plt.figure(figsize=(20,7))
-ax1 = plt.subplot(1,3,1)
-sns.barplot(x = prefixAceptance.index, y =prefixAceptance.project_is_approved )
-ax2 = plt.subplot(1,3,2)
-sns.barplot(x = genderAceptance.index, y =genderAceptance.project_is_approved )
-ax3 = plt.subplot(1,3,3)
-sns.barplot(x = titleAceptance.index, y =titleAceptance.project_is_approved )
+plot_indicator(chosen_indicators[11],delta=10)
 
 
-# It looks like there is not a real correlation between the prefix of the title and the accpetance rate of the projects. 
-
-# ### School Satate.
+# ## 3) GDP per capita (adjusted by purchasing power parity)
+# - Here also India lags behind China by ~9 years.
 
 # In[ ]:
 
 
-stateAceptance = train_data[["school_state","project_is_approved"]].groupby("school_state").mean()
-stateAceptance["state"] = stateAceptance.index
-
-fig = plt.figure( figsize=(20,10))
-plt.title("Accpetance rate per State")
-sns.barplot(x = stateAceptance.index, y =stateAceptance.project_is_approved )
+plot_indicator(chosen_indicators[7],delta=9)
 
 
-# Then again it doesn't seem that the number percentaje of accepted projects change between states. If this wasn't true then we would expect bars of different sizes. Now we can reject the hipotesis that each state have a different budget and that this butget constraints the amount of projects that each state can accept. 
-# 
-# Just to be sure let's plot the total number projects (applications) per state.
+# ## 4) Poverty Alleviation 
+# - China has managed to get a much steeper drop in poverty compared to India.
+# - It still appears that China has a head start of 10 years ahead of India.
 
 # In[ ]:
 
 
-stateAceptance = train_data[["school_state","project_is_approved"]].groupby("school_state").count()
-stateAceptance["state"] = stateAceptance.index
-stateAceptance = stateAceptance.sort_values( "project_is_approved", ascending=False)
-
-fig = plt.figure( figsize=(20,10))
-plt.title("Number of applications per State")
-sns.barplot(x = stateAceptance.index, y =stateAceptance.project_is_approved )
+plot_indicator(chosen_indicators[1],delta=10)
 
 
-# This intersting, it looks like there are some states that recieve a lot more applications than others but the acceptance rate it's almost the same for all the states. This tell us that maybe all the states have a fixed rule and they must accept at least 80% of the applications. If this was true then the competition is not about finding the good applications but finding the worst applications.
-
-# ### Acceptance and Time.
-# in this section we plot the trend of acceptance rates and the number of applications.
-
-# In[ ]:
-
-
-train_data["project_submitted_datetime"] = pd.to_datetime( train_data.project_submitted_datetime )
-train_data["date"] = train_data.project_submitted_datetime.apply( lambda x: x.date() )
-train_data["month"] = train_data.project_submitted_datetime.apply( lambda x: x.month )
-train_data["weekday"] = train_data.project_submitted_datetime.apply( lambda x: x.weekday )
-train_data["year"] = train_data.project_submitted_datetime.apply( lambda x: x.year )
-
-
-# In[ ]:
-
-
-dateAcceptance = train_data[["date","project_is_approved"]].groupby("date").mean()
-dateAcceptanceCount = train_data[["date","project_is_approved"]].groupby("date").count() 
-
-fig = plt.figure( figsize=(20,6))
-plt.title("Acceptance rate per date and number of applications")
-ax1 = plt.subplot(1,1,1)
-plt.plot(dateAcceptance  )
-ax2 = plt.subplot(1,1,1)
-ax2 = ax1.twinx()
-plt.plot(dateAcceptanceCount, "red"  )
-red_patch = mpatches.Patch(color='red', label='Total number of applications')
-blue_patch = mpatches.Patch(color='blue', label='Acceptance rate')
-plt.legend(handles=[blue_patch, red_patch])
-
-
-# In[ ]:
-
-
-monthAcceptance = train_data[["month","project_is_approved"]].groupby("month").mean()
-monthAcceptanceCount = train_data[["month","project_is_approved"]].groupby("month").count() 
-
-fig = plt.figure( figsize=(20,6))
-
-plt.title("Acceptance trend")
-
-ax1 = plt.subplot(1,1,1)
-plt.plot(monthAcceptance  )
-ax2 = plt.subplot(1,1,1)
-ax2 = ax1.twinx()
-plt.plot(monthAcceptanceCount, "red"  )
-
-red_patch = mpatches.Patch(color='red', label='Total number of applications')
-blue_patch = mpatches.Patch(color='blue', label='Acceptance rate')
-plt.legend(handles=[blue_patch, red_patch])
-
-
-# In the first trend plot it's hard to notice that there is a negative correlation between the total number of applications and the acceptance rate but using a month aggregation plot allow us to see that the more applications are presented on a given month the lower the acceptance rate. Maybe this happen becauase application analist have more time to read the complete application or maybe beacause they need to accept at least X number of applications.
-# 
-# ### Teacher posted applications in the past.
-# 
-# In this section we want to test if the number of past applications hava an impact on the accpetance rate.
+# ## 5) Life Expectancy
+# - There was steep rise in life expectancy in China during the 1960's.
+# - Both countries have shown a significant increase over a past 5 decades.
+# - In terms of life expectancy, China leads India by ~ 25 years
 # 
 
 # In[ ]:
 
 
-postedAcceptance= train_data[["teacher_number_of_previously_posted_projects","project_is_approved"]].groupby("teacher_number_of_previously_posted_projects").mean()
-postedAcceptanceCount = train_data[["teacher_number_of_previously_posted_projects","project_is_approved"]].groupby("teacher_number_of_previously_posted_projects").count() 
-postedAcceptanceCount = postedAcceptanceCount.rename( columns= {"project_is_approved": "applications_count"})
+plot_indicator(chosen_indicators[6],delta=25)
 
-postedAcceptance =  postedAcceptance.merge( postedAcceptanceCount, right_index=True, left_index= True)
-postedAcceptance = postedAcceptance.sort_index( ascending= True)
 
-postedAcceptance50 = postedAcceptance.head(50)
-
+# ## 6) Urban Population growth
+# - China leads India by ~ 15 years
+# 
 
 # In[ ]:
 
 
+plot_indicator(chosen_indicators[8],delta=15)
 
 
-fig = plt.figure( figsize=(20,10))
-fig.suptitle( "Distribution: acceptance rate and number of applications per number of past posted projects", fontsize = 20)
-
-ax1 = plt.subplot(2,1,1)
-plt.bar( postedAcceptance50.index, postedAcceptance50.project_is_approved,  color='g') 
-ax2 = plt.subplot(2,1,1)
-ax2 = ax1.twinx()
-plt.bar( postedAcceptance50.index, postedAcceptance50.applications_count, color = 'orange' )
-orange_patch = mpatches.Patch(color='orange', label='Count number of records per previously_posted_projects')
-green_patch = mpatches.Patch(color='green', label='Acceptance rate')
-plt.legend(handles=[green_patch, orange_patch])
-postedAcceptance = postedAcceptance.sort_index( ascending= False)
-postedAcceptance50 = postedAcceptance.head(50)
-
-ax3 = plt.subplot(2,1,2)
-plt.bar( postedAcceptance50.index, postedAcceptance50.project_is_approved,  color='g') 
-ax4 = plt.subplot(2,1,2)
-ax4 = ax3.twinx()
-plt.bar( postedAcceptance50.index, postedAcceptance50.applications_count, color = 'orange' )
-orange_patch = mpatches.Patch(color='orange', label='Count number of records per previously_posted_projects')
-green_patch = mpatches.Patch(color='green', label='Acceptance rate')
-plt.legend(handles=[green_patch, orange_patch])
-
-
-
-# In this plots we can see that the number of previous posted projects doesn't really matter after the certain level. There is a little ascending trend on the acceptance trend when the number of previous posted projects is between 0 and 20. After this level the acceptance rate is almost the same (arround 84%) for all previous posted projects value. We also can see that there are a lot of new teacher sending their applications. The number of teachers with 0 value previous_posted_projects is 50,000 observations
-
-# ###  School grade acceptance rate
+# ## 6) Infant Mortality - as a measure of health care
+# - Both countries show a significant decrease in infant mortality.
+# - Surprisingly, there has been an increase in Chinese infant mortality rate during the 1980's - Might be something interesting to explore here!
+# - China leads India by ~ 20 years in infant mortality rate.
+# 
 
 # In[ ]:
 
 
-categoryAceptance = train_data[["project_grade_category","project_is_approved"]].groupby("project_grade_category").mean()
-categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
-
-fig = plt.figure( figsize=(20,10))
-fig.suptitle( "Distribution acceptance rate and number of applications per school grade ", fontsize = 25)
-plt.subplot(2,1,1)
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
-
-categoryAceptance = train_data[["project_grade_category","project_is_approved"]].groupby("project_grade_category").sum()
-
-plt.subplot(2,1,2)
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+plot_indicator(chosen_indicators[9],delta=20)
 
 
+# ## 7) Adult Literacy Rate
+# - Although the rate of increase seems to be the same for both countries, China has always had a 25 year advantage over India.
 
 # In[ ]:
 
 
-train_data.columnsumns
+plot_indicator(chosen_indicators[5],delta=25)
 
 
-# In[ ]:
-
-
-categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").mean()
-categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
-categoryAceptance = categoryAceptance.head(15)
-categoryAceptanceindex = categoryAceptance.index
-
-fig = plt.figure( figsize=(50,20))
-fig.suptitle( "Distribution acceptance rate and number of applications per category ", fontsize = 50)
-ax1 = plt.subplot(2,1,1)
-ax1.set_title( "Acceptance rate per categort", fontsize = 40)
-
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
-
-categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
-categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
-
-ax2 = plt.subplot(2,1,2)
-ax2.set_title( "Number of records per category", fontsize = 40)
-
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
-
-
+# ## 8) Finally, how are the rich 10% doing in each country?
+# - This may not be the best economic measure, but gives some insights
+# - China has managed to create a lot more rich people faster, but due to the recent recessions India seems to have caught up with China.
 
 # In[ ]:
 
 
-categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
-categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
-categoryAceptance = categoryAceptance.head(15)
-categoryAceptanceindex = categoryAceptance.index
-
-categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").mean()
-categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
-
-fig = plt.figure( figsize=(50,20))
-fig.suptitle( "Distribution acceptance rate and number of applications per category ", fontsize = 50)
-plt.title("Category Accpetance")
-ax1 = plt.subplot(2,1,1)
-ax1.set_title( "Acceptance rate per category", fontsize = 40)
-
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
-
-categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
-categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
-
-ax2 = plt.subplot(2,1,2)
-ax2.set_title( "Number of records per category", fontsize = 40)
-sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+plot_indicator(chosen_indicators[4],delta=10)
 
 
+# # CONCLUSION
+# - By most economic measures like GDP, trade, and poverty alleviation China seems to be ahead of India by 10 years. 
+# - It is interesting to note that China undertook economic reforms in 1978 and India in 1990, exactly 12 years apart, suggesting that this might be the most significant reason for India to lag behind China by around 10 years in many economic growth measures.
+# - Even though the political model adopted in China and India are not the same, the growth rates and trend in most indicators are similar for both countries. This prompts us to ask the question does politics even matter ? 
+# - By some measures of education (literacy) and health care (infant mortality rate), India lags behind China by 20 - 25 years.
+# 
+# 

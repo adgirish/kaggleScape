@@ -1,208 +1,126 @@
-# Stacking Starter based on Allstate Faron's Script
-#https://www.kaggle.com/mmueller/allstate-claims-severity/stacking-starter/run/390867
-# Preprocessing from Alexandru Papiu
-#https://www.kaggle.com/apapiu/house-prices-advanced-regression-techniques/regularized-linear-models
+'''
+
+
+Based on Abhishek Catapillar benchmark
+https://www.kaggle.com/abhishek/caterpillar-tube-pricing/beating-the-benchmark-v1-0
+
+@Soutik
+
+Have fun;)
+'''
 
 import pandas as pd
-import numpy as np
-from scipy.stats import skew
+import numpy as np 
+from sklearn import preprocessing
 import xgboost as xgb
-from sklearn.cross_validation import KFold
-from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error
-from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, Lasso
-from math import sqrt
+from sklearn.feature_extraction import DictVectorizer
 
 
-TARGET = 'SalePrice'
-NFOLDS = 5
-SEED = 0
-NROWS = None
-SUBMISSION_FILE = '../input/sample_submission.csv'
+def xgboost_pred(train,labels,test):
+	params = {}
+	params["objective"] = "reg:linear"
+	params["eta"] = 0.005
+	params["min_child_weight"] = 6
+	params["subsample"] = 0.7
+	params["colsample_bytree"] = 0.7
+	params["scale_pos_weight"] = 1
+	params["silent"] = 1
+	params["max_depth"] = 9
+    
+    
+	plst = list(params.items())
+
+	#Using 5000 rows for early stopping. 
+	offset = 4000
+
+	num_rounds = 10000
+	xgtest = xgb.DMatrix(test)
+
+	#create a train and validation dmatrices 
+	xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+	xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
+
+	#train using early stopping and predict
+	watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+	model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=120)
+	preds1 = model.predict(xgtest,ntree_limit=model.best_iteration)
 
 
-## Load the data ##
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
+	#reverse train and labels and use different 5k for early stopping. 
+	# this adds very little to the score but it is an option if you are concerned about using all the data. 
+	train = train[::-1,:]
+	labels = np.log(labels[::-1])
 
-ntrain = train.shape[0]
-ntest = test.shape[0]
+	xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+	xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
 
-## Preprocessing ##
-
-y_train = np.log(train[TARGET]+1)
-
-
-train.drop([TARGET], axis=1, inplace=True)
+	watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+	model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=120)
+	preds2 = model.predict(xgtest,ntree_limit=model.best_iteration)
 
 
-all_data = pd.concat((train.loc[:,'MSSubClass':'SaleCondition'],
-                      test.loc[:,'MSSubClass':'SaleCondition']))
+	#combine predictions
+	#since the metric only cares about relative rank we don't need to average
+	preds = (preds1)*1.4 + (preds2)*8.6
+	return preds
+
+#load train and test 
+train  = pd.read_csv('../input/train.csv', index_col=0)
+test  = pd.read_csv('../input/test.csv', index_col=0)
 
 
-#log transform skewed numeric features:
-numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
+labels = train.Hazard
+train.drop('Hazard', axis=1, inplace=True)
 
-skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
-skewed_feats = skewed_feats[skewed_feats > 0.75]
-skewed_feats = skewed_feats.index
-
-all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
-
-all_data = pd.get_dummies(all_data)
-
-#filling NA's with the mean of the column:
-all_data = all_data.fillna(all_data.mean())
-
-#creating matrices for sklearn:
-
-x_train = np.array(all_data[:train.shape[0]])
-x_test = np.array(all_data[train.shape[0]:])
-
-kf = KFold(ntrain, n_folds=NFOLDS, shuffle=True, random_state=SEED)
+train_s = train
+test_s = test
 
 
-class SklearnWrapper(object):
-    def __init__(self, clf, seed=0, params=None):
-        params['random_state'] = seed
-        self.clf = clf(**params)
+train_s.drop('T2_V10', axis=1, inplace=True)
+train_s.drop('T2_V7', axis=1, inplace=True)
+train_s.drop('T1_V13', axis=1, inplace=True)
+train_s.drop('T1_V10', axis=1, inplace=True)
 
-    def train(self, x_train, y_train):
-        self.clf.fit(x_train, y_train)
+test_s.drop('T2_V10', axis=1, inplace=True)
+test_s.drop('T2_V7', axis=1, inplace=True)
+test_s.drop('T1_V13', axis=1, inplace=True)
+test_s.drop('T1_V10', axis=1, inplace=True)
 
-    def predict(self, x):
-        return self.clf.predict(x)
-
-
-class XgbWrapper(object):
-    def __init__(self, seed=0, params=None):
-        self.param = params
-        self.param['seed'] = seed
-        self.nrounds = params.pop('nrounds', 250)
-
-    def train(self, x_train, y_train):
-        dtrain = xgb.DMatrix(x_train, label=y_train)
-        self.gbdt = xgb.train(self.param, dtrain, self.nrounds)
-
-    def predict(self, x):
-        return self.gbdt.predict(xgb.DMatrix(x))
+columns = train.columns
+test_ind = test.index
 
 
-def get_oof(clf):
-    oof_train = np.zeros((ntrain,))
-    oof_test = np.zeros((ntest,))
-    oof_test_skf = np.empty((NFOLDS, ntest))
+train_s = np.array(train_s)
+test_s = np.array(test_s)
 
-    for i, (train_index, test_index) in enumerate(kf):
-        x_tr = x_train[train_index]
-        y_tr = y_train[train_index]
-        x_te = x_train[test_index]
+# label encode the categorical variables
+for i in range(train_s.shape[1]):
+    lbl = preprocessing.LabelEncoder()
+    lbl.fit(list(train_s[:,i]) + list(test_s[:,i]))
+    train_s[:,i] = lbl.transform(train_s[:,i])
+    test_s[:,i] = lbl.transform(test_s[:,i])
 
-        clf.train(x_tr, y_tr)
-
-        oof_train[test_index] = clf.predict(x_te)
-        oof_test_skf[i, :] = clf.predict(x_test)
-
-    oof_test[:] = oof_test_skf.mean(axis=0)
-    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
+train_s = train_s.astype(float)
+test_s = test_s.astype(float)
 
 
-et_params = {
-    'n_jobs': 16,
-    'n_estimators': 100,
-    'max_features': 0.5,
-    'max_depth': 12,
-    'min_samples_leaf': 2,
-}
+preds1 = xgboost_pred(train_s,labels,test_s)
 
-rf_params = {
-    'n_jobs': 16,
-    'n_estimators': 100,
-    'max_features': 0.2,
-    'max_depth': 12,
-    'min_samples_leaf': 2,
-}
+#model_2 building
 
-xgb_params = {
-    'seed': 0,
-    'colsample_bytree': 0.7,
-    'silent': 1,
-    'subsample': 0.7,
-    'learning_rate': 0.075,
-    'objective': 'reg:linear',
-    'max_depth': 4,
-    'num_parallel_tree': 1,
-    'min_child_weight': 1,
-    'eval_metric': 'rmse',
-    'nrounds': 500
-}
+train = train.T.to_dict().values()
+test = test.T.to_dict().values()
+
+vec = DictVectorizer()
+train = vec.fit_transform(train)
+test = vec.transform(test)
+
+preds2 = xgboost_pred(train,labels,test)
 
 
+preds = 0.47 * (preds1**0.2) + 0.53 * (preds2**0.8)
 
-rd_params={
-    'alpha': 10
-}
-
-
-ls_params={
-    'alpha': 0.005
-}
-
-
-xg = XgbWrapper(seed=SEED, params=xgb_params)
-et = SklearnWrapper(clf=ExtraTreesRegressor, seed=SEED, params=et_params)
-rf = SklearnWrapper(clf=RandomForestRegressor, seed=SEED, params=rf_params)
-rd = SklearnWrapper(clf=Ridge, seed=SEED, params=rd_params)
-ls = SklearnWrapper(clf=Lasso, seed=SEED, params=ls_params)
-
-xg_oof_train, xg_oof_test = get_oof(xg)
-et_oof_train, et_oof_test = get_oof(et)
-rf_oof_train, rf_oof_test = get_oof(rf)
-rd_oof_train, rd_oof_test = get_oof(rd)
-ls_oof_train, ls_oof_test = get_oof(ls)
-
-print("XG-CV: {}".format(sqrt(mean_squared_error(y_train, xg_oof_train))))
-print("ET-CV: {}".format(sqrt(mean_squared_error(y_train, et_oof_train))))
-print("RF-CV: {}".format(sqrt(mean_squared_error(y_train, rf_oof_train))))
-print("RD-CV: {}".format(sqrt(mean_squared_error(y_train, rd_oof_train))))
-print("LS-CV: {}".format(sqrt(mean_squared_error(y_train, ls_oof_train))))
-
-
-x_train = np.concatenate((xg_oof_train, et_oof_train, rf_oof_train, rd_oof_train, ls_oof_train), axis=1)
-x_test = np.concatenate((xg_oof_test, et_oof_test, rf_oof_test, rd_oof_test, ls_oof_test), axis=1)
-
-print("{},{}".format(x_train.shape, x_test.shape))
-
-dtrain = xgb.DMatrix(x_train, label=y_train)
-dtest = xgb.DMatrix(x_test)
-
-xgb_params = {
-    'seed': 0,
-    'colsample_bytree': 0.8,
-    'silent': 1,
-    'subsample': 0.6,
-    'learning_rate': 0.01,
-    'objective': 'reg:linear',
-    'max_depth': 1,
-    'num_parallel_tree': 1,
-    'min_child_weight': 1,
-    'eval_metric': 'rmse',
-}
-
-res = xgb.cv(xgb_params, dtrain, num_boost_round=1000, nfold=4, seed=SEED, stratified=False,
-             early_stopping_rounds=25, verbose_eval=10, show_stdv=True)
-
-best_nrounds = res.shape[0] - 1
-cv_mean = res.iloc[-1, 0]
-cv_std = res.iloc[-1, 1]
-
-print('Ensemble-CV: {0}+{1}'.format(cv_mean, cv_std))
-
-gbdt = xgb.train(xgb_params, dtrain, best_nrounds)
-
-submission = pd.read_csv(SUBMISSION_FILE)
-submission.iloc[:, 1] = gbdt.predict(dtest)
-saleprice = np.exp(submission['SalePrice'])-1
-submission['SalePrice'] = saleprice
-submission.to_csv('xgstacker_starter.sub.csv', index=None)
+#generate solution
+preds = pd.DataFrame({"Id": test_ind, "Hazard": preds})
+preds = preds.set_index('Id')
+preds.to_csv('xgboost_benchmark_3.csv')

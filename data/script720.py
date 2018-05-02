@@ -1,1013 +1,557 @@
 
 # coding: utf-8
 
+# # TensorFlow deep NN
+# #### A high-level tutorial into Deep Learning using MNIST data and TensorFlow library.
+# by [@kakauandme](https://twitter.com/KaKaUandME) and [@thekoshkina](https://twitter.com/thekoshkina)
+# 
+# Accuracy: 0.99
+# 
+# **Prerequisites:** fundamental coding skills, a bit of linear algebra, especially matrix operations and perhaps understanding how images are stored in computer memory. To start with machine learning, we suggest [coursera course](https://www.coursera.org/learn/machine-learning) by Andrew Ng.
+# 
+# 
+# Note: 
+# 
+# *Feel free to fork and adjust* CONSTANTS *to tweak network behaviour and explore how it changes algorithm performance and accuracy. Besides **TensorFlow graph** section can also be modified for learning purposes.*
+# 
+# *It is highly recommended printing every variable that isn’t 100% clear for you. Also, [tensorboard](https://www.tensorflow.org/versions/master/how_tos/summaries_and_tensorboard/index.html) can be used on a local environment for visualisation and debugging.*
+# ## Libraries and settings
+
 # In[ ]:
 
 
-import numpy as np 
-import pandas as pd 
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.model_selection import train_test_split, KFold, cross_val_score
-from sklearn import preprocessing, metrics
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.linear_model import LinearRegression, LassoCV, RidgeCV, Ridge, Lasso, SGDRegressor
-from sklearn.metrics import  make_scorer,  mean_squared_error
+import numpy as np
+import pandas as pd
+
 get_ipython().run_line_magic('matplotlib', 'inline')
-from scipy.stats import skew, skewtest, norm
-from xgboost.sklearn import XGBRegressor
-import scipy.stats as st
-from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
-
-
-# In[ ]:
-
-
-train_data = pd.read_csv('../input/train.csv')
-test_data = pd.read_csv('../input/test.csv')
-
-
-
-# In[ ]:
-
-
-#Lets look at Sale Price which is the dependent variable here
-
-sns.distplot(train_data['SalePrice'], fit=norm);
-
-
-# In[ ]:
-
-
-#This is not normally distributed and is skewed
-print()
-print("Skew is: %f" % train_data['SalePrice'].skew()) 
-
-
-# In[ ]:
-
-
-#Lets look at Price vs Living area - the bigger the house usually the more money its worth
-
-plt.scatter(train_data['GrLivArea'], train_data['SalePrice'], c = "blue", marker = "s")
-plt.title("Looking for outliers")
-plt.xlabel("GrLivArea")
-plt.ylabel("SalePrice")
-plt.show()
-
-
-
-# In[ ]:
-
-
-#Found a couple of outliers - low sale price and Large living area  -  Lets get rid of those
-
-train_data = train_data[train_data['GrLivArea'] < 4500]
-
-
-
-# In[ ]:
-
-
-#We only want to look at "Normal" Sales
-
-train_data = train_data[train_data['SaleCondition']== 'Normal']
-
-
-# In[ ]:
-
-
-#Lets look at Price vs Living area - the bigger the house usually the more money its worth
-
-plt.scatter(train_data['GrLivArea'], train_data['SalePrice'], c = "blue", marker = "s")
-plt.title("Looking for outliers")
-plt.xlabel("GrLivArea")
-plt.ylabel("SalePrice")
-plt.show()
-
-
-# In[ ]:
-
-
-# Lets look at correlations here of the variables
-
-corrmatrix = train_data.corr()
-f, ax = plt.subplots(figsize=(12, 9))
-sns.heatmap(corrmatrix, vmax=.8, square=True);
-
-
-# In[ ]:
-
-
-#Correlation values
-
-k = 10 #number of variables for heatmap
-cols = corrmatrix.nlargest(k, 'SalePrice')['SalePrice'].index
-cm = np.corrcoef(train_data[cols].values.T)
-sns.set(font_scale=1.25)
-hm = sns.heatmap(cm, cbar=True, annot=True, square=True, fmt='.2f', annot_kws={'size': 10}, yticklabels=cols.values, xticklabels=cols.values)
-plt.show()
-
-
-# In[ ]:
-
-
-#  Going to bin Neighborhood into quartiles by Median SalePrice 
-
-Neighborhood = train_data.groupby('Neighborhood')
-Neighborhood['SalePrice'].median()
-
-
-# In[ ]:
-
-
-# Based on the above we drop 4 items as well as ID since we dont need that - we will save it as we need it later
-
-ID_train = train_data['Id']
-ID_test = test_data['Id']
-
-
-### These pop out - we are looking for variables that are telling us the same thing - multicollinearity
-
-#TotalBsmntSF and 1stFlrSF are very highly correlated - basement sits below 1st floor
-#GarageCars and GarageArea are veryhighly correlated - bigger the area more cars can fit in
-#GarageYrBlt and YearBuilt are very highly correlated - usually build a garage same time as the house
-#TotRmsAbvGrd and GrLivArea are very highly correlated - more area the more rooms
-
-# Lets drop one of these from each pairing - how to decide which one look at correlation vs sale price and drop lower one
-
-train_data.drop("Id", axis = 1, inplace = True)
-test_data.drop("Id", axis = 1, inplace = True)
-train_data.drop("TotRmsAbvGrd", axis = 1, inplace = True)
-test_data.drop("TotRmsAbvGrd", axis = 1, inplace = True)
-train_data.drop("GarageYrBlt", axis = 1, inplace = True)
-test_data.drop("GarageYrBlt", axis = 1, inplace = True)
-train_data.drop("GarageArea", axis = 1, inplace = True)
-test_data.drop("GarageArea", axis = 1, inplace = True)
-train_data.drop("1stFlrSF", axis = 1, inplace = True)
-test_data.drop("1stFlrSF", axis = 1, inplace = True)
-
-
-
-
-
-
-# In[ ]:
-
-
-# Log transform the Sale price to make it more normally distributed and then drop it from the features
-
-train_data['SalePrice'] = np.log1p(train_data['SalePrice'])
-y = train_data['SalePrice']
-
-train_data.drop("SalePrice", axis = 1, inplace = True)
-
-
-# In[ ]:
-
-
-# Get number of records and set variable to identify split point once we combine them
-
-print(train_data.shape)
-print(test_data.shape)
-ntrain = train_data.shape[0]
-ntest = test_data.shape[0]
-print(ntrain)
-
-
-# In[ ]:
-
-
-Combined_data = pd.concat([train_data,test_data]).reset_index(drop=True)
-
-
-# In[ ]:
-
-
-print("Combined size is : {}".format(Combined_data.shape))
-
-
-# In[ ]:
-
-
-#missing data - see what needs to be cleaned up
-
-total = Combined_data.isnull().sum().sort_values(ascending=False)
-percent = (Combined_data.isnull().sum()/Combined_data.isnull().count()).sort_values(ascending=False)
-missing_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
-missing_data.head(40)
-
-
-# In[ ]:
-
-
-#Going to drop fields where most of the data is missing and is irrevelant in sale price of a home
-
-# Missing too much data
-
-Combined_data.drop("PoolQC", axis = 1, inplace = True)
-Combined_data.drop("MiscFeature", axis = 1, inplace = True)
-Combined_data.drop("Alley", axis = 1, inplace = True)
-
-
-# In[ ]:
-
-
-#Missing data handling
-
-#Combined_data["GarageYrBlt"].value_counts(dropna=False)  this helps look at the distribution
-
-# LotFrontage : NA most likely means no lot frontage
-Combined_data["LotFrontage"].fillna(0, inplace=True) 
-
-# Fence : NA means no fence
-Combined_data["Fence"].fillna("None", inplace=True)
-
-# FireplaceQu : NA means no fireplace
-Combined_data["FireplaceQu"].fillna("None", inplace=True)
-
-# GarageCond : NA means no garage
-Combined_data["GarageCond"].fillna("None", inplace=True)
-
-# GarageFinish : NA means no garage
-Combined_data["GarageFinish"].fillna("None", inplace=True)
-
-# GarageQual : NA means no garage
-Combined_data["GarageQual"].fillna("None", inplace=True)
-
-# GarageType : NA means no garage
-Combined_data["GarageType"].fillna("None", inplace=True)
-
-
-# BsmtFinType2 : NA means no basement
-Combined_data["BsmtFinType2"].fillna("None", inplace=True)
-
-# BsmtExposure : NA means no basement
-Combined_data["BsmtExposure"].fillna("None", inplace=True)
-
-# BsmtQual : NA means no basement
-Combined_data["BsmtQual"].fillna("None", inplace=True)
-
-# BsmtFinType1 : NA means no basement
-Combined_data["BsmtFinType1"].fillna("None", inplace=True)
-
-# BsmtCond: NA means no basement
-Combined_data["BsmtCond"].fillna("None", inplace=True)
-
-# MasVnrType: NA means none
-Combined_data["MasVnrType"].fillna("None", inplace=True)
-
-# MasVnrArea : NA most likely means 0
-Combined_data["MasVnrArea"].fillna(0, inplace=True) 
-
-# MasVnrArea : NA most likely means 0
-Combined_data["Electrical"].fillna("SBrkr", inplace=True) 
-
-# BsmtHalfBath : NA most likely means 0
-Combined_data["BsmtHalfBath"].fillna(0, inplace=True)
-
-# BsmtFullBath : NA most likely means 0
-Combined_data["BsmtFullBath"].fillna(0, inplace=True)
-
-# BsmtFinSF1 : NA most likely means 0
-Combined_data["BsmtFinSF1"].fillna(0, inplace=True)
-
-# BsmtFinSF2 : NA most likely means 0
-Combined_data["BsmtFinSF2"].fillna(0, inplace=True)
-
-# BsmtUnfSF : NA most likely means 0
-Combined_data["BsmtUnfSF"].fillna(0, inplace=True)
-
-# TotalBsmtSF: NA most likely means 0
-Combined_data["TotalBsmtSF"].fillna(0, inplace=True)
-
-# GarageCars : NA most likely means 0
-Combined_data["GarageCars"].fillna(0, inplace=True)
-
-## GarageArea : NA most likely means 0
-#Combined_data["GarageArea"].fillna(0, inplace=True)
-
-# BsmtCond: NA means no basement
-Combined_data["Utilities"].fillna(0, inplace=True)
-
-# BsmtCond: NA means no basement
-Combined_data["Functional"].fillna(0, inplace=True)
-
-# BsmtCond: NA means no basement
-Combined_data["KitchenQual"].fillna(0, inplace=True)
-
-#MSZoning (The general zoning classification) : 'RL' is by far the most common value.
-
-Combined_data["MSZoning"].fillna("RL", inplace=True)
-
-#SaleType : Fill in again with most frequent which is "WD"
-
-Combined_data["SaleType"].fillna("WD", inplace=True)
-
-#Exterior 1 and 2 : Fill in again with most frequent 
-
-Combined_data['Exterior1st'] = Combined_data['Exterior1st'].fillna(Combined_data['Exterior1st'].mode()[0])
-Combined_data['Exterior2nd'] = Combined_data['Exterior2nd'].fillna(Combined_data['Exterior2nd'].mode()[0])
-
-
-
-# In[ ]:
-
-
-# Some numerical features are actually really categories - switch them back
-
-Combined_data = Combined_data.replace({"MSSubClass" : {20 : "SC20", 30 : "SC30", 40 : "SC40", 45 : "SC45", 
-                                       50 : "SC50", 60 : "SC60", 70 : "SC70", 75 : "SC75", 
-                                       80 : "SC80", 85 : "SC85", 90 : "SC90", 120 : "SC120", 
-                                       150 : "SC150", 160 : "SC160", 180 : "SC180", 190 : "SC190"},
-                       "MoSold" : {1 : "Jan", 2 : "Feb", 3 : "Mar", 4 : "Apr", 5 : "May", 6 : "Jun",
-                                  7 : "Jul", 8 : "Aug", 9 : "Sep", 10 : "Oct", 11 : "Nov", 12 : "Dec"}
-                     })
-
-
-
-# In[ ]:
-
-
-# Encode some categorical features as ordered numbers when there is information in the order
-
-Combined_data = Combined_data.replace({"BsmtCond" : {"None" : 0, "Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "BsmtExposure" : {"None" : 0, "Mn" : 1, "Av": 2, "Gd" : 3},
-                       "BsmtFinType1" : {"None" : 0, "Unf" : 1, "LwQ": 2, "Rec" : 3, "BLQ" : 4, 
-                                         "ALQ" : 5, "GLQ" : 6},
-                       "BsmtFinType2" : {"None" : 0, "Unf" : 1, "LwQ": 2, "Rec" : 3, "BLQ" : 4, 
-                                         "ALQ" : 5, "GLQ" : 6},
-                       "BsmtQual" : {"None" : 0, "Po" : 1, "Fa" : 2, "TA": 3, "Gd" : 4, "Ex" : 5},
-                       "ExterCond" : {"Po" : 1, "Fa" : 2, "TA": 3, "Gd": 4, "Ex" : 5},
-                       "ExterQual" : {"Po" : 1, "Fa" : 2, "TA": 3, "Gd": 4, "Ex" : 5},
-                       "FireplaceQu" : {"None" : 0, "Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "Functional" : {"Sal" : 1, "Sev" : 2, "Maj2" : 3, "Maj1" : 4, "Mod": 5, 
-                                       "Min2" : 6, "Min1" : 7, "Typ" : 8},
-                       "GarageCond" : {"None" : 0, "Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "GarageFinish" : {"None" : 0, "Unf" : 1, "RFn" : 2, "Fin" : 3},
-                       "GarageQual" : {"None" : 0, "Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "HeatingQC" : {"Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "KitchenQual" : {"Po" : 1, "Fa" : 2, "TA" : 3, "Gd" : 4, "Ex" : 5},
-                       "LandSlope" : {"Sev" : 1, "Mod" : 2, "Gtl" : 3},
-                       "LotShape" : {"IR3" : 1, "IR2" : 2, "IR1" : 3, "Reg" : 4},
-                       "PavedDrive" : {"N" : 0, "P" : 1, "Y" : 2},
-                       "Street" : {"Grvl" : 1, "Pave" : 2},
-                       "Utilities" : {"ELO" : 1, "NoSeWa" : 2, "NoSewr" : 3, "AllPub" : 4}}
-                     )
-
-
-# In[ ]:
-
-
-#Adding new features
-
-Combined_data['Total_Home_Quality'] = Combined_data['OverallQual'] + Combined_data['OverallCond']
-Combined_data['Total_Basement_Quality'] = Combined_data['BsmtQual'] + Combined_data['BsmtCond']
-Combined_data['Total_Basement_FinshedSqFt'] = Combined_data['BsmtFinSF1'] + Combined_data['BsmtFinSF2']
-Combined_data['Total_Exterior_Quality'] = Combined_data['ExterQual'] + Combined_data['ExterCond']
-Combined_data['Total_Garage_Quality'] = Combined_data['GarageCond'] + Combined_data['GarageQual'] + Combined_data['GarageFinish']
-Combined_data['Total_Basement_FinshType'] = Combined_data['BsmtFinType1'] + Combined_data['BsmtFinType2']
-Combined_data['Total_Garage_Quality'] = Combined_data['GarageCond'] + Combined_data['GarageQual'] + Combined_data['GarageFinish']
-Combined_data['Total_Basement_FinshType'] = Combined_data['BsmtFinType1'] + Combined_data['BsmtFinType2']
-Combined_data['Total_Bathrooms'] = Combined_data['BsmtFullBath'] + (Combined_data['BsmtHalfBath'] * 0.5) + Combined_data['FullBath'] + (Combined_data['HalfBath'] * 0.5)
-Combined_data['Total_Land_Quality'] = Combined_data['LandSlope'] + Combined_data['LotShape']
-
-
-#Drop the individual components from above to avoid multicolinearity
-
-Combined_data.drop("OverallQual", axis = 1, inplace = True)
-Combined_data.drop("OverallCond", axis = 1, inplace = True)
-Combined_data.drop("BsmtQual", axis = 1, inplace = True)
-Combined_data.drop("BsmtCond", axis = 1, inplace = True)
-Combined_data.drop("BsmtFinSF1", axis = 1, inplace = True)
-Combined_data.drop("BsmtFinSF2", axis = 1, inplace = True)
-Combined_data.drop("ExterQual", axis = 1, inplace = True)
-Combined_data.drop("ExterCond", axis = 1, inplace = True)
-Combined_data.drop("GarageCond", axis = 1, inplace = True)
-Combined_data.drop("GarageQual", axis = 1, inplace = True)
-Combined_data.drop("GarageFinish", axis = 1, inplace = True)
-Combined_data.drop("BsmtFinType1", axis = 1, inplace = True)
-Combined_data.drop("BsmtFinType2", axis = 1, inplace = True)
-Combined_data.drop("BsmtFullBath", axis = 1, inplace = True)
-Combined_data.drop("BsmtHalfBath", axis = 1, inplace = True)
-Combined_data.drop("FullBath", axis = 1, inplace = True)
-Combined_data.drop("HalfBath", axis = 1, inplace = True)
-Combined_data.drop("LandSlope", axis = 1, inplace = True)
-Combined_data.drop("LotShape", axis = 1, inplace = True)
-
-#also dropping LandContour variable as it is contained in LandSlope
-
-Combined_data.drop("LandContour", axis = 1, inplace = True)
-
-
-# In[ ]:
-
-
-# Binning neighborhood into quartiles based on SalePrice
-
-Combined_data = Combined_data.replace({"Neighborhood" : {
-"MeadowV" : 0,
-"IDOTRR" : 0,
-"BrDale" : 0,
-"OldTown" : 0,
-"Edwards" : 0,
-"BrkSide" : 0,
-"Sawyer" : 0,
-"Blueste" : 1,
-"SWISU" : 1,
-"NAmes" : 1,
-"NPkVill" : 1,
-"Mitchel" : 1,
-"SawyerW" : 1,
-"Gilbert" : 2,
-"NWAmes" : 2,
-"Blmngtn" : 2,
-"CollgCr" : 2,
-"ClearCr" : 2,
-"Crawfor" : 2,
-"Veenker" : 3,
-"Somerst" : 3,
-"Timber" : 3,
-"StoneBr" : 3,
-"NoRidge" : 3,
-"NridgHt" : 3}})
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+import tensorflow as tf
+
+# settings
+LEARNING_RATE = 1e-4
+# set to 20000 on local environment to get 0.99 accuracy
+TRAINING_ITERATIONS = 2500        
     
+DROPOUT = 0.5
+BATCH_SIZE = 50
+
+# set to 0 to train on all available data
+VALIDATION_SIZE = 2000
+
+# image number to output
+IMAGE_TO_DISPLAY = 10
 
 
-
-
-# In[ ]:
-
-
-#Check again to see that we are all cleaned up
-
-new_total = Combined_data.isnull().sum().sort_values(ascending=False)
-new_percent = (Combined_data.isnull().sum()/Combined_data.isnull().count()).sort_values(ascending=False)
-new_missing_data = pd.concat([new_total, new_percent], axis=1, keys=['Total', 'Percent'])
-new_missing_data.head(10)
-
+# ## Data preparation
+# To start, we read provided data. The *train.csv* file contains 42000 rows and 785 columns. Each row represents an image of a handwritten digit and a label with the value of this digit.
 
 # In[ ]:
 
 
-#Use to check distributions
+# read training data from CSV file 
+data = pd.read_csv('../input/train.csv')
 
-#sns.distplot(Combined_data['Total_Basement_FinshedSqFt']>0,fit=norm)
+print('data({0[0]},{0[1]})'.format(data.shape))
+print (data.head())
 
+
+# Every image is a "stretched" array of pixel values.
 
 # In[ ]:
 
 
-# Check pure numerical features (not ordinal) for skewed distributions and
-# need to be normalized by taking the log. Value if skew >1 (indicates skewnewss)
+images = data.iloc[:,1:].values
+images = images.astype(np.float)
 
-Skewed_Feature_Check = ['LotArea','MasVnrArea', 'BsmtUnfSF', 'TotalBsmtSF', 
-                        'LowQualFinSF', 'GrLivArea', 'WoodDeckSF', 'OpenPorchSF', 
-                       'PoolArea', 'MiscVal', 'Total_Basement_FinshedSqFt']
+# convert from [0:255] => [0.0:1.0]
+images = np.multiply(images, 1.0 / 255.0)
 
-#Skewed_Feature_Check = ['GrLivArea', 'LotArea', 'TotalBsmtSF', '1stFlrSF']
+print('images({0[0]},{0[1]})'.format(images.shape))
 
-for feature in Skewed_Feature_Check:
-    
-    print((feature), skew(Combined_data[feature]), skewtest(Combined_data[feature]))
-    
-    from scipy.special import boxcox1p
 
-    lam = 0.15
+# In this case it's 784 pixels => 28 * 28px
+
+# In[ ]:
+
+
+image_size = images.shape[1]
+print ('image_size => {0}'.format(image_size))
+
+# in this case all images are square
+image_width = image_height = np.ceil(np.sqrt(image_size)).astype(np.uint8)
+
+print ('image_width => {0}\nimage_height => {1}'.format(image_width,image_height))
+
+
+# To output one of the images, we reshape this long string of pixels into a 2-dimensional array, which is basically a grayscale image.
+
+# In[ ]:
+
+
+# display image
+def display(img):
     
+    # (784) => (28,28)
+    one_image = img.reshape(image_width,image_height)
     
-    Combined_data[feature] = boxcox1p(Combined_data[feature], lam)
+    plt.axis('off')
+    plt.imshow(one_image, cmap=cm.binary)
+
+# output image     
+display(images[IMAGE_TO_DISPLAY])
+
+
+# The corresponding labels are numbers between 0 and 9, describing which digit a given image is of.
+
+# In[ ]:
+
+
+labels_flat = data[[0]].values.ravel()
+
+print('labels_flat({0})'.format(len(labels_flat)))
+print ('labels_flat[{0}] => {1}'.format(IMAGE_TO_DISPLAY,labels_flat[IMAGE_TO_DISPLAY]))
+
+
+# In this case, there are ten different digits/labels/classes.
+
+# In[ ]:
+
+
+labels_count = np.unique(labels_flat).shape[0]
+
+print('labels_count => {0}'.format(labels_count))
+
+
+# For most classification problems "one-hot vectors" are used. A one-hot vector is a vector that contains a single element equal to 1 and the rest of the elements equal to 0. In this case, the *nth* digit is represented as a zero vector with 1 in the *nth* position.
+
+# In[ ]:
+
+
+# convert class labels from scalars to one-hot vectors
+# 0 => [1 0 0 0 0 0 0 0 0 0]
+# 1 => [0 1 0 0 0 0 0 0 0 0]
+# ...
+# 9 => [0 0 0 0 0 0 0 0 0 1]
+def dense_to_one_hot(labels_dense, num_classes):
+    num_labels = labels_dense.shape[0]
+    index_offset = np.arange(num_labels) * num_classes
+    labels_one_hot = np.zeros((num_labels, num_classes))
+    labels_one_hot.flat[index_offset + labels_dense.ravel()] = 1
+    return labels_one_hot
+
+labels = dense_to_one_hot(labels_flat, labels_count)
+labels = labels.astype(np.uint8)
+
+print('labels({0[0]},{0[1]})'.format(labels.shape))
+print ('labels[{0}] => {1}'.format(IMAGE_TO_DISPLAY,labels[IMAGE_TO_DISPLAY]))
+
+
+# Lastly we set aside data for validation. It's essential in machine learning to have a separate dataset which doesn't take part in the training and is used to make sure that what we've learned can actually be generalised.
+
+# In[ ]:
+
+
+# split data into training & validation
+validation_images = images[:VALIDATION_SIZE]
+validation_labels = labels[:VALIDATION_SIZE]
+
+train_images = images[VALIDATION_SIZE:]
+train_labels = labels[VALIDATION_SIZE:]
+
+
+print('train_images({0[0]},{0[1]})'.format(train_images.shape))
+print('validation_images({0[0]},{0[1]})'.format(validation_images.shape))
+
+
+# *Data is ready. The neural network structure is next.*
+# ## TensorFlow graph
+# TensorFlow does its heavy lifting outside Python. Therefore, instead of running every single operation independently, TensorFlow allows users to build a whole graph of interacting operations and then runs the workflow in a separate process at once.
+# #### Helper functions
+# For this NN model, a lot of weights and biases are created. Generally, weights should be initialised with a small amount of noise for symmetry breaking, and to prevent 0 gradients. 
+# 
+# Since we are using [ReLU](https://en.wikipedia.org/wiki/Rectifier_(neural_networks) neurones (ones that contain rectifier function *f(x)=max(0,x)*), it is also good practice to initialise them with a slightly positive initial bias to avoid "dead neurones".
+
+# In[ ]:
+
+
+# weight initialization
+def weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev=0.1)
+    return tf.Variable(initial)
+
+def bias_variable(shape):
+    initial = tf.constant(0.1, shape=shape)
+    return tf.Variable(initial)
+
+
+# For this problem we use zero padded [convolutions](https://en.wikipedia.org/wiki/Convolutional_neural_network#Convolutional_layer) so that the output is the same size as the input. Stride/step in this case is equal to 1.
+# 
+# In general, convolution layer is used to get the features of the data.  In the case of digit recognition - a shape of each digit.  It uses learnable kernels/filters each of which corresponds to one particular shape pattern. The number of the filter can differ for other problems.
+
+# In[ ]:
+
+
+# convolution
+def conv2d(x, W):
+    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+
+
+# [Pooling](https://en.wikipedia.org/wiki/Convolutional_neural_network#Pooling_layer) is plain max pooling over 2x2 blocks.
+# 
+# Pooling is used for downsampling of the data. 2x2 max-pooling splits the image into square 2-pixel blocks and only keeps maximum value for each of those blocks. 
+
+# In[ ]:
+
+
+# pooling
+# [[0,3],
+#  [4,2]] => 4
+
+# [[0,1],
+#  [1,1]] => 1
+
+def max_pool_2x2(x):
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+
+
+# *We'll get back to convolutions and pooling in more detail below.*
+# 
+# The good thing about neural networks that any NN can be used as a layer in a large multilayer NN meaning that output of one can be used as input for another. This sequential approach can create very sophisticated NN with multiple layers. They are also called Deep Neural Networks.
+# 
+# In this case, we use two convolution layers with pooling in between them, then densely connected layer followed by dropout and lastly readout layer.
+
+# In[ ]:
+
+
+# input & output of NN
+
+# images
+x = tf.placeholder('float', shape=[None, image_size])
+# labels
+y_ = tf.placeholder('float', shape=[None, labels_count])
+
+
+# The first layer is a convolution, followed by max pooling. The convolution computes 32 features for each 5x5 patch. Its weight tensor has a shape of [5, 5, 1, 32]. The first two dimensions are the patch size, the next is the number of input channels (1 means that images are grayscale), and the last is the number of output channels. There is also a bias vector with a component for each output channel.
+# 
+# To apply the layer, we reshape the input data to a 4d tensor, with the first dimension corresponding to the number of images, second and third - to image width and height, and the final dimension - to the number of colour channels.
+# 
+# After the convolution, pooling reduces the size of the output from 28x28 to 14x14.
+
+# In[ ]:
+
+
+# first convolutional layer
+W_conv1 = weight_variable([5, 5, 1, 32])
+b_conv1 = bias_variable([32])
+
+# (40000,784) => (40000,28,28,1)
+image = tf.reshape(x, [-1,image_width , image_height,1])
+#print (image.get_shape()) # =>(40000,28,28,1)
+
+
+h_conv1 = tf.nn.relu(conv2d(image, W_conv1) + b_conv1)
+#print (h_conv1.get_shape()) # => (40000, 28, 28, 32)
+h_pool1 = max_pool_2x2(h_conv1)
+#print (h_pool1.get_shape()) # => (40000, 14, 14, 32)
+
+
+# Prepare for visualization
+# display 32 fetures in 4 by 8 grid
+layer1 = tf.reshape(h_conv1, (-1, image_height, image_width, 4 ,8))  
+
+# reorder so the channels are in the first dimension, x and y follow.
+layer1 = tf.transpose(layer1, (0, 3, 1, 4,2))
+
+layer1 = tf.reshape(layer1, (-1, image_height*4, image_width*8)) 
+
+
+# The second layer has 64 features for each 5x5 patch. Its weight tensor has a shape of [5, 5, 32, 64]. The first two dimensions are the patch size, the next is the number of input channels (32 channels correspond to 32 featured that we got from previous convolutional layer), and the last is the number of output channels. There is also a bias vector with a component for each output channel.
+# 
+# Because the image is down-sampled by pooling to 14x14 size second convolutional layer picks up more general characteristics of the images. Filters cover more space of the picture. Therefore, it is adjusted for more generic features while the first layer finds smaller details.
+
+# In[ ]:
+
+
+# second convolutional layer
+W_conv2 = weight_variable([5, 5, 32, 64])
+b_conv2 = bias_variable([64])
+
+h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+#print (h_conv2.get_shape()) # => (40000, 14,14, 64)
+h_pool2 = max_pool_2x2(h_conv2)
+#print (h_pool2.get_shape()) # => (40000, 7, 7, 64)
+
+# Prepare for visualization
+# display 64 fetures in 4 by 16 grid
+layer2 = tf.reshape(h_conv2, (-1, 14, 14, 4 ,16))  
+
+# reorder so the channels are in the first dimension, x and y follow.
+layer2 = tf.transpose(layer2, (0, 3, 1, 4,2))
+
+layer2 = tf.reshape(layer2, (-1, 14*4, 14*16)) 
+
+
+# Now that the image size is reduced to 7x7, we add a [fully-connected layer](https://en.wikipedia.org/wiki/Convolutional_neural_network#Fully_Connected_layer) with 1024 neurones to allow processing on the entire image (each of the neurons of the fully connected layer is connected to all the activations/outpus of the previous layer)
+
+# In[ ]:
+
+
+# densely connected layer
+W_fc1 = weight_variable([7 * 7 * 64, 1024])
+b_fc1 = bias_variable([1024])
+
+# (40000, 7, 7, 64) => (40000, 3136)
+h_pool2_flat = tf.reshape(h_pool2, [-1, 7*7*64])
+
+h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+#print (h_fc1.get_shape()) # => (40000, 1024)
+
+
+# To prevent overfitting, we  apply [dropout](https://en.wikipedia.org/wiki/Convolutional_neural_network#Dropout) before the readout layer.
+# 
+# Dropout removes some nodes from the network at each training stage. Each of the nodes is either kept in the network with probability *keep_prob* or dropped with probability *1 - keep_prob*. After the training stage is over the nodes are returned to the NN with their original weights.
+
+# In[ ]:
+
+
+# dropout
+keep_prob = tf.placeholder('float')
+h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+
+
+# Finally, we add a softmax layer, the same one if we use just a  simple [softmax regression](https://en.wikipedia.org/wiki/Softmax_function).
+
+# In[ ]:
+
+
+# readout layer for deep net
+W_fc2 = weight_variable([1024, labels_count])
+b_fc2 = bias_variable([labels_count])
+
+y = tf.nn.softmax(tf.matmul(h_fc1_drop, W_fc2) + b_fc2)
+
+#print (y.get_shape()) # => (40000, 10)
+
+
+# To evaluate network performance we use [cross-entropy](https://en.wikipedia.org/wiki/Cross_entropy) and to minimise it [ADAM optimiser](http://arxiv.org/pdf/1412.6980v8.pdf) is used. 
+# 
+# ADAM optimiser is a gradient based optimization algorithm, based on adaptive estimates, it's more sophisticated than steepest gradient descent and is well suited for problems with large data or many parameters.
+
+# In[ ]:
+
+
+# cost function
+cross_entropy = -tf.reduce_sum(y_*tf.log(y))
+
+
+# optimisation function
+train_step = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cross_entropy)
+
+# evaluation
+correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
+
+accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
+
+
+# To predict values from test data, highest probability is picked from "one-hot vector" indicating that chances of  an image being one of the digits are highest.
+
+# In[ ]:
+
+
+# prediction function
+#[0.1, 0.9, 0.2, 0.1, 0.1 0.3, 0.5, 0.1, 0.2, 0.3] => 1
+predict = tf.argmax(y,1)
+
+
+# *Finally neural network structure is defined and TensorFlow graph is ready for training.*
+# ## Train, validate and predict
+# #### Helper functions
+# 
+# Ideally, we should use all data for every step of the training, but that's expensive. So, instead, we use small "batches" of random data. 
+# 
+# This method is called [stochastic training](https://en.wikipedia.org/wiki/Stochastic_gradient_descent). It is cheaper, faster and gives much of the same result.
+
+# In[ ]:
+
+
+epochs_completed = 0
+index_in_epoch = 0
+num_examples = train_images.shape[0]
+
+# serve data by batches
+def next_batch(batch_size):
     
+    global train_images
+    global train_labels
+    global index_in_epoch
+    global epochs_completed
     
+    start = index_in_epoch
+    index_in_epoch += batch_size
     
-    #Combined_data[feature] = np.log1p(Combined_data[feature])
-         
+    # when all trainig data have been already used, it is reorder randomly    
+    if index_in_epoch > num_examples:
+        # finished epoch
+        epochs_completed += 1
+        # shuffle the data
+        perm = np.arange(num_examples)
+        np.random.shuffle(perm)
+        train_images = train_images[perm]
+        train_labels = train_labels[perm]
+        # start next epoch
+        start = 0
+        index_in_epoch = batch_size
+        assert batch_size <= num_examples
+    end = index_in_epoch
+    return train_images[start:end], train_labels[start:end]
+
+
+# Now when all operations for every variable are defined in TensorFlow graph all computations will be performed outside Python environment.
+
+# In[ ]:
+
+
+# start TensorFlow session
+init = tf.initialize_all_variables()
+sess = tf.InteractiveSession()
+
+sess.run(init)
+
+
+# Each step of the loop, we get a "batch" of data points from the training set and feed it to the graph to replace the placeholders.  In this case, it's:  *x, y* and *dropout.*
+# 
+# Also, once in a while, we check training accuracy on an upcoming "batch".
+# 
+# On the local environment, we recommend [saving training progress](https://www.tensorflow.org/versions/master/api_docs/python/state_ops.html#Saver), so it can be recovered for further training, debugging or evaluation.
+
+# In[ ]:
+
+
+# visualisation variables
+train_accuracies = []
+validation_accuracies = []
+x_range = []
+
+display_step=1
+
+for i in range(TRAINING_ITERATIONS):
+
+    #get new batch
+    batch_xs, batch_ys = next_batch(BATCH_SIZE)        
+
+    # check progress on every 1st,2nd,...,10th,20th,...,100th... step
+    if i%display_step == 0 or (i+1) == TRAINING_ITERATIONS:
         
-    
-#skewed = train_df_munged[numeric_features].apply(lambda x: skew(x.dropna().astype(float)))
-#skewed = skewed[skewed > 0.75]
-#skewed = skewed.index
+        train_accuracy = accuracy.eval(feed_dict={x:batch_xs, 
+                                                  y_: batch_ys, 
+                                                  keep_prob: 1.0})       
+        if(VALIDATION_SIZE):
+            validation_accuracy = accuracy.eval(feed_dict={ x: validation_images[0:BATCH_SIZE], 
+                                                            y_: validation_labels[0:BATCH_SIZE], 
+                                                            keep_prob: 1.0})                                  
+            print('training_accuracy / validation_accuracy => %.2f / %.2f for step %d'%(train_accuracy, validation_accuracy, i))
+            
+            validation_accuracies.append(validation_accuracy)
+            
+        else:
+             print('training_accuracy => %.4f for step %d'%(train_accuracy, i))
+        train_accuracies.append(train_accuracy)
+        x_range.append(i)
+        
+        # increase display_step
+        if i%(display_step*10) == 0 and i:
+            display_step *= 10
+    # train on batch
+    sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys, keep_prob: DROPOUT})
 
 
-
-# In[ ]:
-
-
-# split into categorical and numberical features
-
-categorical_features = Combined_data.select_dtypes(include = ["object"]).columns
-numerical_features = Combined_data.select_dtypes(exclude = ["object"]).columns
-print("Numerical features : " + str(len(numerical_features)))
-print("Categorical features : " + str(len(categorical_features)))
-
-
-# In[ ]:
-
-
-# convert into data frames
-
-Combined_data_numerical = Combined_data[numerical_features]
-Combined_data_categorical = Combined_data[categorical_features]
-
+# After training is done, it's good to check accuracy on data that wasn't used in training.
 
 # In[ ]:
 
 
-corrmatrix_combined = Combined_data_numerical.corr()
-f, ax = plt.subplots(figsize=(12, 9))
-sns.heatmap(corrmatrix_combined, vmax=.8, square=True);
-
-
-# In[ ]:
-
-
-#Fireplaces and Fireplace Quality highly correlated - examine
-
-
-# In[ ]:
-
-
-Combined_data['FireplaceQu'].hist()
-
-
-# In[ ]:
-
-
-Combined_data['Fireplaces'].hist()
-
-
-# In[ ]:
-
-
-# Lets drop Fireplace Quality as it is more or less dominated by no value making it correlated with # Fireplaces
-
-Combined_data.drop("FireplaceQu", axis = 1, inplace = True)
-
-
-# In[ ]:
-
-
-# converting categorical to numeric values
-
-Combined_data_categorical = pd.get_dummies(Combined_data_categorical,drop_first=True)
-
-
-# In[ ]:
-
-
-#Combine them back together
-
-Combined_data = pd.concat([Combined_data_categorical, Combined_data_numerical], axis = 1)
-
-
-# In[ ]:
-
-
-# check shape again - we will have added a lot of features
-
-print("Combined size is : {}".format(Combined_data.shape))
-
-
-# In[ ]:
-
-
-#resplit the data into training and test sets again
-
-train_data = Combined_data[:ntrain]
-test_data = Combined_data[ntrain:]
-test_data = test_data.reset_index(drop=True)
-
-
-# In[ ]:
-
-
-# check that it matches original length
-
-print(train_data.shape)
-print(test_data.shape)
-
-
-# In[ ]:
-
-
-X_train, X_test, y_train, y_test = train_test_split(train_data, y, test_size = 0.20, random_state = 1)
-print("X_train : " + str(X_train.shape))
-print("X_test : " + str(X_test.shape))
-print("y_train : " + str(y_train.shape))
-print("y_test : " + str(y_test.shape))
-
-
-# In[ ]:
-
-
-#Scale the data after it is split to avoid "leakage" into the test set
-# Going to try to use 
-# http://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-plot-all-scaling-py
-
-scaler = RobustScaler()
-#X_train.loc[:, numerical_features] = scaler.fit_transform(X_train.loc[:, numerical_features])
-#X_test.loc[:, numerical_features] = scaler.transform(X_test.loc[:, numerical_features])
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-
-#scaler = RobustScaler().fit(X_train[i].values.reshape(-1, 1))
-#X_train[i] = sc.transform(X_train[i].values.reshape(-1, 1))
-#X_test[i] = sc.transform(X_test[i].values.reshape(-1, 1))
-
-
-
-
-# In[ ]:
-
-
-# Run Cross Val Score on basic model with no parameter tuning
-
-for Model in [LinearRegression, Ridge, Lasso, XGBRegressor]:
-    model = Model()
-    print('%s: %s' % (Model.__name__,
-                      np.sqrt(-cross_val_score(model, X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-                      
-
-
-# Not sure what is going on with LinearRegression as score is obviously not good
-# 
-# 
-
-# In[ ]:
-
-
-#Proceed with Ridge and Lasso and will fine tune alpha parameter
-
-alphas = [.0001, .0003, .0005, .0007, .0009, .01, 0.05, 0.1, 0.3, 1, 3, 5, 10, 15, 30, 50]
-
-
-
-plt.figure(figsize=(5, 3))
-
-for model in [Lasso, Ridge]:
-  
-    scores = [np.sqrt(-cross_val_score(model(alpha), X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()
-              for alpha in alphas]
-             
-    plt.plot(alphas, scores, label=model.__name__)
-
-    plt.legend(loc='center')
-    plt.xlabel('alpha')
-    plt.ylabel('cross validation score')
-    plt.tight_layout()
+# check final accuracy on validation set  
+if(VALIDATION_SIZE):
+    validation_accuracy = accuracy.eval(feed_dict={x: validation_images, 
+                                                   y_: validation_labels, 
+                                                   keep_prob: 1.0})
+    print('validation_accuracy => %.4f'%validation_accuracy)
+    plt.plot(x_range, train_accuracies,'-b', label='Training')
+    plt.plot(x_range, validation_accuracies,'-g', label='Validation')
+    plt.legend(loc='lower right', frameon=False)
+    plt.ylim(ymax = 1.1, ymin = 0.7)
+    plt.ylabel('accuracy')
+    plt.xlabel('step')
     plt.show()
 
 
-# In[ ]:
-
-
-xgbreg = XGBRegressor(nthreads=-1, booster = 'gblinear') 
-np.sqrt(-cross_val_score(xgbreg, X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()
-
-
-# In[ ]:
-
-
-#XGBRegressor Tuning
-
-params = {'learning_rate':[1,.01],
-          #'gamma':[i/10.0 for i in range(3,6)], 
-          'reg_alpha':[.09],
-          #'reg_lambda':[i/10.0 for i in range(1,10)],
-          'n_estimators': [1000] 
-         }
-
-
-xgbreg = XGBRegressor(nthreads=-1, booster = 'gblinear')  
-
-from sklearn.model_selection import GridSearchCV
-
-xgbreg_model = GridSearchCV(xgbreg, params, n_jobs=1, scoring="neg_mean_squared_error", cv=10)  
-xgbreg_model.fit(X_train, y_train )    
-  
-xgbreg_model.best_estimator_
-
+# When, we're happy with the outcome, we read test data from *test.csv* and predict labels for provided images.
+# 
+# Test data contains only images and labels are missing. Otherwise, the structure is similar to training data.
+# 
+# Predicted labels are stored into CSV file for future submission.
 
 # In[ ]:
 
 
-np.sqrt(-xgbreg_model.best_score_)
+# read test data from CSV file 
+test_images = pd.read_csv('../input/test.csv').values
+test_images = test_images.astype(np.float)
+
+# convert from [0:255] => [0.0:1.0]
+test_images = np.multiply(test_images, 1.0 / 255.0)
+
+print('test_images({0[0]},{0[1]})'.format(test_images.shape))
 
 
-# Looks like a small alpha value for Lasso (.01) and for Ridge a value of 10
+# predict test set
+#predicted_lables = predict.eval(feed_dict={x: test_images, keep_prob: 1.0})
+
+# using batches is more resource efficient
+predicted_lables = np.zeros(test_images.shape[0])
+for i in range(0,test_images.shape[0]//BATCH_SIZE):
+    predicted_lables[i*BATCH_SIZE : (i+1)*BATCH_SIZE] = predict.eval(feed_dict={x: test_images[i*BATCH_SIZE : (i+1)*BATCH_SIZE], 
+                                                                                keep_prob: 1.0})
+
+
+print('predicted_lables({0})'.format(len(predicted_lables)))
+
+# output test image and prediction
+display(test_images[IMAGE_TO_DISPLAY])
+print ('predicted_lables[{0}] => {1}'.format(IMAGE_TO_DISPLAY,predicted_lables[IMAGE_TO_DISPLAY]))
+
+# save results
+np.savetxt('submission_softmax.csv', 
+           np.c_[range(1,len(test_images)+1),predicted_lables], 
+           delimiter=',', 
+           header = 'ImageId,Label', 
+           comments = '', 
+           fmt='%d')
+
+
+# ## Appendix
+# As it was mentioned before, it is good to output some variables for a better understanding of the process. 
+# 
+# Here we pull an output of the first convolution layer from TensorFlow graph. 32 features are transformed into an image grid, and it's quite interesting to see how filters picked by NN outline characteristics of different digits.
 
 # In[ ]:
 
 
-#Generating scores for training and test sets using tuned alpha parameters
-
-Lasso_model = Lasso(alpha=.0045)
-Ridge_model = Ridge(alpha=10)
-
-print("Lasso Train")
-print((np.sqrt(-cross_val_score(Lasso_model, X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("Lasso Test")
-print((np.sqrt(-cross_val_score(Lasso_model, X_test, y_test, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("Ridge Train")
-print((np.sqrt(-cross_val_score(Ridge_model, X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("Ridge Test")
-print((np.sqrt(-cross_val_score(Ridge_model, X_test, y_test, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("XGBRegressor")
-print((np.sqrt(-cross_val_score(xgbreg_model.best_estimator_, X_train, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("XGBRegressorr")
-print()
-print((np.sqrt(-cross_val_score(xgbreg_model.best_estimator_, X_test, y_test, scoring="neg_mean_squared_error", cv = 10)).mean()))
-
-
-# Results seem pretty good here. Not too much overfitting occuring at all.
-
-# In[ ]:
-
-
-#Fit Lasso model to train data and make predictions for both training and test sets and check residuals
-
-Lasso_model.fit(X_train, y_train)
-
-y_train_pred = Lasso_model.predict(X_train)
-y_test_pred = Lasso_model.predict(X_test)
-  
-# Plot residuals
-plt.scatter(y_train_pred, y_train_pred - y_train, c = "blue", marker = "s", label = "Training data")
-plt.scatter(y_test_pred, y_test_pred - y_test, c = "lightgreen", marker = "s", label = "Validation data")
-plt.title("Lasso")
-plt.xlabel("Predicted values")
-plt.ylabel("Residuals")
-plt.legend(loc = "upper left")
-plt.hlines(y = 0, xmin = 10.5, xmax = 13.5, color = "red")
-plt.show()
-
-# Plot predictions
-plt.scatter(y_train_pred, y_train, c = "blue", marker = "s", label = "Training data")
-plt.scatter(y_test_pred, y_test, c = "lightgreen", marker = "s", label = "Validation data")
-plt.title("Lasso")
-plt.xlabel("Predicted values")
-plt.ylabel("Real values")
-plt.legend(loc = "upper left")
-plt.plot([10.5, 13.5], [10.5, 13.5], c = "red")
-plt.show()  
-
-
-
-    
-        
-    
-        
+layer1_grid = layer1.eval(feed_dict={x: test_images[IMAGE_TO_DISPLAY:IMAGE_TO_DISPLAY+1], keep_prob: 1.0})
+plt.axis('off')
+plt.imshow(layer1_grid[0], cmap=cm.seismic )
 
 
 # In[ ]:
 
 
-# Plot important coefficients
+sess.close()
 
-coefs = pd.Series(Lasso_model.coef_, index = train_data.columns)
-print("Lasso picked " + str(sum(coefs != 0)) + " features and eliminated the other " +        str(sum(coefs == 0)) + " features")
-imp_coefs = pd.concat([coefs.sort_values().head(15),
-                     coefs.sort_values().tail(10)])
-imp_coefs.plot(kind = "barh")
-plt.title("Coefficients in the Lasso Model")
-plt.show()
 
-
-# In[ ]:
-
-
-imp_coefs
-
-
-# In[ ]:
-
-
-#Fit Ridge model to train data and make predictions for both training and test sets and check residuals
-
-Ridge_model.fit(X_train, y_train)
-
-y_train_pred = Ridge_model.predict(X_train)
-y_test_pred = Ridge_model.predict(X_test)
-
-# Plot residuals
-plt.scatter(y_train_pred, y_train_pred - y_train, c = "blue", marker = "s", label = "Training data")
-plt.scatter(y_test_pred, y_test_pred - y_test, c = "lightgreen", marker = "s", label = "Validation data")
-plt.title("Ridge")
-plt.xlabel("Predicted values")
-plt.ylabel("Residuals")
-plt.legend(loc = "upper left")
-plt.hlines(y = 0, xmin = 10.5, xmax = 13.5, color = "red")
-plt.show()
-
-# Plot predictions
-plt.scatter(y_train_pred, y_train, c = "blue", marker = "s", label = "Training data")
-plt.scatter(y_test_pred, y_test, c = "lightgreen", marker = "s", label = "Validation data")
-plt.title("Ridge")
-plt.xlabel("Predicted values")
-plt.ylabel("Real values")
-plt.legend(loc = "upper left")
-plt.plot([10.5, 13.5], [10.5, 13.5], c = "red")
-plt.show()  
-
-
-# Next step is to retrain the fitted models on the entire training set and then make predictions
-# on the true Test set for submission.
-
-# In[ ]:
-
-
-#rescale the data again but this time based on the entire training set
-
-scaler_final = RobustScaler()
-train_data = scaler_final.fit_transform(train_data)
-
-
-# In[ ]:
-
-
-# intiate and fit the final Lasso model
-
-Lasso_model_final= Lasso(alpha=.0045)
-Lasso_model_final.fit(train_data, y)
-
-
-# In[ ]:
-
-
-# intiate and fit the final Ridge model
-
-Ridge_model_final= Ridge(alpha=10)
-Ridge_model_final.fit(train_data, y)
-
-
-# In[ ]:
-
-
-XGBRegressor_final = xgbreg_model.best_estimator_
-XGBRegressor_final.fit(train_data, y)
-
-
-# In[ ]:
-
-
-# Scale the test numerical data using the scaler calculated on the entire training set
-
-test_data = scaler_final.transform(test_data)
-
-
-# In[ ]:
-
-
-labels_lasso = np.expm1(Lasso_model_final.predict(test_data))
-labels_ridge = np.expm1(Ridge_model_final.predict(test_data))
-labels_xgbregressor = np.expm1(XGBRegressor_final.predict(test_data))
-
-
-# In[ ]:
-
-
-## Saving prediction file to CSV - basic model with parameter tuning
-
-pd.DataFrame({'Id': ID_test, 'SalePrice': labels_lasso}).to_csv('LassoPredictions.csv', index =False) 
-pd.DataFrame({'Id': ID_test, 'SalePrice': labels_ridge}).to_csv('RidgePredictions.csv', index =False) 
-pd.DataFrame({'Id': ID_test, 'SalePrice': labels_xgbregressor}).to_csv('XgbregressorPredictions.csv', index =False) 
-
-
-# In[ ]:
-
-
-#Advanced feature selection testing
-
-
-# In[ ]:
-
-
-from sklearn.feature_selection import RFECV
-
-
-# In[ ]:
-
-
-# Create the RFE object and compute a cross-validated score - go back to the original training split and original tuned Lasso model
-
-rfecv = RFECV(estimator=Lasso_model_final, step=1, cv=KFold(10),
-              scoring='neg_mean_squared_error')
-
-rfecv.fit(X_train, y_train)
-
-print("Optimal number of features : %d" % rfecv.n_features_)
-
-# Plot number of features VS. cross-validation scores
-plt.figure()
-plt.xlabel("Number of features selected")
-plt.ylabel("Cross validation score")
-plt.plot(range(1, len(rfecv.grid_scores_) + 1), np.sqrt(-rfecv.grid_scores_))
-plt.show()
-
-
-
-# In[ ]:
-
-
-# Gets the index values of the features that you want to keep
-
-Index = rfecv.get_support(indices=True)
-Index
-
-
-# In[ ]:
-
-
-#build the new dataframes using those selected features
-
-X_train_new = X_train[:,Index]
-X_test_new = X_test[:,Index]
-Test_data_new = test_data[:,Index]
-Train_data_new = train_data[:,Index]
-
-
-# In[ ]:
-
-
-Train_data_new.shape
-
-
-# In[ ]:
-
-
-# retesting the Lasso model again using the same process but with reduced feature data set
-
-print("Lasso Train")
-print((np.sqrt(-cross_val_score(Lasso_model_final, X_train_new, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("Lasso Test")
-print((np.sqrt(-cross_val_score(Lasso_model_final, X_test_new, y_test, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-
-
-# In[ ]:
-
-
-# Scores are better using reduced features on their own as the dataset
-
-
-# In[ ]:
-
-
-
-
-print("Ridge Train")
-print((np.sqrt(-cross_val_score(Ridge_model_final, X_train_new, y_train, scoring="neg_mean_squared_error", cv = 10)).mean()))
-print()
-print("Ridge Test")
-print((np.sqrt(-cross_val_score(Ridge_model_final, X_test_new, y_test, scoring="neg_mean_squared_error", cv = 10)).mean()))
-
-
-# In[ ]:
-
-
-# Scores are actually worse using reduced features on their own as the dataset
-
-
-# In[ ]:
-
-
-#Fit the model to the entire training set using reduced features
-
-Lasso_model_final.fit(Train_data_new, y)
-
-
-# In[ ]:
-
-
-Ridge_model_final.fit(Train_data_new, y)
-
-
-# In[ ]:
-
-
-Final_labels_Lasso = np.expm1(Lasso_model_final.predict(Test_data_new))
-Final_labels_Ridge = np.expm1(Ridge_model_final.predict(Test_data_new))
-
-
-# In[ ]:
-
-
-## Saving prediction file to CSV - basic model with parameter tuning
-
-pd.DataFrame({'Id': ID_test, 'SalePrice': Final_labels_Lasso}).to_csv('Lassorfecv.csv', index =False) 
-
-pd.DataFrame({'Id': ID_test, 'SalePrice': Final_labels_Ridge}).to_csv('Ridgerfecv.csv', index =False) 
-
-
-# In[ ]:
-
-
-#with pd.option_context('display.max_columns', None):
- #   display(Combined_data.head())
-
+# ## Reference
+# - [Deep MNIST for Experts](https://www.tensorflow.org/versions/master/tutorials/mnist/pros/index.html#deep-mnist-for-experts)
+# - [A Convolutional Network implementation example using TensorFlow library](https://github.com/aymericdamien/TensorFlow-Examples/blob/master/notebooks/3%20-%20Neural%20Networks/convolutional_network.ipynb)
+# - [Digit recognizer in Python using CNN](https://www.kaggle.com/kobakhit/digit-recognizer/digit-recognizer-in-python-using-cnn)
+# - [Deep Learning in a Nutshell: Core Concepts](http://devblogs.nvidia.com/parallelforall/deep-learning-nutshell-core-concepts/)

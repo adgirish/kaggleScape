@@ -1,38 +1,65 @@
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 import numpy as np
-import math
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from mpl_toolkits.basemap import Basemap  
 
-gifts = pd.read_csv('../input/gifts.csv')
-gifts.info()
-gifts.head()
-gifts.describe()
+#read in data
+shipdata = pd.read_csv('../input/CLIWOC15.csv')
+lat = shipdata.Lat3
+lon = shipdata.Lon3
+coord=np.column_stack((list(lon),list(lat)))
+ship=shipdata.ShipName
+utc=shipdata.UTC
+year=shipdata.Year
+month=shipdata.Month
+day=shipdata.Day
 
-# All gift locations
-gifts.plot.scatter('Longitude', 'Latitude', alpha=0.3, s=1, color='brown')
-plt.title('Gift Locations; N = {:,}'.format(len(gifts)))
+#take out lon/lat nan
+utc=utc[~np.isnan(coord).any(axis=1)]
+ship=ship[~np.isnan(coord).any(axis=1)]
+year=year[~np.isnan(coord).any(axis=1)]
+month=month[~np.isnan(coord).any(axis=1)]
+day=day[~np.isnan(coord).any(axis=1)]
+coord=coord[~np.isnan(coord).any(axis=1)]
+data=np.column_stack((coord,ship,year,month,day,utc))
+
+#find Endeavour
+np.count_nonzero(data[:,2]=='Endeavour')
+cook=data[data[:,2]=='Endeavour']
+
+#sort time
+cook=cook[cook[:,6].argsort()]
+
+#set up map
+m = Basemap(projection='robin',lon_0=180,resolution='c', llcrnrlon=120, urcrnrlon=-30)
+m.drawcoastlines()
+m.drawcountries()
+m.drawmeridians(np.arange(0,360,30))
+m.drawparallels(np.arange(-90,90,30))
+m.fillcontinents(color='grey')
+
+#draw path on the background
+x,y=m(cook[:,0],cook[:,1])
+m.plot(x,y,'.',color='grey',alpha=0.2)
+
+#animation (based on https://jakevdp.github.io/blog/2012/08/18/matplotlib-animation-tutorial/)
+
+x,y = m(0, 0)
+point = m.plot(x, y, 'o', markersize=7, color='red')[0]
+def init():
+    point.set_data([], [])
+    return point,
+
+def animate(i):
+    x,y=m(cook[i][0],cook[i][1])
+    point.set_data(x,y)
+    plt.title('%d %d %d' % (cook[i][3],cook[i][4],cook[i][5]))
+    return point,
+
+output = animation.FuncAnimation(plt.gcf(), animate, init_func=init, frames=355, interval=100, blit=True, repeat=False)
+
+
+#have problems with saving
+output.save('captaincook.gif', writer='imagemagick')
 plt.show()
-plt.savefig('All_gift_locations.png')
-
-# Create category for Weight = 1 and quintile of other weights
-gifts['Weight_Group'] = pd.qcut(gifts.Weight.replace(1, np.nan), 5)
-gifts.Weight_Group = gifts.Weight_Group.cat.add_categories('[1, 1]').fillna('[1, 1]')
-categories = list(gifts.Weight_Group.cat.categories)
-categories = [categories[-1]] + categories[:-1]
-gifts.Weight_Group = gifts.Weight_Group.cat.reorder_categories(categories)
-
-gifts.groupby('Weight_Group').size()
-
-fig, axes = plt.subplots(nrows=2, ncols=3)
-plt.subplots_adjust(top=0.90)
-plt.suptitle('Location of Minimum Weight Gifts and Quintiles of Other Weights Gifts')
-fig.set_size_inches(15, 7)
-for count, (group, df) in enumerate(gifts.groupby('Weight_Group')):
-    row = math.floor(count / 3)
-    col = count % 3
-    df.plot.scatter('Longitude', 'Latitude', alpha=0.5, s=1, ax=axes[row][col], color='brown')
-    axes[row][col].set_title('Weights {:}; N = {:,}'.format(group, len(df)))
-plt.subplots_adjust(hspace=0.4)
-plt.show()
-plt.savefig('Gift_locations_by_weight.png')

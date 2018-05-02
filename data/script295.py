@@ -1,966 +1,672 @@
 
 # coding: utf-8
 
-# # Learning machine learning competitions goals
+# # Taylor made keras model
+# I have uploaded the notebook I used for building the best NN model of our ensemble. It is not cleaned but maybe could be helpful.
 
-# In[105]:
+# In[ ]:
 
 
-# data analysis and wrangling
 import pandas as pd
 import numpy as np
-import random as rnd
-import xgboost as xgb
-
-# visualization
 import matplotlib.pyplot as plt
+import os 
+import glob
+import seaborn as sns
+from termcolor import colored
+import keras
+from sklearn.model_selection import KFold
+from tqdm import tqdm
+import sys
+import hyperopt
+from hyperopt import fmin, tpe, hp
+import time
+import cPickle
+import scipy.stats as ss
+
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Input
+from keras import regularizers
+from keras.models import Model
+from keras.layers import Concatenate
+
+from porto.definitions import TRAIN_SET_PATH, TEST_SET_PATH, DATA_DIR
+from porto.dataset import DatasetCleaner, DatasetBuilder
+from porto.metrics import gini_normalized
+
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-# machine learning
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import Perceptron
-from sklearn.linear_model import SGDClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import VotingClassifier
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import StratifiedKFold
-from sklearn.feature_selection import SelectFromModel
+
+# ## Gather the data
+
+# In[ ]:
 
 
-# ## Acquire data
+df_train = pd.read_csv(TRAIN_SET_PATH)
+df_test = pd.read_csv(TEST_SET_PATH)
 
-# In[107]:
+
+# Clean the missing values
+
+# In[ ]:
 
 
-train_df = pd.read_csv('../input/train.csv')
-test_df = pd.read_csv('../input/test.csv')
+dataset_cleaner = DatasetCleaner(min_category_samples=50)
+dataset_cleaner.fit(df_train)
+dataset_cleaner.transform(df_train)
+dataset_cleaner.transform(df_test)
 
-targets = train_df.Survived
-train_df.drop('Survived', 1, inplace=True)
+
+# Get rid of calc features.
+
+# In[ ]:
+
+
+unwanted = df_train.columns[df_train.columns.str.startswith('ps_calc_')]
+df_train.drop(unwanted, axis=1, inplace=True)
+df_test.drop(unwanted, axis=1, inplace=True)
+print df_train.shape
+
+
+# ### One hot encoding
+# Apply one hot encoding to categorical features.
+
+# In[ ]:
+
+
+categorical_columns = df_train.columns[df_train.columns.str.endswith('_cat')]
+df_train = pd.concat([pd.get_dummies(df_train, columns=categorical_columns), df_train[categorical_columns]], axis=1)
+df_test = pd.concat([pd.get_dummies(df_test, columns=categorical_columns), df_test[categorical_columns]], axis=1)
+print df_train.shape, df_test.shape
+
+
+# In[ ]:
+
+
+df_train[df_train.columns[df_train.columns.str.startswith(categorical_columns[7])]].head(15)
+
+
+# ### Custom binary encoding
+# Apply custom binary encoding to discrete numeric features.
+
+# In[ ]:
+
+
+numerical_discrete_features = ['ps_ind_01', 'ps_ind_03', 'ps_ind_14', 'ps_ind_15', 
+                               'ps_reg_01', 'ps_reg_02',
+                               'ps_car_15', 'ps_car_11']
+
+
+# In[ ]:
+
+
+def apply_custom_binary_encoding(column):
+    column_values = df_train[column]
+    unique_values = sorted(df_train[column].unique())
+    for i, value in enumerate(unique_values[0:-1]):
+        new_column_name = '%s_cbe%02d' % (column, i)
+        df_train[new_column_name] = (df_train[column] > value).astype(np.int)
+        df_test[new_column_name] = (df_test[column] > value).astype(np.int)
+
+
+# In[ ]:
+
+
+for column in numerical_discrete_features:
+    apply_custom_binary_encoding(column)
+print df_train.shape, df_test.shape
+
+
+# In[ ]:
+
+
+df_train[df_train.columns[df_train.columns.str.startswith('ps_ind_01')]].head(15)
+
+
+# ### Target encoding
+
+# In[ ]:
+
+
+def add_noise(series, noise_level):
+    return series * (1 + noise_level * np.random.randn(len(series)))
+
+
+def target_encode(trn_series=None,
+                  tst_series=None,
+                  target=None,
+                  min_samples_leaf=1,
+                  smoothing=1,
+                  noise_level=0):
+    """
+    Smoothing is computed like in the following paper by Daniele Micci-Barreca
+    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
+    trn_series : training categorical feature as a pd.Series
+    tst_series : test categorical feature as a pd.Series
+    target : target data as a pd.Series
+    min_samples_leaf (int) : minimum samples to take category average into account
+    smoothing (int) : smoothing effect to balance categorical average vs prior
+    """
+    assert len(trn_series) == len(target)
+    assert trn_series.name == tst_series.name
+    temp = pd.concat([trn_series, target], axis=1)
+    # Compute target mean
+    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
+    # Compute smoothing
+    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
+    # Apply average function to all target data
+    prior = target.mean()
+    # The bigger the count the less full_avg is taken into account
+    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
+    averages.drop(["mean", "count"], axis=1, inplace=True)
+    # Apply averages to trn and tst series
+    ft_trn_series = pd.merge(
+        trn_series.to_frame(trn_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=trn_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_trn_series.index = trn_series.index
+    ft_tst_series = pd.merge(
+        tst_series.to_frame(tst_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=tst_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_tst_series.index = tst_series.index
+    return add_noise(ft_trn_series, noise_level), add_noise(ft_tst_series, noise_level)
+
+
+# In[ ]:
+
+
+target_encoding_columns = list(numerical_discrete_features) + list(categorical_columns)
+for f in target_encoding_columns:
+    df_train[f + "_tef"], df_test[f + "_tef"] = target_encode(trn_series=df_train[f],
+                                         tst_series=df_test[f],
+                                         target=df_train['target'],
+                                         min_samples_leaf=200,
+                                         smoothing=10,
+                                         noise_level=0)
+print df_train.shape, df_test.shape
+
+
+# In[ ]:
+
+
+df_train.head()
+
+
+# ### Normalize numerical columns
+
+# In[ ]:
+
+
+numerical_columns = [column for column in df_train.columns if not 'bin' in column and not 'cat' in column]
+numerical_columns = [column for column in numerical_columns if not 'cbe' in column and not 'tef' in column]
+numerical_columns = [column for column in numerical_columns if column.startswith('ps_')]
+tfe_columns = [column for column in df_train.columns if 'tef' in column]
+
+normalize_columns = numerical_columns + tfe_columns
+
+
+# In[ ]:
+
+
+for column in normalize_columns:
+    mean_value = df_train[column].mean()
+    std_value = df_train[column].std()
+    df_train[column] = (df_train[column] - mean_value)/std_value
+    df_test[column] = (df_test[column] - mean_value)/std_value
     
-# merging train data and test data for future feature engineering
-combined = train_df.append(test_df)
-combined.reset_index(inplace=True)
-combined.drop('index', inplace=True, axis=1)
+    max_value = np.maximum(df_train[column].max(), -df_train[column].min())
+    MAX_VALUE_ALLOWED = 5.
+    if max_value > MAX_VALUE_ALLOWED:
+        scale = MAX_VALUE_ALLOWED/max_value
+        df_train[column] *= scale
+        df_test[column] *= scale
 
 
-# ## Analyze by describing data
+# ### Organize the columns for feeding the network
 
-# In[3]:
+# Remove categorical columns because they have been encoded and we don't need them any more.
 
+# In[ ]:
 
-print(train_df.columns.values)
 
+df_train.drop(categorical_columns, axis=1, inplace=True)
+df_test.drop(categorical_columns, axis=1, inplace=True)
+print df_train.shape, df_test.shape
 
-# In[4]:
 
+# Now we have to divide the features by individual, region and car.
+# We also have to divide them between categorical and non-categorical. In the categorical columns I will encode the custom binary encoding features. In the non-categorical columns I will include the target encode of categorical columns 
 
-# preview the data
-train_df.head()
+# In[ ]:
 
 
-# In[5]:
+df_train.columns
 
 
-train_df.tail()
+# In[ ]:
 
 
-# In[6]:
+column_dict = {}
+for key in ['car', 'ind', 'reg']:
+    column_dict[key] = [column for column in df_train.columns if key in column]
+    column_dict['%s_categorical' % key] = [column for column in column_dict[key] if '_cbe' in column or 'cat_' in column]
+    column_dict['%s_categorical' % key] = [column for column in column_dict['%s_categorical' % key] if 'tef' not in column]
+    column_dict[key] = [column for column in column_dict[key] if column not in column_dict['%s_categorical' % key]]
+for key in column_dict:
+    print key, len(column_dict[key])
 
 
-train_df.info()
-print('_'*40)
-test_df.info()
+# In[ ]:
 
 
-# In[7]:
+for key in column_dict:
+    print key
+    print column_dict[key]
+    print
 
 
-train_df.describe()
+# ### Prepare the data for keras
 
+# In[ ]:
 
-# In[8]:
 
+x = {key: df_train[column_dict[key]].values for key in column_dict}
 
-train_df.describe(include=['O'])
 
+# In[ ]:
 
-# ## Analyze by pivoting data
 
-# In[9]:
+x_test = {key: df_test[column_dict[key]].values for key in column_dict}
 
 
-train_df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+# In[ ]:
 
 
-# In[10]:
+y = df_train.target.values
+ids = df_train.id.values
 
 
-train_df[['Sex', 'Survived']].groupby(['Sex'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+# In[ ]:
 
 
-# In[11]:
+column_dict[key]
 
 
-train_df[['SibSp', 'Survived']].groupby(['SibSp'], as_index=False).mean().sort_values(by='Survived', ascending=False)
+# ### Load the test prediction of the best model
 
+# In[ ]:
 
-# In[12]:
 
+def load_save_dict(filename):
+    with open(filename, 'r') as f:
+        save_dict = cPickle.load(f)
+    return save_dict
+keras_save_dict = load_save_dict('/media/guillermo/Data/Kaggle/Porto_Safe_Driver/experiments/keras_log_20_5folds/2017_11_05_07_51_47.pkl')
+best_test_pred= keras_save_dict['test_pred'][:, 0]
 
-train_df[['Parch', 'Survived']].groupby(['Parch'], as_index=False).mean().sort_values(by='Survived', ascending=False)
 
+# In[ ]:
 
-# ## Wrangle data
 
-# In[109]:
+keras_save_dict = load_save_dict('/media/guillermo/Data/Kaggle/Porto_Safe_Driver/experiments/keras_log_20_5folds/2017_11_05_07_51_47.pkl')
 
 
-combined['Age'].fillna(combined['Age'].median(), inplace=True)
+# In[ ]:
 
 
-# ### Correcting by dropping features
-
-# In[13]:
-
-
-print("Before", train_df.shape, test_df.shape, combine[0].shape, combine[1].shape)
-
-train_df = train_df.drop(['Ticket', 'Cabin'], axis=1)
-test_df = test_df.drop(['Ticket', 'Cabin'], axis=1)
-combine = [train_df, test_df]
-
-print("After", train_df.shape, test_df.shape, combine[0].shape, combine[1].shape)
-
-
-# ### Creating new feature extracting from existing
-
-# In[14]:
-
-
-for dataset in combine:
-    dataset['Title'] = dataset.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
-
-pd.crosstab(train_df['Title'], train_df['Sex'])
-
-
-# In[15]:
-
-
-for dataset in combine:
-    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess', 'Capt', 'Col',         'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
+best_test_pred= keras_save_dict['test_pred'][:, 0]
+
+
+# In[ ]:
+
+
+val_pred = keras_save_dict['val_pred'][:, 0]
+sampling_probabilities = np.abs(df_train.target.values - val_pred)
+
+
+# ## Function for getting the score
+
+# In[ ]:
+
+
+def save_log(filepath, params, time_stamp, gini_val_list, 
+             gini_train_list, best_epoch_list, new_gini_val_list, 
+             gini_test, optimizer_score):
+    if not os.path.exists(filepath):
+        with open(filepath, 'w') as f:
+            f.write('\t'.join(['timestamp', 'new_gini_val_score', 'gini_test', 'gini_val_mean', 
+                               'gini_train_mean', 'best_epoch',
+                               'gini_val_std', 'gini_train_std','params']) + '\n')
+    with open(filepath, 'a') as f:
+        text = time_stamp + '\t'
+        text += '%.4f\t%.4f\t%.4f\t' % (new_gini_val_list[-1], gini_test, optimizer_score)
+        text += '%.4f\t%.4f\t' % (np.mean(gini_val_list), np.mean(gini_train_list))
+        text += '%.1f\t' % np.mean(best_epoch_list)
+        text += '%.4f\t%.4f\t%s\n' % (np.std(gini_val_list), np.std(gini_train_list), params)
+        f.write(text)
+
+
+# In[ ]:
+
+
+def get_keras_model(encoding_conf, layers, dropout_rates, l1=0, l2=0, encoding_activation='relu'):
+    # Create the encoding
+    encoding_list = []
+    input_list = []
+    for key in ['reg', 'car', 'ind']:
+        categorical_key = '%s_categorical' % key
+        input_layer = Input(shape=(x[categorical_key].shape[1],), name=categorical_key)
+        input_list.append(input_layer)
+        encoding = Dense(int(encoding_conf[categorical_key]), 
+                         activation=encoding_activation, name='%s_encoding' % categorical_key, 
+                        kernel_regularizer=regularizers.l1_l2(l1, l2))(input_layer)
+        input_layer = Input(shape=(x[key].shape[1],), name=key)
+        input_list.append(input_layer)
+        encoding_input = Concatenate(axis=1)([input_layer, encoding])
+        encoding = Dense(int(encoding_conf[key]), activation=encoding_activation, name='%s_encoding' % key,
+                        kernel_regularizer=regularizers.l1_l2(l1, l2))(encoding_input)
+        encoding_list.append(encoding)
+        
+    encoding = Concatenate(axis=1)(encoding_list)
     
-    dataset['Title'] = dataset['Title'].replace('Mlle', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Ms', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Mme', 'Mrs')
+    first_layer = True
+    for n_units, drop in zip(layers, dropout_rates):
+        if first_layer:
+            output = Dense(n_units, activation='relu')(encoding)
+            first_layer = False
+        else:
+            output = Dense(n_units, activation='relu')(output)
+        if drop > 0:
+            output = Dropout(drop)(output)
+    # Add the final layer
+    output = Dense(1, activation='sigmoid', name='output')(output)
     
-train_df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean()
+    model = Model(inputs=input_list, outputs=output)
+    model.compile(loss='binary_crossentropy',  optimizer='RMSprop')
+    return model
 
 
-# In[16]:
+# In[ ]:
 
 
-title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Rare": 5}
-for dataset in combine:
-    dataset['Title'] = dataset['Title'].map(title_mapping)
-    dataset['Title'] = dataset['Title'].fillna(0)
+def get_upsampled_index(y, train_index, n_upsampling):
+    positive_index = train_index[y[train_index] == 1]
+    upsampled_index = train_index.tolist() + positive_index.tolist()*(n_upsampling)
+    np.random.shuffle(upsampled_index)
+    return upsampled_index
+
+
+# In[ ]:
+
+
+def get_noisy_target(y, prob):
+    if prob == 0:
+        return y
+    noise = np.random.binomial(1, prob, y.shape)
+    noisy_target = noise + y
+    noisy_target[noisy_target == 2] = 0
+    return noisy_target
+
+
+# In[ ]:
+
+
+def plot_train_evolution(val_score):
+    plt.figure(figsize=(12, 6))
+    plt.plot(val_score, label='val')
+    plt.plot(val_score, 'ro')
+    plt.ylabel('validation score')
+    plt.xlabel('Number of epochs')
+    plt.ylim(ymin=np.max(val_score) - 0.01)
+    plt.show()
+
+
+# In[ ]:
+
+
+def get_score(params):
+    # Get the parameters for the model
+    model_layers = [int(params['n_units_per_layer'])]*int(params['n_layers'])
+    model_dropout_rates = [params['dropout_rate']]*int(params['n_layers'])    
     
-train_df.head()
-
-
-# In[17]:
-
-
-train_df = train_df.drop(['Name', 'PassengerId'], axis=1)
-test_df = test_df.drop(['Name'], axis=1)
-combine = [train_df, test_df]
-train_df.shape, test_df.shape
-
-
-# ### Converting a categorical feature
-
-# In[18]:
-
-
-for dataset in combine:
-    dataset['Sex'] = dataset['Sex'].map( {'female': 1, 'male': 0} ).astype(int)
+    time_stamp = time.strftime("%Y_%m_%d_%H_%M_%S")
+    gini_train_list, gini_val_list, best_epoch_list  = [], [], []
+    test_pred_list, val_pred_list, val_id_list = [], [], []
+    new_gini_val_list = []
     
-train_df.head()
-
-
-# ### Completing a numerical continuous feature
-
-# In[19]:
-
-
-guess_ages = np.zeros((2, 3))
-guess_ages
-
-
-# In[20]:
-
-
-for dataset in combine:
-    for i in range(0, 2):
-        for j in range(0, 3):
-            guess_df = dataset[(dataset['Sex'] == i) & (dataset['Pclass'] == j+1)]['Age'].dropna()
-            
-            age_guess = guess_df.median()
-            
-            guess_ages[i, j] = int(age_guess / 0.5 + 0.5) * 0.5
-            
-    for i in range(0, 2):
-        for j in range(0, 3):
-            dataset.loc[(dataset.Age.isnull()) & (dataset.Sex == i) & (dataset.Pclass == j+1),                        'Age'] = guess_ages[i, j]
-            
-    dataset['Age'] = dataset['Age'].astype(int)
-
-train_df.head()
-
-
-# In[21]:
-
-
-train_df['AgeBand'] = pd.cut(train_df['Age'], 5)
-train_df[['AgeBand', 'Survived']].groupby(['AgeBand'], as_index=False).mean().sort_values(by='AgeBand', ascending=True)
-
-
-# In[22]:
-
-
-for dataset in combine:
-    dataset.loc[dataset['Age'] <= 16, 'Age'] = 0
-    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
-    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
-    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
-    dataset.loc[dataset['Age'] > 64, 'Age'] = 4
-train_df.head()
-
-
-# In[23]:
-
-
-train_df = train_df.drop(['AgeBand'], axis=1)
-combine = [train_df, test_df]
-train_df.head()
-
-
-# ### Create new feature combining existing features
-
-# In[24]:
-
-
-for dataset in combine:
-    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
-
-train_df[['FamilySize', 'Survived']].groupby(['FamilySize'], as_index=False).mean().sort_values(by='Survived', ascending=False)
-
-
-# In[25]:
-
-
-for dataset in combine:
-    dataset['IsAlone'] = 0
-    dataset.loc[dataset['FamilySize'] == 1, 'IsAlone'] = 1
-    
-train_df[['IsAlone', 'Survived']].groupby(['IsAlone'], as_index=False).mean()
-
-
-# In[26]:
-
-
-train_df = train_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
-test_df = test_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
-combine = [train_df, test_df]
-
-train_df.head()
-
-
-# In[27]:
-
-
-for dataset in combine:
-    dataset['Age*Class'] = dataset.Age * dataset.Pclass
-    
-train_df.loc[:, ['Age*Class', 'Age', 'Pclass']]
-
-
-# ### Completing a categorical feature
-
-# In[28]:
-
-
-freq_port = train_df.Embarked.dropna().mode()[0]
-freq_port
-
-
-# In[29]:
-
-
-for dataset in combine:
-    dataset['Embarked'] = dataset['Embarked'].fillna(freq_port)
-    
-train_df[['Embarked', 'Survived']].groupby(['Embarked'], as_index=False).mean().sort_values(by='Survived', ascending=False)
-
-
-# ### Converting categorical feature to numeric
-
-# In[30]:
-
-
-for dataset in combine:
-    dataset['Embarked'] = dataset['Embarked'].map({'S': 0, 'C': 1, 'Q': 2}).astype(int)
-
-train_df.head()
-
-
-# ### Quick completing and converting a numeric feature
-
-# In[31]:
-
-
-train_df['Fare'].fillna(train_df['Fare'].dropna().median(), inplace=True)
-train_df.head()
-test_df['Fare'].fillna(test_df['Fare'].dropna().median(), inplace=True)
-test_df.head()
-
-
-# In[32]:
-
-
-train_df['FareBand'] = pd.qcut(train_df['Fare'], 4)
-train_df[['FareBand', 'Survived']].groupby(['FareBand'], as_index=False).mean().sort_values(by='FareBand', ascending=True)
-
-
-# In[33]:
-
-
-for dataset in combine:
-    dataset.loc[dataset['Fare'] <= 7.91, 'Fare'] = 0
-    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
-    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare'] = 2
-    dataset.loc[dataset['Fare'] > 31, 'Fare'] = 3
-    dataset['Fare'] = dataset['Fare'].astype(int)
-    
-train_df = train_df.drop(['FareBand'], axis=1)
-combine = [train_df, test_df]
-
-train_df.head(10)
-
-
-# In[34]:
-
-
-test_df.head(10)
-
-
-# ## Feature engineering
-
-# In[110]:
-
-
-def get_titles():
-
-    global combined
-    
-    # we extract the title from each name
-    combined['Title'] = combined['Name'].map(lambda name:name.split(',')[1].split('.')[0].strip())
-    
-    # a map of more aggregated titles
-    Title_Dictionary = {
-                        "Capt":       "Officer",
-                        "Col":        "Officer",
-                        "Major":      "Officer",
-                        "Jonkheer":   "Royalty",
-                        "Don":        "Royalty",
-                        "Sir" :       "Royalty",
-                        "Dr":         "Officer",
-                        "Rev":        "Officer",
-                        "the Countess":"Royalty",
-                        "Dona":       "Royalty",
-                        "Mme":        "Mrs",
-                        "Mlle":       "Miss",
-                        "Ms":         "Mrs",
-                        "Mr" :        "Mr",
-                        "Mrs" :       "Mrs",
-                        "Miss" :      "Miss",
-                        "Master" :    "Master",
-                        "Lady" :      "Royalty"
-
-                        }
-    
-    # we map each title
-    combined['Title'] = combined.Title.map(Title_Dictionary)
-
-
-# In[111]:
-
-
-get_titles()
-
-
-# In[112]:
-
-
-grouped_train = combined.head(891).groupby(['Sex','Pclass','Title'])
-grouped_median_train = grouped_train.median()
-
-grouped_test = combined.iloc[891:].groupby(['Sex','Pclass','Title'])
-grouped_median_test = grouped_test.median()
-
-
-# In[113]:
-
-
-def process_age():
-    
-    global combined
-    
-    # a function that fills the missing values of the Age variable
-    
-    def fillAges(row, grouped_median):
-        if row['Sex']=='female' and row['Pclass'] == 1:
-            if row['Title'] == 'Miss':
-                return grouped_median.loc['female', 1, 'Miss']['Age']
-            elif row['Title'] == 'Mrs':
-                return grouped_median.loc['female', 1, 'Mrs']['Age']
-            elif row['Title'] == 'Officer':
-                return grouped_median.loc['female', 1, 'Officer']['Age']
-            elif row['Title'] == 'Royalty':
-                return grouped_median.loc['female', 1, 'Royalty']['Age']
-
-        elif row['Sex']=='female' and row['Pclass'] == 2:
-            if row['Title'] == 'Miss':
-                return grouped_median.loc['female', 2, 'Miss']['Age']
-            elif row['Title'] == 'Mrs':
-                return grouped_median.loc['female', 2, 'Mrs']['Age']
-
-        elif row['Sex']=='female' and row['Pclass'] == 3:
-            if row['Title'] == 'Miss':
-                return grouped_median.loc['female', 3, 'Miss']['Age']
-            elif row['Title'] == 'Mrs':
-                return grouped_median.loc['female', 3, 'Mrs']['Age']
-
-        elif row['Sex']=='male' and row['Pclass'] == 1:
-            if row['Title'] == 'Master':
-                return grouped_median.loc['male', 1, 'Master']['Age']
-            elif row['Title'] == 'Mr':
-                return grouped_median.loc['male', 1, 'Mr']['Age']
-            elif row['Title'] == 'Officer':
-                return grouped_median.loc['male', 1, 'Officer']['Age']
-            elif row['Title'] == 'Royalty':
-                return grouped_median.loc['male', 1, 'Royalty']['Age']
-
-        elif row['Sex']=='male' and row['Pclass'] == 2:
-            if row['Title'] == 'Master':
-                return grouped_median.loc['male', 2, 'Master']['Age']
-            elif row['Title'] == 'Mr':
-                return grouped_median.loc['male', 2, 'Mr']['Age']
-            elif row['Title'] == 'Officer':
-                return grouped_median.loc['male', 2, 'Officer']['Age']
-
-        elif row['Sex']=='male' and row['Pclass'] == 3:
-            if row['Title'] == 'Master':
-                return grouped_median.loc['male', 3, 'Master']['Age']
-            elif row['Title'] == 'Mr':
-                return grouped_median.loc['male', 3, 'Mr']['Age']
-    
-    combined.head(891).Age = combined.head(891).apply(lambda r : fillAges(r, grouped_median_train) if np.isnan(r['Age']) 
-                                                      else r['Age'], axis=1)
-    
-    combined.iloc[891:].Age = combined.iloc[891:].apply(lambda r : fillAges(r, grouped_median_test) if np.isnan(r['Age']) 
-                                                      else r['Age'], axis=1)
-
-
-# In[114]:
-
-
-process_age()
-
-
-# In[115]:
-
-
-def process_names():
-    
-    global combined
-    # we clean the Name variable
-    combined.drop('Name',axis=1,inplace=True)
-    
-    # encoding in dummy variable
-    titles_dummies = pd.get_dummies(combined['Title'],prefix='Title')
-    combined = pd.concat([combined,titles_dummies],axis=1)
-    
-    # removing the title variable
-    combined.drop('Title',axis=1,inplace=True)
-
-
-# In[116]:
-
-
-process_names()
-
-
-# In[117]:
-
-
-def process_fares():
-    
-    global combined
-    # there's one missing fare value - replacing it with the mean.
-    combined.head(891).Fare.fillna(combined.head(891).Fare.mean(), inplace=True)
-    combined.iloc[891:].Fare.fillna(combined.iloc[891:].Fare.mean(), inplace=True)
-
-
-# In[118]:
-
-
-process_fares()
-
-
-# In[119]:
-
-
-def process_embarked():
-    
-    global combined
-    # two missing embarked values - filling them with the most frequent one (S)
-    combined.head(891).Embarked.fillna('S', inplace=True)
-    combined.iloc[891:].Embarked.fillna('S', inplace=True)
+    random_state = -1
+    sys.stdout.flush()
+    for i in tqdm(range(params['max_experiments'])):
+        random_state += 1
+        
+        fold_val_ids = []
+        unsorted_val_preds = []
+        
+        for n_fold in range(params['n_folds']):
+            kf = KFold(n_splits=params['n_folds'], shuffle=True, random_state=random_state)
+            partitions = [_ for _ in kf.split(y)]
+            train_index, val_index = partitions[n_fold]
+
+            x_train = {key:x[key][train_index] for key in x}
+            x_val = {key:x[key][val_index] for key in x}
+            upsampled_probs = y[train_index]*params['n_upsampling'] + 1
+            train_sample_probs = sampling_probabilities[train_index]
+            train_sample_probs *= upsampled_probs
+            train_sample_probs /= np.sum(train_sample_probs)
+            #print 'train_sample_probs: ', train_sample_probs[0:20]
+
+            model = get_keras_model(params['encoding_conf'], encoding_activation=params['encoding_activation'],
+                                    layers=model_layers, dropout_rates=model_dropout_rates,
+                                    l1=params['l1'], l2=params['l2'])
+
+            model_gini_train_list = []
+            model_gini_val_list = []
+            best_weights = None
+            for epoch in range(params['max_epochs']):
+                for _ in range(params['val_period']):
+                    epoch_index = np.random.choice(train_index, size=params['epoch_size'],
+                                                   p=train_sample_probs, replace=False)
+                    x_train_epoch = {key:x[key][epoch_index] for key in x}
+                    model.fit(x=x_train_epoch, y=y[epoch_index], epochs=1, 
+                              batch_size=params['batch_size'], verbose=False)
+
+                preds_val = model.predict(x=x_val, batch_size=params['batch_size'])
+                gini_val = gini_normalized(y[val_index], preds_val)
+                model_gini_val_list.append(gini_val)
+
+                best_epoch = np.argmax(model_gini_val_list)
+                if best_epoch == epoch:
+                    best_weights = model.get_weights()
+                if epoch - best_epoch >= params['patience']:
+                    break
+
+            best_epoch = np.argmax(model_gini_val_list)
+            best_epoch_list.append(best_epoch)
+            gini_val_list.append(model_gini_val_list[best_epoch])
+
+            model.set_weights(best_weights)
+            preds_test = preds_val = model.predict(x=x_test, batch_size=params['batch_size'])
+            test_pred_list.append(preds_test)
+
+            preds_train = model.predict(x=x_train, batch_size=params['batch_size'])
+            gini_train = gini_normalized(y[train_index], preds_train)
+            gini_train_list.append(gini_train)
+
+            preds_val = model.predict(x=x_val, batch_size=params['batch_size'])
+            unsorted_val_preds.append(preds_val)
+            fold_val_ids.append(ids[val_index])
+
+            if params['verbose']:
+                print colored('Gini val: %.4f\tGini train: %.4f' % (gini_val_list[-1], gini_train_list[-1]), 'blue')
+                plot_train_evolution(model_gini_val_list)
+        # Sort the validation predictions
+        fold_val_ids = np.concatenate(fold_val_ids)
+        unsorted_val_preds = np.concatenate(unsorted_val_preds)
+        sorted_index = np.argsort(fold_val_ids)
+        sorted_val_preds = unsorted_val_preds[sorted_index]
+        val_pred_list.append(sorted_val_preds)
+        # Get the gini validation score
+        new_gini_val = gini_normalized(y, np.mean(val_pred_list, axis=0))
+        new_gini_val_list.append(new_gini_val)
+        # Get test score
+        test_pred_mean = np.mean(test_pred_list, axis=0)
+        gini_test = gini_normalized(best_test_pred, test_pred_mean)
+        
+        if params['verbose']:
+            text = 'Gini val: %.4f\tGini test: %.4f' % (new_gini_val, gini_test)
+            print colored(text, 'blue')
+     
+    gini_train_score = np.mean(gini_train_list)
+    gini_val_score = np.mean(gini_val_list)
+    gini_val = new_gini_val_list[-1]
     
     
-    # dummy encoding 
-    embarked_dummies = pd.get_dummies(combined['Embarked'],prefix='Embarked')
-    combined = pd.concat([combined,embarked_dummies],axis=1)
-    combined.drop('Embarked',axis=1,inplace=True)
-
-
-# In[120]:
-
-
-process_embarked()
-
-
-# In[121]:
-
-
-def process_cabin():
+    print time_stamp
+    print colored('params: %s' % params, 'green')
+    print colored('Gini val score: %.4f' % gini_val, 'green')
+    print colored('Gini test score: %.4f' % gini_test, 'green')
     
-    global combined
+    optimizer_score = gini_test - 2.9949206966767021*gini_val - 0.12420528931875374
     
-    # replacing missing cabins with U (for Uknown)
-    combined.Cabin.fillna('U', inplace=True)
+    save_log(params['log_file'], params, time_stamp, gini_val_list, 
+             gini_train_list, best_epoch_list, new_gini_val_list,
+             gini_test, optimizer_score)
+    save_dict = {
+        'gini_test': gini_test,
+        'test_pred': test_pred_mean,
+        'val_pred': np.mean(val_pred_list, axis=0),
+        'new_gini_val_list': new_gini_val_list,
+        'gini_train_list': gini_train_list,
+        'gini_val_list': gini_val_list,
+        'params': params,
+        'time_stamp': time_stamp,
+        'best_epoch_list': best_epoch_list,
+    }
+    dirname = os.path.splitext(os.path.basename(params['log_file']))[0]
+    pickle_path = os.path.join(DATA_DIR, 'experiments', dirname, '%s.pkl' % time_stamp)
+    if not os.path.exists(os.path.dirname(pickle_path)):
+        os.mkdir(os.path.dirname(pickle_path))
+    with open(pickle_path, 'w') as f:
+        cPickle.dump(save_dict, f)
+        
     
-    # mapping each Cabin value with the cabin letter
-    combined['Cabin'] = combined['Cabin'].map(lambda c : c[0])
     
-    # dummy encoding ...
-    cabin_dummies = pd.get_dummies(combined['Cabin'], prefix='Cabin')
+    return optimizer_score
+
+
+# ## Speed up
+
+# I think there are too much evaluations, let's divide them by 4 and 2
+
+# In[ ]:
+
+
+sampling_probabilities[:] = 1
+
+
+# In[ ]:
+
+
+raise
+
+
+# In[ ]:
+
+
+params = {
+    'encoding_conf': {
+        'reg_categorical': 3.0, 
+        'car_categorical': 1, 
+        'ind_categorical': 50.0, 
+        'ind': 70.0, 
+        'car': 35.0, 
+        'reg': 34.0}, 
+    'n_layers': 1, 
+    'n_units_per_layer': 90.0, 
+    'dropout_rate': 0.5, 
+    'encoding_activation': 'tanh', 
     
-    combined = pd.concat([combined,cabin_dummies], axis=1)
+    'l2': 0.0001, 
+    'l1': 1e-05, 
     
-    combined.drop('Cabin', axis=1, inplace=True)
+    'batch_size': 2048,
+    'val_period': 4,
+    'epoch_size': 100000, 
+    'patience': 12, 
+    'n_upsampling': 25, 
+    'n_folds': 5, 
+    'max_epochs': 1000, 
+    'max_experiments': 10, 
+    'verbose': True, 
+    'log_file': '../logs/keras_v31_5folds.csv'}
+get_score(params)
 
 
-# In[122]:
+# In[ ]:
 
 
-process_cabin()
-
-
-# In[123]:
-
-
-def process_sex():
+params = {
+    'encoding_conf': {
+        'reg_categorical': 3.0, 
+        'car_categorical': 1, 
+        'ind_categorical': 50.0, 
+        'ind': 70.0, 
+        'car': 35.0, 
+        'reg': 34.0}, 
+    'n_layers': 1, 
+    'n_units_per_layer': 90.0, 
+    'dropout_rate': 0.5, 
+    'encoding_activation': 'tanh', 
     
-    global combined
-    # mapping string values to numerical one 
-    combined['Sex'] = combined['Sex'].map({'male':1,'female':0})
-
-
-# In[124]:
-
-
-process_sex()
-
-
-# In[125]:
-
-
-def process_pclass():
+    'l2': 0.0001, 
+    'l1': 1e-05, 
     
-    global combined
-    # encoding into 3 categories:
-    pclass_dummies = pd.get_dummies(combined['Pclass'], prefix="Pclass")
+    'batch_size': 2048,
+    'val_period': 8,
+    'epoch_size': 50000, 
+    'patience': 12, 
+    'n_upsampling': 25, 
+    'n_folds': 5, 
+    'max_epochs': 1000, 
+    'max_experiments': 10, 
+    'verbose': True, 
+    'log_file': '../logs/keras_v31_5folds.csv'}
+get_score(params)
+
+
+# In[ ]:
+
+
+params = {
+    'encoding_conf': {
+        'reg_categorical': 3.0, 
+        'car_categorical': 1, 
+        'ind_categorical': 50.0, 
+        'ind': 70.0, 
+        'car': 35.0, 
+        'reg': 34.0}, 
+    'n_layers': 1, 
+    'n_units_per_layer': 90.0, 
+    'dropout_rate': 0.5, 
+    'encoding_activation': 'tanh', 
     
-    # adding dummy variables
-    combined = pd.concat([combined,pclass_dummies],axis=1)
+    'l2': 0.0001, 
+    'l1': 1e-05, 
     
-    # removing "Pclass"
-    
-    combined.drop('Pclass',axis=1,inplace=True)
+    'batch_size': 2048,
+    'val_period': 16,
+    'epoch_size': 25000, 
+    'patience': 12, 
+    'n_upsampling': 25, 
+    'n_folds': 5, 
+    'max_epochs': 1000, 
+    'max_experiments': 10, 
+    'verbose': True, 
+    'log_file': '../logs/keras_v31_5folds.csv'}
+get_score(params)
 
-
-# In[126]:
-
-
-process_pclass()
-
-
-# In[127]:
-
-
-def process_ticket():
-    
-    global combined
-    
-    # a function that extracts each prefix of the ticket, returns 'XXX' if no prefix (i.e the ticket is a digit)
-    def cleanTicket(ticket):
-        ticket = ticket.replace('.','')
-        ticket = ticket.replace('/','')
-        ticket = ticket.split()
-        ticket = map(lambda t : t.strip(), ticket)
-        ticket = filter(lambda t : not t.isdigit(), ticket)
-        if len(ticket) > 0:
-            return ticket[0]
-        else: 
-            return 'XXX'
-    
-
-    # Extracting dummy variables from tickets:
-
-    combined['Ticket'] = combined['Ticket'].map(cleanTicket)
-    tickets_dummies = pd.get_dummies(combined['Ticket'], prefix='Ticket')
-    combined = pd.concat([combined, tickets_dummies], axis=1)
-    combined.drop('Ticket', inplace=True, axis=1)
-
-
-# In[128]:
-
-
-def process_family():
-    
-    global combined
-    # introducing a new feature : the size of families (including the passenger)
-    combined['FamilySize'] = combined['Parch'] + combined['SibSp'] + 1
-    
-    # introducing other features based on the family size
-    combined['Singleton'] = combined['FamilySize'].map(lambda s: 1 if s == 1 else 0)
-    combined['SmallFamily'] = combined['FamilySize'].map(lambda s: 1 if 2<=s<=4 else 0)
-    combined['LargeFamily'] = combined['FamilySize'].map(lambda s: 1 if 5<=s else 0)
-
-
-# In[129]:
-
-
-process_family()
-
-
-# In[130]:
-
-
-combined.drop('Ticket', inplace=True, axis=1)
-combined.drop('PassengerId', inplace=True, axis=1)
-
-
-# ## Modeling
-
-# In[131]:
-
-
-def recover_train_test_target():
-    global combined
-    
-    train0 = pd.read_csv('../input/train.csv')
-    
-    targets = train0.Survived
-    train = combined.head(891)
-    test = combined.iloc[891:]
-    
-    return train, test, targets
-
-
-# In[132]:
-
-
-train, test, targets = recover_train_test_target()
-
-
-# In[133]:
-
-
-clf = RandomForestClassifier(n_estimators=50, max_features='sqrt')
-clf = clf.fit(train, targets)
-
-
-# In[135]:
-
-
-model = SelectFromModel(clf, prefit=True)
-train_reduced = model.transform(train)
-train_reduced.shape
-
-
-# In[136]:
-
-
-test_reduced = model.transform(test)
-test_reduced.shape
-
-
-# In[137]:
-
-
-run_gs = False
-
-if run_gs:
-    parameter_grid = {
-                 'max_depth' : [4, 6, 8],
-                 'n_estimators': [50, 10],
-                 'max_features': ['sqrt', 'auto', 'log2'],
-                 'min_samples_split': [1, 3, 10],
-                 'min_samples_leaf': [1, 3, 10],
-                 'bootstrap': [True, False],
-                 }
-    forest = RandomForestClassifier()
-    cross_validation = StratifiedKFold(targets, n_folds=5)
-
-    grid_search = GridSearchCV(forest,
-                               scoring='accuracy',
-                               param_grid=parameter_grid,
-                               cv=cross_validation)
-
-    grid_search.fit(train, targets)
-    model = grid_search
-    parameters = grid_search.best_params_
-
-    print('Best score: {}'.format(grid_search.best_score_))
-    print('Best parameters: {}'.format(grid_search.best_params_))
-else: 
-    parameters = {'bootstrap': False, 'min_samples_leaf': 3, 'n_estimators': 50, 
-                  'min_samples_split': 10, 'max_features': 'sqrt', 'max_depth': 6}
-    
-    model = RandomForestClassifier(**parameters)
-    model.fit(train, targets)
-
-
-# In[138]:
-
-
-Y_pred = model.predict(test).astype(int)
-
-
-# ## Model, predict and solve
-
-# In[35]:
-
-
-X_train = train_df.drop("Survived", axis=1)
-Y_train = train_df["Survived"]
-X_test = test_df.drop("PassengerId", axis=1).copy()
-X_train.shape, Y_train.shape, X_test.shape
-
-
-# In[36]:
-
-
-# Logistic Regression
-
-logreg = LogisticRegression()
-logreg.fit(X_train, Y_train)
-Y_pred = logreg.predict(X_test)
-acc_log = round(logreg.score(X_train, Y_train) * 100, 2)
-acc_log
-
-
-# In[37]:
-
-
-coeff_df = pd.DataFrame(train_df.columns.delete(0))
-coeff_df.columns = ['Feature']
-coeff_df["Correlation"] = pd.Series(logreg.coef_[0])
-
-coeff_df.sort_values(by='Correlation', ascending=False)
-
-
-# In[38]:
-
-
-# Support Vector Machines
-
-svc = SVC()
-svc.fit(X_train, Y_train)
-Y_pred = svc.predict(X_test)
-acc_svc = round(svc.score(X_train, Y_train) * 100, 2)
-acc_svc
-
-
-# In[39]:
-
-
-knn = KNeighborsClassifier(n_neighbors = 3)
-knn.fit(X_train, Y_train)
-Y_pred = knn.predict(X_test)
-acc_knn = round(knn.score(X_train, Y_train) * 100, 2)
-acc_knn
-
-
-# In[40]:
-
-
-# Gaussian Naive Bayes
-
-gaussian = GaussianNB()
-gaussian.fit(X_train, Y_train)
-Y_pred = gaussian.predict(X_test)
-acc_gaussian = round(gaussian.score(X_train, Y_train) * 100, 2)
-acc_gaussian
-
-
-# In[41]:
-
-
-# Perceptron
-
-perceptron = Perceptron()
-perceptron.fit(X_train, Y_train)
-Y_pred = perceptron.predict(X_test)
-acc_perceptron = round(perceptron.score(X_train, Y_train) * 100, 2)
-acc_perceptron
-
-
-# In[42]:
-
-
-# Linear SVC
-
-linear_svc = LinearSVC()
-linear_svc.fit(X_train, Y_train)
-Y_pred = linear_svc.predict(X_test)
-acc_linear_svc = round(linear_svc.score(X_train, Y_train) * 100, 2)
-acc_linear_svc
-
-
-# In[43]:
-
-
-# Stochastic Gradient Descent
-
-sgd = SGDClassifier()
-sgd.fit(X_train, Y_train)
-Y_pred = sgd.predict(X_test)
-acc_sgd = round(sgd.score(X_train, Y_train) * 100, 2)
-acc_sgd
-
-
-# In[44]:
-
-
-# Decision Tree
-
-decision_tree = DecisionTreeClassifier()
-decision_tree.fit(X_train, Y_train)
-Y_pred = decision_tree.predict(X_test)
-acc_decision_tree = round(decision_tree.score(X_train, Y_train) * 100, 2)
-acc_decision_tree
-
-
-# In[45]:
-
-
-# Random Forest
-
-random_forest = RandomForestClassifier(n_estimators=100)
-random_forest.fit(X_train, Y_train)
-Y_pred = random_forest.predict(X_test)
-acc_random_forest = round(random_forest.score(X_train, Y_train) * 100, 2)
-acc_random_forest
-
-
-# In[46]:
-
-
-# XGBoost
-
-gbm = xgb.XGBClassifier(max_depth=3, n_estimators=300, learning_rate=0.5)
-gbm.fit(X_train, Y_train)
-Y_pred = gbm.predict(X_test)
-acc_gbm = round(gbm.score(X_train, Y_train) * 100, 2)
-acc_gbm
-
-
-# In[47]:
-
-
-# Voting Classifier
-
-ensemble = VotingClassifier(estimators=[('svc', svc), ('random_forest', random_forest), 
-                                        ('decision_tree', decision_tree), ('gbm', gbm)])
-ensemble = ensemble.fit(X_train, Y_train)
-Y_pred = ensemble.predict(X_test)
-
-
-# In[48]:
-
-
-kfold = StratifiedKFold(n_splits=10)
-
-
-# In[49]:
-
-
-# Extra Trees Classifier
-
-extra_trees = ExtraTreesClassifier()
-
-ex_param_grid = {"max_depth": [None],
-                "max_features": [1, 3, 8],
-                "min_samples_split": [2, 3, 10],
-                "min_samples_leaf": [1, 3, 10], 
-                "bootstrap": [False],
-                "n_estimators": [100, 300], 
-                "criterion": ["gini"]}
-
-gs_extra_trees = GridSearchCV(extra_trees, param_grid = ex_param_grid, cv=kfold, scoring="accuracy")
-
-gs_extra_trees.fit(X_train, Y_train)
-
-extra_trees_best = gs_extra_trees.best_estimator_
-
-Y_pred = extra_trees_best.predict(X_test)
-
-
-# ## Model evaluation
-
-# In[50]:
-
-
-models = pd.DataFrame({
-    'Model' : ['Support Vector Machines', 'KNN', 'Logistic Regression',
-              'Random Forest', 'Naive Bayes', 'Perceptron',
-              'Stochastic Gradient Descent', 'Linear SVC',
-              'Decision Tree', 'XGBoost'],
-    'Score' : [acc_svc, acc_knn, acc_log,
-              acc_random_forest, acc_gaussian, acc_perceptron,
-              acc_sgd, acc_linear_svc, acc_decision_tree, acc_gbm]})
-models.sort_values(by='Score', ascending=False)
-
-
-# In[139]:
-
-
-submission = pd.DataFrame({
-    "PassengerId": test_df["PassengerId"],
-    "Survived": Y_pred
-})
-submission.to_csv('submission.csv', index=False)
-
-
-# ## References
-# 
-# This notebook was done based on the [Titanic Data Science Solutions](https://www.kaggle.com/ibacaraujo/titanic-data-science-solutions) tutorial

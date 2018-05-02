@@ -1,130 +1,122 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-import numpy as np
-import cv2
-import os
-import glob
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
+# # INTRODUCTION
+# * I will explain how to make ROC for binary labeled data
+# * In this tutorial we will learn how to use
+# * Random forest classifier
+# * 5 fold cross validation
+# * ROC Curve
+# * AUC
+# * Visualize
 
 # In[ ]:
 
 
-# Load images into dictionary where the keys
-# represent patients (first label on training images)
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-def load_cv2_images(folder):
-    imgs, masks, img_ids = {}, {}, {}
-    for i in range(47):
-        imgs[i+1] = []
-        masks[i+1] = []
-        img_ids[i+1] = []
-    
-    paths = glob.glob(folder+'*.tif')
-    paths = [p for p in paths if 'mask' not in p]
-    
-    for p in paths:
-        # Read in greyscale image and append to path
-        index = int(p.split('/')[3].split('_')[0])
-        try:
-            imgs[index].append(cv2.imread(p, 0))
-            masks[index].append(cv2.imread(p[:-4]+'_mask.tif', 0))
-            img_ids[index].append(p.split('/')[3])
-        except:
-            pass
-    
-    for i in range(47):
-        imgs[i+1] = np.array(imgs[i+1])
-        masks[i+1] = np.array(masks[i+1])
-    
-    return imgs, masks, img_ids
-    
-imgs, masks, img_ids = load_cv2_images('../input/train/')
+# import necessary packages
+import matplotlib.pylab as plt
+from scipy import interp
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_curve,auc
+from sklearn.model_selection import StratifiedKFold
+import matplotlib.patches as patches
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-imgs.keys()
+# import data, see feature names, label count and data info
+data = pd .read_csv('../input/voice.csv')
+print(data.columns)
+label_value_count = data.label.value_counts()
+print(label_value_count)
+print(data.info())
 
 
-# In[ ]:
-
-
-imgs[1].shape, masks[1].shape
-
-
-# In[ ]:
-
-
-# The function below will find any
-# image similar to the input image
-
-def find_pairs(compare_img, compare_mask, compare_id,
-               imgs, masks, img_ids,
-               compare_index, matches):
-
-    threshold = 23000000
-    for i, (img, mask, img_id) in enumerate(zip(imgs, masks, img_ids)):
-        if np.abs(compare_img - img).sum() < threshold         and i != compare_index         and (compare_mask.sum() == 0) != (mask.sum() == 0):
-            matches.append((compare_img, compare_mask, compare_id, img, mask, img_id))
-
-    return matches
-
-matches = []
-for j in range(47):
-    for i, (img, mask, img_id) in enumerate(zip(imgs[j+1], masks[j+1], img_ids[j+1])):
-        matches = find_pairs(img, mask, img_id,
-                             imgs[j+1], masks[j+1], img_ids[j+1],
-                             i, matches)
-len(matches)
-
+# As it can be seen in info type of label is object (str) so we need to convert it numerical value
+# 
 
 # In[ ]:
 
 
-# Print the matches, avoiding duplicates
+# Convert string label to float : male = 1, female = 0
+dict = {'label':{'male':1,'female':0}}      # label = column name
+data.replace(dict,inplace = True)           # replace = str to numerical
+x = data.loc[:, data.columns != 'label']
+y = data.loc[:,'label']
 
-repeats, unique = [], []
-for i, m in enumerate(matches):
 
-    # Using pixel sums as an ID for the picture
-    if m[0].sum() not in repeats    or m[3].sum() not in repeats:
-                
-        unique.append(m[0].sum())
-        fig, ax = plt.subplots(2, 2)
-        if m[1].sum() == 0:
-            i1, i2 = 1, 0
-        else:
-            i1, i2 = 0, 1
-            
-        ax[i1][0].imshow(m[0], cmap='hot')
-        ax[i1][0].set_title(m[2])
-        ax[i1][1].imshow(m[1], cmap='hot')
-        ax[i1][1].set_title(m[2][:-4]+'_mask.tif')
-        
-        ax[i2][0].imshow(m[3], cmap='hot')
-        ax[i2][0].set_title(m[5])
-        ax[i2][1].imshow(m[4], cmap='hot')
-        ax[i2][1].set_title(m[5][:-4]+'_mask.tif')
-        
-        fig.subplots_adjust(hspace=0.4)
-        plt.show()
-        
-    repeats.append(m[0].sum())
-    repeats.append(m[3].sum())
-    if i == 98:
-        break
-
+# * Create random forest classifier and 5 fold cross validation
+# * In k fold cross validation, data set is divided into k subsets and method is repeated k times. Each time one of the k subset is used for test set and others are training set. After that, average accuracy across all k trials is computed.
 
 # In[ ]:
 
 
-# Number of cases found
-len(unique)
+random_state = np.random.RandomState(0)
+clf = RandomForestClassifier(random_state=random_state)
+cv = StratifiedKFold(n_splits=5,shuffle=False)
 
+
+# * ROC is receiver operationg characteristic. In this curve x axis is false positive rate and y axis is true positive rate
+# * If the curve in plot is closer to left-top corner, test is more accurate.
+# * Roc curve score is auc that is computation area under the curve from prediction scores
+# * We want auc to closer 1
+
+# In[ ]:
+
+
+# plot arrows
+fig1 = plt.figure(figsize=[12,12])
+ax1 = fig1.add_subplot(111,aspect = 'equal')
+ax1.add_patch(
+    patches.Arrow(0.45,0.5,-0.25,0.25,width=0.3,color='green',alpha = 0.5)
+    )
+ax1.add_patch(
+    patches.Arrow(0.5,0.45,0.25,-0.25,width=0.3,color='red',alpha = 0.5)
+    )
+
+tprs = []
+aucs = []
+mean_fpr = np.linspace(0,1,100)
+i = 1
+for train,test in cv.split(x,y):
+    prediction = clf.fit(x.iloc[train],y.iloc[train]).predict_proba(x.iloc[test])
+    fpr, tpr, t = roc_curve(y[test], prediction[:, 1])
+    tprs.append(interp(mean_fpr, fpr, tpr))
+    roc_auc = auc(fpr, tpr)
+    aucs.append(roc_auc)
+    plt.plot(fpr, tpr, lw=2, alpha=0.3, label='ROC fold %d (AUC = %0.2f)' % (i, roc_auc))
+    i= i+1
+
+plt.plot([0,1],[0,1],linestyle = '--',lw = 2,color = 'black')
+mean_tpr = np.mean(tprs, axis=0)
+mean_auc = auc(mean_fpr, mean_tpr)
+plt.plot(mean_fpr, mean_tpr, color='blue',
+         label=r'Mean ROC (AUC = %0.2f )' % (mean_auc),lw=2, alpha=1)
+
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC')
+plt.legend(loc="lower right")
+plt.text(0.32,0.7,'More accurate area',fontsize = 12)
+plt.text(0.63,0.4,'Less accurate area',fontsize = 12)
+plt.show()
+
+
+# # CONCLUSION
+# * In this example ROC is used for binary classes. Although it is mostly used for binary classes, it actually can be used for multi classes.
+# * **If you have any suggest, question or comment, I will be happy to hear it.**

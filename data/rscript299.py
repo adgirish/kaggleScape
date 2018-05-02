@@ -1,127 +1,206 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import numpy as np
+import dicom
+import glob
+from matplotlib import pyplot as plt
+import os
+import cv2
+import pandas as pd
+from keras.models import Sequential,load_model,Model
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Convolution2D, MaxPooling2D
+from keras.layers import Input, merge, UpSampling2D
+from keras.optimizers import Adam
+from keras.preprocessing.image import ImageDataGenerator
+from keras import backend as K
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+def load_scans(path):
+    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path)]
+    slices.sort(key=lambda x: int(x.InstanceNumber))
+    return np.stack([s.pixel_array for s in slices])
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+def get_scans(df,scans_list):
+    scans=np.stack([load_scans(scan_folder+df.id[i_scan[0]])[i_scan[1]] for i_scan in scans_list])
+    scans=process_scans(scans)
+    view_scans(scans)
+    return(scans)
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+def process_scans(scans):
+    scans1=np.zeros((scans.shape[0],1,img_rows,img_cols))
+    for i in range(scans.shape[0]):
+        img=scans[i,:,:]
+        img = 255.0 / np.amax(img) * img
+        img =img.astype(np.uint8)
+        img =cv2.resize(img, (img_rows, img_cols))
+        scans1[i,0,:,:]=img
+    return (scans1)
 
-# Any results you write to the current directory are saved as output.
+def view_scans(scans):
+    %matplotlib inline
+    for i in range(scans.shape[0]):
+        print ('scan '+str(i))
+        plt.imshow(scans[i,0,:,:], cmap=plt.cm.gray)
+        plt.show()
 
-# MA result from https://www.kaggle.com/paulorzp/log-means-and-medians-to-predict-new-itens-0-546/code
-def read_ma():
-    ma = pd.read_csv("../output/comb8.csv")
-    ma.columns = ['id','unit_sales_ma']
-    ma['unit_sales_ma'] = pd.np.log1p(ma['unit_sales_ma']) # logarithm conversion
-    print("ma", ma.columns, ma.shape)
-    print(ma.head(3))
-    return ma
+def view_scans_widget(scans):
+    %matplotlib tk
+    for i in range(scans.shape[0]):
+        plt.figure(figsize=(7,7))
+        plt.imshow(scans[i,0,:,:], cmap=plt.cm.gray)
+        plt.show()
 
+def get_masks(scans,masks_list):
+    %matplotlib inline
+    scans1=scans.copy()
+    maxv=255
+    masks=np.zeros(shape=(scans.shape[0],1,img_rows,img_cols))
+    for i_m in range(len(masks_list)):
+        for i in range(-masks_list[i_m][3],masks_list[i_m][3]+1):
+            for j in range(-masks_list[i_m][3],masks_list[i_m][3]+1):
+                masks[masks_list[i_m][0],0,masks_list[i_m][2]+i,masks_list[i_m][1]+j]=1
+        for i1 in range(-masks_list[i_m][3],masks_list[i_m][3]+1):
+            scans1[masks_list[i_m][0],0,masks_list[i_m][2]+i1,
+            masks_list[i_m][1]+masks_list[i_m][3]]=maxv=255
+            scans1[masks_list[i_m][0],0,masks_list[i_m][2]+i1,
+            masks_list[i_m][1]-masks_list[i_m][3]]=maxv=255
+            scans1[masks_list[i_m][0],0,masks_list[i_m][2]+masks_list[i_m][3],
+            masks_list[i_m][1]+i1]=maxv=255
+            scans1[masks_list[i_m][0],0,masks_list[i_m][2]-masks_list[i_m][3],
+            masks_list[i_m][1]+i1]=maxv=255
+    for i in range(scans.shape[0]):
+        print ('scan '+str(i))
+        f, ax = plt.subplots(1, 2,figsize=(10,5))
+        ax[0].imshow(scans1[i,0,:,:],cmap=plt.cm.gray)
+        ax[1].imshow(masks[i,0,:,:],cmap=plt.cm.gray)
+        plt.show()
+    return(masks)
 
-dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
-
-def prepare_train_data():
-    print("----- Reading the data -----")
-
-    train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
-                            skiprows=range(1, 101688779) #Skip dates before 2017-01-01
-                            )
-
-    print("----- Scale the data -----")
-    train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
-    train['unit_sales'] = pd.np.log1p(train['unit_sales']) #logarithm conversion
-
-    print("----- Reindex the data -----")
-    # creating records for all items, in all markets on all dates
-    # for correct calculation of daily unit sales averages.
-    u_dates = train.date.unique()
-    u_stores = train.store_nbr.unique()
-    u_items = train.item_nbr.unique()
-    train.set_index(["date", "store_nbr", "item_nbr"], inplace=True)
-    train = train.reindex(
-        pd.MultiIndex.from_product(
-            (u_dates, u_stores, u_items),
-            names=["date", "store_nbr", "item_nbr"]
-        )
-    )
-
-    del u_dates, u_stores, u_items
-
-    print("----- Fill in missing values -----")
-    # Fill NaNs
-    train.loc[:, "unit_sales"].fillna(0, inplace=True)
-    train.reset_index(inplace=True) # reset index and restoring unique columns
-    lastdate = train.iloc[train.shape[0]-1].date
-
-    print("train", train.columns, train.shape)
-    print(train.head(3))
-
-    return train, lastdate
-
-def average_dow(train):
-    # Average by dow
-    train["dow"] = train["date"].dt.dayofweek
-    train_mean_dow = train[['store_nbr', 'item_nbr', 'dow', 'unit_sales']].groupby(['store_nbr', 'item_nbr', 'dow']).mean()
-    train_mean_dow.reset_index(inplace=True)
-    train_mean_dow.columns = ['store_nbr', 'item_nbr', 'dow', 'unit_sales_dow']
-    print("train_mean_dow", train_mean_dow.columns, train_mean_dow.shape)
-    print(train_mean_dow.head(3))
-
-    train_mean_week = train_mean_dow[['store_nbr', 'item_nbr', 'unit_sales_dow']].groupby(['store_nbr', 'item_nbr']).mean()
-    train_mean_week.reset_index(inplace=True)
-    train_mean_week.columns = ['store_nbr', 'item_nbr', 'unit_sales_week']
-    print("train_mean_week", train_mean_week.columns, train_mean_week.shape)
-    print(train_mean_week.head(3))
-
-    train_mean = pd.merge(train_mean_dow, train_mean_week, on=['store_nbr', 'item_nbr'])
-    print("train_mean", train_mean.columns, train_mean.shape)
-    print(train_mean.head(3))
-
-    # store_nbr  item_nbr  dow  unit_sales_dow  unit_sales_week
-    return train_mean
-
-
-def prepare_test_data(ma):
-    # dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8'}
-
-    # Load test
-    test = pd.read_csv("../input/test.csv", usecols=[0, 1, 2, 3], dtype=dtypes, parse_dates=['date'])
-
-    print("test", test.columns, test.shape)
-    print(test.head(3))
-
-    rs_ma = pd.merge(ma, test, on=['id'])
-    rs_ma["dow"] = rs_ma["date"].dt.dayofweek
-
-    print("rs_ma", rs_ma.columns, rs_ma.shape)
-    print(rs_ma.head(3))
-
-    # id  unit_sales_ma       date  store_nbr  item_nbr  dow
-    return rs_ma
+def augmentation(scans,masks,n):
+    datagen = ImageDataGenerator(
+        featurewise_center=False,   
+        samplewise_center=False,  
+        featurewise_std_normalization=False,  
+        samplewise_std_normalization=False,  
+        zca_whitening=False,  
+        rotation_range=25,   
+        width_shift_range=0.3,  
+        height_shift_range=0.3,   
+        horizontal_flip=True,   
+        vertical_flip=True,  
+        zoom_range=False)
+    i=0
+    scans_g=scans.copy()
+    for batch in datagen.flow(scans, batch_size=1, seed=1000): 
+        scans_g=np.vstack([scans_g,batch])
+        i += 1
+        if i > n:
+            break
+    i=0
+    masks_g=masks.copy()
+    for batch in datagen.flow(masks, batch_size=1, seed=1000): 
+        masks_g=np.vstack([masks_g,batch])
+        i += 1
+        if i > n:
+            break
+    return((scans_g,masks_g))
 
 
-def adjust_sub(rs_ma, train_mean):
-    final = pd.merge(rs_ma, train_mean, on=['store_nbr', 'item_nbr', 'dow'], how='left')
-    print("final - v1", final.columns, final.shape)
-    print(final.head(3))
-    #(['id', 'unit_sales_ma', 'date', 'store_nbr', 'item_nbr', 'dow', 'unit_sales_dow', 'unit_sales_week'])
+K.set_image_dim_ordering('th')   
 
-    final['unit_sales'] = final['unit_sales_ma']
-    pos_idx = final['unit_sales_week'] > 0
-    final_pos = final.loc[pos_idx]
+smooth = 1.
 
-    final.loc[pos_idx, 'unit_sales'] = final_pos['unit_sales_ma'] * final_pos['unit_sales_dow'] / final_pos['unit_sales_week']
-    final['unit_sales'] = pd.np.expm1(final['unit_sales']) # restoring unit values
+def dice_coef(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
 
-    final[['id','unit_sales']].to_csv('../output/ma_scale_dow.csv.gz', index=False, float_format='%.4f', compression='gzip')
 
-ma = read_ma()
-train, lastdate = prepare_train_data()
-train_mean = average_dow(train)
-rs_ma = prepare_test_data(ma)
-adjust_sub(rs_ma, train_mean)
+def dice_coef_loss(y_true, y_pred):
+    return -dice_coef(y_true, y_pred)
+
+def unet_model():
+    inputs = Input((1, img_rows, img_cols))
+    conv1 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(inputs)
+    conv1 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(conv1)
+    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
+
+    conv2 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(pool1)
+    conv2 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(conv2)
+    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
+
+    conv3 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(pool2)
+    conv3 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(conv3)
+    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
+
+    conv4 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(pool3)
+    conv4 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(conv4)
+    pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
+
+    conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(pool4)
+    conv5 = Convolution2D(512, 3, 3, activation='relu', border_mode='same')(conv5)
+
+    up6 = merge([UpSampling2D(size=(2, 2))(conv5), conv4], mode='concat', concat_axis=1)
+    conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(up6)
+    conv6 = Convolution2D(256, 3, 3, activation='relu', border_mode='same')(conv6)
+
+    up7 = merge([UpSampling2D(size=(2, 2))(conv6), conv3], mode='concat', concat_axis=1)
+    conv7 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(up7)
+    conv7 = Convolution2D(128, 3, 3, activation='relu', border_mode='same')(conv7)
+
+    up8 = merge([UpSampling2D(size=(2, 2))(conv7), conv2], mode='concat', concat_axis=1)
+    conv8 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(up8)
+    conv8 = Convolution2D(64, 3, 3, activation='relu', border_mode='same')(conv8)
+
+    up9 = merge([UpSampling2D(size=(2, 2))(conv8), conv1], mode='concat', concat_axis=1)
+    conv9 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(up9)
+    conv9 = Convolution2D(32, 3, 3, activation='relu', border_mode='same')(conv9)
+
+    conv10 = Convolution2D(1, 1, 1, activation='sigmoid')(conv9)
+
+    model = Model(input=inputs, output=conv10)
+
+    model.compile(optimizer=Adam(lr=1e-5), loss=dice_coef_loss, metrics=[dice_coef])
+
+    return model
+
+def predict_segments(model,scans):
+    pred = model.predict(scans_g, verbose=1)
+    for i in range(scans.shape[0]):
+        print ('scan '+str(i))
+        f, ax = plt.subplots(1, 2,figsize=(10,5))
+        ax[0].imshow(scans[i,0,:,:],cmap=plt.cm.gray)
+        ax[1].imshow(pred[i,0,:,:],cmap=plt.cm.gray)
+        plt.show()
+        
+
+img_rows = 256
+img_cols = 256
+scan_folder='data/stage1/'
+df=pd.read_csv('data/stage1_labels.csv')
+
+# Set up scans list for training  in the format [[id,number_of_scan],...]
+scans_list=[[125,100],[245,100],[150,100]]
+
+scans=get_scans(df,scans_list)
+
+
+# View scans in the matplotlib widgets to get coordinates 
+view_scans_widget(scans)
+
+# Set up masks list in the format [[scan_number,x_coordinate,y_coordinate, size],]
+masks_list=[ [0,92,180,7],[0,174,104,7],[0,181,178,7],
+           [1,180,85,7],[1,164,152,7],[2,87,191,7]]
+           
+# Get masks for nodules
+masks=get_masks(scans,masks_list)
+
+model = unet_model()
+# Simultaneous augmentation of scans and masks
+scans_g, masks_g=augmentation(scans,masks,350)
+# model training
+model.fit(scans_g, masks_g, batch_size=16, nb_epoch=15, verbose=1, shuffle=True)
+
+# Perform segmentation on the scans set 
+predict_segments(model,scans)
+
+

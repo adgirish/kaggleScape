@@ -1,231 +1,223 @@
 
 # coding: utf-8
 
-# #Intro
-# First of all thanks to Kjetil Åmdal-Sævik for providing excellent code for data preparation.
-# Being a novice python programmer, my code may not be that much efficient but it may serve as a starting point for using TensorFlow.
-
-# In[1]:
-
-
-import os
-import sys
-import numpy as np
-import tensorflow as tf
-import random
-import math
-import warnings
-import pandas as pd
-import cv2
-import matplotlib.pyplot as plt
-
-from tqdm import tqdm
-from itertools import chain
-from skimage.io import imread, imshow, imread_collection, concatenate_images
-from skimage.transform import resize
-from skimage.morphology import label
-
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
-
+# <h1>Lower Back Pain Classification Algorithm </h1>
+# 
+# <p>This dataset contains the anthropometric measurements of the curvature of the spine to support the model towards a more accurate classification.
+# <br />
+# Lower back pain affects around 80% of individuals at some point in their life. If this model becomes robust enough, then these measurements may soon become predictive and treatable measures. 
+# <br /> 
+# <a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.471.4845&rep=rep1&type=pdf">This study</a> asserts the validity of the manual goniometer measurements as a valid clinical tool. </p>
 
 # In[2]:
 
 
-# Set some parameters
-IMG_WIDTH = 128
-IMG_HEIGHT = 128
-IMG_CHANNELS = 3
-TRAIN_PATH = '../input/stage1_train/'
-TEST_PATH = '../input/stage1_test/'
+import pandas as pd
+import numpy as np
+import seaborn as sns
 
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
+# read data into dataset variable
+data = pd.read_csv("../input/Dataset_spine.csv")
+
+# Drop the unnamed column in place (not a copy of the original)#
+data.drop('Unnamed: 13', axis=1, inplace=True)
+
+# Concatenate the original df with the dummy variables
+data = pd.concat([data, pd.get_dummies(data['Class_att'])], axis=1)
+
+# Drop unnecessary label column in place. 
+data.drop(['Class_att','Normal'], axis=1, inplace=True)
 
 
 # In[3]:
 
 
-# Get train and test IDs
-train_ids = next(os.walk(TRAIN_PATH))[1]
-test_ids = next(os.walk(TEST_PATH))[1]
+data.head()
 
 
 # In[4]:
 
 
-# Get and resize train images and masks
-images = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
-labels = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
-print('Getting and resizing train images and masks ... ')
-sys.stdout.flush()
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    path = TRAIN_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    images[n] = img
-    mask = np.zeros((IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
-    for mask_file in next(os.walk(path + '/masks/'))[2]:
-        mask_ = imread(path + '/masks/' + mask_file)
-        mask_ = np.expand_dims(resize(mask_, (IMG_HEIGHT, IMG_WIDTH), mode='constant', 
-                                      preserve_range=True), axis=-1)
-        mask = np.maximum(mask, mask_)
-    labels[n] = mask
+import seaborn as sns
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-X_train = images
-Y_train = labels
 
-# Get and resize test images
-X_test = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
-sizes_test = []
-print('Getting and resizing test images ... ')
-sys.stdout.flush()
-for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
-    path = TEST_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    sizes_test.append([img.shape[0], img.shape[1]])
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    X_test[n] = img
-
-print('Done!')
-
+# <h1>Exploratory Data Analysis </h1>
 
 # In[5]:
 
 
-def shuffle():
-    global images, labels
-    p = np.random.permutation(len(X_train))
-    images = X_train[p]
-    labels = Y_train[p]
+data.columns = ['Pelvic Incidence','Pelvic Tilt','Lumbar Lordosis Angle','Sacral Slope','Pelvic Radius', 
+                'Spondylolisthesis Degree', 'Pelvic Slope', 'Direct Tilt', 'Thoracic Slope', 
+                'Cervical Tilt','Sacrum Angle', 'Scoliosis Slope','Outcome']
+
+corr = data.corr()
+
+# Set up the matplot figure
+f, ax = plt.subplots(figsize=(12,9))
+
+#Draw the heatmap using seaborn
+sns.heatmap(corr, cmap='inferno', annot=True)
 
 
 # In[6]:
 
 
-def next_batch(batch_s, iters):
-    if(iters == 0):
-        shuffle()
-    count = batch_s * iters
-    return images[count:(count + batch_s)], labels[count:(count + batch_s)]
+data.describe()
 
 
 # In[7]:
 
 
-def deconv2d(input_tensor, filter_size, output_size, out_channels, in_channels, name, strides = [1, 1, 1, 1]):
-    dyn_input_shape = tf.shape(input_tensor)
-    batch_size = dyn_input_shape[0]
-    out_shape = tf.stack([batch_size, output_size, output_size, out_channels])
-    filter_shape = [filter_size, filter_size, out_channels, in_channels]
-    w = tf.get_variable(name=name, shape=filter_shape)
-    h1 = tf.nn.conv2d_transpose(input_tensor, w, out_shape, strides, padding='SAME')
-    return h1
+from pylab import *
+import copy
+outlier = data[["Spondylolisthesis Degree", "Outcome"]]
+#print(outlier[outlier >200])
+abspond = outlier[outlier["Spondylolisthesis Degree"]>15]
+print("1= Abnormal, 0=Normal\n",abspond["Outcome"].value_counts())
 
 
 # In[8]:
 
 
-def conv2d(input_tensor, depth, kernel, name, strides=(1, 1), padding="SAME"):
-    return tf.layers.conv2d(input_tensor, filters=depth, kernel_size=kernel, strides=strides, padding=padding, activation=tf.nn.relu, name=name)
+#   Dropping Outlier
+data = data.drop(115,0)
+colr = copy.copy(data["Outcome"])
+co = colr.map({1:0.44, 0:0.83})
+
+#   Plot scatter
+plt.scatter(data["Cervical Tilt"], data["Spondylolisthesis Degree"], c=co, cmap=plt.cm.RdYlGn)
+plt.xlabel("Cervical Tilt")
+plt.ylabel("Spondylolisthesis Degree")
+
+colors=[ 'c', 'y', 'm',]
+ab =data["Outcome"].where(data["Outcome"]==1)
+no = data["Outcome"].where(data["Outcome"]==0)
+plt.show()
+# UNFINISHED ----- OBJECTIVE: Color visual by Outcome - 0 for green, 1 for Red (example)
 
 
 # In[9]:
 
 
-X = tf.placeholder(tf.float32, [None, 128, 128, 3])
-Y_ = tf.placeholder(tf.float32, [None, 128, 128, 1])
-lr = tf.placeholder(tf.float32)
+#   Create the training dataset
+training = data.drop('Outcome', axis=1)
+testing = data['Outcome']
 
 
 # In[10]:
 
 
-net = conv2d(X, 32, 1, "Y0") #128
+#   Import necessary ML packages
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report
 
-net = conv2d(net, 64, 3, "Y2", strides=(2, 2)) #64
-
-net = conv2d(net, 128, 3, "Y3", strides=(2, 2)) #32
-
-
-net = deconv2d(net, 1, 32, 128, 128, "Y2_deconv") # 32
-net = tf.nn.relu(net)
-
-net = deconv2d(net, 2, 64, 64, 128, "Y1_deconv", strides=[1, 2, 2, 1]) # 64
-net = tf.nn.relu(net)
-
-net = deconv2d(net, 2, 128, 32, 64, "Y0_deconv", strides=[1, 2, 2, 1]) # 128
-net = tf.nn.relu(net)
-
-logits = deconv2d(net, 1, 128, 1, 32, "logits_deconv") # 128
-
-loss = tf.losses.sigmoid_cross_entropy(Y_, logits)
-optimizer = tf.train.AdamOptimizer(lr).minimize(loss)
+#   Split into training/testing datasets using Train_test_split
+X_train, X_test, y_train, y_test = train_test_split(training, testing, test_size=0.33, random_state=22, stratify=testing)
 
 
-# In[ ]:
+# <h1> Convert DataFrame Object to a numpy array due to faster computation in modelling</h1>
+
+# In[11]:
 
 
-# init
-init = tf.global_variables_initializer()
-sess = tf.Session()
-sess.run(init)
+import numpy as np
 
-batch_count = 0
-display_count = 1
-for i in range(10000):
-    # training on batches of 10 images with 10 mask images
-    if(batch_count > 67):
-        batch_count = 0    
+# convert to numpy.ndarray and dtype=float64 for optimal
+array_train = np.asarray(training)
+array_test = np.asarray(testing)
+print(array_train.shape)
+print(array_test.shape)
 
-    batch_X, batch_Y = next_batch(10, batch_count)
-
-    batch_count += 1
-
-    feed_dict = {X: batch_X, Y_: batch_Y, lr: 0.0005}
-    loss_value, _ = sess.run([loss, optimizer], feed_dict=feed_dict)
-
-    if(i % 500 == 0):
-        print(str(display_count) + " training loss:", str(loss_value))
-        display_count +=1
-        
-print("Done!")
+#   Convert each pandas DataFrame object into a numpy array object. 
+array_XTrain, array_XTest, array_ytrain, array_ytest = np.asarray(X_train), np.asarray(X_test), np.asarray(y_train), np.asarray(y_test)
 
 
-# **Test on the data that is not seen by the network during training:**
+# <h1> Employing Support Vector Machine as a Classifier - 85% </h1>
 
-# In[ ]:
-
-
-ix = 3 #random.randint(0, 64) #len(X_test) - 1 = 64
-test_image = X_test[ix].astype(float)
-imshow(test_image)
-plt.show()
+# In[12]:
 
 
-# In[ ]:
+#    Import Necessary Packages
+from sklearn import svm
+from sklearn.metrics import accuracy_score
+
+#   Instantiate the classifier
+clf = svm.SVC(kernel='linear')
+
+#   Fit the model to the training data
+clf.fit(array_XTrain, array_ytrain)
+
+#   Generate a prediction and store it in 'pred'
+pred = clf.predict(array_XTest)
+
+#   Print the accuracy score/percent correct
+svmscore = accuracy_score(array_ytest, pred)
+print("Support Vector Machines are ", svmscore*100, "accurate")
 
 
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
+# <h1> That's it! </h1>
+# <p>~85% prediction accuracy with Support Vector Machines!  To increase the accuracy of the model, feature engineering is a suitable solution - as well as creating new variables based on domain knowledge.</p>
+
+# <h2> Next Steps</h2>
+# <li> Since we've done no feature engineering or any parameter tuning, there is a lot of room for improvement. </li>
+# <li>Specifically, an ANN has been shown to acheive a 93% accuracy score when predicting low back pain from this study</li>
+# 
+
+# In[13]:
 
 
-# In[ ]:
+from keras.models import Sequential
+from keras.layers import Dense, Activation
+import keras
 
 
-#print(ix)
-test_image = np.reshape(test_image, [-1, 128 , 128, 3])
-test_data = {X:test_image}
+# In[14]:
 
-test_mask = sess.run([logits],feed_dict=test_data)
-test_mask = np.reshape(np.squeeze(test_mask), [IMG_WIDTH , IMG_WIDTH, 1])
-for i in range(IMG_WIDTH):
-    for j in range(IMG_HEIGHT):
-            test_mask[i][j] = int(sigmoid(test_mask[i][j])*255)
-imshow(test_mask.squeeze().astype(np.uint8))
-plt.show()
 
+print(array_XTrain.shape)
+print(array_ytrain.shape)
+
+
+# In[15]:
+
+
+#  Define our model
+model = Sequential()
+model.add(Dense(32, activation='tanh', input_dim=12))
+model.add(Dense(10, activation='softmax'))
+model.compile(optimizer='rmsprop',
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+one_hot_labels = keras.utils.to_categorical(array_ytrain, num_classes=10)
+
+history = model.fit(array_XTrain, one_hot_labels,epochs=1000, batch_size=30)
+weights = model.layers[0].get_weights()[0]
+biases = model.layers[0].get_weights()[1]
+
+
+# In[16]:
+
+
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.plot(history.history['loss'])
+plt.xlabel("Epochs (Batches)")
+plt.ylabel("Loss")
+plt.title("Training an Artificial Neural Net")
+
+
+# <h3>A Little Note About Input Shapes</h3>
+# 
+# The input dimension on the input layer of a Neural Net (NN) seems to always cause me issues. It begins with me thinking that dimensions refer to the length of the input data. Although I still want to confirm, this is a misconception on my part. Input dimension (or shape) refers to the number of fields in the input data. 
+# 
+# "Fields", in this case, refers to the variables within the input data. The number of Fields, Features or Dimension should be the value of the input shape. 
+
+# <p> After we've set up the model's parameters we must choose both a loss function and define the learning rate. An analogy to understand learning rate is to imagine a bowl. To find the lowest (or highest) point of the bowl, you take a small 'leap' from your current position to a random location. 
+# 
+# * If the jump is too large, you risk making too large a step and stepping over the most optimal position. 
+# * If the jump is too small, you risk increasing the computational cost. I believe the standard is to set it to 0.1 as a 'default'. 

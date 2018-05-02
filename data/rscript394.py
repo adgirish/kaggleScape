@@ -1,49 +1,49 @@
-#Modification of Beletecheneke and Bojan' kernels using ensemble of NN .
-
-import pandas as pd 
 import numpy as np
- 
-#Download csv files from the following links. Make sure kernal's ID is the same as the one in the link.
+import pandas as pd
 
-#Author: Andy Harless
-#File: xgb_submit.csv
-#Link: https://www.kaggle.com/aharless/xgboost-cv-lb-284?scriptVersionId=1673404
+print('Reading data...')
+key_1 = pd.read_csv('../input/key_1.csv')
+train_1 = pd.read_csv('../input/train_1.csv')
+ss_1 = pd.read_csv('../input/sample_submission_1.csv')
 
-#Author: Vladimir Demidov
-#File: stacked_1.csv
-#Link: https://www.kaggle.com/yekenot/simple-stacker-lb-0-284?scriptVersionId=1665392
+print('Preprocessing...')
+# train_1.fillna(0, inplace=True)
 
-#Author: Keui Shen Nong
-#File: Froza_and_Pascal.csv
-#Link: https://www.kaggle.com/kueipo/base-on-froza-pascal-single-xgb-lb-0-284?scriptVersionId=1679911
+print('Processing...')
+ids = key_1.Id.values
+pages = key_1.Page.values
 
-#Author: areeves87
-#File: median_rank_submission.csv
-#Link: https://www.kaggle.com/areeves87/aggregate-20-kernel-csvs-by-median-rank-lb-285
+print('key_1...')
+d_pages = {}
+for id, page in zip(ids, pages):
+    d_pages[id] = page[:-11]
 
-#Author: Kostiantyn Isaienkov & DanyaKosmin
-#File: NN.csv
-#Link: https://www.kaggle.com/pluchme/0-285-lb-average-of-3xgboost-lightgbm-nn
+print('train_1...')
+pages = train_1.Page.values
+# visits = train_1['2016-12-31'].values # Version 1 score: 60.6
+# visits = np.round(np.mean(train_1.drop('Page', axis=1).values, axis=1)) # Version 2 score: 64.8
+# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -14:], axis=1)) # Version 3 score: 52.5
+# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -7:], axis=1)) # Version 4 score: 53.7
+# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -21:], axis=1)) # Version 5, 6 score: 51.3
+# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -28:], axis=1)) # Version 7 score: 51.1
+# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -28:], axis=1)) # Version 8 score: 47.1 
+# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -35:], axis=1)) # Version 9 score: 46.6
+# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -42:], axis=1)) # Version 10 score: 46.3
+# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -49:], axis=1)) # Version 11 score: 46.2
+# visits = np.nan_to_num(np.round(np.nanmedian(train_1.drop('Page', axis=1).values[:, -49:], axis=1))) # Version 12 score: 45.7
+visits = np.nan_to_num(np.round(np.nanmedian(train_1.drop('Page', axis=1).values[:, -56:], axis=1)))
 
-#Read csv files
+d_visits = {}
+for page, visits_number in zip(pages, visits):
+    d_visits[page] = visits_number
 
-stacked_1 = pd.read_csv('../input/stacked1/stacked_1.csv')
-xgb_submit = pd.read_csv('../input/xgbsubmit/xgb_submit_1.csv')
-Froza_and_Pascal = pd.read_csv('../input/forza-and-pascal/Froza_and_Pascal.csv')
-median_rank_submission = pd.read_csv('../input/median-rank-submission/median_rank_submission.csv')
-akvelon_NN_ensemble = pd.read_csv('../input/nn-ensemble/NN.csv')
+print('Modifying sample submission...')
+ss_ids = ss_1.Id.values
+ss_visits = ss_1.Visits.values
 
-# Ensemble and create submission 
+for i, ss_id in enumerate(ss_ids):
+    ss_visits[i] = d_visits[d_pages[ss_id]]
 
-sub = pd.DataFrame()
-sub['id'] = stacked_1['id']
-sub['target'] = np.exp(np.mean(
-	[	
-	stacked_1['target'].apply(lambda x: np.log(x)),\
-	xgb_submit['target'].apply(lambda x: np.log(x)),\
-	Froza_and_Pascal['target'].apply(lambda x: np.log(x)),\
-	median_rank_submission['target'].apply(lambda x: np.log(x)),\
-    akvelon_NN_ensemble['target'].apply(lambda x: np.log(x))\
-	], axis =0))
-	
-sub.to_csv('sub.csv', index = False, float_format='%.6f') 
+print('Saving submission...')
+subm = pd.DataFrame({'Id': ss_ids, 'Visits': ss_visits})
+subm.to_csv('submission.csv', index=False)

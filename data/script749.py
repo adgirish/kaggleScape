@@ -1,919 +1,846 @@
 
 # coding: utf-8
 
-# ## Introduction
-# 
-# **_Poonam Ligade_**
-# 
-# *27th Dec 2016*
-# 
-# I am are trying to find out how many people on titanic survived from disaster.
-# 
-# Here goes Titanic Survival Prediction End to End ML Pipeline  
-# 
-#  1) **Introduction**
-# 
-#  1. Import Libraries
-#  2. Load data
-#  3. Run Statistical summeries
-#  4. Figure out missing value columns
-# 
-#  
-#  
-# 2) **Visualizations**
-# 
-#  1. Correlation with target variable
-# 
-# 
-# 3) **Missing values imputation**
-# 
-#  1. train data Missing columns- Embarked,Age,Cabin
-#  2. test data Missing columns- Age and Fare
-#  
-# 
-# 4) **Feature Engineering**
-# 
-#  1. Calculate total family size
-#  2. Get title from name
-#  3. Find out which deck passenger belonged to
-#  4. Dealing with Categorical Variables
-#      * Label encoding
-#  5. Feature Scaling
-# 
-# 
-# 5) **Prediction**
-# 
-#  1. Split into training & test sets
-#  2. Build the model
-#  3. Feature importance
-#  4. Predictions
-#  5. Ensemble : Majority voting
-# 
-# 6) **Submission**
-
-# Import libraries
-# ================
-
 # In[ ]:
 
 
-# We can use the pandas library in python to read in the csv file.
+import json, datetime
 import pandas as pd
-#for numerical computaions we can use numpy library
 import numpy as np
-
-
-# Load train & test data
-# ======================
-
-# In[ ]:
-
-
-# This creates a pandas dataframe and assigns it to the titanic variable.
-titanic = pd.read_csv("../input/train.csv")
-# Print the first 5 rows of the dataframe.
-titanic.head()
-
-
-# In[ ]:
-
-
-titanic_test = pd.read_csv("../input/test.csv")
-#transpose
-titanic_test.head().T
-#note their is no Survived column here which is our target varible we are trying to predict
-
-
-# In[ ]:
-
-
-#shape command will give number of rows/samples/examples and number of columns/features/predictors in dataset
-#(rows,columns)
-titanic.shape
-
-
-# In[ ]:
-
-
-#Describe gives statistical information about numerical columns in the dataset
-titanic.describe()
-#you can check from count if there are missing vales in columns, here age has got missing values
-
-
-# In[ ]:
-
-
-#info method provides information about dataset like 
-#total values in each column, null/not null, datatype, memory occupied etc
-titanic.info()
-
-
-# In[ ]:
-
-
-#lets see if there are any more columns with missing values 
-null_columns=titanic.columns[titanic.isnull().any()]
-titanic.isnull().sum()
-
-
-# **yes even Embarked and cabin has missing values.**
-
-# In[ ]:
-
-
-#how about test set??
-titanic_test.isnull().sum()
-
-
-# **Age, Fare and cabin has missing values.
-# we will see how to fill missing values next.**
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt
 import seaborn as sns
-sns.set(font_scale=1)
-
-pd.options.display.mpl_style = 'default'
-labels = []
-values = []
-for col in null_columns:
-    labels.append(col)
-    values.append(titanic[col].isnull().sum())
-ind = np.arange(len(labels))
-width=0.6
-fig, ax = plt.subplots(figsize=(6,5))
-rects = ax.barh(ind, np.array(values), color='purple')
-ax.set_yticks(ind+((width)/2.))
-ax.set_yticklabels(labels, rotation='horizontal')
-ax.set_xlabel("Count of missing values")
-ax.set_ylabel("Column Names")
-ax.set_title("Variables with missing values");
-
-
-# **Visualizations**
-# ==============
-
-# In[ ]:
-
-
-titanic.hist(bins=10,figsize=(9,7),grid=False);
-
-
-# **we can see that Age and Fare are measured on very different scaling. So we need to do feature scaling before predictions.**
-
-# In[ ]:
-
-
-g = sns.FacetGrid(titanic, col="Sex", row="Survived", margin_titles=True)
-g.map(plt.hist, "Age",color="purple");
-
-
-# In[ ]:
-
-
-g = sns.FacetGrid(titanic, hue="Survived", col="Pclass", margin_titles=True,
-                  palette={1:"seagreen", 0:"gray"})
-g=g.map(plt.scatter, "Fare", "Age",edgecolor="w").add_legend();
-
-
-# In[ ]:
-
-
-g = sns.FacetGrid(titanic, hue="Survived", col="Sex", margin_titles=True,
-                palette="Set1",hue_kws=dict(marker=["^", "v"]))
-g.map(plt.scatter, "Fare", "Age",edgecolor="w").add_legend()
-plt.subplots_adjust(top=0.8)
-g.fig.suptitle('Survival by Gender , Age and Fare');
-
-
-# In[ ]:
-
-
-titanic.Embarked.value_counts().plot(kind='bar', alpha=0.55)
-plt.title("Passengers per boarding location");
-
-
-# In[ ]:
-
-
-sns.factorplot(x = 'Embarked',y="Survived", data = titanic,color="r");
-
-
-# In[ ]:
-
-
-sns.set(font_scale=1)
-g = sns.factorplot(x="Sex", y="Survived", col="Pclass",
-                    data=titanic, saturation=.5,
-                    kind="bar", ci=None, aspect=.6)
-(g.set_axis_labels("", "Survival Rate")
-    .set_xticklabels(["Men", "Women"])
-    .set_titles("{col_name} {col_var}")
-    .set(ylim=(0, 1))
-    .despine(left=True))  
-plt.subplots_adjust(top=0.8)
-g.fig.suptitle('How many Men and Women Survived by Passenger Class');
-
-
-# In[ ]:
-
-
-ax = sns.boxplot(x="Survived", y="Age", 
-                data=titanic)
-ax = sns.stripplot(x="Survived", y="Age",
-                   data=titanic, jitter=True,
-                   edgecolor="gray")
-sns.plt.title("Survival by Age",fontsize=12);
-
-
-# In[ ]:
-
-
-titanic.Age[titanic.Pclass == 1].plot(kind='kde')    
-titanic.Age[titanic.Pclass == 2].plot(kind='kde')
-titanic.Age[titanic.Pclass == 3].plot(kind='kde')
- # plots an axis lable
-plt.xlabel("Age")    
-plt.title("Age Distribution within classes")
-# sets our legend for our graph.
-plt.legend(('1st Class', '2nd Class','3rd Class'),loc='best') ;
-
-
-# In[ ]:
-
-
-corr=titanic.corr()#["Survived"]
-plt.figure(figsize=(10, 10))
-
-sns.heatmap(corr, vmax=.8, linewidths=0.01,
-            square=True,annot=True,cmap='YlGnBu',linecolor="white")
-plt.title('Correlation between features');
-
-
-# In[ ]:
-
-
-#correlation of features with target variable
-titanic.corr()["Survived"]
-
-
-# **Looks like Pclass has got highest negative correlation with "Survived" followed by Fare, Parch and Age** 
-
-# In[ ]:
-
-
-g = sns.factorplot(x="Age", y="Embarked",
-                    hue="Sex", row="Pclass",
-                    data=titanic[titanic.Embarked.notnull()],
-                    orient="h", size=2, aspect=3.5, 
-                   palette={'male':"purple", 'female':"blue"},
-                    kind="violin", split=True, cut=0, bw=.2);
-
-
-# Missing Value Imputation
-# ========================
-# 
-# **Its important to fill missing values, because some machine learning algorithms can't accept them eg SVM.**
-# 
-# *But filling missing values with mean/median/mode is also a prediction which may not be 100% accurate, instead you can use models like Decision Trees and Random Forest which handle missing values very well.*
-
-# **Embarked Column**
-
-# In[ ]:
-
-
-#Lets check which rows have null Embarked column
-titanic[titanic['Embarked'].isnull()]
-
-
-# **PassengerId 62 and 830** have missing embarked values
-# 
-# Both have ***Passenger class 1*** and ***fare $80.***
-# 
-# Lets plot a graph to visualize and try to guess from where they embarked
-
-# In[ ]:
-
-
-sns.boxplot(x="Embarked", y="Fare", hue="Pclass", data=titanic);
-
-
-# In[ ]:
-
-
-titanic["Embarked"] = titanic["Embarked"].fillna('C')
-
-
-# We can see that for ***1st class*** median line is coming around ***fare $80*** for ***embarked*** value ***'C'***.
-# So we can replace NA values in Embarked column with 'C'
-
-# In[ ]:
-
-
-#there is an empty fare column in test set
-titanic_test.describe()
-
-
-# ***Fare Column***
-
-# In[ ]:
-
-
-titanic_test[titanic_test['Fare'].isnull()]
-
-
-# In[ ]:
-
-
-#we can replace missing value in fare by taking median of all fares of those passengers 
-#who share 3rd Passenger class and Embarked from 'S' 
-def fill_missing_fare(df):
-    median_fare=df[(df['Pclass'] == 3) & (df['Embarked'] == 'S')]['Fare'].median()
-#'S'
-       #print(median_fare)
-    df["Fare"] = df["Fare"].fillna(median_fare)
-    return df
-
-titanic_test=fill_missing_fare(titanic_test)
-
-
-# Feature Engineering
-# ===================
-
-# ***Deck- Where exactly were passenger on the ship?***
-
-# In[ ]:
-
-
-titanic["Deck"]=titanic.Cabin.str[0]
-titanic_test["Deck"]=titanic_test.Cabin.str[0]
-titanic["Deck"].unique() # 0 is for null values
-
-
-# In[ ]:
-
-
-g = sns.factorplot("Survived", col="Deck", col_wrap=4,
-                    data=titanic[titanic.Deck.notnull()],
-                    kind="count", size=2.5, aspect=.8);
-
-
-# In[ ]:
-
-
-titanic = titanic.assign(Deck=titanic.Deck.astype(object)).sort("Deck")
-g = sns.FacetGrid(titanic, col="Pclass", sharex=False,
-                  gridspec_kws={"width_ratios": [5, 3, 3]})
-g.map(sns.boxplot, "Deck", "Age");
-
-
-# In[ ]:
-
-
-titanic.Deck.fillna('Z', inplace=True)
-titanic_test.Deck.fillna('Z', inplace=True)
-titanic["Deck"].unique() # Z is for null values
-
-
-# ***How Big is your family?***
-
-# In[ ]:
-
-
-# Create a family size variable including the passenger themselves
-titanic["FamilySize"] = titanic["SibSp"] + titanic["Parch"]+1
-titanic_test["FamilySize"] = titanic_test["SibSp"] + titanic_test["Parch"]+1
-print(titanic["FamilySize"].value_counts())
-
-
-# In[ ]:
-
-
-# Discretize family size
-titanic.loc[titanic["FamilySize"] == 1, "FsizeD"] = 'singleton'
-titanic.loc[(titanic["FamilySize"] > 1)  &  (titanic["FamilySize"] < 5) , "FsizeD"] = 'small'
-titanic.loc[titanic["FamilySize"] >4, "FsizeD"] = 'large'
-
-titanic_test.loc[titanic_test["FamilySize"] == 1, "FsizeD"] = 'singleton'
-titanic_test.loc[(titanic_test["FamilySize"] >1) & (titanic_test["FamilySize"] <5) , "FsizeD"] = 'small'
-titanic_test.loc[titanic_test["FamilySize"] >4, "FsizeD"] = 'large'
-print(titanic["FsizeD"].unique())
-print(titanic["FsizeD"].value_counts())
-
-
-# In[ ]:
-
-
-sns.factorplot(x="FsizeD", y="Survived", data=titanic);
-
-
-# ***Do you have longer names?***
-
-# In[ ]:
-
-
-#Create feture for length of name 
-# The .apply method generates a new series
-titanic["NameLength"] = titanic["Name"].apply(lambda x: len(x))
-
-titanic_test["NameLength"] = titanic_test["Name"].apply(lambda x: len(x))
-#print(titanic["NameLength"].value_counts())
-
-bins = [0, 20, 40, 57, 85]
-group_names = ['short', 'okay', 'good', 'long']
-titanic['NlengthD'] = pd.cut(titanic['NameLength'], bins, labels=group_names)
-titanic_test['NlengthD'] = pd.cut(titanic_test['NameLength'], bins, labels=group_names)
-
-sns.factorplot(x="NlengthD", y="Survived", data=titanic)
-print(titanic["NlengthD"].unique())
-
-
-# ***Whats in the name?***
-
-# In[ ]:
-
-
-import re
-
-#A function to get the title from a name.
-def get_title(name):
-    # Use a regular expression to search for a title.  Titles always consist of capital and lowercase letters, and end with a period.
-    title_search = re.search(' ([A-Za-z]+)\.', name)
-    #If the title exists, extract and return it.
-    if title_search:
-        return title_search.group(1)
-    return ""
-
-#Get all the titles and print how often each one occurs.
-titles = titanic["Name"].apply(get_title)
-print(pd.value_counts(titles))
-
-
-#Add in the title column.
-titanic["Title"] = titles
-
-# Titles with very low cell counts to be combined to "rare" level
-rare_title = ['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']
-
-# Also reassign mlle, ms, and mme accordingly
-titanic.loc[titanic["Title"] == "Mlle", "Title"] = 'Miss'
-titanic.loc[titanic["Title"] == "Ms", "Title"] = 'Miss'
-titanic.loc[titanic["Title"] == "Mme", "Title"] = 'Mrs'
-titanic.loc[titanic["Title"] == "Dona", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Lady", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Countess", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Capt", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Col", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Don", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Major", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Rev", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Sir", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Jonkheer", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Dr", "Title"] = 'Rare Title'
-
-#titanic.loc[titanic["Title"].isin(['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-#                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']), "Title"] = 'Rare Title'
-
-#titanic[titanic['Title'].isin(['Dona', 'Lady', 'Countess'])]
-#titanic.query("Title in ('Dona', 'Lady', 'Countess')")
-
-titanic["Title"].value_counts()
-
-
-titles = titanic_test["Name"].apply(get_title)
-print(pd.value_counts(titles))
-
-#Add in the title column.
-titanic_test["Title"] = titles
-
-# Titles with very low cell counts to be combined to "rare" level
-rare_title = ['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']
-
-# Also reassign mlle, ms, and mme accordingly
-titanic_test.loc[titanic_test["Title"] == "Mlle", "Title"] = 'Miss'
-titanic_test.loc[titanic_test["Title"] == "Ms", "Title"] = 'Miss'
-titanic_test.loc[titanic_test["Title"] == "Mme", "Title"] = 'Mrs'
-titanic_test.loc[titanic_test["Title"] == "Dona", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Lady", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Countess", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Capt", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Col", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Don", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Major", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Rev", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Sir", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Jonkheer", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Dr", "Title"] = 'Rare Title'
-
-titanic_test["Title"].value_counts()
-
-
-# ***Ticket column***
-
-# In[ ]:
-
-
-titanic["Ticket"].tail()
-
-
-# In[ ]:
-
-
-titanic["TicketNumber"] = titanic["Ticket"].str.extract('(\d{2,})', expand=True)
-titanic["TicketNumber"] = titanic["TicketNumber"].apply(pd.to_numeric)
-
-
-titanic_test["TicketNumber"] = titanic_test["Ticket"].str.extract('(\d{2,})', expand=True)
-titanic_test["TicketNumber"] = titanic_test["TicketNumber"].apply(pd.to_numeric)
-
-
-# In[ ]:
-
-
-#some rows in ticket column dont have numeric value so we got NaN there
-titanic[titanic["TicketNumber"].isnull()]
-
-
-# In[ ]:
-
-
-titanic.TicketNumber.fillna(titanic["TicketNumber"].median(), inplace=True)
-titanic_test.TicketNumber.fillna(titanic_test["TicketNumber"].median(), inplace=True)
-
-
-# Convert Categorical variables into Numerical ones
-# =================================================
-
-# In[ ]:
-
-
-from sklearn.preprocessing import LabelEncoder,OneHotEncoder
-
-labelEnc=LabelEncoder()
-
-cat_vars=['Embarked','Sex',"Title","FsizeD","NlengthD",'Deck']
-for col in cat_vars:
-    titanic[col]=labelEnc.fit_transform(titanic[col])
-    titanic_test[col]=labelEnc.fit_transform(titanic_test[col])
-
-titanic.head()
-
-
-# ***Age Column***
-# 
-# Age seems to be promising feature.
-# So it doesnt make sense to simply fill null values out with median/mean/mode.
-# 
-# We will use ***Random Forest*** algorithm to predict ages. 
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(titanic["Age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="red")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count");
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestRegressor
-#predicting missing values in age using Random Forest
-def fill_missing_age(df):
-    
-    #Feature set
-    age_df = df[['Age','Embarked','Fare', 'Parch', 'SibSp',
-                 'TicketNumber', 'Title','Pclass','FamilySize',
-                 'FsizeD','NameLength',"NlengthD",'Deck']]
-    # Split sets into train and test
-    train  = age_df.loc[ (df.Age.notnull()) ]# known Age values
-    test = age_df.loc[ (df.Age.isnull()) ]# null Ages
-    
-    # All age values are stored in a target array
-    y = train.values[:, 0]
-    
-    # All the other values are stored in the feature array
-    X = train.values[:, 1::]
-    
-    # Create and fit a model
-    rtr = RandomForestRegressor(n_estimators=2000, n_jobs=-1)
-    rtr.fit(X, y)
-    
-    # Use the fitted model to predict the missing values
-    predictedAges = rtr.predict(test.values[:, 1::])
-    
-    # Assign those predictions to the full data set
-    df.loc[ (df.Age.isnull()), 'Age' ] = predictedAges 
-    
-    return df
-
-
-# In[ ]:
-
-
-titanic=fill_missing_age(titanic)
-titanic_test=fill_missing_age(titanic_test)
-
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(titanic["Age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-    plt.xlim((15,100));
-
-
-# **Feature Scaling**
-# ===============
-# 
-# We can see that Age, Fare are measured on different scales, so we need to do Feature Scaling first before we proceed with predictions.
-
-# In[ ]:
-
-
-from sklearn import preprocessing
-
-std_scale = preprocessing.StandardScaler().fit(titanic[['Age', 'Fare']])
-titanic[['Age', 'Fare']] = std_scale.transform(titanic[['Age', 'Fare']])
-
-
-std_scale = preprocessing.StandardScaler().fit(titanic_test[['Age', 'Fare']])
-titanic_test[['Age', 'Fare']] = std_scale.transform(titanic_test[['Age', 'Fare']])
-
-
-# Correlation of features with target 
-# =======================
-
-# In[ ]:
-
-
-titanic.corr()["Survived"]
-
-
-# Predict Survival
-# ================
-
-# *Linear Regression*
-# -------------------
-
-# In[ ]:
-
-
-# Import the linear regression class
-from sklearn.linear_model import LinearRegression
-# Sklearn also has a helper that makes it easy to do cross validation
-from sklearn.cross_validation import KFold
-
-# The columns we'll use to predict the target
-predictors = ["Pclass", "Sex", "Age","SibSp", "Parch", "Fare",
-              "Embarked","NlengthD", "FsizeD", "Title","Deck"]
-target="Survived"
-# Initialize our algorithm class
-alg = LinearRegression()
-
-# Generate cross validation folds for the titanic dataset.  It return the row indices corresponding to train and test.
-# We set random_state to ensure we get the same splits every time we run this.
-kf = KFold(titanic.shape[0], n_folds=3, random_state=1)
-
-predictions = []
-
-
-# In[ ]:
-
-
-for train, test in kf:
-    # The predictors we're using the train the algorithm.  Note how we only take the rows in the train folds.
-    train_predictors = (titanic[predictors].iloc[train,:])
-    # The target we're using to train the algorithm.
-    train_target = titanic[target].iloc[train]
-    # Training the algorithm using the predictors and target.
-    alg.fit(train_predictors, train_target)
-    # We can now make predictions on the test fold
-    test_predictions = alg.predict(titanic[predictors].iloc[test,:])
-    predictions.append(test_predictions)
-
-
-# In[ ]:
-
-
-predictions = np.concatenate(predictions, axis=0)
-# Map predictions to outcomes (only possible outcomes are 1 and 0)
-predictions[predictions > .5] = 1
-predictions[predictions <=.5] = 0
-
-
-accuracy=sum(titanic["Survived"]==predictions)/len(titanic["Survived"])
-accuracy
-
-
-# *Logistic Regression*
-# -------------------
-
-# In[ ]:
-
-
-from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import ShuffleSplit
-
-predictors = ["Pclass", "Sex", "Fare", "Embarked","Deck","Age",
-              "FsizeD", "NlengthD","Title","Parch"]
-
-# Initialize our algorithm
-lr = LogisticRegression(random_state=1)
-# Compute the accuracy score for all the cross validation folds.
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-
-scores = cross_val_score(lr, titanic[predictors], 
-                                          titanic["Survived"],scoring='f1', cv=cv)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# *Random Forest *
-# -------------------
-
-# In[ ]:
-
-
-from sklearn import cross_validation
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.cross_validation import KFold
-from sklearn.model_selection import cross_val_predict
-
-import numpy as np
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD","NameLength", "FsizeD", "Title","Deck"]
-
-# Initialize our algorithm with the default paramters
-# n_estimators is the number of trees we want to make
-# min_samples_split is the minimum number of rows we need to make a split
-# min_samples_leaf is the minimum number of samples we can have at the place where a tree branch ends (the bottom points of the tree)
-rf = RandomForestClassifier(random_state=1, n_estimators=10, min_samples_split=2, 
-                            min_samples_leaf=1)
-kf = KFold(titanic.shape[0], n_folds=5, random_state=1)
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-
-predictions = cross_validation.cross_val_predict(rf, titanic[predictors],titanic["Survived"],cv=kf)
-predictions = pd.Series(predictions)
-scores = cross_val_score(rf, titanic[predictors], titanic["Survived"],
-                                          scoring='f1', cv=kf)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# In[ ]:
-
-
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD","NameLength", "FsizeD", "Title","Deck","TicketNumber"]
-rf = RandomForestClassifier(random_state=1, n_estimators=50, max_depth=9,min_samples_split=6, min_samples_leaf=4)
-rf.fit(titanic[predictors],titanic["Survived"])
-kf = KFold(titanic.shape[0], n_folds=5, random_state=1)
-predictions = cross_validation.cross_val_predict(rf, titanic[predictors],titanic["Survived"],cv=kf)
-predictions = pd.Series(predictions)
-scores = cross_val_score(rf, titanic[predictors], titanic["Survived"],scoring='f1', cv=kf)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# Important features
-# ==================
-
-# In[ ]:
-
-
-importances=rf.feature_importances_
-std = np.std([rf.feature_importances_ for tree in rf.estimators_],
-             axis=0)
-indices = np.argsort(importances)[::-1]
-sorted_important_features=[]
-for i in indices:
-    sorted_important_features.append(predictors[i])
-#predictors=titanic.columns
-plt.figure()
-plt.title("Feature Importances By Random Forest Model")
-plt.bar(range(np.size(predictors)), importances[indices],
-       color="r", yerr=std[indices], align="center")
-plt.xticks(range(np.size(predictors)), sorted_important_features, rotation='vertical')
-
-plt.xlim([-1, np.size(predictors)]);
-
-
-# *Gradient Boosting*
-# -------------------
-
-# In[ ]:
-
-
-import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier
-
-from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.cross_validation import KFold
-get_ipython().run_line_magic('matplotlib', 'inline')
 import matplotlib.pyplot as plt
-#predictors = ["Pclass", "Sex", "Age", "Fare",
- #             "FsizeD", "Embarked", "NlengthD","Deck","TicketNumber"]
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD", "FsizeD","NameLength","Deck","Embarked"]
-# Perform feature selection
-selector = SelectKBest(f_classif, k=5)
-selector.fit(titanic[predictors], titanic["Survived"])
-
-# Get the raw p-values for each feature, and transform from p-values into scores
-scores = -np.log10(selector.pvalues_)
-
-indices = np.argsort(scores)[::-1]
-
-sorted_important_features=[]
-for i in indices:
-    sorted_important_features.append(predictors[i])
-
-plt.figure()
-plt.title("Feature Importances By SelectKBest")
-plt.bar(range(np.size(predictors)), scores[indices],
-       color="seagreen", yerr=std[indices], align="center")
-plt.xticks(range(np.size(predictors)), sorted_important_features, rotation='vertical')
-
-plt.xlim([-1, np.size(predictors)]);
 
 
 # In[ ]:
 
 
-from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
-predictors = ["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck"]
+from datetime import datetime, timedelta
+from collections import OrderedDict
 
-# Initialize our algorithm
-lr = LogisticRegression(random_state=1)
-# Compute the accuracy score for all the cross validation folds.  
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-scores = cross_val_score(lr, titanic[predictors], titanic["Survived"], scoring='f1',cv=cv)
-print(scores.mean())
-
-
-# *AdaBoost *
-# --------------------
 
 # In[ ]:
 
 
-from sklearn.ensemble import AdaBoostClassifier
-predictors = ["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck","TicketNumber"]
-adb=AdaBoostClassifier()
-adb.fit(titanic[predictors],titanic["Survived"])
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-scores = cross_val_score(adb, titanic[predictors], titanic["Survived"], scoring='f1',cv=cv)
-print(scores.mean())
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-
-# Maximum Voting ensemble and Submission
-# =======
 
 # In[ ]:
 
 
-predictions=["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck","NameLength","TicketNumber"]
-from sklearn.ensemble import VotingClassifier
-eclf1 = VotingClassifier(estimators=[
-        ('lr', lr), ('rf', rf), ('adb', adb)], voting='soft')
-eclf1 = eclf1.fit(titanic[predictors], titanic["Survived"])
-predictions=eclf1.predict(titanic[predictors])
-predictions
-
-test_predictions=eclf1.predict(titanic_test[predictors])
-
-test_predictions=test_predictions.astype(int)
-submission = pd.DataFrame({
-        "PassengerId": titanic_test["PassengerId"],
-        "Survived": test_predictions
-    })
-
-submission.to_csv("titanic_submission.csv", index=False)
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ***To do: stacking!. Watch this space…***
+# # 1. Files
+# ### `data.json` / `data.csv`
+# 
+#  * **date (str)** : the date of publication (or last update) of the deck.
+#  * **user (str)** : the user who uploaded the deck.
+#  * **deck_class (str)** : one of the nine character class in Hearthstone (`Druid`, `Priest`, ...).
+#  * **deck_archetype (str)** : the theme of deck labelled by the user (`Aggro Druid`, `Dragon Priest`, ...).
+#  * **deck_format (str)** : the game format of the deck on the day data was recorded (`W` for "Wild" or `S` for "Standard").
+#  * **deck_set (str)** : the latest expansion published prior the deck publication (`Naxxramas`, `TGT Launch`, ...).
+#  * **deck_id (int)** : the ID of the deck.
+#  * **deck_type (str)** : the type of the deck labelled by the user :
+#     - *Ranked Deck* : a deck played on ladder.
+#     - *Theorycraft* : a deck built with unreleased cards to get a gist of the future metagame.
+#     - *PvE Adventure* : a deck built to beat the bosses in adventure mode.
+#     - *Arena* : a deck built in arena mode.
+#     - *Tavern Brawl* : a deck built for the weekly tavern brawl mode.
+#     - *Tournament* : a deck brought at tournament by a pro-player.
+#     - *None* : the game type was not mentioned.
+#     
+#  * **rating (int)** : the number of upvotes received by that deck.
+#  * **title (str)** : the name of the deck.
+#  * **craft_cost (int)** : the amount of dust (in-game craft material) required to craft the deck.
+#  * **cards (list)** : a list of 30 card ids. Each ID can be mapped to the card description using the reference file.
+# 
+# ### `refs.json` 
+# Contains the reference to the cards played in Hearthstone. This file was originally proposed on [HearthstoneJSON](https://hearthstonejson.com/). Each record features a lot of informations about the cards, I'll list the most important :
+# 
+# * **dbfId (int)** : the id of the card (the one used in `data.json`).
+# * **rarity (str)** : the rarity of the card (`EPIC`, `RARE`, ...).
+# * **cardClass (str)** : the character class (`WARLOCK`, `PRIEST`, ...).
+# * **artist (str)** : the artist behind the card's art.
+# * **collectible (bool)** : whether or not the card can be collected.
+# * **cost (int)** : the card play cost.
+# * **health (int)** : the card health (if it's a minion).
+# * **attack (int)** : the card attack (if it's a minion).
+# * **name (str)** : the card name.
+# * **flavor (str)** : the card's flavor text.
+# * **set (str)** : the set / expansion which featured this card.
+# * **text (int)** : the card's text.
+# * **type (str)** : the card's type (`MINION`, `SPELL`, ...).
+# * **race (str)** : the card's race (if it's a minion).
+# * **set (str)** : the set / expansion which featured this card.
+# * ...
 
-# ***Hope you find it useful. :)please upvote***
+# In[ ]:
+
+
+with open('../input/data.json') as file:
+    data = json.load(file)
+
+
+# In[ ]:
+
+
+with open('../input/refs.json') as file:
+    refs = json.load(file)
+
+
+# In[ ]:
+
+
+# to dataframe
+decks = pd.DataFrame(data)
+
+
+# In[ ]:
+
+
+# transform date strings to datetime objects
+decks['date'] = pd.to_datetime(decks['date'])
+
+
+# In[ ]:
+
+
+# reformat the card column
+card_col = ['card_{}'.format(str(i)) for i in range(30)]
+cards = pd.DataFrame([c for c in decks['cards']], columns=card_col)
+cards = cards.apply(np.sort, axis=1)
+decks = pd.concat([decks, cards], axis=1)
+decks = decks.drop('cards', axis=1)
+
+
+# In[ ]:
+
+
+# remove tabs and newlines from user names
+decks['user'] = decks['user'].apply(str.strip)
+
+
+# In[ ]:
+
+
+# delete unnecessary variables
+del(data)
+del(cards)
+
+
+# # 2. Cleaning
+# I included a few safety nets in the scraping pipeline in order to collect playable decks only (decks containing exactly 30 cards), but I might have downloaded noisy data without noticing. Let's check that out!
+
+# In[ ]:
+
+
+raw_length = len(decks)
+print ('Number of decks :', raw_length)
+
+
+# ### 2.1. Dates
+# First thing we want to check is the consistency in the publication date of the decks. Let's see when the dataset starts and when it ends :
+
+# In[ ]:
+
+
+print ('First deck :', min(decks['date']))
+print ('Last deck :', max(decks['date']))
+
+
+# Given that the game was released worldwide on March 11, 2014, it seems a bit weird to have decks built prior to this date. I guess that they were built during the beta by testers. Because who knows what happened back then, it safer to get rid of these decks for now :
+
+# In[ ]:
+
+
+release_date = datetime(2014, 3, 11)
+decks = decks[decks['date'] > release_date]
+
+
+# In[ ]:
+
+
+# now let's check the dates
+print ('First deck :', min(decks['date']))
+print ('Last deck :', max(decks['date']))
+
+
+# In[ ]:
+
+
+prc_left = round(len(decks) / raw_length * 100)
+print ('Decks removed :', raw_length - len(decks))
+print ('Original dataset left :', prc_left, '%')
+
+
+# If we have unique ids, we don't have duplicates. Let's look for potential duplicates :
+
+# In[ ]:
+
+
+assert len(decks['deck_id'].unique()) == len(decks)
+
+
+# ### 2.2. Game type
+# Hearthstone has two main types of ladder games : "Standard" (where only recent and basic cards are allowed) and "Wild" (where all cards are allowed). Expansion cards rotate every year when new material is proposed by Blizzard. This means that an expansion card that was part of the "Standard" set last year has moved to the "Wild" set now. 
+# 
+# Here, we will just assume that all decks are "Standard" :
+
+# In[ ]:
+
+
+# decks = decks[decks['deck_format'] == 'W']
+
+
+# ### 2.3. Deck Archetypes
+# A few decks are marked as "Edit" ; I don't know what it means so I prefer to change it back to "Unknown" :
+
+# In[ ]:
+
+
+decks.loc[(decks['deck_archetype'] == 'Edit'), 'deck_archetype'] = 'Unknown'
+
+
+# In[ ]:
+
+
+# duplicates check
+assert len(decks['deck_id'].unique()) == len(decks)
+
+
+# ### 2.4. Deck Types
+# Now let's have a look a the type of decks included in the dataset :
+
+# In[ ]:
+
+
+decks['deck_type'].value_counts()
+
+
+# At the moment, we are interested in decks played on ladder only, so I think we can keep "Ranked Deck" and "Tournament". Tournament decks rarely differ from decks played on ladder (because everyone looks for the most competitive decks).
+# 
+# By dropping the "None" and "Theorycraft" categories, we lose a lot of data, which is annoying. There are two ways to save a few observations :
+# 
+# * Looking for keywords in the titles (like "Ranked") and keep the records with these words.
+# * Keep the decks that are already duplicates of "Ranked Decks".
+# 
+# I think that the later option is safer because we are less likely to include garbage into the final data set. Let's give it a try :
+
+# In[ ]:
+
+
+# get the none and ranked decks
+none_decks = decks[decks['deck_type'] == 'None']
+ranked_decks = decks[decks['deck_type'].isin(['Ranked Deck', 'Tournament'])]
+
+
+# In[ ]:
+
+
+# looks for none ids with cards already in ranked
+none_ids = pd.merge(none_decks, ranked_decks, on=card_col, how='inner')['deck_id_x']
+
+
+# In[ ]:
+
+
+# add the none_ids decks to ranked
+none_could_be_ranked = none_decks[none_decks['deck_id'].isin(none_ids)]
+ranked_decks = pd.concat([none_could_be_ranked, ranked_decks])
+
+
+# In[ ]:
+
+
+# the same for theorycraft decks
+theory_decks = decks[decks['deck_type'] == 'Theorycraft']
+theory_decks_ids = pd.merge(theory_decks, ranked_decks, on=card_col, how='inner')['deck_id_x']
+theory_could_be_ranked = theory_decks[theory_decks['deck_id'].isin(theory_decks_ids)]
+decks = pd.concat([theory_could_be_ranked, ranked_decks])
+
+
+# In[ ]:
+
+
+# duplicates check
+assert len(decks['deck_id'].unique()) == len(decks)
+
+
+# In[ ]:
+
+
+prc_left = round(decks.shape[0] / raw_length * 100)
+print ('Decks removed :', raw_length - decks.shape[0])
+print ('Original dataset left :', prc_left, '%')
+
+
+# So, after cleaning our set contains "None" and "Theorycraft" decks that could also be found in "Ranked" (so we consider them as ranked decks). We got rid of 38% of the original set. 
+
+# # 3. Exploration
+# In order to get insights from this data set, I'll be mosting looking at the number of submissions. Posting a deck on Hearthpwn doesn't mean that this deck was actually played in game (we don't have access to Blizzard's data), but I'll assume that it constitutes a reasonable proxy.
+
+# ### 3.1. Timely Deck Submissions
+# Let's have a look at the weekly submissions recorded on Hearthpwn. I wonder how the release of a new expansion motivates players at trying new decks. It should be possible to retrieve the release dates from the data set, but I did a little bit of research to find the official dates.
+
+# In[ ]:
+
+
+release_dates = {
+    'Explorers' : datetime(2015, 11, 12),
+    'Old Gods' : datetime(2016, 4, 26),
+    'Classic Nerfs' : datetime(2016, 3, 14),
+    'Yogg Nerf' : datetime(2016, 10, 3),
+    'Karazhan' : datetime(2016, 8, 11),
+    'Gadgetzan' : datetime(2016, 12, 1),
+    'Naxx Launch' : datetime(2014, 7, 22),
+    'Live Patch 5506' : datetime(2014, 5, 28),
+    'Undertaker Nerf' : datetime(2015, 1, 29),
+    'Blackrock Launch' : datetime(2015, 4, 2),
+    'GvG Launch' : datetime(2014, 12, 8),
+    'TGT Launch' : datetime(2015, 8, 24),
+    'Warsong Nerf' : datetime(2016, 1, 16),
+    'Live Patch 4973' : datetime(2014, 3, 14),
+    'Aggro Downfall' : datetime(2017, 2, 28),
+    # 'Beta Patch 4944' : datetime(2014, 3, 11),
+    # 'GvG Prelaunch' : datetime(2014, 12, 5)
+}
+
+
+# In[ ]:
+
+
+date_decks = decks.set_index(pd.DatetimeIndex(decks['date'])).sort_index()
+
+
+# In[ ]:
+
+
+weekly_submissions = date_decks.resample('W')['date'].count()
+
+
+# In[ ]:
+
+
+fig = plt.figure()
+ax = weekly_submissions.plot(figsize=(25, 10), fontsize=15)
+
+for key, date in release_dates.items():
+    ax.axvline(date, color='green', alpha=.35)
+    ax.text(date, 12000, key, rotation=90, fontsize=15)
+
+
+# **Observation** : each expansion/adventure seems to be followed by a burst in deck submissions. Expansions contain much more news cards (~130) than adventures (~30-40), which may explain why more decks are submitted on expansions launch compared to adventures. *Wispers of the Old Gods* seem to have been particularily inspiring! Notice that each peak is followed by a sharp decrease in submissions over the next weeks, which suggests that the meta game stabilizes over time and new content is required to maintain the players involved.
+
+# ### 3.2. Most played class
+# We can also have a look at the character classes favored by the players. Hearthstone has nine different character classes : *Mage*, *Priest*, *Paladin*, *Warrior*, *Shaman*, *Druid*, *Rogue*, *Hunter* and *Warlock* :
+
+# In[ ]:
+
+
+class_count = decks['deck_class'].value_counts()
+class_count_df = class_count.to_frame().reset_index()
+
+
+# In[ ]:
+
+
+colors = {
+    'Druid' : 'sandybrown',
+    'Hunter' : 'green',
+    'Mage' : 'royalblue',
+    'Paladin' : 'gold',
+    'Priest' : 'lightgrey',
+    'Rogue' : 'darkgrey',
+    'Shaman' : 'darkblue',
+    'Warlock' : 'purple',
+    'Warrior' : 'firebrick',
+}
+
+# sort colors to make plotting easier
+colors = OrderedDict(sorted(colors.items()))
+
+
+# In[ ]:
+
+
+class_count_df['color'] = class_count_df['index'].replace(colors)
+
+
+# In[ ]:
+
+
+class_count_df.plot.pie(
+    y='deck_class', 
+    labels=class_count_df['index'], 
+    colors=class_count_df['color'],
+    autopct='%.2f', 
+    fontsize=15,
+    figsize=(10, 10),
+    legend=False,
+)
+
+
+# **Observation** : All classes seem to be equally represented in the past two years. There is a slight preference for *Mage* and *Priest* decks. However, this number is likely to have evolved over time. Some class might have been popular at so point, but not popular anymore after a given expansion.
+
+# In[ ]:
+
+
+weekly_classes = date_decks.groupby('deck_class').resample('W').size().T
+weekly_classes_rf = weekly_classes.divide(weekly_classes.sum(axis=1), axis=0)
+
+ax = weekly_classes_rf.plot(
+    kind='area', 
+    figsize=(20, 12), 
+    color=colors.values(), 
+    alpha=.35,
+    legend=False,
+    fontsize=15,
+)
+
+ax.set_ylim([0, 1])
+
+for key, date in release_dates.items():
+    ax.axvline(date, color='grey')
+    ax.text(date, 1.2, key, rotation=90, fontsize=15)
+
+
+# **Observation** : it's difficult to identify clear trends from this visualization without looking at the rise and fall of specific deck archetypes. But it is still possible to spot popularity bursts in certain classes after a given content update, for instance :
+# 
+# * *Warrior* got very popular right after *Blackrock Mountain* launch and dominated the meta after *Whispers of the Old Gods*
+# * *Paladin* was trending after *TGT* was released and knew a peak after *Karazhan*.
+# * *Shaman* inspired players after *Gadgetzan*.
+# * *Warlock* was mostly played around *Naxxramas*.
+
+# ### 3.3. Most rated decks / deck builders
+# Hearthpwn offers the possibility to rate players' decks. A quick look at the rating distribution relative frequencies suggests that the vast majority of the decks do not get any ratings :
+
+# In[ ]:
+
+
+rating_count = decks['rating'].value_counts(normalize=True).sort_index()
+
+
+# In[ ]:
+
+
+rating_count.head(n=10)
+
+
+# Let's have a look at the deck builders. Maybe the number of submissions is more informative :
+
+# In[ ]:
+
+
+users = decks.groupby('user')['rating'].count().sort_values(ascending=False)
+
+
+# In[ ]:
+
+
+users.head(n=30).plot(kind='bar', figsize=(20, 10), fontsize=15, color=sns.color_palette())
+
+
+# **Observation** : the top submitters are pro-players, streamers & popular YouTubers. This is not really surprising since publishing competitive (or fun) decks is a way to increase popularity and attract new viewers. Hearthpwn has also a feature allowing users to assign a deck to another user. So it is possible that many of these decks were compiled and assigned by fans or followers.
+
+# ### 3.4. Most played archetype
+
+# In[ ]:
+
+
+# total of differents archetypes
+decks['deck_archetype'].value_counts().size
+
+
+# It seems that we have a total of 74 deck archetypes (75 minus the "unknown" category). Note that Hearthpwn seems to have implemented the feature allowing users to specify the deck archetype around *Whispers of the Old Gods*, which means that, unless a player updates his old decks, deck archetype remains "Unknown" for pre-*Old Gods* decks. So the data we will explore now represent about a year of deck submissions. Let's have a look at the average rating for each archetype :
+
+# In[ ]:
+
+
+known = decks[decks['deck_archetype'] != 'Unknown']
+counts = known.groupby(['deck_class', 'deck_archetype']).size().reset_index()
+
+
+# In[ ]:
+
+
+for i, group in counts.groupby('deck_class'):
+    fig = plt.figure()
+    group.sort_values(0, ascending=False).plot(
+        kind='bar', 
+        x='deck_archetype', 
+        title=str(i),
+        color=colors[str(i)],
+        legend=False,
+        figsize=(15, 6),
+        fontsize=15,
+    )
+
+
+# **Observation** : this overview of the decks archetypes shows that some classes tend to generate more diverse decks than others. For instance, *Rogue*, *Priest* and *Druid* show at least 10 differents archetypes, whereas *Hunter* has only 6. Some archetypes seem to dominate their classes, like *Control Warrior* which is clearly over-represented  or *Midrange Shaman*, and some archetypes represent fringe or meme types of decks, like *Mech Shaman* who almost never saw play. This means that the data we have to deal with is highly imbalanced.
+# 
+# Moreover, this overview does not inform us about the evolution of archetypes in time. Some archetypes that seem to be less popular now might have been very popular earlier one (*Oil Rogue* for instance) but we don't have that information since a lot of the decks archetypes are marked as "Unknown". In order to get a better idea of the evolution of the trends, we might want to try to infer the archetype from the cards in the deck.
+# 
+# I'm going to try to classify the decks using a Random Forest algorithm. The 30 cards of the decks constitute the features we are going to work with.
+
+# # 4. Archetype Classification
+
+# ### 4.1. Random Forest (first-attempt)
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix, classification_report, f1_score, cohen_kappa_score
+from sklearn.model_selection import train_test_split
+
+
+# In[ ]:
+
+
+def predict_archetype(class_name, decks, card_col, n_trees=500, max_feats=5, log=True):
+
+    # known / unknown split
+    dclass = decks[decks['deck_class'] == class_name]
+    known = dclass[dclass['deck_archetype'] != 'Unknown']
+    unknown = dclass[dclass['deck_archetype'] == 'Unknown']
+
+    # data / target split
+    X = known[card_col]
+    y = known['deck_archetype']
+
+    # train / test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.5)
+    
+    # random forest
+    clf = RandomForestClassifier(
+        n_estimators=n_trees, 
+        max_features=max_feats, 
+        class_weight=None
+    )
+    
+    clf.fit(X_train, y_train)
+    pred = clf.predict(X_test)
+    
+    # metrics
+    conf_matrix = pd.DataFrame(
+        confusion_matrix(y_test, pred), 
+        columns=clf.classes_, 
+        index=clf.classes_
+    )
+    
+    if log:
+        print (classification_report(y_test, pred))
+        # print (cohen_kappa_score(y_test, pred))
+        # print (conf_matrix)
+    
+    return clf
+
+
+# In[ ]:
+
+
+# save the classifiers each class
+clfs = {}
+for c in decks['deck_class'].unique():
+    clfs[c] = predict_archetype(c, decks, card_col)
+
+
+# **Observation** : Meh. Even though Random Forests might be the most well suited algorithm for this task, the accuracy of the prediction is not satisfactory. Let's have a closer look the predictions produced by one of our classifiers (paladin, for instance) :
+
+# In[ ]:
+
+
+paladin_clf = clfs['Paladin']
+
+
+# In[ ]:
+
+
+paladin_set = decks[decks['deck_class'] == 'Paladin']
+paladin_ukn = paladin_set[paladin_set['deck_archetype'] == 'Unknown']
+paladin_ukn.is_copy = False
+
+
+# In[ ]:
+
+
+pred = paladin_clf.predict(paladin_ukn[card_col])
+
+
+# In[ ]:
+
+
+paladin_ukn['deck_archetype'] = pred
+
+
+# In[ ]:
+
+
+paladin_ukn = paladin_ukn.set_index(pd.DatetimeIndex(paladin_ukn['date'])).sort_index()
+weekly_paladin = paladin_ukn.groupby('deck_archetype').resample('W').size().reset_index()
+weekly_paladin_piv = weekly_paladin.pivot(index='date', columns='deck_archetype', values=0).fillna(0)
+weekly_paladin_rf = weekly_paladin_piv.divide(weekly_paladin_piv.sum(axis=1), axis=0)
+
+ax = weekly_paladin_rf.plot(
+    kind='area', 
+    figsize=(20, 5), 
+    legend=True,
+    fontsize=15,
+    color=sns.color_palette('Set3', 10)
+)
+
+ax.set_ylim([0, 1])
+
+for key, date in release_dates.items():
+    ax.axvline(date, color='grey')
+    ax.text(date, 1.5, key, rotation=90, fontsize=15)
+
+
+# **Observation** : well, indeed, it's not really accurate. *Reno Pally* was only introduced in the *Explorers* pack (so all archetypes labelled as such prior to this adventure are errors) and *N'Zoth* is a card from... *Old Gods*. Yet, those who have a little experience of the game can aknownledge that *N'Zoth Paladin* was indeed a big deal after *Old Gods* and *Secret Pally* became the plague after TGT (which is also correct).
+# 
+# So it seems that our algorithm does not put enough weight on the cards that constitute the core of the archetypes. There are probably several explanations for that : 
+# 
+# * **Imbalance** : the archetypes are just too imbalanced to yield good results. We can try to over-sample the classes with a very low number of observations (using SMOTE algorithm) to improve our model and boost recall scores.
+# 
+# * **Card Rotation** : as we have noticed earlier, all expansions / adventure cards rotate from the "Standard" format to the "Wild" format. This between-expansion variance might contribute to miss-classification. For instance a *Fatigue Mage* played in "Standard" today might very well contain more cards from the *Freeze Mage* in the *Wild* format than it's current *Wild* version, so both get confused easily (I'm making this up, but you get the idea). This could be particularily important since most of the labeled decks appeared after *Old Gods* on Hearthpwn. I think giving our algorithm information about the card rotation might improve our prediction. One way to achieve this is to build new features based on the number of card in the deck belonging to each expansion. The logic here is that associating *N'Zoth* decks (for instance) to post-*Old Gods* cards could reduce miss-identification in pre-*Old Gods* archetypes. Let's try this.
+
+# ### 4.2. Random Forest (with resampling & feature engineering)
+
+# In[ ]:
+
+
+from imblearn.over_sampling import SMOTE
+
+
+# In[ ]:
+
+
+# building a card id - set mapping from refs file
+refs_dict = {c.get('dbfId') : c.get('set') for c in refs}
+
+
+# In[ ]:
+
+
+def multi_smote(X, y, kind='svm'):
+    
+    # regroup observations by classes
+    full = pd.concat([X, y], axis=1)
+    by_arch = full.groupby('deck_archetype')
+
+    samples = []
+    
+    for name, group in by_arch:
+        
+        # create a 2-classes dataset
+        all_but_one = full[full['deck_archetype'] != name]
+        all_but_one.is_copy = False
+        all_but_one['deck_archetype'] = 'Other'
+        
+        toSMOTE = pd.concat([group, all_but_one])
+        _X = toSMOTE[X.columns]
+        _y = toSMOTE['deck_archetype']
+        
+        # resample with 2 classes
+        sm = SMOTE(kind=kind)
+        X_re, y_re = sm.fit_sample(_X, _y)
+        re = np.column_stack([X_re, y_re])
+        
+        # remove reference to other
+        re = re[~(re == 'Other').any(axis=1)]
+    
+        samples.append(re)
+        
+    resampled = np.concatenate(samples)
+    
+    return resampled[:, :len(X.columns)], resampled[:, -1]
+
+
+# Here is the updated function including SMOTE resampling and set features :
+
+# In[ ]:
+
+
+def predict_archetype(class_name, decks, card_col, refs, n_trees=500, max_feats=5, log=True):
+
+    # known / unknown split
+    dclass = decks[decks['deck_class'] == class_name]
+    known = dclass[dclass['deck_archetype'] != 'Unknown']
+    unknown = dclass[dclass['deck_archetype'] == 'Unknown']
+
+    # data / target split
+    X = known[card_col]
+    y = known['deck_archetype']
+    
+    # adding expansions counts
+    set_df = known[card_col].apply(pd.Series.replace, to_replace=refs_dict)
+    counts = set_df.apply(pd.value_counts, axis=1).fillna(0)
+    X = pd.concat([X, counts], axis=1)
+
+    # train / test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=.5)
+    
+    # over-sampling the training set
+    X_train, y_train = multi_smote(X_train, y_train)
+    
+    # random forest
+    clf = RandomForestClassifier(
+        n_estimators=n_trees, 
+        max_features=max_feats, 
+        class_weight=None
+    )
+    
+    clf.fit(X_train, y_train)
+    pred = clf.predict(X_test)
+    
+    # metrics
+    conf_matrix = pd.DataFrame(
+        confusion_matrix(y_test, pred), 
+        columns=clf.classes_, 
+        index=clf.classes_
+    )
+    
+    if log:
+        print (classification_report(y_test, pred))
+        # print (conf_matrix)
+        # print (cohen_kappa_score(y_test, pred))
+        # print (clf.feature_importances_)
+    
+    return clf
+
+
+# In[ ]:
+
+
+# save the classifiers each class
+clfs = {}
+for c in decks['deck_class'].unique():
+    clfs[c] = predict_archetype(c, decks, card_col, refs_dict)
+
+
+# **Observation** : resampling and adding new features slighly improved the recall score for small classes as expected, but this improvement is rather small (and it sometimes reduces overall performances on some subsets of the data). There are are other approachs that we can try :
+# 
+# * **Disregard fringe deck archetypes** : who plays *Water Rogue* anyway? To improve the prediction, we could just get rid of the archetypes with less than, say, 100 decks.
+# 
+# * **Group the data by expansion** : to reduce the variance induced by new cards, we can train a different model for each expansion time-span ; but this is obviously less interesting than a general model.
+# 
+# * **Go unsupervised** : we can consider that the labels reported by Hearthpwn users do not represent accuratelly the variety of archetypes in Hearthstone. So we could group the decks the way we want to see other trends emerge, using LDA algorithm, for instance. Let's try this option.
+
+# ### 4.3. LDA
+# LDA is generally used to discover topics among text samples. When you think about it, our decks can also be considered like texts with similar or different words (cards). Decks that share the same cards represent a same topic (archetype). 
+
+# In[ ]:
+
+
+from gensim import corpora, models
+
+
+# In[ ]:
+
+
+# building a card id - set mapping from refs file
+names_dict = {c.get('dbfId') : c.get('name') for c in refs}
+
+# we'll test paladin, as an example
+subset = decks[decks['deck_class'] == 'Paladin']
+names_df = subset[card_col].apply(pd.Series.replace, to_replace=names_dict)
+lists = names_df.values.tolist()
+dictionary = corpora.Dictionary(lists)
+corpus = [dictionary.doc2bow(l) for l in lists]
+
+# we'll consider the 10 most important topics, as a starter
+ldamodel = models.ldamodel.LdaModel(corpus, num_topics=10, id2word = dictionary, passes=20)
+
+topics = ldamodel.print_topics(num_topics=10, num_words=30)
+
+def get_topic(row):
+    '''This function returns the most likely archetype'''
+    topics = ldamodel.get_document_topics(row)
+    best = max(topics, key=lambda x: x[1])
+    return best[0]
+
+# get the archetypes based on card BOW
+pred = [get_topic(d) for d in corpus]
+subset.is_copy = False
+subset['deck_archetype'] = pred
+
+
+# In[ ]:
+
+
+paladin_ukn = subset.set_index(pd.DatetimeIndex(subset['date'])).sort_index()
+weekly_paladin = paladin_ukn.groupby('deck_archetype').resample('W').size().reset_index()
+weekly_paladin_piv = weekly_paladin.pivot(index='date', columns='deck_archetype', values=0).fillna(0)
+weekly_paladin_rf = weekly_paladin_piv.divide(weekly_paladin_piv.sum(axis=1), axis=0)
+
+ax = weekly_paladin_rf.plot(
+    kind='area', 
+    figsize=(20, 8), 
+    legend=True,
+    fontsize=15,
+    color=sns.color_palette('Set3', 10)
+)
+
+ax.set_ylim([0, 1])
+
+for key, date in release_dates.items():
+    ax.axvline(date, color='grey')
+    ax.text(date, 1.3, key, rotation=90, fontsize=15)
+
+
+# **Observation** : now we're talking! Although not perfect, the categories found by the LDA model make more sense. Upon closer inspection, a Hearthstone player will recognize popular decks among the numbers :
+
+# In[ ]:
+
+
+# The infamous secret-paladin from TGT.
+topics[5]
+
+
+# In[ ]:
+
+
+# A mix of several types of aggressive paladin decks
+topics[0]
+
+
+# In[ ]:
+
+
+# a classic post-Naxxramas midrange paladin
+topics[9]
+
+
+# In[ ]:
+
+
+# Buff paladin
+topics[8]
+
+
+# In[ ]:
+
+
+# Murloc paladin
+topics[3]
+
+
+# In[ ]:
+
+
+# N'zoth paladin
+topics[4]
+
+
+# In[ ]:
+
+
+# Dragon paladin (starting with Blackrock)
+topics[2]
+
+
+# # 5. Conclusion
+# We have seen that archetypes selected by Hearthpwn users represent only the more recent versions of the decks, which means that older decks hardly felt into theses categories. LDA gave us a better idea of the life and death of various archetypes, but requires also some knowledge of the game.
+# 
+# This data set is a lot of fun and there is still a lot to do (regarding the deck ratings, the craft cost, etc.). Thanks for the read!

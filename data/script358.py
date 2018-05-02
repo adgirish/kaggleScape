@@ -1,549 +1,311 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-import pandas as pd
-import numpy as np
-
-
-# <h1>Introduction</h1>
+# # INTRODUCTION
+# In this tutorial, we are going to learn basics of bokeh library. Bokeh is interactive visualization library.
+# <br> I divide bokeh tutorial into 2 parts. Because kaggle has problem while running bokeh that cause crash in browser.
+# 1. PART 1:
+#     1. Basic Data Exploration with Pandas
+#     1. Explanation of Bokeh Packages
+#     1. Plotting with Glyphs
+#     1. Additional Glyps
+#     1. Data Formats
+#     1. Customizing Glyphs
+#     1. Layouts
+#     1. Linking Plots
+# 1. PART 2: https://www.kaggle.com/kanncaa1/interactive-bokeh-tutorial-part-2/editnb
+#     1. Callbacks 
+#         * Slider
+#         * dropdowns
 # 
-# In this tutorial I'd like to illustrate some advanced uses of pipelines. Some readers might have used them in work already, or could be totally unfamiliar with them - no worries, I'll cover basic uses as well as some advanced tricks.
 
-# <h2>Advantages of pipelines</h2>
-# 1. Use of pipelines gives you a kind of meta-language to describe your model and abstract from some implementation details.
-# 2. With pipelines, you don't need to carry test dataset transformation along with your train features - this is taken care of automatically.
-# 3. Hyperparameter tuning made easy - set new parameters on any estimator in the pipeline, and refit - in 1 line. Or use GridSearchCV on the pipeline.
+# In[ ]:
 
-# <h2>Simple illustrations</h2>
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# ##  Basic Data Exploration with Pandas
+# <br>Before everyting, we need to import data with read_csv().
+# <br>In order to make visualization we need to understand data and look whether there are nan values in data or not.
+# <br>We will use pandas library:
+#     * read_csv()
+#     * info()
+#     * head()
 # 
-# Let's start with simple illustrations.
-
-# <h3>Data preparation</h3>
-# 
-# I assume you are familiar with the data structure from other hot tutorials, so I'll be brief here.
 
 # In[ ]:
 
 
-#read the data in
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-
-
-# In[ ]:
-
-
-#encode labels to integer classes
-from sklearn.preprocessing import LabelEncoder
-
-lb = LabelEncoder().fit(train['author'])
-
-#Original labels are stored in a class property
-#and binarized labels correspond to indexes of this array - 0,1,2 in our case of three classes
-lb.classes_
-
-
-# In[ ]:
-
-
-#after transformation the label will look like an array of integer taking values 0,1,2
-lb.transform(train['author'])
-
-
-# Split the thain dataset into two parts: the large one is used for training models,
-# the smaller one serves as a validation dataset - which is not seen during training, but has labels.
-# 
-# Here our new testing data set will be 0.7 of original train dataset (test_size=0.3),
-# we want proportion of classes to be kept in the new test (stratify=train['author']), 
-# and we set the random state for reproducability (random_state=17).
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-
-X_train_part, X_valid, y_train_part, y_valid =    train_test_split(train['text'], 
-                     lb.transform(train['author']), 
-                test_size=0.3,random_state=17, stratify=train['author'])
-
-
-# <h3>Preparing a pipeline</h3>
-# 
-# Let's create our fist model.
-
-# In[ ]:
-
-
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.linear_model import LogisticRegression
-
-pipe1 = Pipeline([
-    ('cv', CountVectorizer()),
-    ('tfidf', TfidfTransformer()),
-    ('logit', LogisticRegression()),
-])
-
-
-# In this pipeline, input data comes first to `CountVectorizer`, which creates a sparse matrix of word counts in each sentence. This matrix then serves as input to `TfidfTransformer` which massages the data and handles it to the LogisticRegression estimator for training and prediction.
-
-# <h3>Fitting the Model</h3>
-# 
-# Our pipe1 object has all the properties of an estimator, so we can treat it as such. Hence, we call the `fit()` method.
-# 
-# Note that Pipeline "knows" that the first tho steps are transformers, so it will only call `fit()` and `transform()` on them, or just `fit_transform()` if it's defined for the class. For the `LogisticRegression` instance - our final model - only `fit()` will be called.
-
-# In[ ]:
-
-
-pipe1.fit(X_train_part, y_train_part)
-
-
-# Let's stop here for a moment and check what we've got. 
-# 
-# 
-# We can look up all the steps of the pipeline, and all the parameters of the steps: 
-
-# In[ ]:
-
-
-pipe1.steps
-
-
-# We can access each step's parameters by name, as well as any of its methods and properties:
-
-# In[ ]:
-
-
-pipe1.named_steps['logit'].coef_
-
-
-# <h3>Making predictions</h3>
-# 
-# This is as easy as with a 'regular' model. We just call `predict()` or `predict_proba()`.
-# Let's use our hold-out data for validation:
-
-# In[ ]:
-
-
-from sklearn.metrics import log_loss
-
-pred = pipe1.predict_proba(X_valid)
-log_loss(y_valid, pred)
-
-
-# <h3>Playing with parameters</h3>
-# That was not a winner! But hold on, we are not there yet!
-# We can improve the score by tuning some parameters. As I have shown earlier, we can check every step's paramters by its name:
-
-# In[ ]:
-
-
-pipe1.named_steps['logit'].get_params()
-
-
-# But we can also check and set them all at once:
-
-# In[ ]:
-
-
-pipe1.get_params()
-
-
-# You can see here, that the Pipeline class has all steps' parameters with their respective names prepended. We can set them as well and fit the model.
-
-# In[ ]:
-
-
-#set_params(cv__lowercase=True)
-pipe1.set_params(cv__min_df=6, 
-                 cv__lowercase=False).fit(X_train_part, y_train_part)
-pred = pipe1.predict_proba(X_valid)
-log_loss(y_valid, pred)
-
-
-# A little bit better! You get the idea. Thinking `GridSearchCV` or `cross_val_score`? Yes, will work on the pipeline too. Fork this kernel and implement it yourself!
-
-# <h3>Playing with a model</h3>
-# Would you like to try another classifier? Naive Bayes seems to be in favor across winning kernels. Replacing a pipeline step is easy:
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import MultinomialNB, BernoulliNB
-
-pipe1 = Pipeline([
-    ('cv', CountVectorizer()),
-    ('tfidf', TfidfTransformer()),
-    #('logit', LogisticRegression()),
-    ('bnb', BernoulliNB()),
-   
-])
+# As you can see from info method. There are 16598.
+# However, Year has 16327 entries. That means Year has NAN value.
+# Also Year should be integer but it is given as float. Therefore we will convert it.
+# In addition, publisher has NAN values.
+data = pd.read_csv("../input/vgsales.csv")
+data.info()
 
 
 # In[ ]:
 
 
-pipe1.fit(X_train_part, y_train_part)
-pred = pipe1.predict_proba(X_valid)
-log_loss(y_valid, pred)
-
-
-# Best score so far! Have more ideas? Fork this kernel and try them out!
-# 
-# Also, for more examples and a gentle intro, read another great Spooky pipeline tutorial: [pipeline for the beginners](https://www.kaggle.com/baghern/a-deep-dive-into-sklearn-pipelines)
-# 
-
-# <h3>Feature Union</h3>
-# 
-# Another strong side of pipelines come from its brother class - `FeatureUnion`. It will help us to combine together some new features that we create as part of EDA. Let's, for example, take a statistics on parts of speech used in each sentence,  and see if it can help to improve the score.
-
-# <h3>NLTK Part-of-Speech tagger</h3>
-# 
-# Suppose we assume that authors could be distinguished by some statistics of use of some parts of speech. May be frequency of conjugatoin is a significant feature? Or use of punctuation?
-# 
-# NLTK can help to tag words in sentences.
-
-# In[ ]:
-
-
-import nltk
-
-text = "And now we are up for 'something' completely different;"
-tokens = nltk.word_tokenize(text)
-tagged = nltk.pos_tag(tokens)
-tagged
-
-
-# Puzzled about all the tags? `CC` means conjunction, coordinated. Take a look at the complete description with `nltk.help.upenn_tagset()` that I don't run here to keep the clutter down.
-# 
-
-# So, in order to tag our text in the pipeline, we will create an estimator class of our own. Don't be afraid - this is simple. We just have to inherit some base classes and overload very few functions that we are actually going to use:
-
-# In[ ]:
-
-
-from sklearn.base import BaseEstimator, TransformerMixin
-from collections import Counter
-
-class PosTagMatrix(BaseEstimator, TransformerMixin):
-    #normalise = True - devide all values by a total number of tags in the sentence
-    #tokenizer - take a custom tokenizer function
-    def __init__(self, tokenizer=lambda x: x.split(), normalize=True):
-        self.tokenizer=tokenizer
-        self.normalize=normalize
-
-    #helper function to tokenize and count parts of speech
-    def pos_func(self, sentence):
-        return Counter(tag for word,tag in nltk.pos_tag(self.tokenizer(sentence)))
-
-    # fit() doesn't do anything, this is a transformer class
-    def fit(self, X, y = None):
-        return self
-
-    #all the work is done here
-    def transform(self, X):
-        X_tagged = X.apply(self.pos_func).apply(pd.Series).fillna(0)
-        X_tagged['n_tokens'] = X_tagged.apply(sum, axis=1)
-        if self.normalize:
-            X_tagged = X_tagged.divide(X_tagged['n_tokens'], axis=0)
-
-        return X_tagged
-
-
-# Now, our new pipeline:
-
-# In[ ]:
-
-
-from sklearn.pipeline import FeatureUnion
-
-pipe2 = Pipeline([
-    ('u1', FeatureUnion([
-        ('tfdif_features', Pipeline([
-            ('cv', CountVectorizer()),
-            ('tfidf', TfidfTransformer()),
-        ])),
-        ('pos_features', Pipeline([
-            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
-        ])),
-    ])),
-    ('logit', LogisticRegression()),
-
-])
+# Lets start with dropping nan values
+data.dropna(how="any",inplace = True)
+data.info()
 
 
 # In[ ]:
 
 
-pipe2.fit(X_train_part, y_train_part)
-pred = pipe2.predict_proba(X_valid)
-log_loss(y_valid, pred)
+# Then convert data from float to int
+data.Year = data.Year.astype(int)
+data.head()     # head method always gives you overview of data.
 
 
-# Not an improvements, but hey, we learned somthing new!
+# ## Explanation of Bokeh Packages
+# For bokeh library, we will use some packages:
+# * output_file: that save our figure with .html extension
+# * show: show the figure
+# * figure: creates empty figure
+# * ColumnarDataSource: Data source of bokeh
+# * HoverTool: like cursor
+# * CategoricalColorMapper: Like a hue in seaborn. If you do not know it look at my seaborn tutorial
+#     * https://www.kaggle.com/kanncaa1/seaborn-for-beginners
+# * Row and column: puts plots in row order or column order in figure
+# * gridplot
+# * Tabs and Panel: Panel is figure for each plot and tab is like button
+#     
 # 
-# By this cell, the reader may already feel the power on the new instruments. Are there downsides? Read on.
-
-# <h2>What gets stuck in the pipes?</h2>
-# 
-# Ok, someone may comment - the way `CounterVectorizer` is usually fit is on the combined train+test datasets, so that the entire vocabulary is learnt. And pipeline accepts one dataset at a time. Yes, this is a problem. The `vocabulary` option won't help us, in case we want to play with ngrams. Is there a work around? Yes. Read on the advanced section
-# 
-# What about stacking? There are some complex worklfows, for example in [Simple Feature Engg Notebook - Spooky Author](https://www.kaggle.com/sudalairajkumar/simple-feature-engg-notebook-spooky-author) it is proposed to stack 7 models! Yes, we can do so with piplines, read on.
-# 
-# 
-# It could be slow to run all transformations all over again! True, and I'll show you the way to save time.
-# 
-
-# <h3>Overloading CountVectorizer class</h3>
 
 # In[ ]:
 
 
-class CountVectorizerPlus(CountVectorizer):
-    def __init__(self, *args, fit_add=None, **kwargs):
-        #this will store a reference to an extra data to include for fitting only
-        self.fit_add = fit_add
-        super().__init__(*args, **kwargs)
-    
-    def transform(self, X):
-        U = super().transform(X)
-        return U
-    
-    def fit_transform(self, X, y=None):
-        if self.fit_add is not None:
-            X_new = pd.concat([X, self.fit_add])
-        else:
-            X_new = X
-        #calling CountVectorizer.fit_transform()
-        super().fit_transform(X_new, y)
+# bokeh packages
+from bokeh.io import output_file,show,output_notebook,push_notebook
+from bokeh.plotting import figure
+from bokeh.models import ColumnDataSource,HoverTool,CategoricalColorMapper
+from bokeh.layouts import row,column,gridplot
+from bokeh.models.widgets import Tabs,Panel
+output_notebook()
 
-        U = self.transform(X)
-        return U
-    
 
+# ## Plotting with Glyphs
+# * Glyphs: visual shapes like circle, square, rectangle or diamond
+# * figure: creates figure
+#     * x_axis_label: label of x axis
+#     * y_axis_label: label of y axis
+#     * tools: tools to move or zoom plot
+#         * pan: slides the plot
+#         * box_zoom: zoom in 
+# * circle: like scatter in matplotlib
+#     * size: size of circles
+#     * color: color
+#     * alpha: opacity
+# * output_file:  that save our figure with .html extension
+# * show: show the figure
+# 
 
 # In[ ]:
 
 
-pipe1a = Pipeline([
-    ('cv', CountVectorizerPlus(fit_add=test['text'])),
-    #('cv', CountVectorizerPlus()),
-    ('tfidf', TfidfTransformer()),
-    #('logit', LogisticRegression()),
-    ('bnb', BernoulliNB()),
-   
-])
-
-
-# In[ ]:
-
-
-pipe1a.fit(X_train_part, y_train_part)
-pred = pipe1a.predict_proba(X_valid)
-print(log_loss(y_valid, pred))
-
-
-# <h3>Stacking with Pipelines</h3>
-# 
-# If you now try to fit the following pipeline below, with intermediate classifiers, whose output you would like to combine and pass onto the final Classifier, it's going to fail. Why? Pipeline does not like to have more than one final estimator. After all, it's called final because, well, it run as a final step in the pipeline.
-# 
-
-# _This cell is Markdown, so the kernel won't stop here._
-# ```
-# pipe3 = Pipeline([
-#     ('u1', FeatureUnion([
-#         ('tfdif_features', Pipeline([
-#             ('cv', CountVectorizer()),
-#             ('tfidf', TfidfTransformer()),
-#             ('tfidf_logit', LogisticRegression()),
-#         ])),
-#         ('pos_features', Pipeline([
-#             ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
-#             ('pos_logit', LogisticRegression()),
-#         ])),
-#     ])),
-#     ('xgb', XGBClassifier()),
-# 
-# ])
-# ```
-
-# Happily, there is a solution. We can _pretend_ that our classifier is a transformer class, while it will 'transform' the input data into class predictions. For this, we make a wrapper around an estimator class:
-
-# In[ ]:
-
-
-#stacking trick
-from sklearn.metrics import get_scorer
-class ClassifierWrapper(BaseEstimator, TransformerMixin):
-    
-    def __init__(self, estimator, verbose=None, fit_params=None, use_proba=True, scoring=None):
-        self.estimator = estimator
-        self.verbose = verbose #True = 1, False = 0, 1 - moderately verbose, 2- extra verbose    
-        if verbose is None:
-            self.verbose=0
-        else:
-            self.verbose=verbose
-        self.fit_params= fit_params
-        self.use_proba = use_proba #whether to use predict_proba in transform
-        self.scoring = scoring # calculate validation score, takes score function name
-        #TODO check if scorer imported?
-        self.score = None #variable to keep the score if scoring is set.
-
-    def fit(self,X,y):
-        fp=self.fit_params
-        if self.verbose==2: print("X: ", X.shape, "\nFit params:", self.fit_params)
-        
-        if fp is not None:
-            self.estimator.fit(X,y, **fp)
-        else:
-            self.estimator.fit(X,y)
-        
-        return self
-    
-    def transform(self, X):
-        if self.use_proba:
-            return self.estimator.predict_proba(X) #[:, 1].reshape(-1,1)
-        else:
-            return self.estimator.predict(X)
-    
-    def fit_transform(self,X,y,**kwargs):
-        self.fit(X,y)
-        p = self.transform(X)
-        if self.scoring is not None:
-            self.score = eval(self.scoring+"(y,p)")
-            #TODO print own instance name?
-            if self.verbose >0: print("score: ", self.score) 
-        return p
-    
-    def predict(self,X):
-        return self.estimator.predict(X)
-    
-    def predict_proba(self,X):
-        return self.estimator.predict_proba(X)
+plot = figure(x_axis_label = "x",y_axis_label = "y",tools = "pan,box_zoom")
+plot.circle(x=[5,4,3,2,1],y=[1,2,3,4,5],size = 10,color = "black",alpha = 0.7)
+output_file("my_first_bokeh_plot.html")
+show(plot)
 
 
 # In[ ]:
 
 
-from xgboost import XGBClassifier
-#params are from the above mentioned tutorial
-xgb_params={
-    'objective': 'multi:softprob',
-    'eta': 0.1,
-    'max_depth': 3,
-    'silent' :1,
-    'num_class' : 3,
-    'eval_metric' : "mlogloss",
-    'min_child_weight': 1,
-    'subsample': 0.8,
-    'colsample_bytree': 0.3,
-    'seed':17,
-    'num_rounds':2000,
-}
+# There are other types of glyphs
+plot = figure()
+plot.diamond(x=[5,4,3,2,1],y=[1,2,3,4,5],size = 10,color = "black",alpha = 0.7)
+plot.cross(x=[1,2,3,4,5],y=[1,2,3,4,5],size = 10,color = "red",alpha = 0.7)
+show(plot)
+
+
+# ##  Additional Glyps
+# * line: line plot
+#     * line_width: width of line
+#     * fill_color: filling inside of circle with color
+# * patches: multiple polynomial shapes at once on a plot
+#     * fill_color: filling inside of patches
+#     * line_color: color of line  around patches
+#  
+
+# In[ ]:
+
+
+# line
+plot = figure()
+plot.line(x=[1,2,3,4,5,6,7],y = [1,2,3,4,5,5,5],line_width = 2)
+plot.circle(x=[1,2,3,4,5,6,7],y = [1,2,3,4,5,5,5],fill_color = "white",size = 10)
+show(plot)
 
 
 # In[ ]:
 
 
-pipe3 = Pipeline([
-    ('u1', FeatureUnion([
-        ('tfdif_features', Pipeline([
-            ('cv', CountVectorizer()),
-            ('tfidf', TfidfTransformer()),
-            ('tfidf_logit', ClassifierWrapper(LogisticRegression())),
-        ])),
-        ('pos_features', Pipeline([
-            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
-            ('pos_logit', ClassifierWrapper(LogisticRegression())),
-        ])),
-    ])),
-    ('xgb', XGBClassifier(**xgb_params)),
-])
+# patches
+plot = figure()
+plot.patches(xs = [[1,1,2,2],[2,2,3,3]],ys = [[1,2,1,2],[1,2,1,2]],fill_color = ["purple","red"],line_color = ["black","black"])
+#show(plot)
+
+
+# ## Data Formats
+# Bokeh can use list, numpy arrays and pandas as a data source. We have pandas data frame in this tutorial.
+
+# In[ ]:
+
+
+# Lets use source in a basic example
+# As you know from info() method we have Year and  Global_Sales columns
+# Lets plot it to learn how to use ColumnDataSource
+source = ColumnDataSource(data)
+plot = figure()
+plot.circle(x="Year",y="Global_Sales",source = source)
+show(plot)
+# If you remember our column names are "Year" and "Global_Sales" in pandas data frame.
+# Nothing change when we convert pandas data frame to source.
+# You can think source is like pandas data frame at this point. Only for now :)
+
+
+# ## Customizing Glyphs
+# * Selection appearance: when you select some point on data, that points shine and others burn out
+#     * tools:
+#         * box_select and lasso_select: selection tools
+#     * selection_color: When you select point, it becomes selected color
+#     * nonselection_fill_alpha: Other non selected points become non selected alpha
+#     * nonselection_fill_color: Other non selected points become non selected color
+# * HoverTool: cursor
+#     * Crosshair: line cursor
+#     * hover_color: Color of hover
+# * Color mapping: color map of chose field. (like hue in seaborn)
+#     * factors: names of variable to color map
+#     * palette: color of chose factors
+# 
+# 
+
+# In[ ]:
+
+
+# Selection appearance
+plot = figure(tools="box_select,lasso_select")
+plot.circle(x= "Year",y = "Global_Sales",source=source,color = "black",
+            selection_color = "orange",
+            nonselection_fill_alpha = 0.2,
+           nonselection_fill_color = "blue")
+show(plot)
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'pipe3.fit(X_train_part, y_train_part)\npred = pipe3.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
-
-
-# <h3>Caching pipeline results</h3>
-# 
-# This is possible with the `memory` parameter of the `Pipeline()` constructor. The argument is either path to a directory, or a `joblib` object.
-
-# In[ ]:
-
-
-pipe4 = Pipeline([
-    ('u1', FeatureUnion([
-        ('tfdif_features', Pipeline([
-            ('cv', CountVectorizer()),
-            ('tfidf', TfidfTransformer()),
-            ('tfidf_logit', ClassifierWrapper(LogisticRegression())),
-        ], memory="/tmp")),
-        ('pos_features', Pipeline([
-            ('pos', PosTagMatrix(tokenizer=nltk.word_tokenize) ),
-            ('pos_logit', ClassifierWrapper(LogisticRegression())),
-        ], memory="/tmp")),
-    ])),
-    ('xgb', XGBClassifier(**xgb_params)),
-])
-
-
-# **I run the same code twice - first time to fit&cache, second time to use cache only**
-# 
-# Notice the difference! I'd like to warn you however. The cache may not always get invalidated when you think it should. You may want to manually remove the directory of the cache.
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'pipe4.fit(X_train_part, y_train_part)\npred = pipe4.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
+# Hover appearance
+hover = HoverTool(tooltips = [("Genre of game","@Genre"),("Publisher of game","@Publisher")], mode="hline")
+plot = figure(tools=[hover,"crosshair"])
+plot.circle(x= "Year",y = "Global_Sales",source=source,color ="black",hover_color ="red")
+show(plot)
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'pipe4.fit(X_train_part, y_train_part)\npred = pipe4.predict_proba(X_valid)\nprint(log_loss(y_valid, pred))')
+# Color mapping
+factors = list(data.Genre.unique()) # what we want to color map. I choose genre of games
+colors = ["red","green","blue","black","orange","brown","grey","purple","yellow","white","pink","peru"]
+mapper = CategoricalColorMapper(factors = factors,palette = colors)
+plot =figure()
+plot.circle(x= "Year",y = "Global_Sales",source=source,color = {"field":"Genre","transform":mapper})
+show(plot)
+# plot looks like confusing but I think you got the idea of mapping 
 
 
-# <h2>Submission</h2>
+# ## Layouts
+# Arranging multiple plots like subplot in matplot library.
+# * Row and columns: puts plots in row order or column order in figure
+# * Grid arrangement: list of order for layout
+#     * toolbar_location: location of tool bar that can be below above left right or none
+# * Tabbed layout
+#     * Panel: like a figure
+#     * Tabs: like a button 
 # 
-# Here we show how easy is it to train the model on the full train dataset and generate predictions for the test one.
 
 # In[ ]:
 
 
-#refit on the full train dataset
-pipe4.fit(train['text'], lb.transform(train['author']))
+# Row and column
+p1 = figure()
+p1.circle(x = "Year",y= "Global_Sales",source = source,color="red")
+p2 = figure()
+p2.circle(x = "Year",y= "EU_Sales",source = source,color="black")
+p3 = figure()
+p3.circle(x = "Year",y= "NA_Sales",source = source,color="blue")
+p4 = figure()
+p4.circle(x = "Year",y= "JP_Sales",source = source,color="orange")
+layout1 = row(p1,p2)
+layout2 = row(p3,p4)
+layout3= column(layout1,layout2)
+show(layout3)
 
-# obtain predictions
-pred = pipe4.predict_proba(test['text'])
 
-#id,EAP,HPL,MWS
-#id07943,0.33,0.33,0.33
-#...
-pd.DataFrame(dict(zip(lb.inverse_transform(range(pred.shape[1])),
-                      pred.T
-                     )
-                 ),index=test.id).to_csv("submission.csv", index_label='id')
+# In[ ]:
 
 
-# <h2>Conclusions and further reading</h2>
-# 
-# Ok, we didn't win, but I din't promice. :) I'll stop here and let the reader add his/her own features and models, stack them and hopefully, rocket to the top!
-# 
-# What else can you learn about pipelines?
-# 
-# - Go to the doc page, http://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html, and check out some examples linked to at the end of the page.
-# 
-# - Take a look at these tutorial and vote them up, if you like them.
-#     - [pipeline for the beginners](https://www.kaggle.com/baghern/a-deep-dive-into-sklearn-pipelines)
-#     - [Simple Feature Engg Notebook - Spooky Author](https://www.kaggle.com/sudalairajkumar/simple-feature-engg-notebook-spooky-author) - try to implement all the models in one pipeline.
-# - Fork this kernel and explore your own ideas!
-# 
-# <h2>Good luck!</h2>
+#nested
+# I use p1, p2 and p3 that are created at above
+layout = row(column(p1,p2),p3)
+show(layout)
+
+
+# In[ ]:
+
+
+# Grid plot 
+layout = gridplot([[p1,p2],[p3,None]],toolbar_location="above")
+show(layout)
+
+
+# In[ ]:
+
+
+#Tabbed layout
+#I use p1 and p2 that are created at above
+tab1 = Panel(child = p1,title = "Global_Sales")
+tab2 = Panel(child = p2,title = "EU_Sales")
+tabs = Tabs(tabs=[tab1,tab2])
+show(tabs)
+
+
+# ## Linking Plots
+# Links plot together. For example, there are two plots and we zoom in one of them. Other one is zoomed automatically. 
+
+# In[ ]:
+
+
+# linking axis
+# We will use p1 and p2 that are created at above
+p2.x_range = p1.x_range
+p2.y_range = p1.y_range
+layout4=column(p1,p2)
+show(layout4)
+
+
+# # CONCLUSION
+# If you like the bokeh library, I am going to dive deep into bokeh.
+# <br> I divide bokeh tutorial into 2 parts. Because kaggle has problem while running bokeh that cause crash in browser.
+# <br> Also look at Part 2: https://www.kaggle.com/kanncaa1/interactive-bokeh-tutorial-part-2/editnb
+# ### If you have any question, I am happy to hear it. I thank c who is developer of Bokeh for this useful visualization library.
 # 

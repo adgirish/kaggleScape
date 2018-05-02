@@ -1,181 +1,152 @@
 
 # coding: utf-8
 
-# ## Notes about machine generated images:
-# <p> I'm republishing this notebook because questions about machine generated images are getting asked alot.
-#  Machine generated images DO NOT count in the scoring of the public or private leaderboard.  It says this in the competition description!  <br>
-# TL:DR - You can identify machine generated images by the length of the decimal in the incidence angle (natural have <= 4, machine generated have > 4).   <br>
-# This really has no effect on your predictions, but I guess it could make it easier for you to hand label the 3425 natural images if you really wanted to.  
-# </p>
+# Here is an example of XGBoost hyperparameter tuning by doing a grid search. For reasons of expediency, the notebook will run only a **[randomized grid search](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.RandomizedSearchCV.html)**. However, I will provide a code for brute-force **[grid search](http://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GridSearchCV.html)** as well - you only need to uncomment that portion if you decide to run this notebook locally.
+# 
+# Although random grid search will work most of the time if you test at least 20-50 different parameter combinations, I **STRONGLY** recommend that you use something like **[Bayesian optimization](https://github.com/fmfn/BayesianOptimization)** for hyperparameter searching as it is more comprehensive and time-efficient. I will try to publish an example of it later. 
+# 
 
 # In[ ]:
 
 
+__author__ = 'Tilii: https://kaggle.com/tilii7' 
+
+import warnings
+warnings.filterwarnings('ignore')
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from subprocess import check_output
-from mpl_toolkits.axes_grid1 import ImageGrid
-import random
-random.seed(1)
+from datetime import datetime
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from xgboost import XGBClassifier
 
 
-# In[ ]:
-
-
-train = pd.read_json("../input/train.json")
-agg_df = train.groupby('inc_angle').agg({"is_iceberg": [len, np.sum]}).sort_values([('is_iceberg', 'len')], ascending=False)
-agg_df[0:20]
-
+# This is a simple timer function that I use in most scripts. I like to know how long things take :-)
 
 # In[ ]:
 
 
-def plot_bands(df, ia):
-    df = df[df['inc_angle'] == ia]
-    i = int(np.sqrt(len(df))//1 * 2)
-    j = int(2*len(df) // i + 1)
-    fig = plt.figure(1, figsize=(24,24))
-    grid = ImageGrid(fig, 111, nrows_ncols=(i, j), axes_pad=0.05)
-    for i, (band1, band2, id_num, inc_angle, iceberg) in enumerate(df.values):
-        # plot band 1
-        ax = grid[(i*2)]
-        band1_sample = band1
-        band1_sample = np.array(band1_sample).reshape(75, 75)
-        ax.imshow(band1_sample / 75.)
-        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
-        ax.text(10, 10, 'Incidence Angle: (%.4f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
-        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
-        ax.axis('on')
-        # plot band 2
-        ax = grid[(i*2)+1]
-        band2_sample = band2
-        band2_sample = np.array(band2_sample).reshape(75, 75)
-        ax.imshow(band2_sample / 75.)
-        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_2"), color='k', backgroundcolor='m', alpha=0.8)
-        ax.text(10, 10, 'Incidence Angle: (%.4f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
-        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
-        ax.axis('on')
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        thour, temp_sec = divmod((datetime.now() - start_time).total_seconds(), 3600)
+        tmin, tsec = divmod(temp_sec, 60)
+        print('\n Time taken: %i hours %i minutes and %s seconds.' % (thour, tmin, round(tsec, 2)))
 
 
-# ## Plot some of the leaky image pairs
+train_df = pd.read_csv('../input/train.csv', dtype={'id': np.int32, 'target': np.int8})
+Y = train_df['target'].values
+X = train_df.drop(['target', 'id'], axis=1)
+test_df = pd.read_csv('../input/test.csv', dtype={'id': np.int32})
+test = test_df.drop(['id'], axis=1)
+
+
+# Let's set up a parameter grid that will be explored during the search. Note that you can use fewer parameters and fewer options for each parameter. Same goes for more parameter and more options if you want to be very thorough. Also, you can plug in any other ML method instead of XGBoost and search for its optimal parameters.
 
 # In[ ]:
 
 
-test = pd.read_json("../input/test.json")
-test['is_iceberg'] = -999
-combined = pd.concat([train, test])
+# A parameter grid for XGBoost
+params = {
+        'min_child_weight': [1, 5, 10],
+        'gamma': [0.5, 1, 1.5, 2, 5],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'max_depth': [3, 4, 5]
+        }
 
 
-# In[ ]:
-
-
-plot_bands(combined, 42.5128)
-
-
-# In[ ]:
-
-
-def plot_bands_test(df):
-    df = df.sample(8)
-    i = 4 #int(np.sqrt(len(df))//1 * 2)
-    j = 4 #int(2*len(df) // i + 1)
-    fig = plt.figure(1, figsize=(16,16))
-    grid = ImageGrid(fig, 111, nrows_ncols=(i, j), axes_pad=0.05)
-    for i, (band1, band2, id_num, inc_angle, iceberg) in enumerate(df.values):
-        # plot band 1
-        ax = grid[(i*2)]
-        band1_sample = band1
-        band1_sample = np.array(band1_sample).reshape(75, 75)
-        ax.imshow(band1_sample / 75.)
-        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
-        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
-        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
-        ax.axis('on')
-        # plot band 2
-        ax = grid[(i*2)+1]
-        band2_sample = band2
-        band2_sample = np.array(band2_sample).reshape(75, 75)
-        ax.imshow(band2_sample / 75.)
-        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_2"), color='k', backgroundcolor='m', alpha=0.8)
-        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
-        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
-        ax.axis('on')
-
-
-# ## Plot random sample of test images
+# A total number of combinations for the set of parameters above is a product of options for each parameter (3 x 5 x 3 x 3 x 3 = 405). It also needs to be multiplied by 5 to calculate a total number of data-fitting runs as we will be doing 5-fold cross-validation. That gets to be a large number in a hurry if you are using many parameters and lots of options, which is why **brute-force grid search takes a long time**.
+# 
+# Next we set up our classifier. We use sklearn's API of XGBoost as that is a requirement for grid search (another reason why Bayesian optimization may be preferable, as it does not need to be sklearn-wrapped). You should consider setting a learning rate to smaller value (at least 0.01, if not even lower), or make it a hyperparameter for grid searching. I am not using very small value here to save on running time. 
+# 
+# *Even though we have 4 threads available per job on Kaggle, I think it is more efficient to do XGBoost runs on single threads, but instead run 4 parallel jobs in the grid search. It's up to you whether you want to change this.*
 
 # In[ ]:
 
 
-plot_bands_test(test)
+xgb = XGBClassifier(learning_rate=0.02, n_estimators=600, objective='binary:logistic',
+                    silent=True, nthread=1)
 
 
-# In[ ]:
-
-
-def plot_bands_test_juxt(df):
-    df['precision_4'] = df['inc_angle'].apply(lambda x: len(str(x))) <= 7
-    df = pd.concat([df[df['precision_4'] == True].sample(8), df[df['precision_4'] == False].sample(8)])
-    fig = plt.figure(1, figsize=(16,16))
-    grid = ImageGrid(fig, 111, nrows_ncols=(4, 4), axes_pad=0.05)
-    for i, (band1, band2, id_num, inc_angle, iceberg, precision_4) in enumerate(df.values):
-        # plot band 1
-        ax = grid[(i)]
-        band1_sample = band1
-        band1_sample = np.array(band1_sample).reshape(75, 75)
-        ax.imshow(band1_sample / 75.)
-        ax.text(10, 4, 'Id: %s %s' % (id_num, "Band_1"), color='k', backgroundcolor='m', alpha=0.8)
-        ax.text(10, 10, 'Incidence Angle: (%.8f)' % inc_angle, color='w', backgroundcolor='k', alpha=0.8)
-        ax.text(10, 16, 'Is Iceberg: %s' % iceberg, color='k', backgroundcolor='w', alpha=0.8)
-        if i < 8:
-            ax.text(10, 22, 'Precision is <= 4: %s' % precision_4, color='k', backgroundcolor='g', alpha=0.8)
-        else:
-            ax.text(10, 22, 'Precision is <= 4: %s' % precision_4, color='k', backgroundcolor='r', alpha=0.8)
-        ax.axis('on')
-
-
-# ## Something seems suspicious about the precision of the incidence angle
+# Next we set up our stratified folds and grid search parameters. I am using AUC as a scoring function, but you can plug in a custom scoring function here if you wish. Grid search wil spawn 4 jobs running a single thread each. The param_comb parameter declares how many different combinations should be picked randomly out of our total (405, see above). I am doing only 5 here, knowing that it will not properly sample the parameter space. Definitely use a bigger number for param_comb.
+# 
+# *You may want to increase/decrease verbosity depending on your preference.*
+# 
+# **Note that I have set the number of splits/folds to 3 in order to save time. You should probably put 5 there to get a more reliable result.**
 
 # In[ ]:
 
 
-plot_bands_test_juxt(test)
+folds = 3
+param_comb = 5
+
+skf = StratifiedKFold(n_splits=folds, shuffle = True, random_state = 1001)
+
+random_search = RandomizedSearchCV(xgb, param_distributions=params, n_iter=param_comb, scoring='roc_auc', n_jobs=4, cv=skf.split(X,Y), verbose=3, random_state=1001 )
+
+# Here we go
+start_time = timer(None) # timing starts from this point for "start_time" variable
+random_search.fit(X, Y)
+timer(start_time) # timing ends here for "start_time" variable
 
 
-# **It looks like images with incidence angles having less than or equal to 4 decimal places (like all of those in the training set) are the naturally captured images, and those with greater precision are machine generated.**
+# You can actually follow along as the search goes on. To convert to normalized gini, multiply the obtained AUC values by 2 and subtract 1.
+# 
+# Let's print the grid-search results and save them in a file.
 
 # In[ ]:
 
 
-print('~%.1f%% of the test data is machine generated' % (100 * (1 - test['precision_4'].sum() / len(test))))
-print('There are %i naturally captured images in the test set' % (test['precision_4'].sum() + 13))
-# My method misses 13 of the natural images.  Thanks for the fix! Sorry I didn't update this sooner
+print('\n All results:')
+print(random_search.cv_results_)
+print('\n Best estimator:')
+print(random_search.best_estimator_)
+print('\n Best normalized gini score for %d-fold search with %d parameter combinations:' % (folds, param_comb))
+print(random_search.best_score_ * 2 - 1)
+print('\n Best hyperparameters:')
+print(random_search.best_params_)
+results = pd.DataFrame(random_search.cv_results_)
+results.to_csv('xgb-random-grid-search-results-01.csv', index=False)
 
 
-# > ## Trying a leakage submission
+# Not surprisingly, this search does not produce a great score because of 3-fold validation and limited parameter sampling.
+# 
+# Lastly, let's make a prediction based on best parameters found during the search.
 
 # In[ ]:
 
 
-CUTOFF = 2
-agg_df = agg_df[agg_df['is_iceberg']['len'] >= CUTOFF]
-my_df = []
-for i in range(0,len(agg_df.index.values)):
-    my_df.append([agg_df.index.values[i], agg_df['is_iceberg'].values[i][0], agg_df['is_iceberg'].values[i][1]])
-my_df = pd.DataFrame(my_df, columns = ['ia', 'count', 'sum_is_iceberg']).drop(0) # remove 1st row NA
-
-test['is_iceberg'] = 0.5
-for (ia, count, sum_is_iceberg) in my_df.values:
-    if(count == sum_is_iceberg):
-        leak = 1
-        test.loc[test['inc_angle'] == ia, 'is_iceberg'] = leak
-    elif(sum_is_iceberg == 0):
-        leak = 0
-        test.loc[test['inc_angle'] == ia, 'is_iceberg'] = leak
-
-test[['id', 'is_iceberg']].to_csv('littleleak_cutoff2.csv', index=False)
+y_test = random_search.predict_proba(test)
+results_df = pd.DataFrame(data={'id':test_df['id'], 'target':y_test[:,1]})
+results_df.to_csv('submission-random-grid-search-xgb-porto-01.csv', index=False)
 
 
-# <p> * The R version of this submission scores .46560 on the public LB, with about 1300 of the 3425 natural test images labelled 0 or 1. (This suggests that exactly 1 prediction of either 1 or 0 is incorrect on the public LB)
+# Below is the code for brute-force grid search. It is commented out as it would never finish on Kaggle in 1 hour.
+
+# In[ ]:
+
+
+# grid = GridSearchCV(estimator=xgb, param_grid=params, scoring='roc_auc', n_jobs=4, cv=skf.split(X,Y), verbose=3 )
+# grid.fit(X, Y)
+# print('\n All results:')
+# print(grid.cv_results_)
+# print('\n Best estimator:')
+# print(grid.best_estimator_)
+# print('\n Best score:')
+# print(grid.best_score_ * 2 - 1)
+# print('\n Best parameters:')
+# print(grid.best_params_)
+# results = pd.DataFrame(grid.cv_results_)
+# results.to_csv('xgb-grid-search-results-01.csv', index=False)
+
+# y_test = grid.best_estimator_.predict_proba(test)
+# results_df = pd.DataFrame(data={'id':test_df['id'], 'target':y_test[:,1]})
+# results_df.to_csv('submission-grid-search-xgb-porto-01.csv', index=False)
+
+
+# Let me know your thoughts or if you have any questions.
+# 

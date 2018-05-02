@@ -1,221 +1,379 @@
 
 # coding: utf-8
 
-# <table>
-#     <tr>
-#         <td>
-#         <center>
-#         <font size="+1">If you haven't used BigQuery datasets on Kaggle previously, check out the <a href = "https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook/">Scavenger Hunt Handbook</a> kernel to get started.</font>
-#         </center>
-#         </td>
-#     </tr>
-# </table>
-# 
-# ___ 
-# 
-# ## Previous days:
-# 
-# * [**Day 1:** SELECT, FROM & WHERE](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1/)
-# * [**Day 2:** GROUP BY, HAVING & COUNT()](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2/)
-# 
-# ____
-# 
-
-# # ORDER BY (and Dates!)
-# 
-# So far in our scavenger hunt, we've learned how to use the following clauses: 
-#     
-#     SELECT ... 
-#     FROM ...
-#     (WHERE) ...
-#     GROUP BY ...
-#     (HAVING) ...
-# We also learned how to use the COUNT() aggregate function and, if you did the optional extra credit, possibly other aggregate functions as well. (If any of this is sounds unfamiliar to you, you can check out the earlier two days using the links above.)
-# 
-# Today we're going to learn how change the order that data is returned to us using the ORDER BY clause. We're also going to talk a little bit about how to work with dates in SQL, because they're sort of their own thing and can lead to headaches if you're unfamiliar with them.
-# 
-# 
-# ### ORDER BY
-# ___
-# 
-# First, let's learn how to use ORDER BY. ORDER BY is usually the last clause you'll put in your query, since you're going to want to use it to sort the results returned by the rest of your query.
-# 
-# We're going to be making queries against this version of the table we've been using an example over the past few days. 
-# 
-# > **Why would the order of a table change?** This can actually happen to active BigQuery datasets, since if your table is being added to regularly [it may be coalesced every so often and that will change the order of the data in your table](https://stackoverflow.com/questions/16854116/the-order-of-records-in-a-regularly-updated-bigquery-databaseg). 
-# 
-# You'll notice that, unlike in earlier days, our table is no longer sorted by the ID column. 
-# 
-# ![](https://i.imgur.com/QRgb4iL.png). 
-# 
-# ** Ordering by a numeric column**
-# 
-# When you ORDER BY a numeric column, by default the column will be sorted from the lowest to highest number. So this query will return the ID, Name and Animal columns, all sorted by the number in the ID column. The row with the lowest number in the ID column will be returned first.
-# 
-#     SELECT ID, Name, Animal
-#     FROM `bigquery-public-data.pet_records.pets`
-#     ORDER BY ID
-# Visually, this looks something like this:
-# 
-# ![](https://i.imgur.com/zEXDTKS.png)
-# 
-#     
-# ** Ordering by a text column**
-# 
-# You can also order by columns that have text in them. By default, the column you sort on will be sorted alphabetically from the beginning to the end of the alphabet.
-# 
-#     SELECT ID, Name, Animal
-#     FROM `bigquery-public-data.pet_records.pets`
-#     ORDER BY Animal
-# ![](https://i.imgur.com/E7qjnf9.png)
-# 
-# ** Reversing the order**
-# 
-# You can reverse the sort order (reverse alphabetical order for text columns or high to low for numeric columns) using the DESC argument. 
-# 
-# > ** DESC** is short for "descending", or high-to-low.
-# 
-# So this query will sort the selected columns by the Animal column, but the values that are last in alphabetic order will be returned first.
-# 
-#     SELECT ID, Name, Animal
-#     FROM `bigquery-public-data.pet_records.pets`
-#     ORDER BY Animal DESC
-# ![](https://i.imgur.com/DREYNFF.png)
-#  
-# ### Dates
-# ____
-# 
-# Finally, let's talk about dates. I'm including these because they are something that I found particularly confusing when I first learned SQL, and I ended up having to use them all. the. time. 
-# 
-# There are two different ways that a date can be stored in BigQuery: as a DATE or as a DATETIME. Here's a quick summary:
-# 
-# **DATE format**
-# 
-# The DATE format has the year first, then the month, and then the day. It looks like this:
-# 
-#     YYYY-[M]M-[D]D
-# * YYYY: Four-digit year
-# * [M]M: One or two digit month
-# * [D]D: One or two digit day
-# 
-# **DATETIME/TIMESTAMP format**
-# 
-# The DATETIME format is just like the date format... but with time added at the end. (The difference between DATETIME and TIMESTAMP is that the date and time information in a DATETIME is based on a specific timezone. On the other hand, a TIMESTAMP will be the same in all time zones, except for the time zone) . Both formats look like this:
-# 
-#     YYYY-[M]M-[D]D[( |T)[H]H:[M]M:[S]S[.DDDDDD]][time zone]
-# * YYYY: Four-digit year
-# * [M]M: One or two digit month
-# * [D]D: One or two digit day
-# * ( |T): A space or a T separator
-# * [H]H: One or two digit hour (valid values from 00 to 23)
-# * [M]M: One or two digit minutes (valid values from 00 to 59)
-# * [S]S: One or two digit seconds (valid values from 00 to 59)
-# * [.DDDDDD]: Up to six fractional digits (i.e. up to microsecond precision)
-# * (TIMESTAMP only) [time zone]: String representing the time zone
-# 
-# ** Getting only part of a date **
-# 
-# Often, though, you'll only want to look at part of a date, like the year or the day. You can do this using the EXTRACT function and specifying what part of the date you'd like to extract. 
-# 
-# So this query will return one column with just the day of each date in the column_with_timestamp column: 
-# 
-#             SELECT EXTRACT(DAY FROM column_with_timestamp)
-#             FROM `bigquery-public-data.imaginary_dataset.imaginary_table`
-# One of the nice things about SQL is that it's very smart about dates and we can ask for information beyond just extracting part of the cell. For example, this query will return one column with just the week in the year (between 1 and 53) of each date in the column_with_timestamp column: 
-# 
-#             SELECT EXTRACT(WEEK FROM column_with_timestamp)
-#             FROM `bigquery-public-data.imaginary_dataset.imaginary_table`
-# SQL has a lot of power when it comes to dates, and that lets you ask very specific questions using this information. You can find all the functions you can use with dates in BigQuery [on this page](https://cloud.google.com/bigquery/docs/reference/legacy-sql), under "Date and time functions".  
-
-# ## Example: Which day of the week do the most fatal motor accidents happen on?
-# ___
-# 
-# Now we're ready to work through an example. Today, we're going to be using the US Traffic Fatality Records database, which contains information on traffic accidents in the US where at least one person died. (It's definitely a sad topic, but if we can understand this data and the trends in it we can use that information to help prevent additional accidents.)
-# 
-# First, just like yesterday, we need to get our environment set up. Since you already know how to look at schema information at this point, I'm going to let you do that on your own. 
-# 
-# > **Important note:** Make sure that you add the BigQuery dataset you're querying to your kernel. Otherwise you'll get 
+# As a serving U.S. Army infantry officer I want to briefly demonstrate the burden of casualties that infantry forces bore in Vietnam (as they do in every conflict).
 
 # In[ ]:
 
 
-# import package with helper functions 
-import bq_helper
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-# create a helper object for this dataset
-accidents = bq_helper.BigQueryHelper(active_project="bigquery-public-data",
-                                   dataset_name="nhtsa_traffic_fatalities")
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-# We're going to look at which day of the week the most fatal traffic accidents happen on. I'm going to get the count of the unique id's (in this table they're called "consecutive_number") as well as the day of the week for each accident. Then I'm going sort my table so that the days with the most accidents are on returned first.
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
 
 # In[ ]:
 
 
-# query to find out the number of accidents which 
-# happen on each day of the week
-query = """SELECT COUNT(consecutive_number), 
-                  EXTRACT(DAYOFWEEK FROM timestamp_of_crash)
-            FROM `bigquery-public-data.nhtsa_traffic_fatalities.accident_2015`
-            GROUP BY EXTRACT(DAYOFWEEK FROM timestamp_of_crash)
-            ORDER BY COUNT(consecutive_number) DESC
-        """
-
-
-# Now that our query is ready, let's run it (safely!) and store the results in a dataframe: 
-
-# In[ ]:
-
-
-# the query_to_pandas_safe method will cancel the query if
-# it would use too much of your quota, with the limit set 
-# to 1 GB by default
-accidents_by_day = accidents.query_to_pandas_safe(query)
-
-
-# And that gives us a dataframe! Let's quickly plot our data to make sure that it's actually been sorted:
-
-# In[ ]:
-
-
-# library for plotting
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
-# make a plot to show that our data is, actually, sorted:
-plt.plot(accidents_by_day.f0_)
-plt.title("Number of Accidents by Rank of Day \n (Most to least dangerous)")
-
-
-# Yep, our query was, in fact, returned sorted! Now let's take a quick peek to figure out which days are the most dangerous:
-
-# In[ ]:
+data = pd.read_csv('../input/VietnamConflict.csv')
+data1 = data[data['BRANCH'].isin(['ARMY', 'MARINE CORPS'])]
 
 
-print(accidents_by_day)
-
-
-# To map from the numbers returned for the day of the week (the second column) to the actual day, I consulted [the BigQuery documentation on the DAYOFWEEK function](https://cloud.google.com/bigquery/docs/reference/legacy-sql#dayofweek), which says that it returns "an integer between 1 (Sunday) and 7 (Saturday), inclusively". So we can tell, based on our query, that in 2015 most fatal motor accidents occur on Sunday and Saturday, while the fewest happen on Tuesday.
-
-# # Scavenger hunt
-# ___
-# 
-# Now it's your turn! Here are the questions I would like you to get the data to answer:
-# 
-# * Which hours of the day do the most accidents occur during?
-#     * Return a table that has information on how many accidents occurred in each hour of the day in 2015, sorted by the the number of accidents which occurred each hour. Use either the accident_2015 or accident_2016 table for this, and the timestamp_of_crash column. (Yes, there is an hour_of_crash column, but if you use that one you won't get a chance to practice with dates. :P)
-#     * **Hint:** You will probably want to use the [EXTRACT() function](https://cloud.google.com/bigquery/docs/reference/standard-sql/functions-and-operators#extract_1) for this.
-# * Which state has the most hit and runs?
-#     * Return a table with the number of vehicles registered in each state that were involved in hit-and-run accidents, sorted by the number of hit and runs. Use either the vehicle_2015 or vehicle_2016 table for this, especially the registration_state_name and hit_and_run columns.
-# 
-# In order to answer these questions, you can fork this notebook by hitting the blue "Fork Notebook" at the very top of this page (you may have to scroll up). "Forking" something is making a copy of it that you can edit on your own without changing the original.
+# Now we come to the part that requires specific domain knowledge. How many of these positions are infantry? Hint: not just the ones that specifically have 'infantry' in the title. Of course, I have to exercise some judgement here since job titles have changed over the years. In general I will not include Rangers and Special Forces in this list, even though the majority of those fine folks are infantry.
 
 # In[ ]:
 
 
-# Your code goes here :)
+infantry_MOS = ['INFANTRY OPERATIONS AND INTELLIGENCE SPECIALIST', 'INDIRECT FIRE INFANTRYMAN', 'INFANTRY UNIT LEADER', 'PARACHUTIST, INFANTRY UNIT COMMANDER', 'INFANTRYMAN', 'RIFLEMAN', 'MACHINEGUNNER', 'INFANTRY OFFICER (I)', 'ASSAULTMAN', 'HEAVY ANTI-ARMOR WEAPONS INFANTRYMAN', 'MORTARMAN', 'INFANTRY UNIT COMMANDER', 'BASIC INFANTRY OFFICER', 'RANGER, OPERATIONS AND TRAINING STAFF OFFICER (G3,A3,S3)', 'INFANTRY SENIOR SERGEANT', 'BASIC INFANTRYMAN', 'RANGER, UNIT OFFICER, TRAINING CENTER', 'RANGER, INFANTRY UNIT COMMANDER', 'RANGER', 'INFANTRY UNIT COMMANDER, (MECHANIZED)', 'LAV ASSAULTMAN', 'SCOUT-SNIPER']
+infantry = data1[data1['POSITION'].isin(infantry_MOS)]
+# What proportion of Vietnam casualties were infantrymen?
+infantry_cas = infantry.FATALITY_YEAR.count()
+total_cas = data.FATALITY_YEAR.count()
+infantry_portion = infantry_cas / total_cas * 100
+print('Infantrymen sustained {}% of total casualties in the Vietnam war.'.format(infantry_portion))
 
 
-
-# Please feel free to ask any questions you have in this notebook or in the [Q&A forums](https://www.kaggle.com/questions-and-answers)! 
+# No surprises here. Actually it is probable that this number is abnormally low because of the nature of the conflict. Unconventional (i.e. guerilla) wars tend to cause greater casualties among non-infantry troops because guerilla fighters deliberately attempt to attack 'soft' (i.e. not combat) targets. This has certainly been true throughout the Global War on Terror.
 # 
-# Also, if you want to share or get comments on your kernel, remember you need to make it public first! You can change the visibility of your kernel under the "Settings" tab, on the right half of your screen.
+# Incidentally, this is not meant as a veiled criticism of guerilla tactics. It is good sense to attack non-combat units because they are easier to successfully hurt.
+
+# Now let's take a look at infantry casualties by rank as compared to the remainder of the war's casualties. I expect to see that infantry casualties tend to be both lower ranking and younger than the remainder. I don't know that this will necessarily be true, however. I just know that infantrymen tend to be young and that infantry structure has proportionately more lower-ranking individuals than other unit types.
+
+# In[ ]:
+
+
+non_infantry = data1[-data1['POSITION'].isin(infantry_MOS)]
+navy_af = data[data['BRANCH'].isin(['NAVY', 'AIR FORCE'])]
+by_grade = ['E01', 'E02', 'E03', 'E04', 'E05', 'E06', 'E07', 'E08', 'E09', 'W01', 'W02', 'W03','W04', 'W05', 'O01', 'O02', 'O03', 'O04', 'O05', 'O06', 'O07']
+plt.subplot(3,1,1)
+_ = sns.countplot(x='PAY_GRADE', data=infantry, order=by_grade)
+_ = plt.title('Infantry Casualties (Army & Marine Corps)')
+_ = plt.xlabel('Pay Grade')
+_ = plt.ylabel('Number of Casualties')
+plt.subplot(3,1,2)
+_ = sns.countplot(x='PAY_GRADE', data=non_infantry, order=by_grade)
+_ = plt.title('Non-Infantry Casualties (Army & Marine Corps)')
+_ = plt.xlabel('Pay Grade')
+_ = plt.ylabel('Number of Casualties')
+plt.subplot(3,1,3)
+_ = sns.countplot(x='PAY_GRADE', data=navy_af, order=by_grade)
+_ = plt.title('Navy & Air Force Casualties')
+_ = plt.xlabel('Pay Grade')
+_ = plt.ylabel('Number of Casualties')
+plt.tight_layout()
+plt.show()    
+
+
+# As expected, infantry casualties tend to occur at lower pay grades than non-infantry casualties. There is an immediately noticeable increase in the proportional number of officer casualties among non-infantry service-members (SMs) within the Army and Marine Corps. I expect this would become considerably more pronounced if I had seperated out all combat arms troops (i.e. cavalry, armor, special forces, rangers) instead of just infantry.
+# 
+# Within the Navy and Air Force the casualty structure is significantly different, with nearly as many deaths in the officer as in the enlisted ranks. This is likely because fixed-wing aircraft pilots are officers and the Navy and Air Force both lost good numbers of aircraft during the war. It is possible with this dataset to look into this more closely by seperating out the pilots in these two services, but for now I'm going to move on. If I get distracted I'll never finish, after all.
+
+# In[ ]:
+
+
+# I have to disable a chained assignment warning here because it keeps popping up but has not value
+# to what I am actually doing here (as far as I can tell)
+pd.options.mode.chained_assignment = None
+# Infantry ages first...
+birth = pd.Series(infantry.loc[:,'BIRTH_YEAR'].floordiv(10000), index=infantry.index)
+infantry.loc[:,'BIRTH_YR'] = birth
+for row in infantry:
+    age_at_death = []
+    birth = infantry.BIRTH_YR
+    death = infantry.FATALITY_YEAR
+    age = death - birth
+    age_at_death.extend(age)
+age = pd.Series(age_at_death, index=infantry.index)
+infantry.loc[:,'AGE'] = age
+# then non-infantry...
+birth = pd.Series(non_infantry.loc[:,'BIRTH_YEAR'].floordiv(10000), index=non_infantry.index)
+non_infantry.loc[:,'BIRTH_YR'] = birth
+for row in non_infantry:    
+    age_at_death2 = []
+    birth = non_infantry.BIRTH_YR
+    death = non_infantry.FATALITY_YEAR
+    age = death - birth
+    age_at_death2.extend(age)
+age = pd.Series(age_at_death2, index=non_infantry.index)
+non_infantry.loc[:,'AGE'] = age
+# and lastly my sister services...
+birth = pd.Series(navy_af.loc[:,'BIRTH_YEAR'].floordiv(10000), index=navy_af.index)
+navy_af.loc[:,'BIRTH_YR'] = birth
+for row in navy_af:    
+    age_at_death3 = []
+    birth = navy_af.BIRTH_YR
+    death = navy_af.FATALITY_YEAR
+    age = death - birth
+    age_at_death3.extend(age)
+age = pd.Series(age_at_death3, index=navy_af.index)
+navy_af.loc[:,'AGE'] = age
+
+plt.subplot(3,1,1)
+_ = sns.countplot(x='AGE', data=infantry)
+_ = plt.title('Infantry Age at Death')
+_ = plt.xlabel('Age')
+_ = plt.ylabel('Number of Fatalities')
+plt.subplot(3,1,2)
+_ = sns.countplot(x='AGE', data=non_infantry)
+_ = plt.title('Non-Infantry Age at Death (Army & Marine Corps)')
+_ = plt.xlabel('Age')
+_ = plt.ylabel('Number of Fatalities')
+plt.subplot(3,1,3)
+_ = sns.countplot(x='AGE', data=navy_af)
+_ = plt.title('Navy & Air Force Ages at Death')
+_ = plt.xlabel('Age')
+_ = plt.ylabel('Number of Fatalities')
+plt.tight_layout()
+plt.show()   
+
+inf_mean = infantry.AGE.mean()
+inf_median = infantry.AGE.median()
+non_inf_mean = non_infantry.AGE.mean()
+non_inf_median = non_infantry.AGE.median()
+oth_svc_mean = navy_af.AGE.mean()
+oth_svc_median = navy_af.AGE.median()
+print('Infantry mean and median age at death are ' + str(inf_mean) + ' and ' + str(inf_median) + ' , respectively.')
+print('Non-Infantry mean and median age at death are ' + str(non_inf_mean) + ' and ' + str(non_inf_median) + ' , respectively.')
+print('AF/Navy mean and median age at death are ' + str(oth_svc_mean) + ' and ' + str(oth_svc_median) + ' , respectively.')
+
+
+# Looks like there is little difference between the infantry and non-infantry ages at death for the Army and Marine Corps. There is a quite significant difference between those two services and the Navy and Air Force, however. It is quite clear from this analysis that the burden of bleeding for one's country falls quite disproportionately on the young in the Army and Marine Corps, but this hardly comes as a surprise.
+# 
+# Now I'll see how hostile and non-hostile deaths stack up between my categories of service-members.
+
+# In[ ]:
+
+
+infantry['HOSTILITY_CONDITIONS'] = infantry['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
+_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=infantry)
+_ = plt.title('Casualty Breakdown, Infantry')
+_ = plt.xlabel('Hostility Conditions')
+_ = plt.ylabel('Number of Fatalities')
+plt.show()
+
+total_deaths = infantry['HOSTILITY_CONDITIONS'].count()
+hostile = infantry[infantry['HOSTILITY_CONDITIONS'] == 'Hostile']
+hostile_death = hostile['HOSTILITY_CONDITIONS'].count()
+non_hostile = infantry[infantry['HOSTILITY_CONDITIONS'] == 'Non-hostile']
+non_hostile_death = non_hostile['HOSTILITY_CONDITIONS'].count()
+non_hostile_ratio = non_hostile_death / total_deaths * 100
+hostile_ratio = hostile_death / total_deaths * 100
+print('Infantry SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
+
+
+# In[ ]:
+
+
+non_infantry['HOSTILITY_CONDITIONS'] = non_infantry['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
+_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=non_infantry)
+_ = plt.title('Casualty Breakdown, Non-Infantry')
+_ = plt.xlabel('Hostility Conditions')
+_ = plt.ylabel('Number of Fatalities')
+plt.show()
+
+total_deaths = non_infantry['HOSTILITY_CONDITIONS'].count()
+ninf_hostile = non_infantry[non_infantry['HOSTILITY_CONDITIONS'] == 'Hostile']
+hostile_death = ninf_hostile['HOSTILITY_CONDITIONS'].count()
+ninf_non_hostile = non_infantry[non_infantry['HOSTILITY_CONDITIONS'] == 'Non-hostile']
+ninf_non_hostile_death = ninf_non_hostile['HOSTILITY_CONDITIONS'].count()
+non_hostile_ratio = ninf_non_hostile_death / total_deaths * 100
+hostile_ratio = hostile_death / total_deaths * 100
+print('Non-infantry SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
+
+
+# In[ ]:
+
+
+navy_af['HOSTILITY_CONDITIONS'] = navy_af['HOSTILITY_CONDITIONS'].replace(['H', 'NH'], ['Hostile', 'Non-hostile'])
+_ = sns.countplot(x='HOSTILITY_CONDITIONS', data=navy_af, order=['Hostile', 'Non-hostile'])
+_ = plt.title('Casualty Breakdown, Navy & Air Force')
+_ = plt.xlabel('Hostility Conditions')
+_ = plt.ylabel('Number of Fatalities')
+plt.show()
+
+total_deaths = navy_af['HOSTILITY_CONDITIONS'].count()
+naf_hostile = navy_af[navy_af['HOSTILITY_CONDITIONS'] == 'Hostile']
+hostile_death = naf_hostile['HOSTILITY_CONDITIONS'].count()
+naf_non_hostile = navy_af[navy_af['HOSTILITY_CONDITIONS'] == 'Non-hostile']
+naf_non_hostile_death = naf_non_hostile['HOSTILITY_CONDITIONS'].count()
+naf_non_hostile_ratio = naf_non_hostile_death / total_deaths * 100
+hostile_ratio = hostile_death / total_deaths * 100
+print('Navy & Air Force SMs sustained {}% hostile casualties and {}% non-hostile casualties.'.format(hostile_ratio, non_hostile_ratio))
+
+
+# It is interesting to note that non-infantry casualties are roughly similiar proportionately to Navy/Air Force casualties over the course of the conflict. This might indicate that there are more similarities between the experience of war between Navy/Air Force personnel and non-infantry Soldiers and Marines than there are between non-infantry Soldiers/Marines and their infantry brethren. One way to shed a little additional light on this thought is to see if there are similarities in the way in which these folks perished.
+
+# In[ ]:
+
+
+order = ['ACCIDENT', 'ILLNESS', 'HOMICIDE', 'SELF-INFLICTED', 'PRESUMED DEAD']
+plt.subplot(2,1,1)
+_ = sns.countplot(x='FATALITY', data=ninf_non_hostile, order=order)
+_ = plt.title('Army/Marine Corps Non-infantry Non-hostile Fatalities by Category')
+_ = plt.xlabel('Fatality Category')
+_ = plt.ylabel('Number of Fatalities')
+
+plt.subplot(2,1,2)
+_ = sns.countplot(x='FATALITY', data=naf_non_hostile, order=order)
+_ = plt.title('Navy/Air Force Non-hostile Fatalities by Category')
+_ = plt.xlabel('Fatality Category')
+_ = plt.ylabel('Number of Fatalities')
+plt.tight_layout()
+plt.show()
+
+
+# Overall quite similiar profiles for non-hostile fatalities. So what about hostile ones? For this we'll have to drill a little deeper and look at actual cause of death.
+
+# In[ ]:
+
+
+plt.subplot(2,1,1)
+_ = sns.countplot(x='FATALITY_2', data=ninf_hostile)
+_ = plt.title('Army/Marine Corps Non-infantry Non-hostile Fatalities by Category')
+_ = plt.xlabel('Fatality Category')
+_ = plt.xticks(rotation=15)
+_ = plt.ylabel('Number of Fatalities')
+
+plt.subplot(2,1,2)
+_ = sns.countplot(x='FATALITY_2', data=naf_hostile)
+_ = plt.title('Navy/Air Force Non-hostile Fatalities by Category')
+_ = plt.xlabel('Fatality Category')
+_ = plt.xticks(rotation=15)
+_ = plt.ylabel('Number of Fatalities')
+plt.tight_layout()
+plt.show()
+
+
+# In[ ]:
+
+
+words = ninf_hostile['FATALITY_2'].tolist()
+words = str(words)
+
+from wordcloud import WordCloud
+
+wordcloud = WordCloud(width=1200, height=1000).generate(text=words)
+plt.title('Non-infantry Hostile Fatality WordCloud')
+plt.imshow(wordcloud)
+plt.show()
+
+
+# In[ ]:
+
+
+
+words2 = naf_hostile['FATALITY_2'].tolist()
+words2 = str(words2)
+wordcloud2 = WordCloud(width=1200, height=1000).generate(text=words2)
+plt.title('Navy/Air Force Hostile Fatality WordCloud')
+plt.imshow(wordcloud2)
+plt.show()
+
+
+# I think this does a much better job of illustrating the difference in the way hostile casualties were inflicted on these forces. Clearly Navy and Air Force casualties mostly involved aircraft crashing or getting shot down while non-infantry Marine and Army casualties were more likely to be inflicted by small arms fire.
+# 
+# Another interesting thing to look at in this dataset might be *when* these SMs died. If we can divide deaths between the rainy and dry seasons in Vietnam we might be able to illustrate whether or not there was a 'fighting season' during this conflict. As an example, in Afghanistan today most fighting occurs during the spring and summer months. Warmer temperatures are more conducive to ill-equipped troops maneuvering and attacking U.S. and coalition forces. I am curious to know if the same was true in Vietnam. If it was it ought to be indicated pretty clearly by the distribution of hostile infantry casualties by month. So let's take a look and see what we can discover.
+# 
+# First I'll just look at how casualties are dispersed across the duration of the conflict. I have seen in some of the other kernels done on this dataset that there are casualties in the 2000s, which are obviously incorrect. I assume that these represent casualties that were discovered during the recent recovery efforts in Vietnam. If this is true I will have to remove these to make my analysis meaningful (since clearly I won't know which year/month these fine Americans died).
+
+# In[ ]:
+
+
+hostile['FATALITY_DATE'] = hostile['FATALITY_DATE'].floordiv(100)
+
+_ = sns.distplot(hostile['FATALITY_DATE'])
+_ = plt.title('Infantry Hostile Fire Casualties by Date')
+plt.show()
+
+
+# As expected.
+
+# In[ ]:
+
+
+hostile = hostile[hostile['FATALITY_DATE'] < 197505]
+
+hostile['FATALITY_MONTH'] = hostile['FATALITY_DATE'] - 190000
+
+
+# In[ ]:
+
+
+hostile['FATALITY_MONTH'] = 0
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196201, 196301, 196401, 196501, 196601, 196701, 196801, 196901, 197001, 197101, 197201, 197301, 197401, 197501])] = 'January'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196202, 196302, 196402, 196502, 196602, 196702, 196802, 196902, 197002, 197102, 197202, 197302, 197402, 197502])] = 'February'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196203, 196303, 196403, 196503, 196603, 196703, 196803, 196903, 197003, 197103, 197203, 197303, 197403, 197503])] = 'March'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196204, 196304, 196404, 196504, 196604, 196704, 196804, 196904, 197004, 197104, 197204, 197304, 197404, 197504])] = 'April'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196205, 196305, 196405, 196505, 196605, 196705, 196805, 196905, 197005, 197105, 197205, 197305, 197405, 197505])] = 'May'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196206, 196306, 196406, 196506, 196606, 196706, 196806, 196906, 197006, 197106, 197206, 197306, 197406, 197506])] = 'June'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196207, 196307, 196407, 196507, 196607, 196707, 196807, 196907, 197007, 197107, 197207, 197307, 197407, 197507])] = 'July'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196208, 196308, 196408, 196508, 196608, 196708, 196808, 196908, 197008, 197108, 197208, 197308, 197408, 197508])] = 'August'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196209, 196309, 196409, 196509, 196609, 196709, 196809, 196909, 197009, 197109, 197209, 197309, 197409, 197509])] = 'September'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196210, 196310, 196410, 196510, 196610, 196710, 196810, 196910, 197010, 197110, 197210, 197310, 197410, 197510])] = 'October'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196211, 196311, 196411, 196511, 196611, 196711, 196811, 196911, 197011, 197111, 197211, 197311, 197411, 197511])] = 'November'
+hostile['FATALITY_MONTH'][hostile['FATALITY_DATE'].isin([196212, 196312, 196412, 196512, 196612, 196712, 196812, 196912, 197012, 197112, 197212, 197312, 197412, 197512])] = 'December'
+
+
+# In[ ]:
+
+
+hostile['season'] = 0
+
+hostile['season'][hostile['FATALITY_MONTH'].isin(['October', 'November', 'December'])] = 'rainy'
+hostile['season'][-hostile['FATALITY_MONTH'].isin(['October', 'November', 'December'])] = 'dry'
+
+
+# In[ ]:
+
+
+order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+_ = sns.countplot(x='FATALITY_MONTH', hue='season', data=hostile, order=order, hue_order=['rainy', 'dry'])
+_ = plt.title('Infantry Fatalities by Hostile Fire (by month)')
+_ = plt.xlabel('Month')
+_ = plt.ylabel('Number of Casualties')
+plt.xticks(rotation=40)
+plt.show()
+
+
+# In[ ]:
+
+
+plt.subplot(2,1,1)
+_ = sns.countplot(x='FATALITY_YEAR', data=hostile)
+_ = plt.title('Infantry Hostile Casualties by Year')
+_ = plt.xlabel('Fatality Year')
+_ = plt.ylabel('Number of Casualties')
+plt.xticks(rotation=45)
+plt.subplot(2,1,2)
+_ = sns.countplot(x='FATALITY_YEAR', data=data)
+_ = plt.title('Total Fatalities by Year')
+_ = plt.xlabel('Fatality Year')
+_ = plt.ylabel('Number of Casualties')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+# All right, looks like my hypothesis was correct. Casualties were lower during the rainy season months than during the dry season. The highest casualties over the course of the conflict occurred during the dry season and gradually trailed off as the rainy season approached. Apparently the 'fighting season' during the Vietnam conflict occurred during the dry season, which is not particularly surprising.
+# 
+# I also plotted casualties by year for Infantry and the total force just for fun. Evidently 1968 was a bad year.
+# 
+# Well, I think that answers all of my questions for this dataset. It's been fun exploring it.  Please feel free to upvote or comment as you see fit. 
+# 
+# Upvotes are always appreciated!
+# ===============================

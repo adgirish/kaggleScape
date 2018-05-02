@@ -1,325 +1,265 @@
 
 # coding: utf-8
 
-# Based on tensorflow starter code from https://www.kaggle.com/alexozerin/end-to-end-baseline-tf-estimator-lb-0-72
-
 # In[ ]:
 
 
-import os
-import re
-from glob import glob
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
+from torch import nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+from torch.optim import Adam
+from torch.utils.data import TensorDataset, DataLoader
+from tqdm import tqdm_notebook
+import seaborn as sns
 
 
 # In[ ]:
 
 
-POSSIBLE_LABELS = 'yes no up down left right on off stop go silence unknown'.split()
-id2name = {i: name for i, name in enumerate(POSSIBLE_LABELS)}
-name2id = {name: i for i, name in id2name.items()}
-len(id2name)
+data = pd.read_json('../input/train.json')
+test = pd.read_json('../input/train.json')
 
 
 # In[ ]:
 
 
-def load_data(data_dir):
-    """ Return 2 lists of tuples:
-    [(class_id, user_id, path), ...] for train
-    [(class_id, user_id, path), ...] for validation
-    """
-    # Just a simple regexp for paths with three groups:
-    # prefix, label, user_id
-    pattern = re.compile("(.+\/)?(\w+)\/([^_]+)_.+wav")
-    all_files = glob(os.path.join(data_dir, 'train/audio/*/*wav'))
+data['band_1'] = data['band_1'].apply(lambda x: np.array(x).reshape(75, 75))
+data['band_2'] = data['band_2'].apply(lambda x: np.array(x).reshape(75, 75))
+test['band_1'] = test['band_1'].apply(lambda x: np.array(x).reshape(75, 75))
+test['band_2'] = test['band_2'].apply(lambda x: np.array(x).reshape(75, 75))
 
-    with open(os.path.join(data_dir, 'train/validation_list.txt'), 'r') as fin:
-        validation_files = fin.readlines()
-    valset = set()
-    for entry in validation_files:
-        r = re.match(pattern, entry)
-        if r:
-            valset.add(r.group(3))
+data['inc_angle'] = pd.to_numeric(data['inc_angle'], errors='coerce')
+test['inc_angle'] = pd.to_numeric(test['inc_angle'], errors='coerce')
 
-    possible = set(POSSIBLE_LABELS)
-    train, val = [], []
-    for entry in all_files:
-        r = re.match(pattern, entry)
-        if r:
-            label, uid = r.group(2), r.group(3)
-            if label == '_background_noise_':
-                label = 'silence'
-            if label not in possible:
-                label = 'unknown'
+train = data.sample(frac=0.8)
+val = data[~data.isin(train)].dropna()
 
-            label_id = name2id[label]
 
-            sample = (label, label_id, uid, entry)
-            if uid in valset:
-                val.append(sample)
-            else:
-                train.append(sample)
+# In[ ]:
 
-    print('There are {} train and {} val samples'.format(len(train), len(val)))
+
+train.head()
+
+
+# ## check NaNs, ignore inc_angle for now
+
+# In[ ]:
+
+
+train.info()
+
+
+# ## Class Balance
+
+# In[ ]:
+
+
+sns.countplot(train['is_iceberg']);
+
+
+# In[ ]:
+
+
+def plot_sample(df, idx):
+    c = ( 'Not Hotdog', 'Hotdog')
+    f, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
+    ax1.imshow(df['band_1'].iloc[idx])
+    ax2.imshow(df['band_2'].iloc[idx])
+    ax3.hist(df['band_1'].iloc[idx].ravel(), bins=256, fc='k', ec='k');
+    ax4.hist(df['band_2'].iloc[idx].ravel(), bins=256, fc='k', ec='k');
+    f.set_figheight(10)
+    f.set_figwidth(10)
+    plt.suptitle(c[df['is_iceberg'].iloc[idx]])
+    plt.show()
+
+
+# In[ ]:
+
+
+plot_sample(train, 764)
+
+
+# In[ ]:
+
+
+plot_sample(train, 2)
+
+
+# ## Concat Bands into (N, 2, 75, 75) images
+
+# In[ ]:
+
+
+band_1_tr = np.concatenate([im for im in train['band_1']]).reshape(-1, 75, 75)
+band_2_tr = np.concatenate([im for im in train['band_2']]).reshape(-1, 75, 75)
+full_img_tr = np.stack([band_1_tr, band_2_tr], axis=1)
+
+band_1_val = np.concatenate([im for im in val['band_1']]).reshape(-1, 75, 75)
+band_2_val = np.concatenate([im for im in val['band_2']]).reshape(-1, 75, 75)
+full_img_val = np.stack([band_1_val, band_2_val], axis=1)
+
+band_1_test = np.concatenate([im for im in test['band_1']]).reshape(-1, 75, 75)
+band_2_test = np.concatenate([im for im in test['band_2']]).reshape(-1, 75, 75)
+full_img_test = np.stack([band_1_test, band_2_test], axis=1)
+
+
+# ## Dataset and DataLoader
+
+# In[ ]:
+
+
+train_imgs = torch.from_numpy(full_img_tr).float()
+train_targets = torch.from_numpy(train['is_iceberg'].values).long()
+train_dataset = TensorDataset(train_imgs, train_targets)
+
+val_imgs = torch.from_numpy(full_img_val).float()
+val_targets = torch.from_numpy(val['is_iceberg'].values).long()
+val_dataset = TensorDataset(val_imgs, val_targets)
+
+
+test_imgs  = torch.from_numpy(full_img_test).float()
+
+
+
+# In[ ]:
+
+
+train_dataset[0]
+
+
+# ## Define simple model
+
+# In[ ]:
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.batch = nn.BatchNorm2d(2)
+        self.conv1 = nn.Conv2d(2, 32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(64 * 18 * 18, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 2)
+
+    def forward(self, x):
+        x = self.batch(x)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+# In[ ]:
+
+
+net = Net()
+
+
+# ## Train
+
+# In[ ]:
+
+
+epochs = 2
+criterion = nn.CrossEntropyLoss()
+optimizer = Adam(net.parameters())
+
+
+# In[ ]:
+
+
+# utils 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, window_size=None):
+        self.length = 0
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+        self.window_size = window_size
+
+    def reset(self):
+        self.length = 0
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        if self.window_size and (self.count >= self.window_size):
+            self.reset()
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+        
+def accuracy(y_true, y_pred):
+    y_true = y_true.float()
+    _, y_pred = torch.max(y_pred, dim=-1)
+    return (y_pred.float() == y_true).float().mean()
     
-    columns_list = ['label', 'label_id', 'user_id', 'wav_file']
-    
-    train_df = pd.DataFrame(train, columns = columns_list)
-    valid_df = pd.DataFrame(val, columns = columns_list)
-    
-    return train_df, valid_df
+def fit(train, val, epochs, batch_size):
+    print('train on {} images validate on {} images'.format(len(train), len(val)))
+    net.train()
+    train_loader = DataLoader(train, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val, batch_size=batch_size, shuffle=False)
+    for epoch in tqdm_notebook(range(epochs), total=epochs):
+        running_loss = AverageMeter()
+        running_accuracy = AverageMeter()
+        val_loss_meter = AverageMeter()
+        val_acc_meter = AverageMeter()
+        pbar = tqdm_notebook(train_loader, total=len(train_loader))
+        for data, target in pbar:
+            data, target = Variable(data), Variable(target)
+            output = net(data)
+            loss = criterion(output, target)
+            acc = accuracy(target.data, output.data)
+            running_loss.update(loss.data[0])
+            running_accuracy.update(acc)
+            pbar.set_description("[ loss: {:.4f} | acc: {:.4f} ] ".format(
+                running_loss.avg, running_accuracy.avg))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        print("[ loss: {:.4f} | acc: {:.4f} ] ".format(running_loss.avg, running_accuracy.avg))
+        for val_data, val_target in val_loader:
+            val_data, val_target = Variable(val_data), Variable(val_target)
+            output = net(val_data)
+            val_loss = criterion(output, val_target)
+            val_acc = accuracy(val_target.data, output.data)
+            val_loss_meter.update(val_loss.data[0])
+            val_acc_meter.update(val_acc)
+        pbar.set_description("[ loss: {:.4f} | acc: {:.4f} | vloss: {:.4f} | vacc: {:.4f} ] ".format(
+        running_loss.avg, running_accuracy.avg, val_loss_meter.avg, val_acc_meter.avg))
+        print("[ loss: {:.4f} | acc: {:.4f} | vloss: {:.4f} | vacc: {:.4f} ] ".format(
+        running_loss.avg, running_accuracy.avg, val_loss_meter.avg, val_acc_meter.avg))
 
 
 # In[ ]:
 
 
-train_df, valid_df = load_data('./data/')
+fit(train_dataset, val_dataset, 3, 32)
 
 
 # In[ ]:
 
 
-train_df.head()
+fit(train_dataset, val_dataset, 3, 32)
 
 
-# In[ ]:
-
-
-train_df.label.value_counts()
-
-
-# In[ ]:
-
-
-silence_files = train_df[train_df.label == 'silence']
-train_df      = train_df[train_df.label != 'silence']
-
-
-# In[ ]:
-
-
-from scipy.io import wavfile
-
-
-# In[ ]:
-
-
-def read_wav_file(fname):
-    _, wav = wavfile.read(fname)
-    wav = wav.astype(np.float32) / np.iinfo(np.int16).max
-    return wav
-
-
-# In[ ]:
-
-
-silence_data = np.concatenate([read_wav_file(x) for x in silence_files.wav_file.values])
-
-
-# In[ ]:
-
-
-from scipy.signal import stft
-
-
-# In[ ]:
-
-
-def process_wav_file(fname):
-    wav = read_wav_file(fname)
-    
-    L = 16000  # 1 sec
-    
-    if len(wav) > L:
-        i = np.random.randint(0, len(wav) - L)
-        wav = wav[i:(i+L)]
-    elif len(wav) < L:
-        rem_len = L - len(wav)
-        i = np.random.randint(0, len(silence_data) - rem_len)
-        silence_part = silence_data[i:(i+L)]
-        j = np.random.randint(0, rem_len)
-        silence_part_left  = silence_part[0:j]
-        silence_part_right = silence_part[j:rem_len]
-        wav = np.concatenate([silence_part_left, wav, silence_part_right])
-    
-    specgram = stft(wav, 16000, nperseg = 400, noverlap = 240, nfft = 512, padded = False, boundary = None)
-    phase = np.angle(specgram[2]) / np.pi
-    amp = np.log1p(np.abs(specgram[2]))
-    
-    return np.stack([phase, amp], axis = 2)
-
-
-# In[ ]:
-
-
-import random
-import tensorflow as tf
-from tensorflow.python.keras.models import Model
-from tensorflow.python.keras.layers import Input, Conv2D, MaxPooling2D, Activation, BatchNormalization, GlobalAveragePooling2D, GlobalMaxPool2D, concatenate, Dense, Dropout
-from tensorflow.python.keras.optimizers import RMSprop
-from tensorflow.python.keras.utils import to_categorical
-
-
-# In[ ]:
-
-
-def train_generator(train_batch_size):
-    while True:
-        this_train = train_df.groupby('label_id').apply(lambda x: x.sample(n = 2000))
-        shuffled_ids = random.sample(range(this_train.shape[0]), this_train.shape[0])
-        for start in range(0, len(shuffled_ids), train_batch_size):
-            x_batch = []
-            y_batch = []
-            end = min(start + train_batch_size, len(shuffled_ids))
-            i_train_batch = shuffled_ids[start:end]
-            for i in i_train_batch:
-                x_batch.append(process_wav_file(this_train.wav_file.values[i]))
-                y_batch.append(this_train.label_id.values[i])
-            x_batch = np.array(x_batch)
-            y_batch = to_categorical(y_batch, num_classes = len(POSSIBLE_LABELS))
-            yield x_batch, y_batch
-
-
-# In[ ]:
-
-
-def valid_generator(val_batch_size):
-    while True:
-        ids = list(range(valid_df.shape[0]))
-        for start in range(0, len(ids), val_batch_size):
-            x_batch = []
-            y_batch = []
-            end = min(start + val_batch_size, len(ids))
-            i_val_batch = ids[start:end]
-            for i in i_val_batch:
-                x_batch.append(process_wav_file(valid_df.wav_file.values[i]))
-                y_batch.append(valid_df.label_id.values[i])
-            x_batch = np.array(x_batch)
-            y_batch = to_categorical(y_batch, num_classes = len(POSSIBLE_LABELS))
-            yield x_batch, y_batch
-
-
-# In[ ]:
-
-
-x_in = Input(shape = (257,98,2))
-x = BatchNormalization()(x_in)
-for i in range(4):
-    x = Conv2D(16*(2 ** i), (3,3))(x)
-    x = Activation('elu')(x)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D((2,2))(x)
-x = Conv2D(128, (1,1))(x)
-x_branch_1 = GlobalAveragePooling2D()(x)
-x_branch_2 = GlobalMaxPool2D()(x)
-x = concatenate([x_branch_1, x_branch_2])
-x = Dense(256, activation = 'relu')(x)
-x = Dropout(0.5)(x)
-x = Dense(len(POSSIBLE_LABELS), activation = 'soft')(x)
-model = Model(inputs = x_in, outputs = x)
-model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
-model.summary()
-
-
-# In[ ]:
-
-
-from keras_tqdm import TQDMNotebookCallback
-from tensorflow.python.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-
-
-# In[ ]:
-
-
-callbacks = [EarlyStopping(monitor='val_loss',
-                           patience=5,
-                           verbose=1,
-                           min_delta=0.01,
-                           mode='min'),
-             ReduceLROnPlateau(monitor='val_loss',
-                               factor=0.1,
-                               patience=3,
-                               verbose=1,
-                               epsilon=0.01,
-                               mode='min'),
-             ModelCheckpoint(monitor='val_loss',
-                             filepath='weights/starter.hdf5',
-                             save_best_only=True,
-                             save_weights_only=True,
-                             mode='min'),
-             TQDMNotebookCallback()]
-
-
-# In[ ]:
-
-
-history = model.fit_generator(generator=train_generator(64),
-                              steps_per_epoch=344,
-                              epochs=20,
-                              verbose=2,
-                              callbacks=callbacks,
-                              validation_data=valid_generator(64),
-                              validation_steps=int(np.ceil(valid_df.shape[0]/64)))
-
-
-# In[ ]:
-
-
-model.load_weights('./weights/starter.hdf5')
-
-
-# In[ ]:
-
-
-test_paths = glob(os.path.join('./data/', 'test/audio/*wav'))
-
-
-# In[ ]:
-
-
-def test_generator(test_batch_size):
-    while True:
-        for start in range(0, len(test_paths), test_batch_size):
-            x_batch = []
-            end = min(start + test_batch_size, len(test_paths))
-            this_paths = test_paths[start:end]
-            for x in this_paths:
-                x_batch.append(process_wav_file(x))
-            x_batch = np.array(x_batch)
-            yield x_batch
-
-
-# In[ ]:
-
-
-predictions = model.predict_generator(test_generator(64), int(np.ceil(len(test_paths)/64)))
-
-
-# In[ ]:
-
-
-classes = np.argmax(predictions, axis=1)
-
-
-# In[ ]:
-
-
-# last batch will contain padding, so remove duplicates
-submission = dict()
-for i in range(len(test_paths)):
-    fname, label = os.path.basename(test_paths[i]), id2name[classes[i]]
-    submission[fname] = label
-
-
-# In[ ]:
-
-
-with open('starter_submission.csv', 'w') as fout:
-    fout.write('fname,label\n')
-    for fname, label in submission.items():
-        fout.write('{},{}\n'.format(fname, label))
-
+# ## Overfitting at 4 epochs

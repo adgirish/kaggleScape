@@ -1,167 +1,158 @@
-import pandas as pd
+import gc
+import time
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
-from sklearn.linear_model import ElasticNet, Lasso
-from sklearn.feature_selection import SelectFromModel
-from sklearn.svm import SVR
-from sklearn.model_selection import KFold, cross_val_score
-from sklearn.pipeline import make_pipeline
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import RobustScaler
-from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
-import xgboost as xgb
+import pandas as pd
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+from scipy.sparse import csr_matrix, hstack
 
-y_train = train['y'].values
-y_mean = np.mean(y_train)
-id_test = test['ID']
+from sklearn.linear_model import Ridge
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split, cross_val_score
+import lightgbm as lgb
 
-num_train = len(train)
-df_all = pd.concat([train, test])
-df_all.drop(['ID', 'y'], axis=1, inplace=True)
+NUM_BRANDS = 4000
+NUM_CATEGORIES = 1000
+NAME_MIN_DF = 10
+MAX_FEATURES_ITEM_DESCRIPTION = 55000
 
-df_all = pd.get_dummies(df_all, drop_first=True)
 
-train = df_all[:num_train]
-test = df_all[num_train:]
+def handle_missing_inplace(dataset):
+    dataset['category_name'].fillna(value='missing', inplace=True)
+    dataset['brand_name'].fillna(value='missing', inplace=True)
+    dataset['item_description'].fillna(value='missing', inplace=True)
 
-class StackingCVRegressorAveraged(BaseEstimator, RegressorMixin, TransformerMixin):
-    def __init__(self, regressors, meta_regressor, n_folds=5):
-        self.regressors = regressors
-        self.meta_regressor = meta_regressor
-        self.n_folds = n_folds
 
-    def fit(self, X, y):
-        self.regr_ = [list() for x in self.regressors]
-        self.meta_regr_ = clone(self.meta_regressor)
+def cutting(dataset):
+    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
+    pop_category = dataset['category_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['category_name'].isin(pop_category), 'category_name'] = 'missing'
 
-        kfold = KFold(n_splits=self.n_folds, shuffle=True)
 
-        out_of_fold_predictions = np.zeros((X.shape[0], len(self.regressors)))
+def to_categorical(dataset):
+    dataset['category_name'] = dataset['category_name'].astype('category')
+    dataset['brand_name'] = dataset['brand_name'].astype('category')
+    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
 
-        for i, clf in enumerate(self.regressors):
-            for train_idx, holdout_idx in kfold.split(X, y):
-                instance = clone(clf)
-                self.regr_[i].append(instance)
 
-                instance.fit(X[train_idx], y[train_idx])
-                y_pred = instance.predict(X[holdout_idx])
-                out_of_fold_predictions[holdout_idx, i] = y_pred
+def main():
+    start_time = time.time()
 
-        self.meta_regr_.fit(out_of_fold_predictions, y)
+    train = pd.read_table('../input/train.tsv', engine='c')
+    test = pd.read_table('../input/test.tsv', engine='c')
+    print('[{}] Finished to load data'.format(time.time() - start_time))
+    print('Train shape: ', train.shape)
+    print('Test shape: ', test.shape)
 
-        return self
+    nrow_train = train.shape[0]
+    y = np.log1p(train["price"])
+    merge: pd.DataFrame = pd.concat([train, test])
+    submission: pd.DataFrame = test[['test_id']]
 
-    def predict(self, X):
-        meta_features = np.column_stack([
-            np.column_stack([r.predict(X) for r in regrs]).mean(axis=1)
-            for regrs in self.regr_
-        ])
-        return self.meta_regr_.predict(meta_features)
-        
+    del train
+    del test
+    gc.collect()
 
-class StackingCVRegressorRetrained(BaseEstimator, RegressorMixin, TransformerMixin):
-    def __init__(self, regressors, meta_regressor, n_folds=5, use_features_in_secondary=False):
-        self.regressors = regressors
-        self.meta_regressor = meta_regressor
-        self.n_folds = n_folds
-        self.use_features_in_secondary = use_features_in_secondary
+    handle_missing_inplace(merge)
+    print('[{}] Finished to handle missing'.format(time.time() - start_time))
 
-    def fit(self, X, y):
-        self.regr_ = [clone(x) for x in self.regressors]
-        self.meta_regr_ = clone(self.meta_regressor)
+    cutting(merge)
+    print('[{}] Finished to cut'.format(time.time() - start_time))
 
-        kfold = KFold(n_splits=self.n_folds, shuffle=True)
+    to_categorical(merge)
+    print('[{}] Finished to convert categorical'.format(time.time() - start_time))
 
-        out_of_fold_predictions = np.zeros((X.shape[0], len(self.regressors)))
+    cv = CountVectorizer(min_df=NAME_MIN_DF)
+    X_name = cv.fit_transform(merge['name'])
+    print('[{}] Finished count vectorize `name`'.format(time.time() - start_time))
 
-        # Create out-of-fold predictions for training meta-model
-        for i, regr in enumerate(self.regr_):
-            for train_idx, holdout_idx in kfold.split(X, y):
-                instance = clone(regr)
-                instance.fit(X[train_idx], y[train_idx])
-                out_of_fold_predictions[holdout_idx, i] = instance.predict(X[holdout_idx])
+    cv = CountVectorizer()
+    X_category = cv.fit_transform(merge['category_name'])
+    print('[{}] Finished count vectorize `category_name`'.format(time.time() - start_time))
 
-        # Train meta-model
-        if self.use_features_in_secondary:
-            self.meta_regr_.fit(np.hstack((X, out_of_fold_predictions)), y)
-        else:
-            self.meta_regr_.fit(out_of_fold_predictions, y)
-        
-        # Retrain base models on all data
-        for regr in self.regr_:
-            regr.fit(X, y)
+    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
+                         ngram_range=(1, 3),
+                         stop_words='english')
+    X_description = tv.fit_transform(merge['item_description'])
+    print('[{}] Finished TFIDF vectorize `item_description`'.format(time.time() - start_time))
 
-        return self
+    lb = LabelBinarizer(sparse_output=True)
+    X_brand = lb.fit_transform(merge['brand_name'])
+    print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
 
-    def predict(self, X):
-        meta_features = np.column_stack([
-            regr.predict(X) for regr in self.regr_
-        ])
+    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
+                                          sparse=True).values)
+    print('[{}] Finished to get dummies on `item_condition_id` and `shipping`'.format(time.time() - start_time))
 
-        if self.use_features_in_secondary:
-            return self.meta_regr_.predict(np.hstack((X, meta_features)))
-        else:
-            return self.meta_regr_.predict(meta_features)
-        
-class AveragingRegressor(BaseEstimator, RegressorMixin, TransformerMixin):
-    def __init__(self, regressors):
-        self.regressors = regressors
+    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category, X_name)).tocsr()
+    print('[{}] Finished to create sparse merge'.format(time.time() - start_time))
 
-    def fit(self, X, y):
-        self.regr_ = [clone(x) for x in self.regressors]
-        
-        # Train base models
-        for regr in self.regr_:
-            regr.fit(X, y)
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_train:]
 
-        return self
-
-    def predict(self, X):
-        predictions = np.column_stack([
-            regr.predict(X) for regr in self.regr_
-        ])
-        return np.mean(predictions, axis=1)
-
-en = make_pipeline(RobustScaler(), SelectFromModel(Lasso(alpha=0.03)), ElasticNet(alpha=0.001, l1_ratio=0.1))
+    # def rmsle(y, y0):
+    #     assert len(y) == len(y0)
+    #     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
     
-rf = RandomForestRegressor(n_estimators=250, n_jobs=4, min_samples_split=25, min_samples_leaf=25, max_depth=3)
-                           
-et = ExtraTreesRegressor(n_estimators=100, n_jobs=4, min_samples_split=25, min_samples_leaf=35, max_features=150)
+    model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3)
+    model.fit(X, y)
+    print('[{}] Finished to train ridge sag'.format(time.time() - start_time))
+    predsR = model.predict(X=X_test)
+    print('[{}] Finished to predict ridge sag'.format(time.time() - start_time))
 
-xgbm = xgb.sklearn.XGBRegressor(max_depth=4, learning_rate=0.005, subsample=0.9, base_score=y_mean,
-                                objective='reg:linear', n_estimators=1000)
-                           
-stack_avg = StackingCVRegressorAveraged((en, rf, et), ElasticNet(l1_ratio=0.1, alpha=1.4))
+    model = Ridge(solver="lsqr", fit_intercept=True, random_state=145, alpha = 3)
+    model.fit(X, y)
+    print('[{}] Finished to train ridge lsqrt'.format(time.time() - start_time))
+    predsR2 = model.predict(X=X_test)
+    print('[{}] Finished to predict ridge lsqrt'.format(time.time() - start_time))
 
-stack_with_feats = StackingCVRegressorRetrained((en, rf, et), xgbm, use_features_in_secondary=True)
+    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.1, random_state = 144) 
+    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
+    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
+    watchlist = [d_train, d_valid]
+    
+    params = {
+        'learning_rate': 0.76,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 99,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'nthread': 4
+    }
 
-stack_retrain = StackingCVRegressorRetrained((en, rf, et), ElasticNet(l1_ratio=0.1, alpha=1.4))
+    params2 = {
+        'learning_rate': 0.85,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 110,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'nthread': 4
+    }
 
-averaged = AveragingRegressor((en, rf, et, xgbm))
+    model = lgb.train(params, train_set=d_train, num_boost_round=7500, valid_sets=watchlist, \
+    early_stopping_rounds=500, verbose_eval=500) 
+    predsL = model.predict(X_test)
+    
+    print('[{}] Finished to predict lgb 1'.format(time.time() - start_time))
+    
+    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
+    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
+    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
+    watchlist2 = [d_train2, d_valid2]
 
-results = cross_val_score(en, train.values, y_train, cv=5, scoring='r2')
-print("ElasticNet score: %.4f (%.4f)" % (results.mean(), results.std()))
+    model = lgb.train(params2, train_set=d_train2, num_boost_round=3000, valid_sets=watchlist2, \
+    early_stopping_rounds=50, verbose_eval=500) 
+    predsL2 = model.predict(X_test)
 
-results = cross_val_score(rf, train.values, y_train, cv=5, scoring='r2')
-print("RandomForest score: %.4f (%.4f)" % (results.mean(), results.std()))
+    print('[{}] Finished to predict lgb 2'.format(time.time() - start_time))
 
-results = cross_val_score(et, train.values, y_train, cv=5, scoring='r2')
-print("ExtraTrees score: %.4f (%.4f)" % (results.mean(), results.std()))
+    preds = predsR2*0.15 + predsR*0.15 + predsL*0.5 + predsL2*0.2
 
-results = cross_val_score(xgbm, train.values, y_train, cv=5, scoring='r2')
-print("XGBoost score: %.4f (%.4f)" % (results.mean(), results.std()))
+    submission['price'] = np.expm1(preds)
+    submission.to_csv("submission_lgbm_ridge_11.csv", index=False)
 
-results = cross_val_score(averaged, train.values, y_train, cv=5, scoring='r2')
-print("Averaged base models score: %.4f (%.4f)" % (results.mean(), results.std()))
-
-results = cross_val_score(stack_with_feats, train.values, y_train, cv=5, scoring='r2')
-print("Stacking (with primary feats) score: %.4f (%.4f)" % (results.mean(), results.std()))
-
-results = cross_val_score(stack_retrain, train.values, y_train, cv=5, scoring='r2')
-print("Stacking (retrained) score: %.4f (%.4f)" % (results.mean(), results.std()))
-                 
-results = cross_val_score(stack_avg, train.values, y_train, cv=5, scoring='r2')
-print("Stacking (averaged) score: %.4f (%.4f)" % (results.mean(), results.std()))
+if __name__ == '__main__':
+    main()

@@ -1,1125 +1,838 @@
 
 # coding: utf-8
 
-# <img src="http://cliparts.co/cliparts/6iy/oBb/6iyoBbdpT.gif"/>
-
-# # Human Resources Analytics - Milestone Report
-# ***
-
-# **"Yeah, they all said that to me..."**, *Bob replied as we were at Starbucks sipping on our dark roast coffee. Bob is a friend of mine and was the owner of a multi-million dollar company, that's right, "m-i-l-l-i-o-n". He used to tell me stories about how his company's productivity and growth has sky rocketed from the previous years and everything has been going great. But recently, he's been noticing some decline within his company. In a five month period, he lost one-fifth of his employees. At least a dozen of them throughout each department made phone calls and even left sticky notes on their tables informing him about their leave. Nobody knew what was happening. In that year, he was contemplating about filing for bankruptcy. Fast-forward seven months later, he's having a conversation with his co-founder of the company. The conversation ends with, **"I quit..."**
-
-# That is the last thing anybody wants to hear from their employees. In a sense, it’s the employees who make the company. It’s the employees who do the work. It’s the employees who shape the company’s culture. Long-term success, a healthy work environment, and high employee retention are all signs of a successful company. But when a company experiences a high rate of employee turnover, then something is going wrong. This can lead the company to huge monetary losses by these innovative and valuable employees.
-
-# Companies that maintain a healthy organization and culture are always a good sign of future prosperity. Recognizing and understanding what factors that were associated with employee turnover will allow companies and individuals to limit this from happening and may even increase employee productivity and growth. These predictive insights give managers the opportunity to take corrective steps to build and preserve their successful business.
-
-# ** "You don't build a business. You build people, and people build the business." - Zig Ziglar**
-# ***
+# <h1>An MVP Aproach</h1>
+# =========
+# <br>
+# <h2> 1. Introduction</h2>
+# ---------------------------------
+# <p>As a (admittedly lazy) Data Scientist I love accessing information in the easiest way possible. Google is my best friend, for example. With the exception of a few things, there is almost nothing you can't find with a simple search.</p>
 # 
-# <img src="https://static1.squarespace.com/static/5144a1bde4b033f38036b7b9/t/56ab72ebbe7b96fafe9303f5/1454076676264/"/>
-
-# ## About This Kernel
-# ***
-# **Feel free to use this kernel as a reference as a template for your analysis :)**
+# <p>This kernel is written and developed using IPython Notebook and XGBoost, with the aim of being ready-to-submit. By that I mean any user can run each code block, submit the output, and achieve a comfortable top-half score. Breaking into the top 10% of the submissions would require quite a bit more effort and a more sophisticated approach. In the final section I include some comments and suggestions of some alterations/variations one might try to improve the score. Those suggestions, if carried out correctly, do result in a strong score on the leaderboard. </p>
 # 
-# For those that are in or interested in **Human Resources** and would like a detailed guide on how to approach an **employee retention** problem through a **data science** point of view, feel free to check this notebook out.. 
+# <p>This then serves as an introductory tutorial to approaching this particular problem (rather than giving the best solution outright) leaving enough room for creativity and innovation in the solution space to allow any user to better the end result.<br>
+# In short, the whole project is about LEARNING, sharing some ideas, and ultimately improving the degree of Data Scientists out there. </p>
+# <p>Enjoy! </p><br>
 # 
-# I will be covering my analysis and approach through different process flows in the data science pipeline, which includes statistical inference and exploratory data analysis. The main goal is to understand the reasoning behind employee turnover and to come up with a model to classify an employee’s risk of attrition. A recommendation for a retention plan was created, which incorporates some best practices for employee retention at different risk levels of attrition.
+# <h3>1.1 The Problem</h3> <br>
+# <p>New York is riddled with one-ways, small side streets, and an almost incalculable amount of pedestrians at any given point in time. Not to mention the amount of cars/motorcycles/bicycles clogging up the roads. Combine this with a mad rush to get from point A to point B, and you'll find yourself late for whatever you need to be on time for.</p>
 # 
-# *Hopefully the kernel added some new insights/perspectives to the data science community! If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!* 
+# <p>The solution to getting from A to B when living in a city like New York (without losing your mind) is easy: take a taxi/Uber/Lyft/etc. You don't need to stress about the traffic or pedestrians and you have a moment to do something else, like catch up on emails. Although this sounds simple enough, it doesn't mean you'll get to your destination in time. So you need to have your driver take the shortest trip possible. By shortest, we're talking time. If a route A is X kilometers *longer*, but gets you there Y minutes *faster* than route B would, rather take that one.</p>
 # 
-# *This notebook will always be a work in progress. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. Thank you guys!*
+# <p>To know which route is the best one to take, we need to be able to predict how long the trip will last when taking a specific route. Therefore, *the goal of this playground competition is to predict the the duration of each trip in the test data set, given start and end coordinates.*</p><br>
 # 
-# ## UPDATE: R Version
-# ***
-# **R Users:**
+# <h3>1.2 The Libraries & Functions</h3><br>
+# <p>
+# Using Python 3.6.1, import the following libraries. Note the use of `%matplotlib inline`, allowing the display of graphs inline in iPython Notebook.</p>
 # 
-# **Thanks to Ragul, he has created a similar kernel but using R. Check it out if you are an R user!**
+# <h3>Documentation</h3>
+# [Scikit-Learn](http://scikit-learn.org/stable/documentation.html "Scikit-Learn")<br>
+# [Pandas](http://pandas.pydata.org/pandas-docs/stable/ "Pandas")<br>
+# [Numpy](https://docs.scipy.org/doc/ "Numpy")<br>
+# [XGBoost](http://xgboost.readthedocs.io/en/latest/python/python_intro.html "XGBoost")<br>
+# [Seaborn](https://seaborn.pydata.org/index.html "Seaborn")<br>
 # 
-# https://www.kaggle.com/ragulram/hr-analytics-exploration-and-modelling-with-r
-
-# ## Business Problem
-# ***
-# *Bob's multi-million dollar company is about to go bankrupt and he wants to know why his employees are leaving.*
-
-# ## Client
-# ***
-# *Bob the Boss*
-
-# ## Objective
-# ***
-# *The company wants to understand what factors contributed most to employee turnover and to create a model that can predict if a certain employee will leave the company or not. The goal is to create or improve different retention strategies on targeted employees. Overall, the implementation of this model will allow management to create better decision-making actions. *
-
-# ## OSEMN Pipeline
-# ****
-# 
-# *I’ll be following a typical data science pipeline, which is call “OSEMN” (pronounced awesome).*
-# 
-# 1. **O**btaining the data is the first approach in solving the problem.
-# 
-# 2. **S**crubbing or cleaning the data is the next step. This includes data imputation of missing or invalid data and fixing column names.
-# 
-# 3. **E**xploring the data will follow right after and allow further insight of what our dataset contains. Looking for any outliers or weird data. Understanding the relationship each explanatory variable has with the response variable resides here and we can do this with a correlation matrix. 
-# 
-# 4. **M**odeling the data will give us our predictive power on whether an employee will leave. 
-# 
-# 5. I**N**terpreting the data is last. With all the results and analysis of the data, what conclusion is made? What factors contributed most to employee turnover? What relationship of variables were found? 
-# 
-# **Note:** *The data was found from the “Human Resources Analytics” dataset provided by Kaggle’s website. https://www.kaggle.com/ludobenistant/hr-analytics*
-# 
-# **Note:** THIS DATASET IS **SIMULATED**.
-
-# # Part 1: Obtaining the Data 
-# ***
+# <p>I used Scikit-Learn (or sklearn) for a few of the machine learning operations that was carried out. Pandas is used for data manipulation. Numpy is the fundamental package for scientific computation in Python. XGBoost is the classification algorithm used to make the final predictions. Seaborn is a nice tool for data visualisation built on top of matplotlib. The import code is as follows:</p>
 
 # In[ ]:
 
 
-# Import the neccessary modules for data manipulation and visual representation
+get_ipython().run_line_magic('matplotlib', 'inline')
 import pandas as pd
+from datetime import datetime
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import xgboost as xgb
+from sklearn.linear_model import LinearRegression, Ridge,BayesianRidge
+from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import mean_squared_error
+from math import radians, cos, sin, asin, sqrt
+import seaborn as sns
+import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib as matplot
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+plt.rcParams['figure.figsize'] = [16, 10]
 
 
-# In[ ]:
-
-
-#Read the analytics csv file and store our dataset into a dataframe called "df"
-df = pd.DataFrame.from_csv('../input/HR_comma_sep.csv', index_col=None)
-
-
-# # Part 2: Scrubbing the Data 
-# ***
-
-# *Typically, cleaning the data requires a lot of work and can be a very tedious procedure. This dataset from Kaggle is super clean and contains no missing values. But still, I will have to examine the dataset to make sure that everything else is readable and that the observation values match the feature names appropriately.*
+# <h2>1.3 Loading the Data</h2><br>
+# <p>Load the data using the Pandas `read_csv` function:</p>
 
 # In[ ]:
 
 
-# Check to see if there are any missing values in our data set
-df.isnull().any()
+train = pd.read_csv('../input/new-york-city-taxi-with-osrm/train.csv')
+test = pd.read_csv('../input/new-york-city-taxi-with-osrm/test.csv')
 
 
-# In[ ]:
-
-
-# Get a quick overview of what we are dealing with in our dataset
-df.head()
-
-
-# In[ ]:
-
-
-# Renaming certain columns for better readability
-df = df.rename(columns={'satisfaction_level': 'satisfaction', 
-                        'last_evaluation': 'evaluation',
-                        'number_project': 'projectCount',
-                        'average_montly_hours': 'averageMonthlyHours',
-                        'time_spend_company': 'yearsAtCompany',
-                        'Work_accident': 'workAccident',
-                        'promotion_last_5years': 'promotion',
-                        'sales' : 'department',
-                        'left' : 'turnover'
-                        })
-
-
-# In[ ]:
-
-
-# Move the reponse variable "turnover" to the front of the table
-front = df['turnover']
-df.drop(labels=['turnover'], axis=1,inplace = True)
-df.insert(0, 'turnover', front)
-df.head()
-
-
-# # Part 3: Exploring the Data
-# *** 
-#  <img  src="https://s-media-cache-ak0.pinimg.com/originals/32/ef/23/32ef2383a36df04a065b909ee0ac8688.gif"/>
-
-# ##  3a. Statistical Overview 
-# ***
-# The dataset has:
-#  - About 15,000 employee observations and 10 features 
-#  - The company had a turnover rate of about 24%
-#  - Mean satisfaction of employees is 0.61
-
-# In[ ]:
-
-
-# The dataset contains 10 columns and 14999 observations
-df.shape
-
-
-# In[ ]:
-
-
-# Check the type of our features. 
-df.dtypes
-
-
-# In[ ]:
-
-
-# Looks like about 76% of employees stayed and 24% of employees left. 
-# NOTE: When performing cross validation, its important to maintain this turnover ratio
-turnover_rate = df.turnover.value_counts() / len(df)
-turnover_rate
-
-
-# In[ ]:
-
-
-# Display the statistical overview of the employees
-df.describe()
-
-
-# In[ ]:
-
-
-# Overview of summary (Turnover V.S. Non-turnover)
-turnover_Summary = df.groupby('turnover')
-turnover_Summary.mean()
-
-
-# ##  3b. Correlation Matrix & Heatmap
-# ***
-# **Moderate Positively Correlated Features:** 
-# - projectCount vs evaluation: 0.349333
-# - projectCount vs averageMonthlyHours:  0.417211
-# - averageMonthlyHours vs evaluation: 0.339742
+# <h2>1.4 Initial Data Exploration</h2><br>
 # 
-# **Moderate Negatively Correlated Feature:**
-#  - satisfaction vs turnover:  -0.388375
-# 
-# **Stop and Think:**
-# - What features affect our target variable the most (turnover)?
-# - What features have strong correlations with each other?
-# - Can we do a more in depth examination of these features?
-# 
-# **Summary:**
-# 
-# From the heatmap, there is a **positive(+)** correlation between projectCount, averageMonthlyHours, and evaluation. Which could mean that the employees who spent more hours and did more projects were evaluated highly. 
-# 
-# For the **negative(-)** relationships, turnover and satisfaction are highly correlated. I'm assuming that people tend to leave a company more when they are less satisfied. 
+# <h3>1.4.1 File structure</h3><br>
+# <p>Let's start off by exploring the files we just imported, using Pandas `head` and `describe` functions:</p>
 
 # In[ ]:
 
 
-#Correlation Matrix
-corr = df.corr()
-corr = (corr)
-sns.heatmap(corr, 
-            xticklabels=corr.columns.values,
-            yticklabels=corr.columns.values)
-
-corr
+pd.set_option('display.float_format', lambda x: '%.3f' % x)
+train.head()
 
 
-# ## 3b2. Statistical Test for Correlation
-# ***
+# <p>Note the use of `pd.set_option('display.float_format', lambda x: '%.3f' % x)` to set the display options. More on that [here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.set_option.html "Pandas set_option").</p>
 # 
-# ### One-Sample T-Test (Measuring Satisfaction Level)
-# A one-sample t-test checks whether a sample mean differs from the population mean. Since satisfaction has the highest correlation with our dependent variable turnover, let's test to see whether the average satisfaction level of employees that had a turnover differs from the those that had no turnover.
-# 
-# **Hypothesis Testing:** Is there significant difference in the **means of satisfaction level** between employees who had a turnover and temployees who had no turnover?
-# 
-#  - **Null Hypothesis:** *(H0: pTS = pES)* The null hypothesis would be that there is **no** difference in satisfaction level between employees who did turnover and those who did not..
-# 
-#  - **Alternate Hypothesis:** *(HA: pTS != pES)* The alternative hypothesis would be that there **is** a difference in satisfaction level between employees who did turnover and those who did not..
+# <p>You can also use `train.tail()` to display the last 5 entries in the two files. From the output we can get an idea of the way the data is structured. Of course, this isn't strictly necessary, since it is possible to get the same view by navigating to the *Input Files* at the top and clicking on any one of the CSV files used in this analysis.</p>
+# <br>
+# <h3>1.4.2 Data Summary</h3><br>
+# <p>Getting a statistical summary of the data is also quite easy. This is where the `describe` function comes in:</p>
 
 # In[ ]:
 
 
-# Let's compare the means of our employee turnover satisfaction against the employee population satisfaction
-#emp_population = df['satisfaction'].mean()
-emp_population = df['satisfaction'][df['turnover'] == 0].mean()
-emp_turnover_satisfaction = df[df['turnover']==1]['satisfaction'].mean()
-
-print( 'The mean satisfaction for the employee population with no turnover is: ' + str(emp_population))
-print( 'The mean satisfaction for employees that had a turnover is: ' + str(emp_turnover_satisfaction) )
+pd.set_option('display.float_format', lambda x: '%.3f' % x)
+train.describe()
 
 
-# ### Conducting the T-Test
-# ***
-# Let's conduct a t-test at **95% confidence level** and see if it correctly rejects the null hypothesis that the sample comes from the same distribution as the employee population. To conduct a one sample t-test, we can use the **stats.ttest_1samp()** function:
+# <p>Let's take a moment to think about what we're seeing here. What stands out? Initially nothing, until we get to the `trip_duration`. A minimum of 1 second, and a maximum of 3 526 282 seconds (roughly 980 hours). No way someone took a trip that long, the bill would be astronomical. And a 1 second trip won't get you anywhere. So clearly there are some outliers we need to deal with.</p>
+# 
+# <p>As a final way of looking at the data initially, consider the use of Pandas' `info` function. The advantage of using this particular function is getting an almost combined view of `describe` and `head`/`tail`, together with `shape` (which describes the number of rows and columns in the particular file). More on the use and output of `info` [here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.DataFrame.info.html "Pandas info").</p>
 
 # In[ ]:
 
 
-import scipy.stats as stats
-stats.ttest_1samp(a=  df[df['turnover']==1]['satisfaction'], # Sample of Employee satisfaction who had a Turnover
-                  popmean = emp_population)  # Employee Who Had No Turnover satisfaction mean
+train.info()
 
 
-# ### T-Test Result
-# ***
-# The test result shows the **test statistic "t" is equal to -51.33**. This test statistic tells us how much the sample mean deviates from the null hypothesis. If the t-statistic lies **outside** the quantiles of the t-distribution corresponding to our confidence level and degrees of freedom, we reject the null hypothesis. We can check the quantiles with **stats.t.ppf()**:
+# <p>So now that we have an idea of what the data looks like and the type of variables we're working with, what's next? This is where the fun really begins.</p>
 
-# ### T-Test Quantile
-# ***
-# If the t-statistic value we calculated above **(-51.33)** is outside the quantiles, then we can reject the null hypothesis
+# <h2>2. Data Preparation</h2>
+# ---------------------
+# <p>My initial thoughts on this is that from the pickup_datetime field we should be extracting hour of day and day of week and day of month.  This seems logical since peak hour traffic and weekend vs non-weekend days could have a mayor effect on travel times. Similar to this there could be seasonality in the travel times to be observed between the different months of the year. Think, for example, of the effect New York's winter months might have on travel time. If the roads are wet/icy you're less likely to drive very fast, so regardless of which route you're taking, you'll take a bit longer to reach your destination.</p>
+# 
+# <p>An interesting variable and its effects to potentially explore is the `passenger_count`. One might argue that an increased number of passengers could result in a few scenarios. It could, for example, result in increased stops along the way, which ultimately extends the time from A to B (note how we're not given the number of passengers at the start and end of the trip - my thinking is that if we were to know the start and end number of passengers in a trip, the data between drops would be split into separate entries, with the last entry in a collection of rows ending with 0 passengers). Also, from a purely physical point of view, the higher the number of passengers, the heavier the vehicle, the slower the vehicle might move. Although I'm fairly certain the effect of this is neglible. </p>
+# 
+# <p>Same with `vendor` and `store_and_fwd_flag`. It is possible that looking into it, we find that there's a difference between vendor 1 and vendor 2, and that either one of the two might be corrupting the "shortest route information" because the vendor's employees are less efficient in finding the best routes through New York. This, however, I also find highly unlikely, but it is an alternative to explore (at least look into it and rule it out difinitively). As for `store_and_fwd_flag` - not having a connection to the server for a particular route to be indicative of a few things. For example, If upon inspection it is discovered that there is a strong correlation between slow trip times and server disconnects, it could be used as another feature in the training model to predict what time a particular route could take.</p>
+# 
+# <p>Getting down to it however, the `_lattitude` and `_longitute` variables  is where I think the most value lies. The options here are to cluster them into "neighborhoods" as well as find the distance and directions between coordinates.</p>
+
+# <h3>2.1 Trip Duration Clean-up</h3><br>
+# 
+# <p>As we noted earlier there are some outliers associated with the `trip_duration` variable, specifically a 980 hour maximum trip duration and a minimum of 1 second trip duration. I've decided to exclude data that lies outside 2 standard deviations from the mean. It might be worthwhile looking into what effect excluding up to 4 standard deviations would have on the end-results.</p>
 
 # In[ ]:
 
 
-degree_freedom = len(df[df['turnover']==1])
-
-LQ = stats.t.ppf(0.025,degree_freedom)  # Left Quartile
-
-RQ = stats.t.ppf(0.975,degree_freedom)  # Right Quartile
-
-print ('The t-distribution left quartile range is: ' + str(LQ))
-print ('The t-distribution right quartile range is: ' + str(RQ))
+m = np.mean(train['trip_duration'])
+s = np.std(train['trip_duration'])
+train = train[train['trip_duration'] <= m + 2*s]
+train = train[train['trip_duration'] >= m - 2*s]
 
 
-# ### One-Sample T-Test Summary
-# ***
-# #### **T-Test = -51.33**       |        **P-Value = 0.000_**       |       **Reject Null Hypothesis**
+# [](http://)<h3>2.2 Latitude and Longitude Clean-up</h3><br>
+# <p>Looking into it, the borders of NY City, in coordinates comes out to be:</p>
 # 
-# ## Question: How come the P-Value is literally 0.0? Can anybody answer this?
+# city_long_border = (-74.03, -73.75)<br>
+# city_lat_border = (40.63, 40.85)
+# <br>
 # 
-# **Reject the null hypothesis because:**
-#  - T-Test score is outside the quantiles
-#  - P-value is lower than confidence level of 5%
-# 
-# Based on the statistical analysis of a one sample t-test, there seems to be some significant difference between the mean satisfaction of employees who had a turnover and the entire employee population. The super low P-value of **0.00_** at a 5% confidence level is a good indicator to **reject the null hypothesis**. 
-# 
-# But this does not neccessarily mean that there is practical significance. We would have to conduct more experiments or maybe collect more data about the employees in order to come up with a more accurate finding.
-# 
-# <img src="https://static1.squarespace.com/static/5144a1bde4b033f38036b7b9/t/56714b05c647ad9f555348fa/1450265419456/PresentWIP.gif?format=500w"/>
-
-# ##  3c. Distribution Plots (Satisfaction - Evaluation - AverageMonthlyHours)
-# ***
-# **Summary:** Let's examine the distribution on some of the employee's features. Here's what I found:
-#  - **Satisfaction** - There is a huge spike for employees with low satisfaction and high satisfaction.
-#  - **Evaluation** - There is a bimodal distrubtion of employees for low evaluations (less than 0.6) and high evaluations (more than 0.8)
-#  - **AverageMonthlyHours** - There is another bimodal distribution of employees with lower and higher average monthly hours (less than 150 hours & more than 250 hours)
-#  - The evaluation and average monthly hour graphs both share a similar distribution. 
-#  - Employees with lower average monthly hours were evaluated less and vice versa.
-#  - If you look back at the correlation matrix, the high correlation between evaluation and averageMonthlyHours does support this finding.
-#  
-# **Stop and Think:** 
-#  - Is there a reason for the high spike in low satisfaction of employees?
-#  - Could employees be grouped in a way with these features?
-#  - Is there a correlation between evaluation and averageMonthlyHours?
+# <p>Comparing this to our `train.describe()` output we see that there are some coordinate points (pick ups/drop offs) that fall outside these borders. So let's limit our area of investigation to within the NY City borders.</p>
 
 # In[ ]:
 
 
-# Set up the matplotlib figure
-f, axes = plt.subplots(ncols=3, figsize=(15, 6))
-
-# Graph Employee Satisfaction
-sns.distplot(df.satisfaction, kde=False, color="g", ax=axes[0]).set_title('Employee Satisfaction Distribution')
-axes[0].set_ylabel('Employee Count')
-
-# Graph Employee Evaluation
-sns.distplot(df.evaluation, kde=False, color="r", ax=axes[1]).set_title('Employee Evaluation Distribution')
-axes[1].set_ylabel('Employee Count')
-
-# Graph Employee Average Monthly Hours
-sns.distplot(df.averageMonthlyHours, kde=False, color="b", ax=axes[2]).set_title('Employee Average Monthly Hours Distribution')
-axes[2].set_ylabel('Employee Count')
+train = train[train['pickup_longitude'] <= -73.75]
+train = train[train['pickup_longitude'] >= -74.03]
+train = train[train['pickup_latitude'] <= 40.85]
+train = train[train['pickup_latitude'] >= 40.63]
+train = train[train['dropoff_longitude'] <= -73.75]
+train = train[train['dropoff_longitude'] >= -74.03]
+train = train[train['dropoff_latitude'] <= 40.85]
+train = train[train['dropoff_latitude'] >= 40.63]
 
 
-# ##  3d. Salary V.S. Turnover
-# ***
-# **Summary:** This is not unusual. Here's what I found:
-#  - Majority of employees who left either had **low** or **medium** salary.
-#  - Barely any employees left with **high** salary
-#  - Employees with low to average salaries tend to leave the company.
-#  
-# **Stop and Think:** 
-#  - What is the work environment like for low, medium, and high salaries?
-#  - What made employees with high salaries to leave?
+# [](http://)<h3>2.3 Date Clean-up</h3><br>
+# <p>As a final step in preparing our data we need to change the formatting of the date variables (`pickup_datetime` and `dropoff_datetime`). This will help a lot with data extraction in the coming section.</p>
 
 # In[ ]:
 
 
-f, ax = plt.subplots(figsize=(15, 4))
-sns.countplot(y="salary", hue='turnover', data=df).set_title('Employee Salary Turnover Distribution');
+train['pickup_datetime'] = pd.to_datetime(train.pickup_datetime)
+test['pickup_datetime'] = pd.to_datetime(test.pickup_datetime)
+train.loc[:, 'pickup_date'] = train['pickup_datetime'].dt.date
+test.loc[:, 'pickup_date'] = test['pickup_datetime'].dt.date
+train['dropoff_datetime'] = pd.to_datetime(train.dropoff_datetime) #Not in Test
 
 
-# <img src="https://cdn.dribbble.com/users/20727/screenshots/2118641/video-producer-motion-graphics-designer-animator-jobs-manchester-uk.gif"/>
-
-# ##  3e. Department V.S. Turnover 
-# ***
-# **Summary:** Let's see more information about the departments. Here's what I found:
-#  - The **sales, technical, and support department** were the top 3 departments to have employee turnover
-#  - The management department had the smallest amount of turnover
-#  
-# **Stop and Think:** 
-#  - If we had more information on each department, can we pinpoint a more direct cause for employee turnover?
-
-# In[ ]:
-
-
-# Employee distri
-# Types of colors
-color_types = ['#78C850','#F08030','#6890F0','#A8B820','#A8A878','#A040A0','#F8D030',  
-                '#E0C068','#EE99AC','#C03028','#F85888','#B8A038','#705898','#98D8D8','#7038F8']
-
-# Count Plot (a.k.a. Bar Plot)
-sns.countplot(x='department', data=df, palette=color_types).set_title('Employee Department Distribution');
- 
-# Rotate x-labels
-plt.xticks(rotation=-45)
-
-
-# In[ ]:
-
-
-f, ax = plt.subplots(figsize=(15, 5))
-sns.countplot(y="department", hue='turnover', data=df).set_title('Employee Department Turnover Distribution');
-
-
-# ##  3f. Turnover V.S. ProjectCount 
-# ***
-# **Summary:** This graph is quite interesting as well. Here's what I found:
-#  - More than half of the employees with **2,6, and 7** projects left the company
-#  - Majority of the employees who did not leave the company had **3,4, and 5** projects
-#  - All of the employees with **7** projects left the company
-#  - There is an increase in employee turnover rate as project count increases
-#  
-# **Stop and Think:** 
-#  - Why are employees leaving at the lower/higher spectrum of project counts?
-#  - Does this means that employees with project counts 2 or less are not worked hard enough or are not highly valued, thus leaving the company?
-#  - Do employees with 6+ projects are getting overworked, thus leaving the company?
+# 1. <h2>3. Data Visualisation and Analysis</h2>
+# ----------------------------------
+# <p> These next steps involve looking at the data visually. Often you'll discover looking at something significant as a graph rather than a table (for example) will give you far greater insight into its nature and what you might need to do to work with it. Of course, the opposite could also be considered true, so don't neglect the first section we went through.</p>
 # 
+# <h3>3.1 Initial Analysis</h3><br>
 # 
+# <p> Let's plot a simple histogram of the trip duration, throwing the data into 100 bins. Change this around to get a feel for what binning does to your data. Simply put, binning involves taking your data's max and min points, subtracting it to get the length, dividing that length by the number of bins to get the interval length, and grouping the data points into those intervals. Here's what that looks like:</p> 
 
 # In[ ]:
 
 
-ax = sns.barplot(x="projectCount", y="projectCount", hue="turnover", data=df, estimator=lambda x: len(x) / len(df) * 100)
-ax.set(ylabel="Percent")
-
-
-# ##  3g. Turnover V.S. Evaluation 
-# ***
-# **Summary:** 
-#  - There is a biomodal distribution for those that had a turnover. 
-#  - Employees with **low** performance tend to leave the company more
-#  - Employees with **high** performance tend to leave the company more
-#  - The **sweet spot** for employees that stayed is within **0.6-0.8** evaluation
-
-# In[ ]:
-
-
-# Kernel Density Plot
-fig = plt.figure(figsize=(15,4),)
-ax=sns.kdeplot(df.loc[(df['turnover'] == 0),'evaluation'] , color='b',shade=True,label='no turnover')
-ax=sns.kdeplot(df.loc[(df['turnover'] == 1),'evaluation'] , color='r',shade=True, label='turnover')
-ax.set(xlabel='Employee Evaluation', ylabel='Frequency')
-plt.title('Employee Evaluation Distribution - Turnover V.S. No Turnover')
-
-
-# ##  3h. Turnover V.S. AverageMonthlyHours 
-# ***
-# **Summary:** 
-#  - Another bi-modal distribution for employees that turnovered 
-#  - Employees who had less hours of work **(~150hours or less)** left the company more
-#  - Employees who had too many hours of work **(~250 or more)** left the company 
-#  - Employees who left generally were **underworked** or **overworked**.
-
-# In[ ]:
-
-
-#KDEPlot: Kernel Density Estimate Plot
-fig = plt.figure(figsize=(15,4))
-ax=sns.kdeplot(df.loc[(df['turnover'] == 0),'averageMonthlyHours'] , color='b',shade=True, label='no turnover')
-ax=sns.kdeplot(df.loc[(df['turnover'] == 1),'averageMonthlyHours'] , color='r',shade=True, label='turnover')
-ax.set(xlabel='Employee Average Monthly Hours', ylabel='Frequency')
-plt.title('Employee AverageMonthly Hours Distribution - Turnover V.S. No Turnover')
-
-
-# ##  3i. Turnover V.S. Satisfaction 
-# ***
-# **Summary:** 
-#  - There is a **tri-modal** distribution for employees that turnovered
-#  - Employees who had really low satisfaction levels **(0.2 or less)** left the company more
-#  - Employees who had low satisfaction levels **(0.3~0.5)** left the company more
-#  - Employees who had really high satisfaction levels **(0.7 or more)** left the company more
-
-# In[ ]:
-
-
-#KDEPlot: Kernel Density Estimate Plot
-fig = plt.figure(figsize=(15,4))
-ax=sns.kdeplot(df.loc[(df['turnover'] == 0),'satisfaction'] , color='b',shade=True, label='no turnover')
-ax=sns.kdeplot(df.loc[(df['turnover'] == 1),'satisfaction'] , color='r',shade=True, label='turnover')
-plt.title('Employee Satisfaction Distribution - Turnover V.S. No Turnover')
-
-
-# ##  3j. ProjectCount VS AverageMonthlyHours 
-# ***
-# 
-# **Summary:**
-#  - As project count increased, so did average monthly hours
-#  - Something weird about the boxplot graph is the difference in averageMonthlyHours between people who had a turnver and did not. 
-#  - Looks like employees who **did not** have a turnover had **consistent** averageMonthlyHours, despite the increase in projects
-#  - In contrast, employees who **did** have a turnover had an increase in averageMonthlyHours with the increase in projects
-# 
-# **Stop and Think:** 
-#  - What could be the meaning for this? 
-#  - **Why is it that employees who left worked more hours than employees who didn't, even with the same project count?**
-
-# In[ ]:
-
-
-#ProjectCount VS AverageMonthlyHours [BOXPLOT]
-#Looks like the average employees who stayed worked about 200hours/month. Those that had a turnover worked about 250hours/month and 150hours/month
-
-import seaborn as sns
-sns.boxplot(x="projectCount", y="averageMonthlyHours", hue="turnover", data=df)
-
-
-# ##  3k. ProjectCount VS Evaluation
-# ***
-# **Summary:** This graph looks very similar to the graph above. What I find strange with this graph is with the turnover group. There is an increase in evaluation for employees who did more projects within the turnover group. But, again for the non-turnover group, employees here had a consistent evaluation score despite the increase in project counts. 
-# 
-# **Questions to think about:**
-#  - **Why is it that employees who left, had on average, a higher evaluation than employees who did not leave, even with an increase in project count? **
-#  - Shouldn't employees with lower evaluations tend to leave the company more? 
-
-# In[ ]:
-
-
-#ProjectCount VS Evaluation
-#Looks like employees who did not leave the company had an average evaluation of around 70% even with different projectCounts
-#There is a huge skew in employees who had a turnover though. It drastically changes after 3 projectCounts. 
-#Employees that had two projects and a horrible evaluation left. Employees with more than 3 projects and super high evaluations left
-import seaborn as sns
-sns.boxplot(x="projectCount", y="evaluation", hue="turnover", data=df)
-
-
-# ##  3l. Satisfaction VS Evaluation
-# ***
-# **Summary:** This is by far the most compelling graph. This is what I found:
-#  - There are **3** distinct clusters for employees who left the company
-#  
-# **Cluster 1 (Hard-working and Sad Employee):** Satisfaction was below 0.2 and evaluations were greater than 0.75. Which could be a good indication that employees who left the company were good workers but felt horrible at their job. 
-#  - **Question:** What could be the reason for feeling so horrible when you are highly evaluated? Could it be working too hard? Could this cluster mean employees who are "overworked"?
-# 
-# **Cluster 2 (Bad and Sad Employee):** Satisfaction between about 0.35~0.45 and evaluations below ~0.58. This could be seen as employees who were badly evaluated and felt bad at work.
-#  - **Question:** Could this cluster mean employees who "under-performed"?
-# 
-# **Cluster 3 (Hard-working and Happy Employee):** Satisfaction between 0.7~1.0 and evaluations were greater than 0.8. Which could mean that employees in this cluster were "ideal". They loved their work and were evaluated highly for their performance. 
-#  - **Question:** Could this cluser mean that employees left because they found another job opportunity?
-
-# In[ ]:
-
-
-sns.lmplot(x='satisfaction', y='evaluation', data=df,
-           fit_reg=False, # No regression line
-           hue='turnover')   # Color by evolution stage
-
-
-# ##  3m. Turnover V.S. YearsAtCompany 
-# ***
-# **Summary:** Let's see if theres a point where employees start leaving the company. Here's what I found:
-#  - More than half of the employees with **4 and 5** years left the company
-#  - Employees with **5** years should **highly** be looked into 
-#  
-# **Stop and Think:** 
-#  - Why are employees leaving mostly at the **3-5** year range?
-#  - Who are these employees that left?
-#  - Are these employees part-time or contractors? 
-
-# In[ ]:
-
-
-ax = sns.barplot(x="yearsAtCompany", y="yearsAtCompany", hue="turnover", data=df, estimator=lambda x: len(x) / len(df) * 100)
-ax.set(ylabel="Percent")
-
-
-# ## 3n. K-Means Clustering of Employee Turnover
-# ***
-# **Cluster 1 (Blue):** Hard-working and Sad Employees
-# 
-# **Cluster 2 (Red):** Bad and Sad Employee 
-# 
-# **Cluster 3 (Green):** Hard-working and Happy Employee 
-# 
-# **Clustering PROBLEM:**
-#     - How do we know that there are "3" clusters?
-#     - We would need expert domain knowledge to classify the right amount of clusters
-#     - Hidden uknown structures could be present
-
-# In[ ]:
-
-
-# Import KMeans Model
-from sklearn.cluster import KMeans
-
-# Graph and create 3 clusters of Employee Turnover
-kmeans = KMeans(n_clusters=3,random_state=2)
-kmeans.fit(df[df.turnover==1][["satisfaction","evaluation"]])
-
-kmeans_colors = ['green' if c == 0 else 'blue' if c == 2 else 'red' for c in kmeans.labels_]
-
-fig = plt.figure(figsize=(10, 6))
-plt.scatter(x="satisfaction",y="evaluation", data=df[df.turnover==1],
-            alpha=0.25,color = kmeans_colors)
-plt.xlabel("Satisfaction")
-plt.ylabel("Evaluation")
-plt.scatter(x=kmeans.cluster_centers_[:,0],y=kmeans.cluster_centers_[:,1],color="black",marker="X",s=100)
-plt.title("Clusters of Employee Turnover")
+plt.hist(train['trip_duration'].values, bins=100)
+plt.xlabel('trip_duration')
+plt.ylabel('number of train records')
 plt.show()
 
 
-# # Feature Importance
-# ***
-# **Summary:**
-# 
-# By using a decision tree classifier, it could rank the features used for the prediction. The top three features were employee satisfaction, yearsAtCompany, and evaluation. This is helpful in creating our model for logistic regression because it’ll be more interpretable to understand what goes into our model when we utilize less features. 
-# 
-# **Top 3 Features:**
-# 1. Satisfaction
-# 2. YearsAtCompany
-# 3. Evaluation
-# 
+# <p>This is a good opportunity to play with some data transformations to see if notable patterns emerge in the data when applying certain transforms, for example a log transform. In this case, applying a log transformation to the trip duration makes sense, since we are doing this to accommodate the leaderboard's scoring metric. That would look like this:</p>
 
 # In[ ]:
 
 
-from sklearn import tree
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import train_test_split
-plt.style.use('fivethirtyeight')
-plt.rcParams['figure.figsize'] = (12,6)
-
-# Renaming certain columns for better readability
-df = df.rename(columns={'satisfaction_level': 'satisfaction', 
-                        'last_evaluation': 'evaluation',
-                        'number_project': 'projectCount',
-                        'average_montly_hours': 'averageMonthlyHours',
-                        'time_spend_company': 'yearsAtCompany',
-                        'Work_accident': 'workAccident',
-                        'promotion_last_5years': 'promotion',
-                        'sales' : 'department',
-                        'left' : 'turnover'
-                        })
-
-# Convert these variables into categorical variables
-df["department"] = df["department"].astype('category').cat.codes
-df["salary"] = df["salary"].astype('category').cat.codes
-
-# Create train and test splits
-target_name = 'turnover'
-X = df.drop('turnover', axis=1)
+train['log_trip_duration'] = np.log(train['trip_duration'].values + 1)
+plt.hist(train['log_trip_duration'].values, bins=100)
+plt.xlabel('log(trip_duration)')
+plt.ylabel('number of train records')
+plt.show()
+sns.distplot(train["log_trip_duration"], bins =100)
 
 
-y=df[target_name]
+# <p>One might also be interested to view the number of trips over time, since this could reveal not only apparent seasonality in the data and certain trends, but could point out any siginficant outliers (if not already cleaned out of the data set of course) and indicate missing values (again, only if it wasn't already checked and cleaned in the data set).</p>
+# 
+# <p>For this we'll simply plot a timeseries line graph of both the test and training data to not only look into identifying possible trends/seasonality but to see if both data sets follow the same pattern shape. Reasonably we'd expect the two datasets to follow a very similar shape since the test data would be/is a randomly selected sample from the original dataset containing all data points. By picking the test points randomly, each data point has the same likelihood of being picked as a test point, thus ensuring uniformity in the test data sample.</p>
 
-X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.15, random_state=123, stratify=y)
-
-dtree = tree.DecisionTreeClassifier(
-    #max_depth=3,
-    class_weight="balanced",
-    min_weight_fraction_leaf=0.01
-    )
-dtree = dtree.fit(X_train,y_train)
-
-## plot the importances ##
-importances = dtree.feature_importances_
-feat_names = df.drop(['turnover'],axis=1).columns
+# In[ ]:
 
 
-indices = np.argsort(importances)[::-1]
-plt.figure(figsize=(12,6))
-plt.title("Feature importances by DecisionTreeClassifier")
-plt.bar(range(len(indices)), importances[indices], color='lightblue',  align="center")
-plt.step(range(len(indices)), np.cumsum(importances[indices]), where='mid', label='Cumulative')
-plt.xticks(range(len(indices)), feat_names[indices], rotation='vertical',fontsize=14)
-plt.xlim([-1, len(indices)])
+plt.plot(train.groupby('pickup_date').count()[['id']], 'o-', label='train')
+plt.plot(test.groupby('pickup_date').count()[['id']], 'o-', label='test')
+plt.title('Trips over Time.')
+plt.legend(loc=0)
+plt.ylabel('Trips')
 plt.show()
 
 
-# # 4a. Modeling the Data: Logistic Regression Analysis
-# ***
-# **NOTE:** This will be an in-depth analysis of using logistic regression as a classifier. I do go over other types of models in the other section below this. **This is more of a use-case example of what can be done and explained to management in a company.**
+# <p>Clearly the test and train datasets follow a very simila shape, as expected. A couple of points stand out at first glance. Around late-Jan/early-Feb there is a massive drop in the number of trips taken. A slightly less drastic drop is apparent about four months later. The first drop could be related to the season: it's winter in New York so you'd expect less trips being taken (who wants to ride around when it's near freezing outside?). However, this seems unlikely because the dip looks to be isolated around a single day or couple of days. In my opinion there's a greater chance that there were strikes (if you've got the South African mindset I do, but this is New York, so probably not that) or that there was an issue with the data system recording the trips. Whatever the reason, it's worth noting these 'outliers'.</p>
 # 
-# Logistic Regression commonly deals with the issue of how likely an observation is to belong to each group. This model is commonly used to predict the likelihood of an event occurring. In contrast to linear regression, the output of logistic regression is transformed with a logit function. This makes the output either 0 or 1. This is a useful model to take advantage of for this problem because we are interested in predicting whether an employee will leave (0) or stay (1). 
-# 
-# Another reason for why logistic regression is the preferred model of choice is because of its interpretability. Logistic regression predicts the outcome of the response variable (turnover) through a set of other explanatory variables, also called predictors. In context of this domain, the value of our response variable is categorized into two forms: 0 (zero) or 1 (one). The value of 0 (zero) represents the probability of an employee not leaving the company and the value of 1 (one) represents the probability of an employee leaving the company.
-# 
-# **Logistic Regression models the probability of ‘success’ as: **
-# <img src="http://i64.tinypic.com/m95a9k.jpg"/>
-#  
-# The equation above shows the relationship between, the dependent variable (success), denoted as (θ) and independent variables or predictor of event, denoted as xi. Where α is the constant of the equation and, β is the coefficient of the predictor variables
-# 
-# 
+# <p> Let's see how significantly (or not significantly at all) the two vendors differ in their respective mean trip durations:</p>
 
 # In[ ]:
 
 
-# Import the neccessary modules for data manipulation and visual representation
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as matplot
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-#Read the analytics csv file and store our dataset into a dataframe called "df"
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, confusion_matrix, precision_recall_curve
-from sklearn.preprocessing import RobustScaler
-df = pd.DataFrame.from_csv('../input/HR_comma_sep.csv', index_col=None)
-
-# Renaming certain columns for better readability
-df = df.rename(columns={'satisfaction_level': 'satisfaction', 
-                        'last_evaluation': 'evaluation',
-                        'number_project': 'projectCount',
-                        'average_montly_hours': 'averageMonthlyHours',
-                        'time_spend_company': 'yearsAtCompany',
-                        'Work_accident': 'workAccident',
-                        'promotion_last_5years': 'promotion',
-                        'sales' : 'department',
-                        'left' : 'turnover'
-                        })
-
-# Convert these variables into categorical variables
-df["department"] = df["department"].astype('category').cat.codes
-df["salary"] = df["salary"].astype('category').cat.codes
+import warnings
+warnings.filterwarnings("ignore")
+plot_vendor = train.groupby('vendor_id')['trip_duration'].mean()
+plt.subplots(1,1,figsize=(17,10))
+plt.ylim(ymin=800)
+plt.ylim(ymax=840)
+sns.barplot(plot_vendor.index,plot_vendor.values)
+plt.title('Time per Vendor')
+plt.legend(loc=0)
+plt.ylabel('Time in Seconds')
 
 
-# Move the reponse variable "turnover" to the front of the table
-front = df['turnover']
-df.drop(labels=['turnover'], axis=1,inplace = True)
-df.insert(0, 'turnover', front)
-
-# Create an intercept term for the logistic regression equation
-df['int'] = 1
-indep_var = ['satisfaction', 'evaluation', 'yearsAtCompany', 'int', 'turnover']
-df = df[indep_var]
-
-# Create train and test splits
-target_name = 'turnover'
-X = df.drop('turnover', axis=1)
-
-y=df[target_name]
-X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.15, random_state=123, stratify=y)
-
-X_train.head()
-#
-
-
-# ## Using Logistic Regression Coefficients 
-# ***
-# With the elimination of the other variables, I’ll be using the three most important features to create our model: Satisfaction, Evaluation, and YearsAtCompany.
-# 
-# Following overall equation was developed: 
-# 
-# **Employee Turnover Score** = Satisfaction*(**-3.769022**) + Evaluation*(**0.207596**) + YearsAtCompany*(**0.170145**) + **0.181896**
-# 
+# <p>So it doesn't look like there's much of a difference between travel times for the two vendors. One would assume that knowing which routes are the fastest to take from A to B is no secret, and that it is more a trick of the trade, rather than IP. But something doesn't look right, so there's another feature we can use to see if after all there is a significant difference in mean travel time: the `store_and_fwd_flag`.</p>
 
 # In[ ]:
 
 
-import statsmodels.api as sm
-iv = ['satisfaction','evaluation','yearsAtCompany', 'int']
-logReg = sm.Logit(y_train, X_train[iv])
-answer = logReg.fit()
+snwflag = train.groupby('store_and_fwd_flag')['trip_duration'].mean()
 
-answer.summary
-answer.params
+plt.subplots(1,1,figsize=(17,10))
+plt.ylim(ymin=0)
+plt.ylim(ymax=1100)
+plt.title('Time per store_and_fwd_flag')
+plt.legend(loc=0)
+plt.ylabel('Time in Seconds')
+sns.barplot(snwflag.index,snwflag.values)
 
 
-# ## Explanation of Coefficients
-# *** 
-# **Employee Turnover Score** = Satisfaction*(**-3.769022**) + Evaluation*(**0.207596**) + YearsAtCompany*(**0.170145**) + **0.181896**
+# <p>So it would seem that the `store_and_fwd_flag` discriminates well between travel times. Clearly there is a slight skew in the data where some of the vendor employees didn't record their travel times accurately.</p>
 # 
-# The values above are the coefficient assigned to each independent variable. The **constant** 0.181896 represents the effect of all uncontrollable variables. 
-# 
-# 
+# <p>As mentioned earlier when digging into the variables, I thought about the impact that the number of passengers per trip might have on travel time. The thought process was that more passengers might equal more stops, hence prolonging the travel time from start to finish (unless the different drop-offs were recorded as separate trips). So in order to find out if there is infact a significant influence in travel time, let's group the mean travel times by the `passenger_count`:</p>
 
 # In[ ]:
 
 
-# Create function to compute coefficients
-coef = answer.params
-def y (coef, Satisfaction, Evaluation, YearsAtCompany) : 
-    return coef[3] + coef[0]*Satisfaction + coef[1]*Evaluation + coef[2]*YearsAtCompany
+pc = train.groupby('passenger_count')['trip_duration'].mean()
 
-import numpy as np
-
-# An Employee with 0.7 Satisfaction and 0.8 Evaluation and worked 3 years has a 14% chance of turnover
-y1 = y(coef, 0.7, 0.8, 3)
-p = np.exp(y1) / (1+np.exp(y1))
-p
+plt.subplots(1,1,figsize=(17,10))
+plt.ylim(ymin=0)
+plt.ylim(ymax=1100)
+plt.title('Time per store_and_fwd_flag')
+plt.legend(loc=0)
+plt.ylabel('Time in Seconds')
+sns.barplot(pc.index,pc.values)
 
 
-# ## Intepretation of Score
-# ***
-# If you were to use these employee values into the equation:
-# - **Satisfaction**: 0.7
-# - **Evaluation**: 0.8
-# - **YearsAtCompany**: 3
+# <p>So no significant difference evident that could be explained by the number of passengers in the vehicle for any given trip. It is interesting to note that there is are on average +-4min trips associated with no passengers. This is probably a mistake made in recording the data unless the vendor employee is into charging him/herself for trips whilst on the job.</p>
 # 
-# You would get:
-# 
-# **Employee Turnover Score** = (**0.7**)*(-3.769022) + (**0.8**)*(0.207596) + (**3**)*(0.170145) + 0.181896 = 0.14431 = **14%***
-# 
-# **Result**: This employee would have a **14%** chance of leaving the company. This information can then be used to form our retention plan.
-
-# ## Retention Plan Using Logistic Regression
-# ***
-# 
-# **Reference:** http://rupeshkhare.com/wp-content/uploads/2013/12/Employee-Attrition-Risk-Assessment-using-Logistic-Regression-Analysis.pdf
-# 
-# With the logistic regression model, we can now use our scores and evaluate the employees through different scoring metrics. Each zone is explain here:
-# 
-# 1.	**Safe Zone (Green)** – Employees within this zone are considered safe. 
-# 2.	**Low Risk Zone (Yellow)** – Employees within this zone are too be taken into consideration of potential turnover. This is more of a long-term track.
-# 3.	**Medium Risk Zone (Orange)** – Employees within this zone are at risk of turnover. Action should be taken and monitored accordingly. 
-# 4.	**High Risk Zone (Red)** – Employees within this zone are considered to have the highest chance of turnover. Action should be taken immediately. 
-# 
-# So with our example above, the employee with a **14%** turnover score will be in the **safe zone**. 
-# 
-# <img src="http://i64.tinypic.com/somk9s.jpg"/>
-# 
-
-# # 4b. Using Other Models
-# ***
-# **NOTE:** I'll be using four other models in this section to measure the accuracy of the different models
-# 
-#  The best model performance out of the four (Decision Tree Model, AdaBoost Model, Logistic Regression Model, Random Forest Model) was **Random Forest**! 
-#  
-#  **Remember:** Machines can predict the future, as long as the future doesn't look too different from the past.
-#  
-#  **Note: Base Rate** 
-#  ***
-#  - A **Base Rate Model** is a simple model or heuristic used as reference point for comparing how well a model is performing. A baseline helps model developers quantify the minimal, expected performance on a particular problem. In this dataset, the majority class that will be predicted will be **0's**, which are employees who did not leave the company. 
-#  - If you recall back to *Part 3: Exploring the Data*, 24% of the dataset contained 1's (employee who left the company) and the remaining 76% contained 0's (employee who did not leave the company). The Base Rate Model would simply predict every 0's and ignore all the 1's. 
-#  - **Example**: The base rate accuracy for this data set, when classifying everything as 0's, would be 76% because 76% of the dataset are labeled as 0's (employees not leaving the company).
-
-# **Note: Evaluating the Model**
-# ***
-# **Precision and Recall / Class Imbalance**
-# 
-# This dataset is an example of a class imbalance problem because of the skewed distribution of employees who did and did not leave. More skewed the class means that accuracy breaks down. 
-# 
-# In this case, evaluating our model’s algorithm based on **accuracy** is the **wrong** thing to measure. We would have to know the different errors that we care about and correct decisions. Accuracy alone does not measure an important concept that needs to be taken into consideration in this type of evaluation: **False Positive** and **False Negative** errors. 
-# 
-# **False Positives (Type I Error)**: You predict that the employee will leave, but do not
-# 
-# **False Negatives (Type II Error)**: You predict that the employee will not leave, but does leave
-# 
-# In this problem, what type of errors do we care about more? False Positives or False Negatives?
-# 
-
-#  **Note: Different Ways to Evaluate Classification Models**
-#  ***
-#    1.  **Predictive Accuracy:** How many does it get right?
-#    2. **Speed:** How fast does it take for the model to deploy? 
-#    3. **Scalability:** Can the model handle large datasets?
-#    4. **Robustness:** How well does the model handle outliers/missing values?
-#    5. **Interpretability:** Is the model easy to understand?
-
-# <img src="http://i68.tinypic.com/qsts7k.jpg"/>
+# <p>Again, we need to check whether the test and train data matches with respect to the number of trips containing X-number of passengers:</p>
 
 # In[ ]:
 
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, confusion_matrix, precision_recall_curve
-from sklearn.preprocessing import RobustScaler
+train.groupby('passenger_count').size()
 
 
 # In[ ]:
 
 
-# Create base rate model
-def base_rate_model(X) :
-    y = np.zeros(X.shape[0])
-    return y
+test.groupby('passenger_count').size()
 
 
-# In[ ]:
+# <p>At first glance nothing seems too far out of the ordinary, however we can note that the passenger count is not ordinal. Note the two extra trips with 9 passengers in the test data. Again, it would seem there is some outlier data we haven't dealt with yet. Other than that though, the counts do seem to match relatively between the two data sets. The next step is to dive into the latitude and longitude data provided, trying to visualise the routes taken and potentially creating a map view to get a feel for the spacial components associated with the data.</p>
 
-
-# Create train and test splits
-target_name = 'turnover'
-X = df.drop('turnover', axis=1)
-#robust_scaler = RobustScaler()
-#X = robust_scaler.fit_transform(X)
-y=df[target_name]
-X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.15, random_state=123, stratify=y)
-
+# ![](http://)<h3>3.2 Coordinate Mapping</h3><br>
+# 
+# <p>Just like we compared the travel time data and the number of passengers between the test and train sets, we can try and verify that the pickup location data in both sets are fairly similar and representative of one another.</p><br> 
+# 
+# <h3>3.2.1 Pickup Locations</h3><br>
+# <p>To do this, we utilise the city map border coordinates for New York, mentioned earlier in the kernel to create the canvas wherein the coordinate points will be graphed. To display the actual coordinates a simple scatter plot is used:</p>
 
 # In[ ]:
 
 
-# Check accuracy of base rate model
-y_base_rate = base_rate_model(X_test)
-from sklearn.metrics import accuracy_score
-print ("Base rate accuracy is %2.2f" % accuracy_score(y_test, y_base_rate))
-
-
-# In[ ]:
-
-
-# Check accuracy of Logistic Model
-from sklearn.linear_model import LogisticRegression
-model = LogisticRegression(penalty='l2', C=1)
-
-model.fit(X_train, y_train)
-print ("Logistic accuracy is %2.2f" % accuracy_score(y_test, model.predict(X_test)))
-
-
-# In[ ]:
-
-
-# Using 10 fold Cross-Validation to train our Logistic Regression Model
-from sklearn import model_selection
-from sklearn.linear_model import LogisticRegression
-kfold = model_selection.KFold(n_splits=10, random_state=7)
-modelCV = LogisticRegression(class_weight = "balanced")
-scoring = 'roc_auc'
-results = model_selection.cross_val_score(modelCV, X_train, y_train, cv=kfold, scoring=scoring)
-print("AUC: %.3f (%.3f)" % (results.mean(), results.std()))
-
-
-# ## Logistic Regression V.S. Random Forest V.S. Decision Tree V.S. AdaBoost Model
-# ***
-
-# In[ ]:
-
-
-# Compare the Logistic Regression Model V.S. Base Rate Model V.S. Random Forest Model
-from sklearn.metrics import roc_auc_score
-from sklearn.metrics import classification_report
-from sklearn.ensemble import RandomForestClassifier
-
-from sklearn import tree
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import BaggingClassifier
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import VotingClassifier
-
-
-print ("---Base Model---")
-base_roc_auc = roc_auc_score(y_test, base_rate_model(X_test))
-print ("Base Rate AUC = %2.2f" % base_roc_auc)
-print(classification_report(y_test, base_rate_model(X_test)))
-
-# NOTE: By adding in "class_weight = balanced", the Logistic Auc increased by about 10%! This adjusts the threshold value
-logis = LogisticRegression(class_weight = "balanced")
-logis.fit(X_train, y_train)
-print ("\n\n ---Logistic Model---")
-logit_roc_auc = roc_auc_score(y_test, logis.predict(X_test))
-print ("Logistic AUC = %2.2f" % logit_roc_auc)
-print(classification_report(y_test, logis.predict(X_test)))
-
-# Decision Tree Model
-dtree = tree.DecisionTreeClassifier(
-    #max_depth=3,
-    class_weight="balanced",
-    min_weight_fraction_leaf=0.01
-    )
-dtree = dtree.fit(X_train,y_train)
-print ("\n\n ---Decision Tree Model---")
-dt_roc_auc = roc_auc_score(y_test, dtree.predict(X_test))
-print ("Decision Tree AUC = %2.2f" % dt_roc_auc)
-print(classification_report(y_test, dtree.predict(X_test)))
-
-# Random Forest Model
-rf = RandomForestClassifier(
-    n_estimators=1000, 
-    max_depth=None, 
-    min_samples_split=10, 
-    class_weight="balanced"
-    #min_weight_fraction_leaf=0.02 
-    )
-rf.fit(X_train, y_train)
-print ("\n\n ---Random Forest Model---")
-rf_roc_auc = roc_auc_score(y_test, rf.predict(X_test))
-print ("Random Forest AUC = %2.2f" % rf_roc_auc)
-print(classification_report(y_test, rf.predict(X_test)))
-
-
-# Ada Boost
-ada = AdaBoostClassifier(n_estimators=400, learning_rate=0.1)
-ada.fit(X_train,y_train)
-print ("\n\n ---AdaBoost Model---")
-ada_roc_auc = roc_auc_score(y_test, ada.predict(X_test))
-print ("AdaBoost AUC = %2.2f" % ada_roc_auc)
-print(classification_report(y_test, ada.predict(X_test)))
-
-
-# ## ROC Graph
-# ***
-
-# In[ ]:
-
-
-# Create ROC Graph
-from sklearn.metrics import roc_curve
-fpr, tpr, thresholds = roc_curve(y_test, logis.predict_proba(X_test)[:,1])
-rf_fpr, rf_tpr, rf_thresholds = roc_curve(y_test, rf.predict_proba(X_test)[:,1])
-dt_fpr, dt_tpr, dt_thresholds = roc_curve(y_test, dtree.predict_proba(X_test)[:,1])
-ada_fpr, ada_tpr, ada_thresholds = roc_curve(y_test, ada.predict_proba(X_test)[:,1])
-
-plt.figure()
-
-# Plot Logistic Regression ROC
-plt.plot(fpr, tpr, label='Logistic Regression (area = %0.2f)' % logit_roc_auc)
-
-# Plot Random Forest ROC
-plt.plot(rf_fpr, rf_tpr, label='Random Forest (area = %0.2f)' % rf_roc_auc)
-
-# Plot Decision Tree ROC
-plt.plot(dt_fpr, dt_tpr, label='Decision Tree (area = %0.2f)' % dt_roc_auc)
-
-# Plot AdaBoost ROC
-plt.plot(ada_fpr, ada_tpr, label='AdaBoost (area = %0.2f)' % ada_roc_auc)
-
-# Plot Base Rate ROC
-plt.plot([0,1], [0,1],label='Base Rate' 'k--')
-
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('ROC Graph')
-plt.legend(loc="lower right")
+city_long_border = (-74.03, -73.75)
+city_lat_border = (40.63, 40.85)
+fig, ax = plt.subplots(ncols=2, sharex=True, sharey=True)
+ax[0].scatter(train['pickup_longitude'].values[:100000], train['pickup_latitude'].values[:100000],
+              color='blue', s=1, label='train', alpha=0.1)
+ax[1].scatter(test['pickup_longitude'].values[:100000], test['pickup_latitude'].values[:100000],
+              color='green', s=1, label='test', alpha=0.1)
+fig.suptitle('Train and test area complete overlap.')
+ax[0].legend(loc=0)
+ax[0].set_ylabel('latitude')
+ax[0].set_xlabel('longitude')
+ax[1].set_xlabel('longitude')
+ax[1].legend(loc=0)
+plt.ylim(city_lat_border)
+plt.xlim(city_long_border)
 plt.show()
 
 
-# # 5. Interpreting the Data
-# ***
+# > <p>We can tell from the two graphs that the pickup locations are quite similar, with the notable difference being that the train data set simply has more data points (which makes sense).</p>
 # 
-# **Summary:** 
-# With all of this information, this is what Bob should know about his company and why his employees probably left:
-#  1. Employees generally left when they are **underworked** (less than 150hr/month or 6hr/day)
-#  2. Employees generally left when they are **overworked** (more than 250hr/month or 10hr/day)
-#  3. Employees with either **really high or low evaluations** should be taken into consideration for high turnover rate
-#  4. Employees with **low to medium salaries** are the bulk of employee turnover
-#  5. Employees that had **2,6, or 7 project count** was at risk of leaving the company
-#  6. Employee **satisfaction** is the highest indicator for employee turnover.
-#  7. Employee that had **4 and 5 yearsAtCompany** should be taken into consideration for high turnover rate
-#  8. Employee **satisfaction**, **yearsAtCompany**, and **evaluation** were the three biggest factors in determining turnover.
+# <h3>3.2.2 Distance and Directionality</h3><br>
+# <p>This next part is quite interesting. Thanks to Beluga's post, we can determine the distance and direction of a specific trip based on the pickup and dropoff coordinates. For this I've made three functions, as:</p>
 
-# **"You don't build a business. You build people, and people build the business." - Zig Ziglar**
-# ***
-# <img src="http://www.goldbeck.com/hrblog/wp-content/uploads/2015/11/giphy-3.gif"/>
+# In[ ]:
 
-# ## Potential Solution
-# ***
-# **Binary Classification**: Turnover V.S. Non Turnover
-# 
-# **Instance Scoring**: Likelihood of employee responding to an offer/incentive to save them from leaving.
-# 
-# **Need for Application**: Save employees from leaving
-# 
-# In our employee retention problem, rather than simply predicting whether an employee will leave the company within a certain time frame, we would much rather have an estimate of the probability that he/she will leave the company. 
-# We would rank employees by their probability of leaving, then allocate a limited incentive budget to the highest probability instances. 
-# 
-# Consider employee turnover domain where an employee is given treatment by Human  Resources because they think the employee will leave the company within a month, but the employee actually does not. This is a false positive. This mistake could be expensive, inconvenient, and time consuming for both the Human Resources and employee, but is a good investment for relational growth. 
-# 
-# Compare this with the opposite error, where Human Resources does not give treatment/incentives to the employees and they do leave. This is a false negative. This type of error is more detrimental because the company lost an employee, which could lead to great setbacks and more money to rehire. 
-# Depending on these errors, different costs are weighed based on the type of employee being treated. For example, if it’s a high-salary employee then would we need a costlier form of treatment? What if it’s a low-salary employee? The cost for each error is different and should be weighed accordingly. 
-#  
-#  **Solution 1:** 
-#  - We can rank employees by their probability of leaving, then allocate a limited incentive budget to the highest probability instances.
-#  - OR, we can allocate our incentive budget to the instances with the highest expected loss, for which we'll need the probability of turnover.
-# 
-# **Solution 2:** 
-# Develop learning programs for managers. Then use analytics to gauge their performance and measure progress. Some advice:
-#  - Be a good coach
-#  - Empower the team and do not micromanage
-#  - Express interest for team member success
-#  - Have clear vision / strategy for team
-#  - Help team with career development    
 
-# # Google Docs Report 
-# ***
-# https://docs.google.com/document/d/1E1oBewdQuX0f_LW26vKV_jcyUCNZqlivICss-ORZFtw/edit?usp=sharing
+def haversine_array(lat1, lng1, lat2, lng2):
+    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+    AVG_EARTH_RADIUS = 6371  # in km
+    lat = lat2 - lat1
+    lng = lng2 - lng1
+    d = np.sin(lat * 0.5) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(lng * 0.5) ** 2
+    h = 2 * AVG_EARTH_RADIUS * np.arcsin(np.sqrt(d))
+    return h
 
-# ## What Now?
-# ***
-# This problem is about people decision. When modeling the data, we should not be using this predictive metric as a solution decider. But, we can use this to arm people with much better relevant information for better decision making.
-# 
-# We would have to conduct more experiments or collect more data about the employees in order to come up with a more accurate finding. I would recommend to gather more variables from the database that could have more impact on determining employee turnover and satisfaction such as their distance from home, gender, age, and etc.
-# 
-# **Reverse Engineer the Problem**
-# ***
-# After trying to understand what caused employees to leave in the first place, we can form another problem to solve by asking ourselves 
-# 1. **"What features caused employees stay?** 
-# 2. **"What features contributed to employee retention?**
-# **
-# There are endless problems to solve!
+def dummy_manhattan_distance(lat1, lng1, lat2, lng2):
+    a = haversine_array(lat1, lng1, lat1, lng2)
+    b = haversine_array(lat1, lng1, lat2, lng1)
+    return a + b
 
-# ## What would you do?
-# ***
-# 
-# **Reddit Commentor (DSPublic):** I worked in HR for a couple of years and here's a few questions I have:
-# People that have HIGH salary and not been promoted, did they leave? If so, could it be a signal that we're not developing people or providing enough opportunities?
-# 
-# How would you define a 'high performer' without using their last evaluation rating? Evaluations tend to be inconsistently applied across departments and highly dependent on your relationship with the person doing that evaluation. Can we do an Evaluation Vs. Departments (see if there are actual differences)?
-# Once defined, did these high performers leave? If so, why? Are we not providing opportunities or recognizing these high performers? Is it a lack of salary?
-# 
-# To add some additional context, 24% turnover rate is high in general but do we know what industry this is from? If the industry norm is 50%, this company is doing great! I see you've done Turnover by dept which is great. If only we have more info and classify these turnovers.
-# 
-# We have voluntary and involuntary turnovers as well. Also, who are these employees - is it part timers, contract workers that turn over? We don't worry about those, they're suppose to go. I'd like to see Turnover vs. Years of service. In real life, we found a cluster / turning point where people 'turn sour' after about 5 years at the company. Can we see satisfaction vs. years at company?
+def bearing_array(lat1, lng1, lat2, lng2):
+    AVG_EARTH_RADIUS = 6371  # in km
+    lng_delta_rad = np.radians(lng2 - lng1)
+    lat1, lng1, lat2, lng2 = map(np.radians, (lat1, lng1, lat2, lng2))
+    y = np.sin(lng_delta_rad) * np.cos(lat2)
+    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lng_delta_rad)
+    return np.degrees(np.arctan2(y, x))
 
-# ## Recommended Websites:
-# ***
+
+# <p>Applying these functions to both the test and train data, we can calculate the haversine distance which is the great-circle distance between two points on a sphere given their longitudes and latitudes. We can then calculate the summed distance traveled in Manhattan. And finally we calculate (through some handy trigonometry) the direction (or bearing) of the distance traveled. These calculations are stored as variables in the separate data sets. The next step I decided to take is to create neighourhods, like Soho, or the Upper East Side, from the data and display this.</p>
+
+# In[ ]:
+
+
+train.loc[:, 'distance_haversine'] = haversine_array(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
+test.loc[:, 'distance_haversine'] = haversine_array(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)    
+    
+train.loc[:, 'distance_dummy_manhattan'] =  dummy_manhattan_distance(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
+test.loc[:, 'distance_dummy_manhattan'] =  dummy_manhattan_distance(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)
+
+train.loc[:, 'direction'] = bearing_array(train['pickup_latitude'].values, train['pickup_longitude'].values, train['dropoff_latitude'].values, train['dropoff_longitude'].values)
+test.loc[:, 'direction'] = bearing_array(test['pickup_latitude'].values, test['pickup_longitude'].values, test['dropoff_latitude'].values, test['dropoff_longitude'].values)
+
+
+# <h3>3.3.3 Lets create the "Neighborhoods"</h3><br>
+# <p>One might think it necessary to have a map handy to do this, but not really. This will intuitively work as KMeans will cluster the data points into their own neighborhoods. This is pretty straight forward since Numpy helps create a vertically stacked array of the pickup and dropoff coordinates, and using `sklearn`'s MiniBatchKMeans module it's easy to set up the parameters to create the clusters.</p>
 # 
-# Statiscal Concepts: https://www.youtube.com/user/BCFoltz/playlists
+# <p>There are three steps to preparing the data: create the coordinates stack, configure the KMeans clustering parameters, and create the actual clusters:</p>
+
+# In[ ]:
+
+
+coords = np.vstack((train[['pickup_latitude', 'pickup_longitude']].values,
+                    train[['dropoff_latitude', 'dropoff_longitude']].values))
+
+
+# In[ ]:
+
+
+sample_ind = np.random.permutation(len(coords))[:500000]
+kmeans = MiniBatchKMeans(n_clusters=100, batch_size=10000).fit(coords[sample_ind])
+
+
+# In[ ]:
+
+
+train.loc[:, 'pickup_cluster'] = kmeans.predict(train[['pickup_latitude', 'pickup_longitude']])
+train.loc[:, 'dropoff_cluster'] = kmeans.predict(train[['dropoff_latitude', 'dropoff_longitude']])
+test.loc[:, 'pickup_cluster'] = kmeans.predict(test[['pickup_latitude', 'pickup_longitude']])
+test.loc[:, 'dropoff_cluster'] = kmeans.predict(test[['dropoff_latitude', 'dropoff_longitude']])
+
+
+# </p>Once you've run through these steps, you're all set to display these clusters in a similar way than the pickup locations. So as an example, I'll graph the pickup location clusters. Again, the map is drawn on the New York border coordinates canvas we created earlier:</p>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(ncols=1, nrows=1)
+ax.scatter(train.pickup_longitude.values[:500000], train.pickup_latitude.values[:500000], s=10, lw=0,
+           c=train.pickup_cluster[:500000].values, cmap='autumn', alpha=0.2)
+ax.set_xlim(city_long_border)
+ax.set_ylim(city_lat_border)
+ax.set_xlabel('Longitude')
+ax.set_ylabel('Latitude')
+plt.show()
+
+
+# <p>This shows a nice visual representation of the KMeans clustering algorithm at work (we used 100 clusters, but there is freedom to play around with this parameter to see how it changes the results). The clustering effectively created the different neighbourhoods in Manhattan as displayed by the borders between the different colors. This should be intuitive to some degree as a trip would differ from point A to point B, in various parts of New york. By nature, it's different.</p>
 # 
-# Common Machine Learning Algorithms: https://www.linkedin.com/pulse/machine-learning-whats-inside-box-randy-lao/
+# <p>The next step is to start looking into extracting information from the dates and starting to think about encoding the data.</p> 
+
+# <h3>3.4 Date Extraction</h3><br>
 # 
-# Basics of Machine Learning: https://www.linkedin.com/pulse/machine-learning-fresh-bloods-randy-lao/
+# <p>Part of the reasoning behind extracting the different parts of the date for each trip is to enable us to do one hot encoding. This involves changing categorical variables into binary variables. It makes it easier to use when training ML models, since logically a machine can much better understand 1's and 0's rather than 'January' or 'Febuary', for example. You can read more on one hot encoding [here](http://machinelearningmastery.com/how-to-one-hot-encode-sequence-data-in-python/ "One Hot Encoding"). To make sure we can use the features we extract from the dates, we need to check if both data sets has the same size (i.e. same number of months, days, hours, etc.). </p>
+
+# In[ ]:
+
+
+#Extracting Month
+train['Month'] = train['pickup_datetime'].dt.month
+test['Month'] = test['pickup_datetime'].dt.month
+
+
+# In[ ]:
+
+
+train.groupby('Month').size(),test.groupby('Month').size()
+
+
+# <p>Both train and test data sets have 6 months, so months are ready for dummy variables (i.e. encoding).</p>
+
+# In[ ]:
+
+
+train['DayofMonth'] = train['pickup_datetime'].dt.day
+test['DayofMonth'] = test['pickup_datetime'].dt.day
+len(train.groupby('DayofMonth').size()),len(test.groupby('DayofMonth').size())
+
+
+# <p>Both train and test data sets have 31 days, so days are ready for dummy variables (i.e. encoding).</p>
+
+# In[ ]:
+
+
+train['Hour'] = train['pickup_datetime'].dt.hour
+test['Hour'] = test['pickup_datetime'].dt.hour
+len(train.groupby('Hour').size()),len(test.groupby('Hour').size())
+
+
+# <p>Both train and test data sets have 24 hours, so hours are ready for dummy variables (i.e. encoding).</p>
+
+# In[ ]:
+
+
+train['dayofweek'] = train['pickup_datetime'].dt.dayofweek
+test['dayofweek'] = test['pickup_datetime'].dt.dayofweek
+len(train.groupby('dayofweek').size()),len(test.groupby('dayofweek').size())
+
+
+# Both sets of data has 7 days per week. That's fine for encoding aswell.
+
+# <p>So, excellent! We can safely use the different date parts in their extracted forms as part of the modelling process. Let's take a look at the average speed and how it changes over time, specifically focusing on how the hour of the day, the day of the week, and the moth of the year affects average speed. It's important to note though that average speed is a function of distance and time so it wouldn't add anything to the modelling output. We'll therefore need to remove it eventually before we train our model.</p>
+
+# In[ ]:
+
+
+train.loc[:, 'avg_speed_h'] = 1000 * train['distance_haversine'] / train['trip_duration']
+train.loc[:, 'avg_speed_m'] = 1000 * train['distance_dummy_manhattan'] / train['trip_duration']
+fig, ax = plt.subplots(ncols=3, sharey=True)
+ax[0].plot(train.groupby('Hour').mean()['avg_speed_h'], 'bo-', lw=2, alpha=0.7)
+ax[1].plot(train.groupby('dayofweek').mean()['avg_speed_h'], 'go-', lw=2, alpha=0.7)
+ax[2].plot(train.groupby('Month').mean()['avg_speed_h'], 'ro-', lw=2, alpha=0.7)
+ax[0].set_xlabel('Hour of Day')
+ax[1].set_xlabel('Day of Week')
+ax[2].set_xlabel('Month of Year')
+ax[0].set_ylabel('Average Speed')
+fig.suptitle('Average Traffic Speed by Date-part')
+plt.show()
+
+
+# <p>So the interesting thing to notice here is the average speed by hour of day. We're I'm from traffic usually peaks between 5am and 9am, and then again from about 4pm to around 6 or 7pm. But it would seem in manhattan that average speed diminishes as the day goes by from around 6am and picks up again around 7 or 8pm. So most of the travelling in the Big Apple happens during work hours. The average speed by weekday follows an expected trend. Over the weekend (Friday, Saturday, Sunday) the average speed picks up quite nicely, indicating less traffic. Finally, the average trip speed by month follows an expected trend. In the winter months there are less trips (see the previous timeseries plot we made) indicating less traffic in general in the city which means you can average a higher speed on the roads.</p>
+# <br>
 # 
-# Data Science Pipeline (OSEMN): https://www.linkedin.com/pulse/life-data-science-osemn-randy-lao/
+# <p>This next part uses the pick-up locations and the average speed data we've got and plots the average speed by location. </p>
+
+# In[ ]:
+
+
+train.loc[:, 'pickup_lat_bin'] = np.round(train['pickup_latitude'], 3)
+train.loc[:, 'pickup_long_bin'] = np.round(train['pickup_longitude'], 3)
+# Average speed for regions
+gby_cols = ['pickup_lat_bin', 'pickup_long_bin']
+coord_speed = train.groupby(gby_cols).mean()[['avg_speed_h']].reset_index()
+coord_count = train.groupby(gby_cols).count()[['id']].reset_index()
+coord_stats = pd.merge(coord_speed, coord_count, on=gby_cols)
+coord_stats = coord_stats[coord_stats['id'] > 100]
+fig, ax = plt.subplots(ncols=1, nrows=1)
+ax.scatter(train.pickup_longitude.values[:500000], train.pickup_latitude.values[:500000], color='black', s=1, alpha=0.5)
+ax.scatter(coord_stats.pickup_long_bin.values, coord_stats.pickup_lat_bin.values, c=coord_stats.avg_speed_h.values,
+           cmap='RdYlGn', s=20, alpha=0.5, vmin=1, vmax=8)
+ax.set_xlim(city_long_border)
+ax.set_ylim(city_lat_border)
+ax.set_xlabel('Longitude')
+ax.set_ylabel('Latitude')
+plt.title('Average speed')
+plt.show()
+
+
+# <p>So clearly, by neighbourhood, the average speed definitely changes. To a greater extent the center of the city is the busiest (we'd expect this since the majority of activity in large cities is focused around the center) and the average speed picks up nicely around the outskirts.</p><br>
 # 
+# <p>We can expect good performance from our clustering data during modelling just from looking at how well we can distinguish average speeds by neighbourhood (i.e. cluster). Something definitely worth exploring, which could boost the performance of the XGBoost model significantly, is to create a data set that can be used with [Xiaolin Wu's line algorithm](https://en.m.wikipedia.org/wiki/Xiaolin_Wu%27s_line_algorithm "Xiaolin Wu's line algorithm"). This would involve pixelating the graph area and recording every pixel crossed by the line from the pick-up location to the drop-off location. If you can make the resolution as high as possible some of the pixels shoudl encapsulate traffic junctions, traffic lights, bridges, etc. Using the "has crossed coordinate X" features one could potentially create an extra +-10 000 features to train the alogrithm with.</p><br>
+# 
+# <p>**Note:** XGBoost will be able to handle up to about 10 000 columns (features) with about 1 million rows of data on a Mac Book Pro.</p>
+
+# <h2>4. Data Enrichment & Dummy Variables</h2>
+# ---------------------------------------
+# <p>At this point it's possible to train our model, but often in Data Science and analysing different datasets, we need to look for alternative sources of data that will add accuracy to the models we build. And we still have the opportunity to create dummy variables that can add to model's accuracy.</p><br>
+# 
+# <h3>4.1 Data Enrichment</h3><br>
+# <p>For this particular problem we can add OSRM ([Open Source Routing Machine](http://project-osrm.org/ "OSRM")) features. Ultimately this is a data set containing the fastest routes from specific starting points in NY. </p>
+
+# In[ ]:
+
+
+fr1 = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_train_part_1.csv', usecols=['id', 'total_distance', 'total_travel_time',  'number_of_steps'])
+fr2 = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_train_part_2.csv', usecols=['id', 'total_distance', 'total_travel_time', 'number_of_steps'])
+test_street_info = pd.read_csv('../input/new-york-city-taxi-with-osrm/fastest_routes_test.csv',
+                               usecols=['id', 'total_distance', 'total_travel_time', 'number_of_steps'])
+train_street_info = pd.concat((fr1, fr2))
+train = train.merge(train_street_info, how='left', on='id')
+test = test.merge(test_street_info, how='left', on='id')
+
+
+# In[ ]:
+
+
+train.shape, test.shape
+
+
+# <p>Strictly speaking we don't need to check the content/shape of the data, but for sanity we can check what the test and training data sets look like. The output makes sence: The columns that the train dataset has that test doesn't is now: `dropoff_datetime`, `avg_speed_m`, `avg_speed_h`, `pickup_lat_bin`, and `pickup_long_bin` (apart from `trip_duration`).</p><br>
+# 
+# <p>Now for the scary part (not really): Creating the dummy variables.</p><br>
+# 
+# <h3>4.2 Creating Dummy Variables</h3><br>
+# <p>So for this step we get to the one hot encoding we spoke of earlier. Generally speaking you can do this in a few ways, but luckily Pandas helps us out again. A simple function that changes categorical data into dummy/indicator variables. Read more [here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.get_dummies.html "Pandas get_dummies"). The application is simple:</p>
+
+# In[ ]:
+
+
+vendor_train = pd.get_dummies(train['vendor_id'], prefix='vi', prefix_sep='_')
+vendor_test = pd.get_dummies(test['vendor_id'], prefix='vi', prefix_sep='_')
+passenger_count_train = pd.get_dummies(train['passenger_count'], prefix='pc', prefix_sep='_')
+passenger_count_test = pd.get_dummies(test['passenger_count'], prefix='pc', prefix_sep='_')
+store_and_fwd_flag_train = pd.get_dummies(train['store_and_fwd_flag'], prefix='sf', prefix_sep='_')
+store_and_fwd_flag_test = pd.get_dummies(test['store_and_fwd_flag'], prefix='sf', prefix_sep='_')
+cluster_pickup_train = pd.get_dummies(train['pickup_cluster'], prefix='p', prefix_sep='_')
+cluster_pickup_test = pd.get_dummies(test['pickup_cluster'], prefix='p', prefix_sep='_')
+cluster_dropoff_train = pd.get_dummies(train['dropoff_cluster'], prefix='d', prefix_sep='_')
+cluster_dropoff_test = pd.get_dummies(test['dropoff_cluster'], prefix='d', prefix_sep='_')
+
+month_train = pd.get_dummies(train['Month'], prefix='m', prefix_sep='_')
+month_test = pd.get_dummies(test['Month'], prefix='m', prefix_sep='_')
+dom_train = pd.get_dummies(train['DayofMonth'], prefix='dom', prefix_sep='_')
+dom_test = pd.get_dummies(test['DayofMonth'], prefix='dom', prefix_sep='_')
+hour_train = pd.get_dummies(train['Hour'], prefix='h', prefix_sep='_')
+hour_test = pd.get_dummies(test['Hour'], prefix='h', prefix_sep='_')
+dow_train = pd.get_dummies(train['dayofweek'], prefix='dow', prefix_sep='_')
+dow_test = pd.get_dummies(test['dayofweek'], prefix='dow', prefix_sep='_')
+
+
+# <p>See how simple that was?</p><br>
+# 
+# <p>We do need to check the output though (never fully trust functions without testing it).</p>
+
+# In[ ]:
+
+
+vendor_train.shape,vendor_test.shape
+
+
+# In[ ]:
+
+
+passenger_count_train.shape,passenger_count_test.shape
+
+
+# In[ ]:
+
+
+store_and_fwd_flag_train.shape,store_and_fwd_flag_test.shape
+
+
+# In[ ]:
+
+
+cluster_pickup_train.shape,cluster_pickup_test.shape
+
+
+# In[ ]:
+
+
+cluster_dropoff_train.shape,cluster_dropoff_test.shape
+
+
+# In[ ]:
+
+
+month_train.shape,month_test.shape
+
+
+# In[ ]:
+
+
+dom_train.shape,dom_test.shape
+
+
+# In[ ]:
+
+
+hour_train.shape,hour_test.shape
+
+
+# In[ ]:
+
+
+dow_train.shape,dow_test.shape
+
+
+# <p>Looking at the output you can tell that everything matches nicely, except for passenger count. We knew this however, since  there were two trips with 9 passengers in the test set where there was no trips with 9 passengers in the train set. Like we concluded, this is clearly an error/outlier. Let's get rid of that:</p>
+
+# In[ ]:
+
+
+passenger_count_test = passenger_count_test.drop('pc_9', axis = 1)
+
+
+# <p>And it would seem we've finally reached the end of what is easily considered the most difficult part of data science: cleaning and wrangling the data into a usable format/structure. The last part before we actually start training the model is to drop the categorical variables (since we replaced these with our indicator variables in the previous step) and compile the final version of our test and train sets.</p>
+
+# In[ ]:
+
+
+train = train.drop(['id','vendor_id','passenger_count','store_and_fwd_flag','Month','DayofMonth','Hour','dayofweek',
+                   'pickup_longitude','pickup_latitude','dropoff_longitude','dropoff_latitude'],axis = 1)
+Test_id = test['id']
+test = test.drop(['id','vendor_id','passenger_count','store_and_fwd_flag','Month','DayofMonth','Hour','dayofweek',
+                   'pickup_longitude','pickup_latitude','dropoff_longitude','dropoff_latitude'], axis = 1)
+
+train = train.drop(['dropoff_datetime','avg_speed_h','avg_speed_m','pickup_lat_bin','pickup_long_bin','trip_duration'], axis = 1)
+
+
+# <p>Let's check what's left after dropping our categorical variables.</p>
+
+# In[ ]:
+
+
+train.shape,test.shape
+
+
+# <p>Now let's add the indicator variables to our datasets.</p>
+
+# In[ ]:
+
+
+Train_Master = pd.concat([train,
+                          vendor_train,
+                          passenger_count_train,
+                          store_and_fwd_flag_train,
+                          cluster_pickup_train,
+                          cluster_dropoff_train,
+                         month_train,
+                         dom_train,
+                          hour_test,
+                          dow_train
+                         ], axis=1)
+
+
+# In[ ]:
+
+
+Test_master = pd.concat([test, 
+                         vendor_test,
+                         passenger_count_test,
+                         store_and_fwd_flag_test,
+                         cluster_pickup_test,
+                         cluster_dropoff_test,
+                         month_test,
+                         dom_test,
+                          hour_test,
+                          dow_test], axis=1)
+
+
+# In[ ]:
+
+
+Train_Master.shape,Test_master.shape
+
+
+# <p>There're two more columns we can drop because we keep the information from those two columns in other variables: `pickup_datetime` and `pickup_date`.</p>
+
+# In[ ]:
+
+
+Train_Master = Train_Master.drop(['pickup_datetime','pickup_date'],axis = 1)
+Test_master = Test_master.drop(['pickup_datetime','pickup_date'],axis = 1)
+
+
+# <p>One more sense check.</p>
+
+# In[ ]:
+
+
+Train_Master.shape,Test_master.shape
+
+
+# <p>This is exactly what we're expecting to see. The training set should have one more column than the test set, since it contains our target variable (which the test set doesn't). The next step is to split the training set into sub-training and sub-testing sets. The reason for this is to be able to tweak model parameters to increase accuracy (i.e. decrease the root mean square error [RSME] value) without creating bias towards the test set. Also, and perhaps more importantly, is that we need a validation set to use with XGBoost. So the XGBoost algorithm takes three datasets: a training set, a test set, and a validation set. The validation set is used to continuously evaluate the accuracy of the training model, and finally the model is used to make predictions against the test set. So splitting out the training set into a separate train and test set gives us a test sample of which we know the outcome variables. Makes sense, right?</p> <br>
+# 
+# <p>For the sake of this tutorial we'll stick to 100 000 data points, this just makes the training process faster and a little less cumbersome to work with. Also, we'll split the training set into a 80-20 train and test set. So from this, there are two things you can do: change the ratios by which you split the original training set (`Train_Master`), e.g. use a 70-30 ratio and see what the results are. Also, you can include all the data points instead of just 100k. This should also have quite a siginficant effect on the outcome.</p><br>
+# 
+# <p>So the split would look something like this:</p>
+
+# In[ ]:
+
+
+Train, Test = train_test_split(Train_Master[0:100000], test_size = 0.2)
+
+
+# <p>Some additional steps are required for us to use these datasets. One thing is to drop the `log_trip_duration` features (this is merely a log transform of one of the features, so it's signficance will remain the same as when it isn't transformed). Also, we can drop our original index and reset it, to make sure we can reference the rows accurately if needed.</p>
+
+# In[ ]:
+
+
+X_train = Train.drop(['log_trip_duration'], axis=1)
+Y_train = Train["log_trip_duration"]
+X_test = Test.drop(['log_trip_duration'], axis=1)
+Y_test = Test["log_trip_duration"]
+
+Y_test = Y_test.reset_index().drop('index',axis = 1)
+Y_train = Y_train.reset_index().drop('index',axis = 1)
+
+
+# <p>One more step and it really is time to start training: We need to create the XGBoost matrices that will be used to train the model using XGBoost. Note that we use the newly created test and train sets as our model training inputs (for train and validation) and finally use the master test set to make our predictions.</p>
+
+# In[ ]:
+
+
+dtrain = xgb.DMatrix(X_train, label=Y_train)
+dvalid = xgb.DMatrix(X_test, label=Y_test)
+dtest = xgb.DMatrix(Test_master)
+watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
+
+
+# <p>Finally! We're ready to use XGBoost. You'll notice that this part is actually quite short. But only in code. It can take quite a while to itterate through the different parameters and different values of these parameters to better the outcome of the model. Let's see what's next.</p>
+
+# [](http://)<h2>5. XGBoost - Training the Model and Testing the Accuracy</h2>
+# -------------------------------------------------------
+# 
+# <p>As mentioned you can play with the different parameters of the XGBoost algorithm to tweak the model's outcome. So below is a short, but very nice, way of itterating through model parameters to tweak the model. So it's implementation is simple: just uncomment the code and run the kernel. Again, refer to the [documentation for XGBoost](http://xgboost.readthedocs.io/en/latest/python/python_intro.html "XGBoost Documentation") to understand what each parameter does and how it alters the behaviour of the training process.</p>
+
+# In[ ]:
+
+
+#md = [6]
+#lr = [0.1,0.3]
+#mcw = [20,25,30]
+#for m in md:
+#    for l in lr:
+#        for n in mcw:
+#            t0 = datetime.now()
+#            xgb_pars = {'min_child_weight': mcw, 'eta': lr, 'colsample_bytree': 0.9, 
+#                        'max_depth': md,
+#            'subsample': 0.9, 'lambda': 1., 'nthread': -1, 'booster' : 'gbtree', 'silent': 1,
+#            'eval_metric': 'rmse', 'objective': 'reg:linear'}
+#            model = xgb.train(xgb_pars, dtrain, 50, watchlist, early_stopping_rounds=10,
+#                  maximize=False, verbose_eval=1)
+
+
+# [0]	train-rmse:5.70042	valid-rmse:5.69993
+# Multiple eval metrics have been passed: 'valid-rmse' will be used for early stopping.
+# 
+# Will train until valid-rmse hasn't improved in 10 rounds.
+# 
+# *[11]	train-rmse: 3.25699	valid-rmse: 3.25698 <br>
+# ... <br>
+# ... <br>
+# 
+# [89]	train-rmse:0.335358	valid-rmse:0.345624 <br>
+# [90]	train-rmse:0.334614	valid-rmse:0.344972 <br>
+# [91]	train-rmse:0.333921	valid-rmse:0.344405 <br>
+
+# Here is one for the fork's. I do recomend you trying to play with these metrics though... 
+
+# In[ ]:
+
+
+xgb_pars = {'min_child_weight': 1, 'eta': 0.5, 'colsample_bytree': 0.9, 
+            'max_depth': 6,
+'subsample': 0.9, 'lambda': 1., 'nthread': -1, 'booster' : 'gbtree', 'silent': 1,
+'eval_metric': 'rmse', 'objective': 'reg:linear'}
+model = xgb.train(xgb_pars, dtrain, 10, watchlist, early_stopping_rounds=2,
+      maximize=False, verbose_eval=1)
+print('Modeling RMSLE %.5f' % model.best_score)
+
+
+# <p>Of course, what type of tutorial would this be if I didn't give some ideas about where to twea the model? Here are some steps I suggest you follow:</p>
+# <ol>
+# <li>Make it more than 10 iterations before stopping.</li>
+# <li>Lower the eta-value.</li>
+# <li>Increase the max depth.</li>
+# </ol>
+# <p>Be very careful though, there is such a thing as overfitting. I.e. training your model so well on the training set that it performs quite poorly on unseen data. Here I would suggest playing with `colsample_bytree` and `subsample` to control overfitting.</p><br>
+# 
+# <p>Out of interest, we can investigate the importance of each feature, to understand what affects the trip duration the most significantly. Here's how XGBoost allows us to do it:</p>
 # 
 
-# # Edits:
-# ***
+# In[ ]:
+
+
+xgb.plot_importance(model, max_num_features=28, height=0.7)
+
+
+# <p>So from top to bottom we see which features have the greatest affect on trip duration. It would make logical sense that distance has the greatest affect. The further you travel, the longer it'll take. The rest of the features follow a similar logic in why it's ranked the way it is.</p><br>
 # 
-# **To Do's:** 
-# 1. Define "high performers". It's ambiguous and is normally determined by relationships. Could be inconsistent. To verify, do a **Evaluation V.S. Department**.
+# <p>The final step before submission is to make our predictions using the trained model:</p>
+
+# In[ ]:
+
+
+pred = model.predict(dtest)
+pred = np.exp(pred) - 1
+
+
+# <p>It's as simple as that. We've now successfully trained a model and made predictions on unseen data about how long it would take to get from A to B. Thus, the last step in getting yourself onto the leaderboard is to make a submission. Let's do that quickly:</p>
+
+# Time for Submission
+
+# In[ ]:
+
+
+submission = pd.concat([Test_id, pd.DataFrame(pred)], axis=1)
+submission.columns = ['id','trip_duration']
+submission['trip_duration'] = submission.apply(lambda x : 1 if (x['trip_duration'] <= 0) else x['trip_duration'], axis = 1)
+submission.to_csv("submission.csv", index=False)
+
+
+# <p>And that's it folks. So thats my basic model on the NYC taxi problem. I truly hope everything was clear, and if not please feel free to comment and I'll try and clarify anything. Also if you spot some errors (come on, I'm human after all) please drop me a line and I'll correct it.</p><br>
 # 
-# 2. Create Expected Value Model. Cost and Benefits. Understand the cost of targeting and cost of employee leaving. Known as Cost Matrix.
+# <p>Thanks for forking, please share if it was useful, and please throw in an upvote if you think it deserves one.</p><br>
 # 
-# 3. Create a tableu dashboard for relevant/important information and highlight 
-
-# **Edit 1**: Added Hypothesis testing for employee turnover satisfaction and entire employee satisfaction 8/29/2017
-
-# **Edit 2**: Added Turnover VS Satisfaction graph 9/14/2017 
-
-# **Edit 3**: Added pd.get_dummies for 'salary' and 'department' features. This increased the AUC score by 2% (76%-78%) 9/23/2017
-
-# **Edit 4:** Added Random Forest Model and updated the ROC Curve. Added Base Rate Model explanation. Added AdaBoost Model. Added Decision Tree Model  9/27/2017
-
-# **Edit 5:** Added decision tree classifier feature importance. Added visualization for decision tree. 9/30/2017
-
-# **Edit 6:** Added more information about precision/recall and class imbalance solutions. Updated potential solution section and included a new section: evaluating model. 10/1/2017
-
-# **Edit 7:** Added an in-depth interpretation of logistic regression model. Using this for a more interpretable classifier. Showing how the coefficents are computed and how each variable is presented in the algoirthm. Added a retention plan as a metric to evaluate our model. 10/11/2017
-
-# <img src="https://content.linkedin.com/content/dam/brand/site/img/logo/logo-tm.png"/>
-
-# # Let's Connect!
-# If anybody would like to discuss any other projects or just have a chat about data science topics, I'll be more than happy to connect with you on:
-# 
-# **LinkedIn:**
-# https://www.linkedin.com/in/randylaosat/
-# 
-# **My Website:**
-# http://randylaosat.strikingly.com/
-# 
-# **This notebook will always be a work in progress. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated. Thank you guys!**
+# <b><p>Warm regards and happy kaggling</p><br></b>
+# <h1>KarelRV</h1>

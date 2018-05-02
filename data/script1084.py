@@ -1,385 +1,264 @@
 
 # coding: utf-8
 
-# In this exploration notebook, we shall try to uncover the basic information about the dataset which will help us build our models / features. 
+# Welcome to the SQL Scavenger Hunt! Each day over the next five days we're going to be focusing on using different SQL commands to help us find the data we need to answer a specific question. I've put together this handbook to help you out by introducing you to SQL and BigQuery. In this handbook, I'll help you hit the ground running by covering the following topics: 
 # 
-# Let us first import the necessary modules.
+# * [What are SQL & BigQuery and why you should learn them?](#What-are-SQL-&-BigQuery-and-why-you-should-learn-them?)
+# * [How to use BigQuery datasets in kernels](#How-to-use-BigQuery-datasets-in-kernels)
+# * [How to avoid common mistakes when querying big datasets](#How-to-avoid-common-mistakes-when-querying-big-datasets)
+# 
+# And I'll wrap up by collecting some helpful links, including the ones to the notebooks for the rest of the scavenger hunt. Let's get to it!
+
+# # What are SQL & BigQuery and why you should learn them?
+# ____
+# 
+# SQL (short for “Structured Query Language”, and said like either "see-quill" or "S-Q-L" ) is a programming language that allows you to interact with databases. For many databases out there, SQL is the *only* way to access the information in them and, as a result, it's an important skill for any data scientist or aspiring data scientist. (You don't need to take my word on this one: in our survey of data scientists we found that SQL was [the third most popular software tool for data science](https://www.kaggle.com/surveys/2017), right after Python and R.)
+# 
+# > **Why learn SQL?**: If you're currently looking for a data science job, being able to show that you're comfortable with SQL will open up more job opportunities for you. If you're currently *doing* data science, brushing up on your SQL skills will help you access more data sources and make it easier to get a subset of a database to work with locally. Plus, it's fun! :)
+# 
+# [BigQuery](https://cloud.google.com/bigquery/) is a Google Cloud product for storing and accessing very large databases very quickly. We've recently started making [some BigQuery datasets](https://www.kaggle.com/datasets?filetype=bigQuery) accessible via Kaggle. Since SQL is the easiest way to access these data in these datasets they make the perfect playground to help you get comfortable with this language.
+# 
+# >  Because the datasets on BigQuery can be very large, there are some restrictions on how much data you can access. The good news is that **each Kaggle user can scan 5TB every 30 days for free.** The bad news is that If you go over your quota you're going to have to wait for it to reset. 
+# 
+# Don't worry, though: in this handbook we'll teach you how to be careful when looking at BigQuery data to make sure you don't accidentally go over your quota.
+
+# # How to use BigQuery datasets in kernels
+# ____
+# 
+# In this section, we're going to go through how to get your first BigQuery notebook up and running and how to actually run a query. I'm going to cover:
+# 
+# * Getting your notebook set up
+# * Checking the structure of the dataset (to help you when you want to write queries)
+# * How to check the size of a query before you run it (to avoid accidentally asking for waaaay more data than you wanted)
+# * How to run your first query! 
+# * How to save the data from your query as a .csv to use later
+# 
+# I'm *not* going to cover all the intricacies of SQL. That's what the next five days of the Scavenger Hunt are for!
+# 
+# ## Getting set up
+# ___
+# The first step is to start a kernel using one of the BigQuery datasets as the data source. You can find these datasets by going to the [Datasets page](https://www.kaggle.com/datasets) and selecting "BigQuery" from the "File Types" drop down menu at the top of the list of datasets. (Alternatively, you can follow [this link](https://www.kaggle.com/datasets?filetype=bigQuery).) 
+# 
+# Once you've picked a BigQuery dataset, head to the dataset page for it and start a new kernel on it by hitting the "New Kernel" button, just as you would with any other dataset. Right now, you can only use BigQuery databases with Python kernels.
+# 
+# > **Can you work with BigQuery in R kernels?** Right now, you can only work with BigQuery in Python kernels, so make sure you don't accidentally start an R kernel instead. If you want to do your analysis in R (which is my personal preference) you can save the data you query as an output file and then add that to a new kernel. We'll go over how to do that later in this notebook. :)
+# 
+# In order to make your life easier, we've put together a Python package called `bq_helper` and pre-loaded it into kernels. It has some helper functions for getting data out of BigQuery that will simplify the process of getting data. If you're curious, you can check out [example kernels with more in-depth information at the end of this notebook](#Additional-information-and-resources).
+# 
+# You can use `bq_helper` in your kernel by importing it, like so:
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-color = sns.color_palette()
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-pd.options.mode.chained_assignment = None  # default='warn'
+# import our bq_helper package
+import bq_helper 
 
 
-# Loading the training dataset and looking at the top few rows.
+# Now that we've added a BigQuery package to our kernel and imported the helper package, the next step is to create a BigQueryHelper object that points to a specific dataset. 
+# 
+# The first thing we need to do this is to know is what our specific dataset is called. You can find this by checking out the dataset listing for your dataset and then navigating to the "Data" tab. For example, [here's a link to the Data tab of the Hacker News dataset](https://www.kaggle.com/hacker-news/hacker-news/data), which is what we're going to be using in this kernel.
+# 
+# If you go to the link I provided, you'll notice a blue rectangle with rounded edges near the top of the page that has the following text in it: "bigquery-public-data.hacker_news.comments". This tells you that you're looking of a summary of the "comments" table in the "hacker_news" dataset. The addresses of BigQuery datasets look like this:
+# 
+# ![](https://i.imgur.com/l11gdKx.png)
+# 
+# We will need to pass this information to BigQueryHelper in order to create our helper object. The active_project argument takes the BigQuery info, which is currently "bigquery-public-data" for all the BigQuery datasets on Kaggle. The dataset_name argument takes the name of the dataset we've added to our query. In this case it's "hacker_news". So we can create our BigQueryHelper object like so:
 
 # In[ ]:
 
 
-train_df = pd.read_json("../input/train.json")
-train_df.head()
+# create a helper object for our bigquery dataset
+hacker_news = bq_helper.BigQueryHelper(active_project= "bigquery-public-data", 
+                                       dataset_name = "hacker_news")
 
 
-# Wow. This dataset looks interesting. It has numerical features, categorical features, date feature, text features and image features.  
+# Now that we've created our helper object, we can get started actually interacting with the dataset!
+
+# ## Check out the structure of your dataset
+# ____
 # 
-# Let us load the test data as well and check the number of rows in train and test to start with.
+# The first thing you're going to want to do, like with any new dataset, is check out the way that data is structured. We're going to do that by looking at the schema.
+# 
+# > **Schema**: A description of how data is organized within a dataset.
+# 
+# Being able to access the information in the schema will be very helpful to us later on as we start to put together queries, so we're going to quickly go over how to do this and how to interpret the schemas once we get them. First, we can use the `BigQueryHelper.list_tables()` method to list all the files in the hacker_news dataset.
 
 # In[ ]:
 
 
-test_df = pd.read_json("../input/test.json")
-print("Train Rows : ", train_df.shape[0])
-print("Test Rows : ", test_df.shape[0])
+# print a list of all the tables in the hacker_news dataset
+hacker_news.list_tables()
 
 
-# **Target Variable**
-# 
-# Before delving more into the features, let us first have a look at the target variable 'interest level'
+# Now that we know what tables are in this dataset, we can get information on the columns in a specific table. In this example, we're looking at the information on the "full" table. 
 
 # In[ ]:
 
 
-int_level = train_df['interest_level'].value_counts()
-
-plt.figure(figsize=(8,4))
-sns.barplot(int_level.index, int_level.values, alpha=0.8, color=color[1])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Interest level', fontsize=12)
-plt.show()
+# print information on all the columns in the "full" table
+# in the hacker_news dataset
+hacker_news.table_schema("full")
 
 
-# Interest level is low for most of the cases followed by medium and then high which makes sense.
+# Each SchemaField tells us about a specific column. In order, the information is:
 # 
-# Now let us start looking into the numerical features present in the dataset. Numerical features are
+# * The name of the column
+# * The datatype in the column
+# * [The mode of the column](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#schema.fields.mode) (NULLABLE means that a column allows NULL values, and is the default)
+# * A description of the data in that column
 # 
-#  - bathrooms
-#  - bedrooms
-#  - price
-#  - latitude
-#  - longitude
+# So, for the first column, we have the following schema field:
 # 
-# The last two are actually not numerical variables, but for now let us just consider it to be numerical.
+# `SchemaField('by', 'string', 'NULLABLE', "The username of the item's author.",())`
 # 
-# **Bathrooms:**
+# This tells us that the column is called "by", that is has strings in it but that NULL values are allowed, and that it contains the username of the item's author.
 # 
-# Let us first start with bathrooms.
+# We can use the `BigQueryHelper.head()` method to check just the first couple of lines of of the "full" table to make sure this is right. (Sometimes you'll run into databases out there where the schema isn't an accurate description of the data anymore, so it's good to check. This shouldn't be a problem with any of the BigQuery databases on Kaggle, though!)
 
 # In[ ]:
 
 
-cnt_srs = train_df['bathrooms'].value_counts()
+# preview the first couple lines of the "full" table
+hacker_news.head("full")
 
-plt.figure(figsize=(8,4))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[0])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bathrooms', fontsize=12)
-plt.show()
 
+# The `BigQueryHelper.head()` method will also let us look at just the information in a specific column. If we want to see the first ten entries in the "by" column, for example, we can do that!
 
 # In[ ]:
 
 
-train_df['bathrooms'].ix[train_df['bathrooms']>3] = 3
-plt.figure(figsize=(8,4))
-sns.violinplot(x='interest_level', y='bathrooms', data=train_df)
-plt.xlabel('Interest level', fontsize=12)
-plt.ylabel('bathrooms', fontsize=12)
-plt.show()
+# preview the first ten entries in the by column of the full table
+hacker_news.head("full", selected_columns="by", num_rows=10)
 
 
-# Looks like evenly distributed across the interest levels. Now let us look at the next feature 'bedrooms'.
+# Now that we know how to familiarize ourself with our datset, let's see how to check how big our queries are before we actually run them.
+
+# ## Check the size of your query before you run it
+# ____
 # 
-# **Bedrooms:**
-
-# In[ ]:
-
-
-cnt_srs = train_df['bedrooms'].value_counts()
-
-plt.figure(figsize=(8,4))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[2])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bedrooms', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(8,6))
-sns.countplot(x='bedrooms', hue='interest_level', data=train_df)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bedrooms', fontsize=12)
-plt.show()
-
-
-# **Price:**
+# BigQuery datasets are, true to their name, BIG. The [biggest dataset we've got on Kaggle so far](https://www.kaggle.com/github/github-repos) is 3 terabytes. Since the monthly quota for BigQuery queries is 5 terabytes, you can easily go past your 30-day quota by running just a couple of queries!
 # 
-# Now let us look at the price variable distribution.
+# > **What's a query?** A query is small piece of SQL code that specifies what data would you like to scan from a databases, and how much of that data you would like returned. (Note that your quota is on data *scanned*, not the amount of data returned.)
+# 
+# One way to help avoid this is to estimate how big your query will be before you actually execute it. You can do this with the `BigQueryHelper.estimate_query_size()` method. For the rest of this notebook, I'll be using an example query that finding the scores for every Hacker News post of the type "job". Let's see how much data it will scan if we actually ran it.
 
 # In[ ]:
 
 
-plt.figure(figsize=(8,6))
-plt.scatter(range(train_df.shape[0]), np.sort(train_df.price.values))
-plt.xlabel('index', fontsize=12)
-plt.ylabel('price', fontsize=12)
-plt.show()
+# this query looks in the full table in the hacker_news
+# dataset, then gets the score column from every row where 
+# the type column has "job" in it.
+query = """SELECT score
+            FROM `bigquery-public-data.hacker_news.full`
+            WHERE type = "job" """
+
+# check how big this query will be
+hacker_news.estimate_query_size(query)
 
 
-# Looks like there are some outliers in this feature. So let us remove them and then plot again.
+# Running this query will take around 150 MB. (The query size is returned in gigabytes.)
+# 
+# > **Important:** When you're writing your query, make sure that the name of the table (next to FROM) is in back ticks (\`), not single quotes ('). The reason for this is that the names of BigQuery tables contain periods in them, which in SQL are special characters. Putting the table name in back ticks protects the table name, so it's treated as a single string instead of being run as code.
+
+# ## Actually run a query
+# ___
+# 
+# Now that we know how to check the size of the query (and make sure we're not scanning several terabytes of data!) we're ready to actually run our first query. You have two methods available to help you do this:
+# 
+# * *`BigQueryHelper.query_to_pandas(query)`*: This method takes a query and returns a Pandas dataframe.
+# * *`BigQueryHelper.query_to_pandas_safe(query, max_gb_scanned=1)`*: This method takes a query and returns a Pandas dataframe only if the size of the query is less than the upperSizeLimit (1 gigabyte by default). 
+# 
+# Here's an example of a query that is larger than the specified upper limit.
 
 # In[ ]:
 
 
-ulimit = np.percentile(train_df.price.values, 99)
-train_df['price'].ix[train_df['price']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.price.values, bins=50, kde=True)
-plt.xlabel('price', fontsize=12)
-plt.show()
+# only run this query if it's less than 100 MB
+hacker_news.query_to_pandas_safe(query, max_gb_scanned=0.1)
 
 
-# The distribution is right skewed as we can see.
-# 
-# Now let us look at the latitude and longitude variables.
-# 
-# **Latitude & Longitude:**
+# And here's an example where the same query returns a dataframe. 
 
 # In[ ]:
 
 
-llimit = np.percentile(train_df.latitude.values, 1)
-ulimit = np.percentile(train_df.latitude.values, 99)
-train_df['latitude'].ix[train_df['latitude']<llimit] = llimit
-train_df['latitude'].ix[train_df['latitude']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.latitude.values, bins=50, kde=False)
-plt.xlabel('latitude', fontsize=12)
-plt.show()
+# check out the scores of job postings (if the 
+# query is smaller than 1 gig)
+job_post_scores = hacker_news.query_to_pandas_safe(query)
 
 
-# So the latitude values are primarily between 40.6 and 40.9. Now let us look at the longitude values.
+# Since this has returned a dataframe, we can work with it as we would any other dataframe. For example, we can get the mean of the column:
 
 # In[ ]:
 
 
-llimit = np.percentile(train_df.longitude.values, 1)
-ulimit = np.percentile(train_df.longitude.values, 99)
-train_df['longitude'].ix[train_df['longitude']<llimit] = llimit
-train_df['longitude'].ix[train_df['longitude']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.longitude.values, bins=50, kde=False)
-plt.xlabel('longitude', fontsize=12)
-plt.show()
+# average score for job posts
+job_post_scores.score.mean()
 
 
-# The longitude values range between -73.8 and -74.02. So the data corresponds to the **New York City**.
+# ## How to save the data from your query as a .csv
+# ___
 # 
-# Now let us plot the same in a map. Thanks to this [kernel][1] by Dotman.
-# 
-# 
-#   [1]: https://www.kaggle.com/dotman/d/fivethirtyeight/uber-pickups-in-new-york-city/data-exploration-and-visualization
+# Now that we've got a dataframe, we might want to save it out as a .csv to use later or in a different kernel. To do this, we can use the following code, which will write our dataframe to a file called "job_post_scores.csv" in the output directory. 
 
 # In[ ]:
 
 
-from mpl_toolkits.basemap import Basemap
-from matplotlib import cm
-
-west, south, east, north = -74.02, 40.64, -73.85, 40.86
-
-fig = plt.figure(figsize=(14,10))
-ax = fig.add_subplot(111)
-m = Basemap(projection='merc', llcrnrlat=south, urcrnrlat=north,
-            llcrnrlon=west, urcrnrlon=east, lat_ts=south, resolution='i')
-x, y = m(train_df['longitude'].values, train_df['latitude'].values)
-m.hexbin(x, y, gridsize=200,
-         bins='log', cmap=cm.YlOrRd_r);
+# save our dataframe as a .csv 
+job_post_scores.to_csv("job_post_scores.csv")
 
 
-# **Created:**
+# In order to access this file later, you'll need to compile your notebook. You can do this using the "Publish" button (if you have the old editor) or the "New Snapshot" button (if you have the new editor). Both are in the upper right hand corner of the editor.
 # 
-# Now let us look at the date column 'created' 
-
-# In[ ]:
-
-
-train_df["created"] = pd.to_datetime(train_df["created"])
-train_df["date_created"] = train_df["created"].dt.date
-cnt_srs = train_df['date_created'].value_counts()
-
-
-plt.figure(figsize=(12,4))
-ax = plt.subplot(111)
-ax.bar(cnt_srs.index, cnt_srs.values, alpha=0.8)
-ax.xaxis_date()
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# So we have data from April to June 2016 in our train set. Now let us look at the test set as well and see if they are also from the same date range. 
-
-# In[ ]:
-
-
-test_df["created"] = pd.to_datetime(test_df["created"])
-test_df["date_created"] = test_df["created"].dt.date
-cnt_srs = test_df['date_created'].value_counts()
-
-plt.figure(figsize=(12,4))
-ax = plt.subplot(111)
-ax.bar(cnt_srs.index, cnt_srs.values, alpha=0.8)
-ax.xaxis_date()
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Looks very similar to the train set dates and so we are good to go.!
+# Once your notebook has compiled and your file is ready, it will show up under the "Output" tab of your notebook. (You should see an Output tab for this notebook with the file we just wrote to a .csv in it.) From there you can download it, or you can add the notebook with the output file as a data source to a new kernel and import the file to your notebook as you would any other .csv file. 
 # 
-# We shall also look at the hour-wise listing trend (Just for fun)
-
-# In[ ]:
-
-
-train_df["hour_created"] = train_df["created"].dt.hour
-cnt_srs = train_df['hour_created'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[3])
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Looks like listings are created during the early hours of the day (1 to 7am). May be that is when the traffic is less and so the updates are happening.
+# > *It can take a couple minutes for the Output tab to show up as your notebook compiles, especially if your file was very large. If you don't see it right away, give it a little bit and it should show up.*
 # 
-# Now let us look at some of the categorical variables.
+# And that's all you need to get started getting data from BigQuery datasets on Kaggle! During the scavenger hunt we'll learn more about how to use SQL to improve the power and flexibility of your queries. 
+
+# # How to avoid common mistakes when querying big datasets
+# ____
 # 
-# **Display Address:**
-
-# In[ ]:
-
-
-cnt_srs = train_df.groupby('display_address')['display_address'].count()
-
-for i in [2, 10, 50, 100, 500]:
-    print('Display_address that appear less than {} times: {}%'.format(i, round((cnt_srs < i).mean() * 100, 2)))
-
-plt.figure(figsize=(12, 6))
-plt.hist(cnt_srs.values, bins=100, log=True, alpha=0.9)
-plt.xlabel('Number of times display_address appeared', fontsize=12)
-plt.ylabel('log(Count)', fontsize=12)
-plt.show()
-
-
-# Most of the display addresses occur less than 100 times in the given dataset. None of the display address occur more than 500 times.
+# Big data is great! Until working at a bigger scale suddenly it makes your problems bigger too, like [this poor professor whose experiment racked up an unexpected $1000 bill](https://www.wired.com/2012/04/aws-bill-in-minutes/). Although Kaggle isn't charging for accessing BigQuery datasets, following these best practices can help you avoid trouble down the line. If you'd like to learn more, you can check out [all the BigQuery best practices here](https://cloud.google.com/bigquery/docs/best-practices).
 # 
-# **Number of Photos:**
+# * *Avoid using the asterisk *(**) in your queries.* As you might have seen before in regular expressions, the asterisk means “everything”. While this may be okay with smaller datasets, if you send a query to a 4 terabyte dataset and ask for “everything” you're going to scan waaaaay more than you bargained for (or that a kernel can handle).
+# * *For initial exploration, look at just part of the table instead of the whole thing.* If you're just curious to see what data's in a table, preview it instead of scanning the whole table. We've included a method, `BigQueryHelper.head()`, in our helper package to help with this. Like `head()` in Pandas or R, it will just return the first few rows for you to look at.
+# * *Double-check the size of complex queries.* If you're planning on running what might be a large query, either estimate the size first or run it using the `BigQueryHelper.query_to_pandas_safe()` method.
+# * *Be cautious about joining tables.* In particular, avoid joining a table with itself (i.e. a self-join) and try to avoid joins that return a table that's larger than the ones you're joining together. (If you want to double-check yourself, you can try the join on just the heads of the tables involved.)
+# * *Don't rely on LIMIT*: One of the things that can be confusing when working with BigQuery datasets is the difference between the data you *scan* and the data you actually *get back* especially since it's the first one that actually counts against your quota. When you do something like select a column with LIMIT = 10, you'll only get 10 results back... but you'll actually be scanning the whole column. It's not a big deal if your table has 1000 rows, but it's a much bigger deal if it has 10,000,000 rows!
+
+# # Additional information and resources
+# _____
 # 
-# This competition also has a huge database of photos of the listings. To start with, let us look at the number of photos given for listings.
-
-# In[ ]:
-
-
-train_df["num_photos"] = train_df["photos"].apply(len)
-cnt_srs = train_df['num_photos'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.xlabel('Number of Photos', fontsize=12)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-train_df['num_photos'].ix[train_df['num_photos']>12] = 12
-plt.figure(figsize=(12,6))
-sns.violinplot(x="num_photos", y="interest_level", data=train_df, order =['low','medium','high'])
-plt.xlabel('Number of Photos', fontsize=12)
-plt.ylabel('Interest Level', fontsize=12)
-plt.show()
-
-
-# Let us now look at the number of features variable and see its distribution.
+# ### Links to the workbook for each day
 # 
-# **Number of features:**
-
-# In[ ]:
-
-
-train_df["num_features"] = train_df["features"].apply(len)
-cnt_srs = train_df['num_features'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Number of features', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-train_df['num_features'].ix[train_df['num_features']>17] = 17
-plt.figure(figsize=(12,10))
-sns.violinplot(y="num_features", x="interest_level", data=train_df, order =['low','medium','high'])
-plt.xlabel('Interest Level', fontsize=12)
-plt.ylabel('Number of features', fontsize=12)
-plt.show()
-
-
-# **Word Clouds:**
+# Now that you've read the handbook, you're ready to get started on the scavenger hunt! These notebooks were designed to be done at the pace of one per day, but feel free to work at your own pace: they'll be available indefinitely. 
 # 
-# Next we shall look into some for the text features.
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-
-text = ''
-text_da = ''
-text_desc = ''
-for ind, row in train_df.iterrows():
-    for feature in row['features']:
-        text = " ".join([text, "_".join(feature.strip().split(" "))])
-    text_da = " ".join([text_da,"_".join(row['display_address'].strip().split(" "))])
-    #text_desc = " ".join([text_desc, row['description']])
-text = text.strip()
-text_da = text_da.strip()
-text_desc = text_desc.strip()
-
-plt.figure(figsize=(12,6))
-wordcloud = WordCloud(background_color='white', width=600, height=300, max_font_size=50, max_words=40).generate(text)
-wordcloud.recolor(random_state=0)
-plt.imshow(wordcloud)
-plt.title("Wordcloud for features", fontsize=30)
-plt.axis("off")
-plt.show()
-
-# wordcloud for display address
-plt.figure(figsize=(12,6))
-wordcloud = WordCloud(background_color='white', width=600, height=300, max_font_size=50, max_words=40).generate(text_da)
-wordcloud.recolor(random_state=0)
-plt.imshow(wordcloud)
-plt.title("Wordcloud for Display Address", fontsize=30)
-plt.axis("off")
-plt.show()
-
-
-# **More to come. Stay tuned.!**
+#  - [Day 1: SELECT FROM](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1/)
+#  - [Day 2: GROUP BY](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2/) 
+#  - [Day 3: ORDER BY &amp; Dates](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-3/)
+#  - [Day 4: WITH &amp; AS](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-4/)
+#  - [Day 5: JOIN](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-5/)
 # 
-# Please upvote if you like the notebook :)
+# ### A video intro for working in Kernels
+# 
+# If you haven't worked in Kernels previously or just want to learn more about our new editor, I've recorded [a short intro video](https://www.youtube.com/watch?v=aMdk40hz30c) to help you get started. 
+# 
+# ### Develop a deeper understanding
+# If you're interested in learning more about BigQuery specifically, Sohier has put together a number of useful kernels to help you learn about the ins and outs. A lot of the things discussed in these kernels have been integrated into our package, so these will let you see under the hood and gain a deeper understanding of what's going on.
+# 
+# * [A getting started guide that walks you through using the BigQuery package directly (this is a lot of what our package does for you)](https://www.kaggle.com/sohier/getting-started-with-big-query)
+# * [A discussion of how to efficiently use resources in BigQuery](https://www.kaggle.com/sohier/efficient-resource-use-in-bigquery/)
+# * [A more in-depth dicussion of the BigQuery API](https://www.kaggle.com/sohier/beyond-queries-exploring-the-bigquery-api)
+# * [Converting BigQuery results to a Pandas dataframe](https://www.kaggle.com/sohier/how-to-integrate-bigquery-pandas)
+# 
+# ### Get inspired!
+# 
+# Here are a couple of interesting analysis to show you what sort of things are possible with BigQuery datasets.
+# 
+# * [What's the most common number of spaces to indent in Python code?](https://www.kaggle.com/hayatoy/most-common-indentation-space-count-in-python-code)
+# * [In what contexts does Kaggle get mentioned in Hacker News?](https://www.kaggle.com/mrisdal/mentions-of-kaggle-on-hacker-news)
+# 
+# ### Learn more about BigQuery
+# 
+# The best place to learn more is in BigQuery documentation, which [you can find here](https://cloud.google.com/bigquery/docs/).

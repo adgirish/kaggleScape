@@ -1,445 +1,285 @@
 
 # coding: utf-8
 
-# # Introduction
-# This Python notebook seeks to explore Mercari's data set, in order to extract "what to do" and "what not to do".
 # 
-# The main idea is to contribute to the community with quick, but deep, first view of the data.
+# # Audio Data Conversion to Images + EDA
 # 
-# It contains some visualizations and data manipulation, that can be further used to build your own Machine Learning Models.
+# **The dataset**: To help with this, TensorFlow recently released the Speech Commands Datasets. It includes 65,000 one-second long utterances of 30 short words, by thousands of different people.
 # 
-# Feel free to contribute to this Kernel with your thoughts.
+# | dataset | file count | zipped space | expanded space | 
+# |-------|-------|-------|--------|
+# |train|64,727 files| 1.1 GB | 2.1 GB |
+# |test|158,538 files | 2.6 GB | 5.2 GB |
 # 
-# Happy Kaggling!
+# **The Goal**: In this competition, you're challenged to use the Speech Commands Dataset to build an algorithm that understands simple spoken commands. 
+# 
+# ### About this Kernel
+# Hi all,  if you are considering doing image recognition on these images, I've put together a starter kit that is designed to convert all the wav files into pictures with the goal of running image recognition on the source files. Hope the below is helpful!
+# 
+# **Version improvement 11-17-17**: swapped libraries to `scipy` instead of using `soundfile`. It will run on kaggle kernel, but handicapped the actual file processing. Credit to https://www.kaggle.com/davids1992/data-visualization-and-investigation for the log_spectogram transformation.
+# 
+# **initial Version improvement 11-16-17**: first submission, requires `soundfile` library
+# 
+# ![](http://www1.icsi.berkeley.edu/Speech/mr/images/PZM_spectrogram.gif)
+# 
+
+# 
+# 
+
+# ## 1. Load libraries
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-from sklearn.feature_extraction.text import TfidfVectorizer
-import string
+from matplotlib.backend_bases import RendererBase
+from scipy import signal
+from scipy.io import wavfile
+#import soundfile as sf
+import os
+import numpy as np
+from PIL import Image
+from scipy.fftpack import fft
 
 get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Readindg data sets
+# ## 2. Set your file path
 
 # In[ ]:
 
 
-df_train = pd.read_csv('../input/train.tsv', sep='\t')
-df_test = pd.read_csv('../input/test.tsv', sep='\t')
+audio_path = '../input/train/audio/'
+pict_Path = '../input/picts/train/'
+test_pict_Path = '../input/picts/test/'
+test_audio_path = '../input/test/audio/'
+samples = []
 
 
-# ### Training set first look
-
-# In[ ]:
-
-
-df_train.head()
-
+# #### Kaggle Version: Identify all the subdirectories in the training directory****
 
 # In[ ]:
 
 
-print('Train shape:{}\nTest shape:{}'.format(df_train.shape, df_test.shape))
+subFolderList = []
+for x in os.listdir(audio_path):
+    if os.path.isdir(audio_path + '/' + x):
+        subFolderList.append(x)
 
 
-# ## Target distribution
-
-# In[ ]:
-
-
-plt.figure(figsize=(20, 15))
-plt.hist(df_train['price'], bins=50, range=[0,250], label='price')
-plt.title('Train "price" distribution', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('Samples', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# ### Price distribution
-
-# In[ ]:
-
-
-df_train['price'].describe()
-
-
-# Looks like the target distribution is more concentrated between **0~100**, but there are still values until **2000**.
-
-# In[ ]:
-
-
-plt.figure(figsize=(20, 15))
-bins=50
-plt.hist(df_train[df_train['shipping']==1]['price'], bins, normed=True, range=[0,250],
-         alpha=0.6, label='price when shipping==1')
-plt.hist(df_train[df_train['shipping']==0]['price'], bins, normed=True, range=[0,250],
-         alpha=0.6, label='price when shipping==0')
-plt.title('Train price over shipping type distribution', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('Normalized Samples', fontsize=15)
-plt.legend(fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.show()
-
-
-# The comparison of target class when shipping is 1 or 0 do not seems to be REALLY separated. But this does not means that this feature is useless, just that it can be further explored
-
-# In[ ]:
-
-
-df = df_train[df_train['price']<100]
-
-my_plot = []
-for i in df_train['item_condition_id'].unique():
-    my_plot.append(df[df['item_condition_id']==i]['price'])
-
-fig, axes = plt.subplots(figsize=(20, 15))
-bp = axes.boxplot(my_plot,vert=True,patch_artist=True,labels=range(1,6)) 
-
-colors = ['cyan', 'lightblue', 'lightgreen', 'tan', 'pink']
-for patch, color in zip(bp['boxes'], colors):
-    patch.set_facecolor(color)
-
-axes.yaxis.grid(True)
-
-plt.title('BoxPlot price X item_condition_id', fontsize=15)
-plt.xlabel('item_condition_id', fontsize=15)
-plt.ylabel('price', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.show()
-
-del df
-
-
-# The training data was reduced to just have sample with **target < 100**.
-# item_condition_id feature does not seems to vary to much in our data. Their medians do not change as the item_condition_id changes. Maybe it is just an ID and should be discarded or maybe it can help the learning algorithms or Feature Egeneering in some way.
+# #### Local Version: create local directories and identify subdirectories
 # 
-# Just to be fair, ID n°5 looks like a little bit different from others. It has a higher 3rd quartile and median.
-
-# # Text exploration
-# Lets take a look into our textual features. I bet we can have a lot of insights from it.
-# ### Most commom letters in Items Descriptions
-
-# In[ ]:
-
-
-cloud = WordCloud(width=1440, height=1080).generate(" ".join(df_train['item_description']
-.astype(str)))
-plt.figure(figsize=(20, 15))
-plt.imshow(cloud)
-plt.axis('off')
-
-
-# ### Verifying if products actually have description
-# The words "description yet" took my attention as they are commom according to the Word Cloud. Lets investigate.
-
-# In[ ]:
-
-
-df_train['has_description'] = 1
-df_train.loc[df_train['item_description']=='No description yet', 'has_description'] = 0
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(20, 15))
-bins=50
-plt.hist(df_train[df_train['has_description']==1]['price'], bins, range=[0,250],
-         alpha=0.6, label='price when has_description==1')
-plt.hist(df_train[df_train['has_description']==0]['price'], bins, range=[0,250],
-         alpha=0.6, label='price when has_description==0')
-plt.title('Train price X has_description type distribution', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('Samples', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# Looking to this histograms, the distribution of prices when an item does not have a description yet is very similar to when they already have a description, considering that the amount of simples in each histogram is very different, of course. To be more clear, there are normed histograms in the next chart.
-# #### Same as above, but normalized
-
-# In[ ]:
-
-
-plt.figure(figsize=(20, 15))
-bins=50
-plt.hist(df_train[df_train['has_description']==1]['price'], bins, normed=True,range=[0,250],
-         alpha=0.6, label='price when has_description==1')
-plt.hist(df_train[df_train['has_description']==0]['price'], bins, normed=True,range=[0,250],
-         alpha=0.6, label='price when has_description==0')
-plt.title('Train price X has_description type distribution', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('Samples', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# Explore products without description does not look to be the best initial approach in this competition.
-
-# # TF-IDF
-# Maybe Term Frequency – Inverse Document Frequency (TF-IDF) can be a good approach to deal with items descriptions.
+# ```python
+# if not os.path.exists(pict_Path):
+#     os.makedirs(pict_Path)
 # 
-# I'll give it a chance here, even as the descriptions are pretty short, as it had given me good results in other contexts.
+# if not os.path.exists(test_pict_Path):
+#     os.makedirs(test_pict_Path)
+# 
+#     
+# subFolderList = []
+# for x in os.listdir(audio_path):
+#     if os.path.isdir(audio_path + '/' + x):
+#         subFolderList.append(x)
+#         if not os.path.exists(pict_Path + '/' + x):
+#             os.makedirs(pict_Path +'/'+ x)
+# ```
+
+# ## 3. Pull an audio sample from each word¶
+# 
 
 # In[ ]:
 
 
-def compute_tfidf(description):
-    description = str(description)
-    description.translate(string.punctuation)
-
-    tfidf_sum=0
-    words_count=0
-    for w in description.lower().split():
-        words_count += 1
-        if w in tfidf_dict:
-            tfidf_sum += tfidf_dict[w]
+sample_audio = []
+total = 0
+for x in subFolderList:
     
-    if words_count > 0:
-        return tfidf_sum/words_count
-    else:
-        return 0
-
-tfidf = TfidfVectorizer(
-    min_df=5, strip_accents='unicode', lowercase =True,
-    analyzer='word', token_pattern=r'\w+', ngram_range=(1, 3), use_idf=True, 
-    smooth_idf=True, sublinear_tf=True, stop_words='english')
-
-
-# In[ ]:
-
-
-tfidf.fit_transform(df_train['item_description'].apply(str))
-tfidf_dict = dict(zip(tfidf.get_feature_names(), tfidf.idf_))
-df_train['tfidf'] = df_train['item_description'].apply(compute_tfidf)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(20, 15))
-plt.scatter(df_train['tfidf'], df_train['price'])
-plt.title('Train price X item_description TF-IDF', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('TF-IDF', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# Well, looking to this scatter plot is possible to notice that as higher the TF-IDF, lower the 'price' gets. I'll definitely try this feature in my models.
-
-# ## Item Description Lengths
-# ### Characters count
-
-# In[ ]:
-
-
-train_ds = pd.Series(df_train['item_description'].tolist()).astype(str)
-test_ds = pd.Series(df_test['item_description'].tolist()).astype(str)
-
-bins=100
-plt.figure(figsize=(20, 15))
-plt.hist(train_ds.apply(len), bins, range=[0,600], label='train')
-plt.hist(test_ds.apply(len), bins, alpha=0.6,range=[0,600], label='test')
-plt.title('Histogram of character count', fontsize=15)
-plt.xlabel('Characters Number', fontsize=15)
-plt.ylabel('Frequency', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# The histograms seems to have a pretty similar distribution. There is a gap near **20 characters**, maybe because of "no description yet" descriptions.
-
-# ### Word count
-
-# In[ ]:
-
-
-bins=100
-plt.figure(figsize=(20, 15))
-plt.hist(train_ds.apply(lambda x: len(x.split())), bins, range=[0,100], label='train')
-plt.hist(test_ds.apply(lambda x: len(x.split())), bins, alpha=0.6,range=[0,100], label='test')
-plt.title('Histogram of word count', fontsize=15)
-plt.xlabel('Number of words', fontsize=15)
-plt.ylabel('Frequency', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-
-
-# As well as character count, word count histograms are very similar for train and test. Further exploration will be needed here!
-
-# # Category Name
-# In our data set, each item have fits in a specific category, or a group of categories (mainly 3 for item).
-# 
-# Basically, the categories are arranged as from top to bottom of comprehensiveness. This means that the first category is less specific and the next are more specifics.
-# 
-# Lets investigate the 'main' categories first.
-
-# In[ ]:
-
-
-def transform_category_name(category_name):
-    try:
-        main, sub1, sub2= category_name.split('/')
-        return main, sub1, sub2
-    except:
-        return np.nan, np.nan, np.nan
-
-df_train['category_main'], df_train['category_sub1'], df_train['category_sub2'] = zip(*df_train['category_name'].apply(transform_category_name))
-
-
-# In[ ]:
-
-
-main_categories = [c for c in df_train['category_main'].unique() if type(c)==str]
-categories_sum=0
-for c in main_categories:
-    categories_sum+=100*len(df_train[df_train['category_main']==c])/len(df_train)
-    print('{:25}{:3f}% of training data'.format(c, 100*len(df_train[df_train['category_main']==c])/len(df_train)))
-print('nan\t\t\t {:3f}% of training data'.format(100-categories_sum))
-
-
-# In[ ]:
-
-
-df = df_train[df_train['price']<80]
-
-my_plot = []
-for i in main_categories:
-    my_plot.append(df[df['category_main']==i]['price'])
+    # get all the wave files
+    all_files = [y for y in os.listdir(audio_path + x) if '.wav' in y]
+    total += len(all_files)
+    # collect the first file from each dir
+    sample_audio.append(audio_path  + x + '/'+ all_files[0])
     
-fig, axes = plt.subplots(figsize=(20, 15))
-bp = axes.boxplot(my_plot,vert=True,patch_artist=True,labels=main_categories) 
-
-colors = ['cyan', 'lightblue', 'lightgreen', 'tan', 'pink']*2
-for patch, color in zip(bp['boxes'], colors):
-    patch.set_facecolor(color)
-
-axes.yaxis.grid(True)
-
-plt.title('BoxPlot price X Main product category', fontsize=15)
-plt.xlabel('Main Category', fontsize=15)
-plt.ylabel('Price', fontsize=15)
-plt.xticks(fontsize=15)
-plt.yticks(fontsize=15)
-plt.show()
+    # show file counts
+    print('count: %d : %s' % (len(all_files), x ))
+print(total)
 
 
-# Well, these boxplots are telling us more than the last ones. At least we have some variation when looking to their medians. But I feel like these results can be improved.
+# > ## 4. Spectrograms
+# Sample File Path
 # 
-# "Men" products are showing themselves more expensives than other in a general way.
-
-# ### 3rd level categories
-# As we have investigated main categories, let's take a look into the lowest level categories.
 
 # In[ ]:
 
 
-print('The data has {} unique 3rd level categories'.format(len(df_train['category_sub2'].unique())))
-
-df = df_train.groupby(['category_sub2'])['price'].agg(['size','sum'])
-df['mean_price']=df['sum']/df['size']
-df.sort_values(by=['mean_price'], ascending=False, inplace=True)
-df = df[:20]
-df.sort_values(by=['mean_price'], ascending=True, inplace=True)
-
-plt.figure(figsize=(20, 15))
-plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5)
-plt.yticks(range(0,len(df)), df.index, fontsize=15)
-plt.xticks(fontsize=15)
-plt.title('ASCENDING - 3rd level categories sorted by its mean prices', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('3rd level categorie', fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-########################################################################
-
-df = df_train.groupby(['category_sub2'])['price'].agg(['size','sum'])
-df['mean_price']=df['sum']/df['size']
-df.sort_values(by=['mean_price'], ascending=True, inplace=True)
-df = df[:50]
-df.sort_values(by=['mean_price'], ascending=False, inplace=True)
-
-plt.figure(figsize=(20, 15))
-plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5, color='r')
-plt.yticks(range(0,len(df)), df.index, fontsize=15)
-plt.xticks(fontsize=15)
-plt.title('DESCENDING - 3rd level categories sorted by its mean prices', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('3rd level categorie', fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
+sample_audio[0]
 
 
-# ### 2nd level categories (middle level)
-# To finish with categories for now, let's evaluate the middle level categories.
+# ### 4.1 Preview of Spectograms across different words
+# 
+# Borrowing log spec function from
+# 
+# https://www.kaggle.com/davids1992/data-visualization-and-investigation
 
 # In[ ]:
 
 
-print('The data has {} unique 2nd level categories'.format(len(df_train['category_sub1'].unique())))
-
-df = df_train.groupby(['category_sub1'])['price'].agg(['size','sum'])
-df['mean_price']=df['sum']/df['size']
-df.sort_values(by=['mean_price'], ascending=False, inplace=True)
-df = df[:20]
-df.sort_values(by=['mean_price'], ascending=True, inplace=True)
-
-plt.figure(figsize=(20, 15))
-plt.barh(range(0,len(df)), df['mean_price'], align='center', alpha=0.5, color='green')
-plt.yticks(range(0,len(df)), df.index, fontsize=15)
-plt.xticks(fontsize=15)
-plt.title('ASCENDING - 2nd level categories sorted by its mean prices', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('3rd level categorie', fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
-########################################################################
-
-df = df_train.groupby(['category_sub1'])['price'].agg(['size','sum'])
-df['mean_price']=df['sum']/df['size']
-df.sort_values(by=['mean_price'], ascending=True, inplace=True)
-df = df[:50]
-df.sort_values(by=['mean_price'], ascending=False, inplace=True)
-
-plt.figure(figsize=(20, 15))
-plt.barh(range(0,len(df)), df['mean_price'], align='center', color='pink')
-plt.yticks(range(0,len(df)), df.index, fontsize=15)
-plt.xticks(fontsize=15)
-plt.title('DESCENDING - 2nd level categories sorted by its mean prices', fontsize=15)
-plt.xlabel('Price', fontsize=15)
-plt.ylabel('3rd level categorie', fontsize=15)
-plt.legend(fontsize=15)
-plt.show()
+def log_specgram(audio, sample_rate, window_size=20,
+                 step_size=10, eps=1e-10):
+    nperseg = int(round(window_size * sample_rate / 1e3))
+    noverlap = int(round(step_size * sample_rate / 1e3))
+    freqs, _, spec = signal.spectrogram(audio,
+                                    fs=sample_rate,
+                                    window='hann',
+                                    nperseg=nperseg,
+                                    noverlap=noverlap,
+                                    detrend=False)
+    return freqs, np.log(spec.T.astype(np.float32) + eps)
 
 
-# * It is interesting to see that we have a huge difference of price looking into items categories (as expected).
-# * Splitting categories into "levels" in our data can make a big difference when training our models.
+# #### Looking at the top 9 different words in Spectrogram format
 
-# # To be continued...
+# In[ ]:
+
+
+fig = plt.figure(figsize=(10,10))
+
+# for each of the samples
+for i, filepath in enumerate(sample_audio[:9]):
+    # Make subplots
+    plt.subplot(3,3,i+1)
+    
+    # pull the labels
+    label = filepath.split('/')[-2]
+    plt.title(label)
+    
+    # create spectogram
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.axis('off')
+
+
+# ### 4.2 Spectograms within the same category, look at "five"
+# 
+
+# In[ ]:
+
+
+five_samples = [audio_path + 'five/' + y for y in os.listdir(audio_path + 'five/')[:6]]
+
+fig = plt.figure(figsize=(10,10))
+
+for i, filepath in enumerate(five_samples):
+    # Make subplots
+    plt.subplot(3,3,i+1)
+    
+    # pull the labels
+    label = filepath.split('/')[-1]
+    plt.title('"five": '+label)
+    
+    # create spectogram
+    # create spectogram
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.axis('off')
+
+
+# ## 5 Waveforms
+# ### 5.1 Waveforms across different Words 
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(8,20))
+for i, filepath in enumerate(sample_audio[:6]):
+    plt.subplot(9,1,i+1)
+    samplerate, test_sound  = wavfile.read(filepath)
+    plt.title(filepath.split('/')[-2])
+    plt.axis('off')
+    plt.plot(test_sound)
+
+
+# ### 5.2 Waveforms within the Same Word 
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(8,20))
+for i, filepath in enumerate(five_samples):
+    plt.subplot(9,1,i+1)
+    samplerate, test_sound = wavfile.read(filepath)
+    plt.title(filepath.split('/')[-2])
+    plt.axis('off')
+    plt.plot(test_sound)
+
+
+# ## 6. Save Figures as images
+# #### Function: convert audio to spectogram images
+
+# In[ ]:
+
+
+def wav2img(wav_path, targetdir='', figsize=(4,4)):
+    """
+    takes in wave file path
+    and the fig size. Default 4,4 will make images 288 x 288
+    """
+
+    fig = plt.figure(figsize=figsize)    
+    # use soundfile library to read in the wave files
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    ## create output path
+    output_file = wav_path.split('/')[-1].split('.wav')[0]
+    output_file = targetdir +'/'+ output_file
+    #plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.imsave('%s.png' % output_file, spectrogram)
+    plt.close()
+
+
+# #### Function: convert audio to waveform images
+
+# In[ ]:
+
+
+def wav2img_waveform(wav_path, targetdir='', figsize=(4,4)):
+    samplerate,test_sound  = wavfile.read(sample_audio[0])
+    fig = plt.figure(figsize=figsize)
+    plt.plot(test_sound)
+    plt.axis('off')
+    output_file = wav_path.split('/')[-1].split('.wav')[0]
+    output_file = targetdir +'/'+ output_file
+    plt.savefig('%s.png' % output_file)
+    plt.close()
+
+
+# ## 6.1 Loops to iterate through directories and save
+# 
+# #### These are 100% markdown to avoid running on the kaggle site. 
+# 
+# Copy and run locally in your instance. I've capped the number of folders and images to 3 and 5 respectively. Remove the list indexing to run through all directories and all images. Becareful, there's 64k training images!
+# 
+# ### Convert Training Audio
+# 
+# ```python
+# for i, x in enumerate(subFolderList[:3]):
+#     print(i, ':', x)
+#     # get all the wave files
+#     all_files = [y for y in os.listdir(audio_path + x) if '.wav' in y]
+#     for file in all_files[:10]:
+#         wav2img(audio_path + x + '/' + file, pict_Path + x)
+# ```
+# 
+# ### Convert Testing Audio
+# ```python
+# # get all the wave files
+# all_files = [y for y in os.listdir(test_audio_path + x) if '.wav' in y]
+# for file in all_files:
+#     wav2img(test_audio_path + x + '/' + file, test_pict_Path + x)
+# ```

@@ -1,343 +1,220 @@
 
 # coding: utf-8
 
-# Unusual meaning map: Treating question pairs as image / surface
-# ---------------------------------------------------------------
-# 
-
-# Other people have already written really nice exploratory kernels which helped me to write the minimal code myself. 
-# 
-# In this kernel, I have tried to extract a different type of feature from which we can learn using any algorithm which can learn via image. The basic assumption behind this exercise is to capture non-sequential closeness between words.
-# 
-# For example:
-# A Question pair has pointing arrows from each of the words of one sentence to each of the words from another sentence
-# ![A Question pair has pointing arrows from each of the words of one sentence to each of the words from another sentence][1]
-# 
-#   [1]: http://image.prntscr.com/image/97e92b0357a843078b61eef5ad8a183b.png
-# 
-# To capture this we can create NxM matrix with Word2Vec distance between each word with other. and resize the matrix just like an image to a 10x10 matrix and use this as a feature to xgboost.
-
 # In[ ]:
 
 
-import csv
-import pip
-from gensim import corpora, models, similarities
-import pandas as pd
-import numpy as np
-train_file = "../input/train.csv"
-df = pd.read_csv(train_file, index_col="id")
-df
-
-
-# In[ ]:
-
-
-import matplotlib.pylab as plt
-
-
-# **Extracting unique questions**
-
-# In[ ]:
-
-
-questions = dict()
-
-for row in df.iterrows():
-    questions[row[1]['qid1']] = row[1]['question1']
-    questions[row[1]['qid2']] = row[1]['question2']
-
-
-# **Creating a simple tokenizer**
-
-# In[ ]:
-
-
-import re
-import nltk
-def basic_cleaning(string):
-    string = str(string)
-    try:
-        string = string.decode('unicode-escape')
-    except Exception:
-        pass
-    string = string.lower()
-    string = re.sub(' +', ' ', string)
-    return string
-sentences = []
-for i in questions:
-    sentences.append(nltk.word_tokenize(basic_cleaning(questions[i])))
-
-
-# **Creating a simple Word2Vec model from the question pair, we can use a pre-trained model instead to get better results**
-
-# In[ ]:
-
-
-import gensim
-model = gensim.models.Word2Vec(sentences, size=100, window=5, min_count=5, workers=4)
-
-
-# **A very simple term frequency and document frequency extractor** 
-
-# In[ ]:
-
-
-tf = dict()
-docf = dict()
-total_docs = 0
-for qid in questions:
-    total_docs += 1
-    toks = nltk.word_tokenize(basic_cleaning(questions[qid]))
-    uniq_toks = set(toks)
-    for i in toks:
-        if i not in tf:
-            tf[i] = 1
-        else:
-            tf[i] += 1
-    for i in uniq_toks:
-        if i not in docf:
-            docf[i] = 1
-        else:
-            docf[i] += 1
-
-
-# Mimic the IDF function but penalize the words which have fairly high score otherwise, and give a strong boost to the words which appear sporadically.
-
-# In[ ]:
-
-
-from __future__ import division
-import math
-def idf(word):
-    return 1 - math.sqrt(docf[word]/total_docs)
-
-
-# In[ ]:
-
-
-print(idf("kenya"))
-
-
-# A simple cleaning module for feature extraction
-
-# In[ ]:
-
-
-import re
-import nltk
-def basic_cleaning(string):
-    string = str(string)
-    string = string.lower()
-    string = re.sub('[0-9\(\)\!\^\%\$\'\"\.;,-\?\{\}\[\]\\/]', ' ', string)
-    string = ' '.join([i for i in string.split() if i not in ["a", "and", "of", "the", "to", "on", "in", "at", "is"]])
-    string = re.sub(' +', ' ', string)
-    return string
-
-
-# In[ ]:
-
-
-def w2v_sim(w1, w2):
-    try:
-        return model.similarity(w1, w2)*idf(w1)*idf(w2)
-    except Exception:
-        return 0.0
-
-
-# **Visualizing features**
-# 
-# This function will create a 10x10 matrix using MxN word pairs among the words of question pair
-
-# In[ ]:
-
-
-
-from mpl_toolkits.mplot3d.axes3d import Axes3D
-import matplotlib.cm as cm
-from scipy import *
-df = df.sample(n=30000)
-def imagify(row):
-    s1 = row['question1']
-    s2 = row['question2']
-    t1 = list((basic_cleaning(s1)).split())
-    t2 = list((basic_cleaning(s2)).split())
-    print("Q1: "+ s1)
-    print("Q2: "+ s2)
-    print("Duplicate: " + str(row['is_duplicate']))
-    
-    img = [[w2v_sim(x, y) for x in t1] for y in t2] 
-    a = np.array(img, order='C')
-    img = np.resize(a,(10,10))
-    # print img
-    fig = plt.figure()
-    # tell imshow about color map so that only set colors are used
-    image = plt.imshow(img,interpolation='nearest')
-    # make a color bar
-    plt.colorbar(image)
-    plt.show()
-s = df.sample(n=3)
-plt.close()
-s.apply(imagify, axis=1, raw=True)
-
-
-# In[ ]:
-
-
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-import matplotlib.pyplot as plt
-from numpy import *
-
-plt.close()
-def surface(row):
-    s1 = row['question1']
-    s2 = row['question2']
-    t1 = list((basic_cleaning(s1)).split())
-    t2 = list((basic_cleaning(s2)).split())
-    print("Q1: "+ s1)
-    print("Q2: "+ s2)
-    print("Duplicate: " + str(row['is_duplicate']))
-    
-#     img = [[w2v_sim(x, y) for x in t1] for y in t2] 
-
-    fig = plt.figure()
-    ax = Axes3D(fig)
-    X = linspace(0,10,10)
-    Y = linspace(0,10,10)
-    X, Y = meshgrid(X, Y)
-    Z = [[w2v_sim(x, y) for x in t1] for y in t2] 
-    a = np.array(Z, order='C')
-    Z = np.resize(a,(10,10))
-    
-    ax.plot_surface(Y, X, Z, rstride=1, cstride=1, cmap=cm.jet)
-    ax.set_xlabel("X Axis")
-    ax.set_ylabel("Y Axis")
-    ax.set_zlabel("Z Axis")
-    plt.show()
-    
-s = df.sample(n=3)
-plt.close()
-s.apply(surface, axis=1, raw=True)
-
-
-# In[ ]:
-
-
-def img_feature(row):
-    s1 = row['question1']
-    s2 = row['question2']
-    t1 = list((basic_cleaning(s1)).split())
-    t2 = list((basic_cleaning(s2)).split())
-    Z = [[w2v_sim(x, y) for x in t1] for y in t2] 
-    a = np.array(Z, order='C')
-    return [np.resize(a,(10,10)).flatten()]
-s = df
-
-img = s.apply(img_feature, axis=1, raw=True)
-pix_col = [[] for y in range(100)] 
-for k in img.iteritems():
-        for f in range(len(list(k[1][0]))):
-           pix_col[f].append(k[1][0][f])
-
-
-# **Extracting Features**
-
-# In[ ]:
-
-
-from nltk.corpus import stopwords
-from __future__ import division
-stops = set(stopwords.words("english"))
-
-def word_match_share(row):
-    q1words = {}
-    q2words = {}
-    for word in str(row['question1']).lower().split():
-        if word not in stops:
-            q1words[word] = 1
-    for word in str(row['question2']).lower().split():
-        if word not in stops:
-            q2words[word] = 1
-    if len(q1words) == 0 or len(q2words) == 0:
-        # The computer-generated chaff includes a few questions that are nothing but stopwords
-        return 0
-    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
-    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
-    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
-    return R
-
-train_word_match = df.apply(word_match_share, axis=1, raw=True)
-
-
-# In[ ]:
-
-
-from __future__ import division
-x_train = pd.DataFrame()
-
-for g in range(len(pix_col)):
-    x_train['img'+str(g)] = pix_col[g]
-
-    
-x_train['word_match'] = train_word_match
-
-y_train = s['is_duplicate'].values
-pos_train = x_train[y_train == 1]
-neg_train = x_train[y_train == 0]
-# Now we oversample the negative class
-# There is likely a much more elegant way to do this...
-p = 0.165
-scale = ((len(pos_train) / (len(pos_train) + len(neg_train))) / p) - 1
-while scale > 1:
-    neg_train = pd.concat([neg_train, neg_train])
-    scale -=1
-neg_train = pd.concat([neg_train, neg_train[:int(scale * len(neg_train))]])
-print(len(pos_train) / (len(pos_train) + len(neg_train)))
-
-x_train = pd.concat([pos_train, neg_train])
-y_train = (np.zeros(len(pos_train)) + 1).tolist() + np.zeros(len(neg_train)).tolist()
-del pos_train, neg_train
-
-
-# In[ ]:
-
-
-from sklearn.cross_validation import train_test_split
-
-x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=4242)
-
-
-# In[ ]:
-
-
-import xgboost as xgb
-
-# Set our parameters for xgboost
-params = {}
-params['objective'] = 'binary:logistic'
-params['eval_metric'] = 'logloss'
-params['eta'] = 0.02
-params['max_depth'] = 7
-
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
-
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-
-bst = xgb.train(params, d_train, 500, watchlist, early_stopping_rounds=100, verbose_eval=10)
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-plt.rcParams['figure.figsize'] = (12.0, 30.0)
-xgb.plot_importance(bst); plt.show()
+
+# # Digit Recognizer in Python using Convolutional Neural Nets
+# by [Koba Khitalishvili](http://www.kobakhit.com/)
+# ## Introduction
+# I used Mathematica and a standard Neural Network model to get ~0.98 accuracy score after 40 minutes of computing. Starting with a brief benchmark Python code [found in the forums](https://www.kaggle.com/c/digit-recognizer/forums/t/2299/getting-started-python-sample-code-random-forest) one can jump into solving the Digit Recognizer
+# problem right away. Below code that uses Random Forest algorithm to classify images as digits will give you 
+# around 0.96 accuracy score in less than a minute which is great. However, this score will put you lower than the 200th place. 
+# According to [MNIST web page](http://yann.lecun.com/exdb/mnist/), convolutional neural networks algorithm yields good results.
+# I will try a simple neural network algorithm out in Python, expand it into a convolutional neural network and see if I can break into the top 100.
+
+# In[ ]:
 
 
-# Using this technique and combining it with word match features I got log loss of **0.31858** on test dataset. 
+from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+import pandas as pd
+
+# create the training & test sets, skipping the header row with [1:]
+dataset = pd.read_csv("../input/train.csv")
+target = dataset[[0]].values.ravel()
+train = dataset.iloc[:,1:].values
+test = pd.read_csv("../input/test.csv").values
+
+# create and train the random forest
+# multi-core CPUs can use: rf = RandomForestClassifier(n_estimators=100, n_jobs=2)
+rf = RandomForestClassifier(n_estimators=100)
+rf.fit(train, target)
+pred = rf.predict(test)
+
+np.savetxt('submission_rand_forest.csv', np.c_[range(1,len(test)+1),pred], delimiter=',', header = 'ImageId,Label', comments = '', fmt='%d')
+
+
+# ## Table of contents
+# 1. Data Preprocessing
+# 2. Train, Predict and Save
+# 3. Conclusion
 # 
-# I thought this feature can be of some help to others hence shared. Enjoy :)
+# ## Data Preprocessing
+# First, lets prepare the data. The `train.csv` has 42k rows. The first column is the digit labels. The rest 784 columns
+# are pixel color values that go from 0 to 255. After loading in the csv files in code section above, I saved the digit labels in the `target` variable and rows of pixel color values  in the `train` variable. 
+# The `test.csv` contains 28k rows of just the pixel color values which we need to classify as digits. Here is the preview of the complete MNIST dataset.
+
+# In[ ]:
+
+
+print(dataset.head())
+
+
+# I convert each data variable from a python list into a numpy array. For the `target` array I specify the integer data type.
+# The train set has 42k rows and 784 columns, so its shape is `(42k,784)`. Each row is a 28 by 28 pixel
+# picture. I will reshape the train set to have `(42k,1)` shape, i.e. each row will contain a 28 by 28 matrix of pixel color values. Same for the test set.
+
+# In[ ]:
+
+
+# convert to array, specify data type, and reshape
+target = target.astype(np.uint8)
+train = np.array(train).reshape((-1, 1, 28, 28)).astype(np.uint8)
+test = np.array(test).reshape((-1, 1, 28, 28)).astype(np.uint8)
+
+
+# Now, we can actually plot those pixel color values and see what a sample picture of a digit looks like. Below is the picture of a digit in the 1729th row:
+
+# In[ ]:
+
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+
+plt.imshow(train[1729][0], cmap=cm.binary) # draw the picture
+
+
+# ## Train, Predict and Save
+# Below is a simple NN set up. Supposedly, it should give >0.9 accuracy score. I had trouble with figuring out
+# the training part in that the accuracy I was getting would not change during the training process. All I had to 
+# do was to decrease the learning rate from 0.01 to 0.0001, nota bene.
+
+# In[ ]:
+
+
+import lasagne
+from lasagne import layers
+from lasagne.updates import nesterov_momentum
+from nolearn.lasagne import NeuralNet
+from nolearn.lasagne import visualize
+
+net1 = NeuralNet(
+        layers=[('input', layers.InputLayer),
+                ('hidden', layers.DenseLayer),
+                ('output', layers.DenseLayer),
+                ],
+        # layer parameters:
+        input_shape=(None,1,28,28),
+        hidden_num_units=1000, # number of units in 'hidden' layer
+        output_nonlinearity=lasagne.nonlinearities.softmax,
+        output_num_units=10,  # 10 target values for the digits 0, 1, 2, ..., 9
+
+        # optimization method:
+        update=nesterov_momentum,
+        update_learning_rate=0.0001,
+        update_momentum=0.9,
+
+        max_epochs=15,
+        verbose=1,
+        )
+
+
+# Now, lets train the model. 
+
+# In[ ]:
+
+
+# Train the network
+net1.fit(train, target)
+
+
+# You can see the output associated with the training process. Right off the bat this set up gives us ~0.95 accuracy
+# score in just 15 epochs which completes in less 3 minuts. Unfortunately, one layer neural network does not improve 
+# beyond 0.96 accuracy score ragardless of how many neurons in a layer is specified (1000 in case above).
+# 
+# I will try out the convolutional neural network. To set up the CNN I added two convolutional layers and one pooling layer. 
+# I would add another pooling layer and a dropout layer, but training such a model would last for over 20 minutes and kaggle notebook is only allowed to run for 1200 seconds (20 minutes). 
+# As a result, below is the CNN model I will use for demonstration.
+
+# In[ ]:
+
+
+def CNN(n_epochs):
+    net1 = NeuralNet(
+        layers=[
+        ('input', layers.InputLayer),
+        ('conv1', layers.Conv2DLayer),      #Convolutional layer.  Params defined below
+        ('pool1', layers.MaxPool2DLayer),   # Like downsampling, for execution speed
+        ('conv2', layers.Conv2DLayer),
+        ('hidden3', layers.DenseLayer),
+        ('output', layers.DenseLayer),
+        ],
+
+    input_shape=(None, 1, 28, 28),
+    conv1_num_filters=7, 
+    conv1_filter_size=(3, 3), 
+    conv1_nonlinearity=lasagne.nonlinearities.rectify,
+        
+    pool1_pool_size=(2, 2),
+        
+    conv2_num_filters=12, 
+    conv2_filter_size=(2, 2),    
+    conv2_nonlinearity=lasagne.nonlinearities.rectify,
+        
+    hidden3_num_units=1000,
+    output_num_units=10, 
+    output_nonlinearity=lasagne.nonlinearities.softmax,
+
+    update_learning_rate=0.0001,
+    update_momentum=0.9,
+
+    max_epochs=n_epochs,
+    verbose=1,
+    )
+    return net1
+
+cnn = CNN(15).fit(train,target) # train the CNN model for 15 epochs
+
+
+# Looks like this CNN model produces a slightly better result than a simple NN model for the same number of epochs and neurons in the hidden layer. 
+# The CNN model was more time consuming though. If you think that it is not worth it to use the CNN model over the NN you are wrong.
+# NN model like any other has an upper bound on the best accuracy score it can produce. After 20 epochs 
+# NN model does not improve beyond ~0.97 whereas a CNN model gets closer to one. I was able to break into
+# top 100 and get the 94th place by using two convolutional layers and two pooling layers which gave me 0.98614 accuracy
+# in about 5 hours. I will provide the code in the post scriptum section.
+# 
+# So there you go. You have a starting point for using neural nets for image classification. 
+# If you expand on the info here and reach a score greater than 0.99 please drop a comment.
+# Now, lets use it on the test set and save the results.
+# 
+
+# In[ ]:
+
+
+# use the NN model to classify test data
+pred = cnn.predict(test)
+
+# save results
+np.savetxt('submission_cnn.csv', np.c_[range(1,len(test)+1),pred], delimiter=',', header = 'ImageId,Label', comments = '', fmt='%d')
+
+
+# ## Conclusion
+# Python really stands out when it comes to solving data problems. Its quick, intuitive, well documented and has a big community.
+# However, its biggest drawback in my opinion is setting up the environment. My set up is [Jupyter Notebook](http://jupyter.org/) coupled 
+# with [Anaconda](https://www.continuum.io/downloads). Both are great tools, howeverm I ended up spending 
+# couple hours taking care of the dependencies theano and lasagne and the Windows environment variables. In contrast to Mathematica which 
+# has superb report generating options, setting up Python environment can be and was for me a tiring experience. Nevertheless, it pays off because 
+# Python framework is well developed for solving data problems. For instance, Mathematica does not even have a CNN
+# implementation available as of 11/4/2015 and everything is done under the hood whereas in a Python framework one 
+# can find almost any algorithm imaginable.
+# 
+# Among Python, R and Julia I beleive Python and R are most competitive data science technologies with Julia being 
+# in the process of maturing. Choosing Python over R and vica versa really has to do with either individual preference or
+# the suitability of the technology for the problem at hand. Python is more efficient than R. But Julia is more 
+# efficient than both Python and R.
+# 
+
+# ### Resources Used:
+# [Convolutional Neural Networks (LeNet)](http://deeplearning.net/tutorial/lenet.html)
+# 
+# [CS231n Convolutional Neural Networks for Visual Recognition](http://cs231n.github.io/convolutional-networks/)
+# 
+# [Tutorial: Training convolutional neural networks with nolearn](http://nbviewer.ipython.org/github/dnouri/nolearn/blob/master/docs/notebooks/CNN_tutorial.ipynb)
+# 
+# [Using convolutional neural nets to detect facial keypoints tutorial](http://danielnouri.org/notes/2014/12/17/using-convolutional-neural-nets-to-detect-facial-keypoints-tutorial/)
+# 
+# [Deep learning – Convolutional neural networks and feature extraction with Python](http://blog.christianperone.com/2015/08/convolutional-neural-networks-and-feature-extraction-with-python/)

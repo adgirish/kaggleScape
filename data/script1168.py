@@ -1,196 +1,231 @@
 
 # coding: utf-8
 
-#  Feature engineering in this competition is quite challenging as the column names have been masked. I have tried many approaches of adding, multiplying etc. which all have failed. The number of combinations that we can make using the given columns is too huge. To tackle this and to reduce the number of combinations I have created the following strategy for feature engineering. I hope it helps.
+# ###This is my first notebook! And rather than going the XGBoost way, I decided it's about time to go back to basics.
+# 
+# We'll look into 
+# ###1. basic feature engineering and extraction
+# ###2. use the Lasso model and give our newly developed data a test run!
+# ###3. Some (minor) visualizations
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import numpy as np
+import pandas as pd 
+import seaborn as sns
+import matplotlib
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import scale
+from scipy.stats import skew, skewtest
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'png'")
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# In[ ]:
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Any results you write to the current directory are saved as output.
+# read in the data
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-import warnings
-warnings.filterwarnings('ignore')
+
+# ### Proposed feature: '1stFlrSF' + '2ndFlrSF' to give us combined Floor Square Footage
+# but first, let's check how well it fares!
+
+# In[ ]:
+
+
+feat_trial = (train['1stFlrSF'] + train['2ndFlrSF']).copy()
+print("Skewness of the original intended feature:",skew(feat_trial))
+print("Skewness of transformed feature", skew(np.log1p(feat_trial)))
+
+# hence, we'll use the transformed feature thank you very much!
+feat_trial = np.log1p(feat_trial)
+matplotlib.rcParams['figure.figsize'] = (12.0, 6.0)
+
+# seaborn's regression plot (I liked it a lot. hence it found it's way here!)
+sns.regplot(x=(feat_trial), y=np.log1p(train['SalePrice']), data=train, order=1);
+
+
+# In[ ]:
+
+
+# lets create the feature then
+train['1stFlr_2ndFlr_Sf'] = np.log1p(train['1stFlrSF'] + train['2ndFlrSF'])
+test['1stFlr_2ndFlr_Sf'] = np.log1p(test['1stFlrSF'] + test['2ndFlrSF'])
+
+
+# ### Feature number 2 -> 1stflr+2ndflr+lowqualsf+GrLivArea = All_Liv_Area
+# 
+# let's see how this fares too
+
+# In[ ]:
+
+
+feat_trial = (train['1stFlr_2ndFlr_Sf'] + train['LowQualFinSF'] + train['GrLivArea']).copy()
+print("Skewness of the original intended feature:",skew(feat_trial))
+print("Skewness of transformed feature", skew(np.log1p(feat_trial)))
+
+# hence, we'll use the transformed feature thank you very much!
+feat_trial = np.log1p(feat_trial)
+matplotlib.rcParams['figure.figsize'] = (12.0, 6.0)
+
+# seaborn's regression plot (I liked it a lot. hence it found it's way here!)
+sns.regplot(x=(feat_trial), y=np.log1p(train['SalePrice']), data=train, order=1);
+
+
+# In[ ]:
+
+
+train['All_Liv_SF'] = np.log1p(train['1stFlr_2ndFlr_Sf'] + train['LowQualFinSF'] + train['GrLivArea'])
+test['All_Liv_SF'] = np.log1p(test['1stFlr_2ndFlr_Sf'] + test['LowQualFinSF'] + test['GrLivArea'])
+
+
+# ## Those were the two features I added. Let's move further to Step 2
+
+# In[ ]:
+
+
+# get all features except Id and SalePrice
+feats = train.columns.difference(['Id','SalePrice'])
+
+# the most hassle free way of working with data is to concatenate them
+# since there are many features that contain nan/null values in the test set
+# that the train set doesn't
+all_data = pd.concat((train.loc[:,feats],
+                      test.loc[:,feats]))
+
+
+# ## The To-Do List
+# 
+# ### 1. Transform skewed numeric features using log(p+1) transformation making them more normal
+# ### 2. Find dummy variables for categorical features
+# ### 3. Replace nans/null values
+
+# In[ ]:
+
+
+# But first, we log transform the target: (reason well explained in Alexandru's AWESOME Notebook)
+train["SalePrice"] = np.log1p(train["SalePrice"])
+
+
+# ## 1. Transformations
+# 
+# ###PS: log(p+1) transformations are not the available transformations for reducing skewness. I have tried sqrt, which yields better results as compared to log(p+1) (for certain features only. log(1+p) is a better way to go for this dataset at least)*emphasized text*
+
+# In[ ]:
+
+
+numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
+skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
+skewed_feats = skewed_feats[skewed_feats > 0.75]
+skewed_feats = skewed_feats.index
+
+all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
+
+
+# ## 2. Let's get them dummies
+
+# In[ ]:
+
+
+# getting dummies for all features. You can go the LabelEncoder way, but this method
+# is more sound (and easier!!!) in my opinion
+all_data = pd.get_dummies(all_data)
+
+
+# ## 3. Fill them nan's
+
+# In[ ]:
+
+
+# 3. filling NA's with the mean of the column:
+all_data = all_data.fillna(all_data[:train.shape[0]].mean())
+
+
+# In[ ]:
+
+
+print(all_data.shape)
+# creating matrices for sklearn:
+X_train = all_data[:train.shape[0]]
+X_test = all_data[train.shape[0]:]
+y = train.SalePrice
+
+
+# In[ ]:
+
+
+# optional. Save these newly created matrices for later usage
+# new_test = pd.DataFrame(X_test.copy())
+# new_test['Id'] = test['Id'].copy()
+# new_test.to_csv("../input/new_test.csv", index=False)
+
+# new_train = pd.DataFrame(X_train.copy())
+# new_train['SalePrice'] = y.copy()
+# new_train.to_csv("../input/new_train.csv", index=False)
+
+
+# ## All set. Moving on to incorporate this data
+# ### But first, Let's devise a cross-validation methodology once and for all (thanks again, Alexandru)
+
+# In[ ]:
+
+
 from sklearn.cross_validation import cross_val_score
-from sklearn.metrics import r2_score
+
+def rmse_cv(model):
+    rmse= np.sqrt(-cross_val_score(model, X_train, y, scoring="neg_mean_squared_error", cv=5))
+    return(rmse)
 
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV, LinearRegression
+
+
+# ### Let's get to work using LassoCV
+
+# In[ ]:
+
+
+model_lasso = LassoCV(alphas = [1, 0.1, 0.001, 0.0005], selection='random', max_iter=15000).fit(X_train, y)
+res = rmse_cv(model_lasso)
+print("Mean:",res.mean())
+print("Min: ",res.min())
+
+
+# ### The above model yields a lb score of 0.12102* (some results I've gained through kaggle nb's and my local system have been different)
+
+# In[ ]:
+
+
+coef = pd.Series(model_lasso.coef_, index = X_train.columns)
+print("Lasso picked " + str(sum(coef != 0)) + " variables and eliminated the other " +  str(sum(coef == 0)) + " variables")
 
 
 # In[ ]:
 
 
-# Remove the outlier
-train=train[train.y<250]
+# plotting feature importances!
+imp_coef = pd.concat([coef.sort_values().head(10),
+                     coef.sort_values().tail(10)])
+matplotlib.rcParams['figure.figsize'] = (8.0, 10.0)
+imp_coef.plot(kind = "barh")
+plt.title("Coefficients in the Lasso Model")
 
 
-# ### ** The strategy **
-# #### First we split the data into two parts. Using the cross validated results try finding out which range of values have max error. In this example I take 100.
-
-# In[ ]:
-
-
-# Check no. of rows greater than equal to 100
-len(train['y'][(train.y>=100)])
-
+# ### Woah. The first feature we engineered did end up being pretty important!!!! Way To go!
 
 # In[ ]:
 
 
-# Check no. of rows less than 100
-len(train['y'][(train.y<100)])
+# Let's make some predictions and submit it to the lb
+test_preds = np.expm1(model_lasso.predict(X_test))
+submission = pd.DataFrame()
+submission['Id'] = test['Id']
+submission["SalePrice"] = test_preds
+submission.to_csv("lasso_by_Sarthak.csv", index=False)
 
-
-# #### Now we convert the training set into a classification problem. Create a new field for class.
-
-# In[ ]:
-
-
-train['y_class'] = train.y.apply(lambda x: 0 if x<100  else 1 )
-
-
-# In[ ]:
-
-
-# Concat the datasets
-data = pd.concat([train,test])
-
-
-# In[ ]:
-
-
-# Removing object type vars as I am more interested in binary ones
-data = data.drop(data.select_dtypes(include = ['object']).columns,axis=1)
-
-
-# In[ ]:
-
-
-feat = list(data.drop(['y','y_class'],axis=1).columns.values)
-
-
-# In[ ]:
-
-
-train_df = (data[:train.shape[0]])
-test_df = (data[train.shape[0]:])
-
-
-# In[ ]:
-
-
-# I have not removed zero valued columns for now
-len(feat)
-
-
-# In[ ]:
-
-
-# Remove ID as we want some honest features :)
-feat.remove('ID')
-
-
-# In[ ]:
-
-
-from sklearn.metrics import f1_score as f1
-
-
-# In[ ]:
-
-
-# Calculating CV score
-def cv_score(model):
-    return cross_val_score(model,train_df[feat],train_df['y_class'],cv=10,scoring = 'f1').mean()
-
-
-# ### Now, the interesting part. 
-# > Decision trees are the basic entities that make up complex algos like XGB. But to understand the rules on the which splitting happens is not possible in XGB. Here, we build decision trees to understand the rules and build features for the same. Lets go!
-
-# In[ ]:
-
-
-from sklearn.tree import DecisionTreeClassifier as DTC
-
-
-# In[ ]:
-
-
-model = DTC(max_depth = 5,min_samples_split=200) # We don't want to overfit
-
-
-# > Its important to notice that there is no sense in keeping high depth values. Since we need strong features, the rules should have considerably large sample size in the leaves. For small sample size values, the feature may not be that strong. 
-
-# In[ ]:
-
-
-cv_score(model) 
-
-
-# > F1 looks good! But sometimes it may not. Doesn't matter, as we want the branches with good gini scores and sample size
-
-# In[ ]:
-
-
-model.fit(train_df[feat],train_df.y_class)
-
-
-# #### > To visualize the tree we use graphviz
-
-# In[ ]:
-
-
-# Graphviz is used to build decision trees
-from sklearn.tree import export_graphviz
-from sklearn import tree
-
-
-# In[ ]:
-
-
-# This statement builds a dot file.
-tree.export_graphviz(model, out_file='tree.dot',feature_names  = feat)  
-
-
-# After building the tree dot file you can convert it into a png using :
-# > **dot  -Tpng tree.dot -o tree.png**
-# 
-# in command line (first cd to dot directory)
-
-# In[ ]:
-
-
-# This will bring the image to the notebook (or you can view it locally)
-from IPython.display import Image
-#Image("tree.png") # Uncomment if you are trying this on local
-# Can't read the image in kernal. Anyone know how? Will try and add image in comments
-
-
-# EDIT : Here is the link to the image - [Tree][1]
-# 
-# 
-#   [1]: https://ibb.co/jvxQkv
-
-# > Now, if you start traversing the tree. We see that when, X314 = 0 and X315 = 0 and X47=0 then the gini score is .2183 with good sample size!!
-# This can be a good feature as it gives us a good separation between the classes.
-
-# Experiment more with this notebook and if you are generous enough, keep adding good features in comments below ;D
-
-# ### Thanks! :)

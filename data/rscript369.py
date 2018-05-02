@@ -1,187 +1,268 @@
-from multiprocessing import *
+'''
+Udates
+http://stackoverflow.com/questions/10565868/what-is-the-criteria-for-choosing-number-of-hidden-layers-and-nodes-in-hidden-la
+
+Rule of thumb for # of input layers
+input layer: the size of my data vactor (the number of features in my model) + 1 
+for the bias node and not including the response variable, of course
+output layer: soley determined by my model: regression (one node) versus classification 
+(number of nodes equivalent to the number of classes, assuming softmax) 
+hidden layer: to start, one hidden layer with a number of nodes equal to the size of the input layer. 
+The "ideal" size is more likely to be smaller (i.e, some number of nodes between the number in the input layer and the number in the output layer) rather than larger--again, this is just an empirical observation, and the bulk of this observation is my own experience. If the project justified the additional time required, then i start with a single hidden layer comprised of a small number of nodes, then (as i explained just above) i add nodes to the Hidden Layer, one at a time, while calculating the generalization error, training error, bias, and variance. When generalization error has dipped and just before it begins to increase again, the number of nodes at that point is my choice. See figure below.
+'''
+
+from __future__ import print_function
 import numpy as np
-import pandas as pd
-from sklearn import *
-import tensorflow as tf
-import lightgbm as lgb
-import xgboost as xgb
-from scipy.io.wavfile import read as scipy_read
-from scipy.io.wavfile import write as scipy_write
-from scipy import signal
-import matplotlib.pyplot as plt
-#%matplotlib inline
-import seaborn as sns
-import glob, random, os
+import datetime
+import csv
+from lasagne.layers import InputLayer, DropoutLayer, DenseLayer
+from lasagne.updates import nesterov_momentum
+from lasagne.objectives import binary_crossentropy
+from nolearn.lasagne import NeuralNet
+import theano
+from theano import tensor as T
+from theano.tensor.nnet import sigmoid
+from sklearn import metrics
+from sklearn.utils import shuffle
 
-def fscipy_read(path):
-    try:
-        return scipy_read(path)[1]
-    except:
-        print(path)
-        return
 
-def transform_df(df):
-    df = pd.DataFrame(df)
-    df['wav'] = df['path'].map(lambda x: fscipy_read(x))
-    df['rate'] = df['path'].map(lambda x: fscipy_read(x).shape)
-    df['min'] = df['path'].map(lambda x: np.min(fscipy_read(x)))
-    df['max'] = df['path'].map(lambda x: np.max(fscipy_read(x)))
-    df['med'] = df['path'].map(lambda x: np.median(fscipy_read(x)))
-    df['mea'] = df['path'].map(lambda x: np.mean(fscipy_read(x)))
-    df['a_min'] = df['path'].map(lambda x: np.min(np.abs(fscipy_read(x))))
-    df['a_max'] = df['path'].map(lambda x: np.max(np.abs(fscipy_read(x))))
-    df['a_med'] = df['path'].map(lambda x: np.median(np.abs(fscipy_read(x))))
-    df['a_mea'] = df['path'].map(lambda x: np.mean(np.abs(fscipy_read(x))))
-    df['quiet1'] = df['path'].map(lambda x: (np.abs(fscipy_read(x))<100).sum())
-    df['quiet2'] = df['path'].map(lambda x: (np.abs(fscipy_read(x))<200).sum())
-    df['quiet3'] = df['path'].map(lambda x: (np.abs(fscipy_read(x))<1000).sum())
-    df['b_sum2'] = df['path'].map(lambda x: np.sum(fscipy_read(x)[::2]))
-    df['b_sum4'] = df['path'].map(lambda x: np.sum(fscipy_read(x)[::4]))
-    df['b_sum8'] = df['path'].map(lambda x: np.sum(fscipy_read(x)[::8]))
-    df['b_sum16'] = df['path'].map(lambda x: np.sum(fscipy_read(x)[::16]))
-    df['b_sum32'] = df['path'].map(lambda x: np.sum(fscipy_read(x)[::32]))
-    #df['freq_sum'] = df['path'].map(lambda x: np.sum(np.abs(np.fft.fft(fscipy_read(x)))))
-    #df['freq_med'] = df['path'].map(lambda x: np.median(np.abs(np.fft.fft(fscipy_read(x)))))
-    #df['freq_mean'] = df['path'].map(lambda x: np.mean(np.abs(np.fft.fft(fscipy_read(x)))))
-    #df['peaks_100'] = df['path'].map(lambda x: len(signal.find_peaks_cwt(fscipy_read(x), np.arange(1, 100))))
-    #df['peaks_200'] = df['path'].map(lambda x: len(signal.find_peaks_cwt(fscipy_read(x), np.arange(1, 200))))
-    #df['peaks_300'] = df['path'].map(lambda x: len(signal.find_peaks_cwt(fscipy_read(x), np.arange(1, 300))))
-    #df['peaks_400'] = df['path'].map(lambda x: len(signal.find_peaks_cwt(fscipy_read(x), np.arange(1, 400))))
-    #df['peaks_500'] = df['path'].map(lambda x: len(signal.find_peaks_cwt(fscipy_read(x), np.arange(1, 500))))
-    return df
+species_map = {'CULEX RESTUANS' : "100000",
+              'CULEX TERRITANS' : "010000", 
+              'CULEX PIPIENS'   : "001000", 
+              'CULEX PIPIENS/RESTUANS' : "101000", 
+              'CULEX ERRATICUS' : "000100", 
+              'CULEX SALINARIUS': "000010", 
+              'CULEX TARSALIS' :  "000001",
+              'UNSPECIFIED CULEX': "001100"} # hack!
+def date(text):
+    return datetime.datetime.strptime(text, "%Y-%m-%d").date()
+    
+def precip(text):
+    TRACE = 1e-3
+    text = text.strip()
+    if text == "M":
+        return None
+    if text == "-":
+        return None
+    if text == "T":
+        return TRACE
+    return float(text)
+    
+def ll(text):
+     return int(float(text)*100)/100
 
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
+def impute_missing_weather_station_values(weather):
+    # Stupid simple
+    for k, v in weather.items():
+        if v[0] is None:
+            v[0] = v[1]
+        elif v[1] is None:
+            v[1] = v[0]
+        for k1 in v[0]:
+            if v[0][k1] is None:
+                v[0][k1] = v[1][k1]
+        for k1 in v[1]:
+            if v[1][k1] is None:
+                v[1][k1] = v[0][k1]
+    
+def load_weather():
+    weather = {}
+    for line in csv.DictReader(open("../input/weather.csv")):
+        for name, converter in {"Date" : date,
+                                "Tmax" : float,"Tmin" : float,"Tavg" : float,
+                                "DewPoint" : float, "WetBulb" : float,
+                                "PrecipTotal" : precip,"Sunrise" : precip,"Sunset" : precip,
+                                "Depart" : float, "Heat" : precip,"Cool" : precip,
+                                "ResultSpeed" : float,"ResultDir" : float,"AvgSpeed" : float,
+                                "StnPressure" : float, "SeaLevel" : float}.items():
+            x = line[name].strip()
+            line[name] = converter(x) if (x != "M") else None
+        station = int(line["Station"]) - 1
+        assert station in [0,1]
+        dt = line["Date"]
+        if dt not in weather:
+            weather[dt] = [None, None]
+        assert weather[dt][station] is None, "duplicate weather reading {0}:{1}".format(dt, station)
+        weather[dt][station] = line
+    impute_missing_weather_station_values(weather)        
+    return weather
+    
+    
+def load_training():
+    training = []
+    for line in csv.DictReader(open("../input/train.csv")):
+        for name, converter in {"Date" : date, 
+                                "Latitude" : ll, "Longitude" : ll,
+                                "NumMosquitos" : int, "WnvPresent" : int}.items():
+            line[name] = converter(line[name])
+        training.append(line)
+    return training
+    
+def load_testing():
+    training = []
+    for line in csv.DictReader(open("../input/test.csv")):
+        for name, converter in {"Date" : date, 
+                                "Latitude" : ll, "Longitude" : ll}.items():
+            line[name] = converter(line[name])
+        training.append(line)
+    return training
+    
+    
+def closest_station(lat, longi):
+    # Chicago is small enough that we can treat coordinates as rectangular.
+    stations = np.array([[41.995, -87.933],
+                         [41.786, -87.752]])
+    loc = np.array([lat, longi])
+    deltas = stations - loc[None, :]
+    dist2 = (deltas**2).sum(1)
+    return np.argmin(dist2)
+       
+def normalize(X, mean=None, std=None):
+    count = X.shape[1]
+    if mean is None:
+        mean = np.nanmean(X, axis=0)
+    for i in range(count):
+        X[np.isnan(X[:,i]), i] = mean[i]
+    if std is None:
+        std = np.std(X, axis=0)
+    for i in range(count):
+        X[:,i] = (X[:,i] - mean[i]) / std[i]
+    return mean, std
+    
+def scaled_count(record):
+    SCALE = 9.0
+    if "NumMosquitos" not in record:
+        # This is test data
+        return 1
+    return int(np.ceil(record["NumMosquitos"] / SCALE))
+    
+    
+def assemble_X(base, weather):
+    X = []
+    for b in base:
+        date = b["Date"]
+        date2 = np.sin((2*3.1459265359*date.day)/365*24)
+        date3 = np.cos((2*3.1459265359*date.day)/365*24)
+        date4 = np.sin((2*3.1459265359*date.month)/365)
+        lat, longi = b["Latitude"], b["Longitude"]
+        case = [date.year, date.month,date4, date.day,date.weekday(),date2,date3, lat, longi]
+        # Look at a selection of past weather values
+        for days_ago in [1,2,3,5,8,12]:
+            day = date - datetime.timedelta(days=days_ago)
+            for obs in ["Tmax","Tmin","Tavg","DewPoint","WetBulb","PrecipTotal","Depart","Sunrise","Sunset","Heat","Cool","ResultSpeed","ResultDir"]:
+                station = closest_station(lat, longi)
+                case.append(weather[day][station][obs])
+                #case.append(np.sin(2*3.1459265359*weather[day][station][obs]))
+        # Specify which mosquitos are present
+        species_vector = [float(x) for x in species_map[b["Species"]]]
+        case.extend(species_vector)
+        # Weight each observation by the number of mosquitos seen. Test data
+        # Doesn't have this column, so in that case use 1. This accidentally
+        # Takes into account multiple entries that result from >50 mosquitos
+        # on one day. 
+        for repeat in range(scaled_count(b)):
+            X.append(case)    
+    X = np.asarray(X, dtype=np.float32)
+    return X
+    
+def assemble_y(base):
+    y = []
+    for b in base:
+        present = b["WnvPresent"]
+        for repeat in range(scaled_count(b)):
+            y.append(present)    
+    return np.asarray(y, dtype=np.int32).reshape(-1,1)
 
-#if not os.path.exists('../input/train/audio/silence'): #use on your own device to add files and use for noise in class files
-#        os.makedirs('../input/train/audio/silence')
+
+class AdjustVariable(object):
+    def __init__(self, variable, target, half_life=20):
+        self.variable = variable
+        self.target = target
+        self.half_life = half_life
+    def __call__(self, nn, train_history):
+        delta = self.variable.get_value() - self.target
+        delta /= 2**(1.0/self.half_life)
+        self.variable.set_value(np.float32(self.target + delta))
+
+def train():
+    weather = load_weather()
+    training = load_training()
+    
+    X = assemble_X(training, weather)
+    mean, std = normalize(X)
+    y = assemble_y(training)
         
-samples = pd.DataFrame(glob.glob('../input/train/audio/_background_noise_/**.wav'), columns=['path'])
-n = 10000
-for w in samples.path:
-    rate, wav = scipy_read(w)
-    print(w, rate, wav.shape)
-    for i in range(0,len(wav)-16000,16000):
-        #scipy_write('../input/train/audio/silence/' + str(n) + '.wav', rate, wav[i:i+16000])
-        n +=1
+    input_size = len(X[0])
+    
+    learning_rate = theano.shared(np.float32(0.1))
+    
+    net = NeuralNet(
+    layers=[  
+        ('input', InputLayer),
+        ('hidden1', DenseLayer),
+        ('dropout1', DropoutLayer),
+        ('hidden2', DenseLayer),
+        ('dropout2', DropoutLayer),
+       # ('hidden3', DenseLayer),
+    #    ('dropout3', DropoutLayer),
+        ('output', DenseLayer),
+        ],
+    # layer parameters:
+    input_shape=(None, input_size), 
+    hidden1_num_units=100, 
+    dropout1_p=0.35,
+    hidden2_num_units=100, 
+    dropout2_p=0.35,
+    #hidden3_num_units=200, 
+    #dropout3_p=0.40,
+    output_nonlinearity=sigmoid, 
+    output_num_units=1, 
 
-audio_classes = ['yes', 'no', 'up', 'down', 'left', 'right', 'on', 'off', 'stop', 'go', 'silence','unknown']
-print('train...')
-train = pd.DataFrame(glob.glob('../input/train/audio/**/**.wav'), columns=['path'])
-train['label'] = train['path'].map(lambda x: x.split('/')[4])
-train['label'] = train['label'].map(lambda x: x if x in audio_classes else 'unknown')
-train['fname'] = train['path'].map(lambda x: x.split('/')[5])
-train = multi_transform(train)
-train = train[train['rate']==(16000,)]
-unknown = train[train['label']=='unknown'].sample(396)
-train = train[train['label']!='unknown']
-train = pd.concat((train, unknown), axis=0, ignore_index=True).reset_index(drop=True)
-print('After Shape: ', train.values.shape)
-print(train['label'].value_counts())
-print('test...')
-test = pd.DataFrame(glob.glob('../input/test/audio/**'), columns=['path'])
-test = test[test['path']!='../input/test/audio/clip_a2fda9e27.wav']
-test['fname'] = test['path'].map(lambda x: x.split('/')[4])
-test = multi_transform(test)
+    # optimization method:
+    update=nesterov_momentum,
+    update_learning_rate=learning_rate,
+    update_momentum=0.9,
+    
+    # Decay the learning rate
+    on_epoch_finished=[
+            AdjustVariable(learning_rate, target=0, half_life=4),
+            ],
 
-i = 5
-print(train['path'].iloc[i], train['rate'].iloc[i])
-plt.plot(train['wav'].iloc[i])
-plt.xlabel("Time (samples)")
-plt.title(train['label'].iloc[i])
-plt.show()
-plt.savefig('img.png')
+    # This is silly, but we don't want a stratified K-Fold here
+    # To compensate we need to pass in the y_tensor_type and the loss.
+    regression=True,
+    y_tensor_type = T.imatrix,
+    objective_loss_function = binary_crossentropy,
+     
+    max_epochs=80, 
+    eval_size=0.1,
+    verbose=1,
+    )
 
-#the rest requires a test set
-"""
-freq, time, spec = signal.spectrogram(scipy_read(train['path'][0])[1], scipy_read(train['path'][0])[0])
-plt.plot(spec)
-plt.imshow(spec)
+    X, y = shuffle(X, y, random_state=123)
+    net.fit(X, y)
+    
+    _, X_valid, _, y_valid = net.train_test_split(X, y, net.eval_size)
+    probas = net.predict_proba(X_valid)[:,0]
+    print("ROC score", metrics.roc_auc_score(y_valid, probas))
 
-col = ['min','max','med', 'mea','a_min','a_max','a_med', 'a_mea', 'quiet1', 'quiet2', 'quiet3','b_sum2','b_sum4','b_sum8','b_sum16','b_sum32'] #, 'peaks_100', 'peaks_200', 'peaks_300', 'peaks_400', 'peaks_500']
+    return net, mean, std     
+    
 
-features1 = np.array([np.array(row[1000:15000:40]).astype(int) for row in train['wav'].values])
-areas1 = np.array([np.mean(np.split(np.abs(row),100), axis=1) for row in train['wav'].values]) * 2
-areas2 = np.array([np.median(np.split(np.abs(row),100), axis=1) for row in train['wav'].values])
-features1 = np.concatenate([features1, train[col].values, areas1, areas2], axis=1)
-lbl = preprocessing.LabelEncoder()
-y = lbl.fit_transform(train['label'].values)
-print(features1.shape)
+def submit(net, mean, std):
+    weather = load_weather()
+    testing = load_testing()
+    X = assemble_X(testing, weather) 
+    normalize(X, mean, std)
+    predictions = net.predict_proba(X)[:,0]    
+    #
+    out = csv.writer(open("submission_final_opt_v5.csv", "w"))
+    out.writerow(["Id","WnvPresent"])
+    for row, p in zip(testing, predictions):
+        out.writerow([row["Id"], p])
 
-features2 = np.array([np.array(row[1000:15000:40]).astype(int) for row in test['wav'].values])
-areas1 = np.array([np.mean(np.split(np.abs(row),100), axis=1) for row in test['wav'].values]) * 2
-areas2 = np.array([np.median(np.split(np.abs(row),100), axis=1) for row in test['wav'].values])
-features2 = np.concatenate([features2, test[col].values, areas1, areas2], axis=1)
-fname = test['fname'].values
-print(features2.shape)
 
-#XGBoost
-fold = 5
-pred = []
-for i in range(fold):
-    np.random.seed(i)
-    random.seed(i)
-    x1, x2, y1, y2 = model_selection.train_test_split(features1, y, test_size=0.2, random_state=i)
-    params = {'eta': 0.2, 'max_depth': 4, 'objective': 'multi:softprob', 'eval_metric': ['merror'], 'num_class': len(lbl.classes_), 'seed': i, 'silent': True}
-    watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-    model = xgb.train(params, xgb.DMatrix(x1, y1), 500,  watchlist, verbose_eval=20, early_stopping_rounds=30)
-    pred.append(model.predict(xgb.DMatrix(features2), ntree_limit=model.best_ntree_limit+10))
-    if i>0:
-        pred[0] = np.array(pred[0]) + np.array(pred[i])
-pred = pd.DataFrame(pred[0] / fold, columns=lbl.classes_)
-pred['fname'] = fname
+if __name__ == "__main__":
+    net, mean, std = train()
+    submit(net, mean, std)
 
-plt.rcParams['figure.figsize'] = (8.0, 12.0)
-xgb.plot_importance(booster=model); plt.show(); #plt.savefig('xgb_fi.png')
-
-#LightGBM
-#params = {'learning_rate': 0.2, 'max_depth': 4, 'boosting_type': 'gbdt', 'objective': 'multiclass', 'metric' : ['multi_logloss','multi_error'], 'is_training_metric': True, 'num_class': len(lbl.classes_), 'seed': 2}
-#model = lgb.train(params, lgb.Dataset(x1, label=y1), 2000, lgb.Dataset(x2, label=y2), verbose_eval=10, early_stopping_rounds=20)
-#pred = pd.DataFrame(model.predict(features2, num_iteration=model.best_iteration), columns=lbl.classes_)
-#pred['fname'] = fname
-
-#TensorFlow Classifier
-#x1, x2, y1, y2 = model_selection.train_test_split(features1, y, test_size=0.3, random_state=8)
-#x1 = x1.astype(np.float32)
-#x2 = x2.astype(np.float32)
-#y1 = y1.astype(np.int)
-#y2 = y2.astype(np.int)
-#col = [tf.feature_column.numeric_column('x', shape=x1.shape[1:])]
-#opt = tf.train.AdamOptimizer(learning_rate=0.0003, beta1=0.7, beta2=0.999, epsilon=1e-07, name='Adam')
-#clf = tf.estimator.DNNClassifier(optimizer=opt, feature_columns=col, hidden_units=[150, 250, 200], n_classes=len(lbl.classes_))
-#clf.train(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x1}, y=y1, shuffle=True), max_steps=1000)
-#score = clf.evaluate(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x2}, y=y2, num_epochs=1, shuffle=True))["accuracy"]
-#print('accuracy: ', score)
-#pred = clf.predict(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': features2.astype(np.float32)}, num_epochs=1, shuffle=False))
-#pred = [p["probabilities"].astype(np.float32) for p in pred]
-#pred  = pd.DataFrame(pred, columns=lbl.classes_)
-#pred['fname'] = fname
-
-label = []
-for r in pred[lbl.classes_].values:
-    r = list(r)
-    label.append([j[1] for j in sorted([[r[i],lbl.classes_[i]] for i in range(len(lbl.classes_))], reverse=True)][0])
-label = [l if l in audio_classes else 'silence' for l in label]
-pred['label'] = label
-
-sub = pd.read_csv('../input/sample_submission.csv')
-sub = pd.merge(sub, pred[['fname','label']], how='left', on='fname')
-sub = sub[['fname','label_y']].fillna('unknown')
-sub.columns = ['fname','label']
-sub.to_csv("submission.csv", index=False)
-print(sub.label.value_counts())
-"""
-#:)
-
-pd.read_csv('../input/sample_submission.csv').to_csv('sample.csv', index=False)
-
-#from subprocess import check_output
-#print(check_output(["find","/", "-name", "tensorflow"]).decode("utf8"))
-#print(check_output(["ls", "/opt/conda/lib/python3.6/site-packages/tensorflow/examples"]).decode("utf8"))
-#No Speech Commands

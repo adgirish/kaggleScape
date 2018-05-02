@@ -1,134 +1,89 @@
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
-
-import datetime
-import pandas as pd
 import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-import random
-import zipfile
-import time
-import shutil
-from sklearn.metrics import log_loss
+import pandas as pd
+import scipy.sparse as ssp
 
-random.seed(2016)
+from sklearn import metrics, model_selection
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-def run_xgb(train, test, features, target, random_state=0):
-    eta = 0.1
-    max_depth = 3
-    subsample = 0.7
-    colsample_bytree = 0.7
-    start_time = time.time()
+def read_text_data(filename):
+	texts = []
+	with open(filename) as fi:
+		fi.readline()
+		for line in fi:
+			id, text = line.split("||")
+			texts.append(text)
+	return texts
+	
+path = "../input/"
+			
+train_texts = read_text_data(path+"training_text")
+test_texts = read_text_data(path+"test_text")
 
-    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
-    params = {
-        "objective": "multi:softprob",
-        "num_class": 12,
-        "booster" : "gbtree",
-        "eval_metric": "mlogloss",
-        "eta": eta,
-        "max_depth": max_depth,
-        "subsample": subsample,
-        "colsample_bytree": colsample_bytree,
-        "silent": 1,
-        "seed": random_state,
-    }
-    num_boost_round = 500
-    early_stopping_rounds = 50
-    test_size = 0.3
+tfidf = TfidfVectorizer(
+	min_df=5, max_features=16000, strip_accents='unicode',lowercase =True,
+	analyzer='word', token_pattern=r'\w+', ngram_range=(1, 3), use_idf=True, 
+	smooth_idf=True, sublinear_tf=True, stop_words = 'english'
+).fit(train_texts)
 
-    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
-    print('Length train:', len(X_train.index))
-    print('Length valid:', len(X_valid.index))
-    y_train = X_train[target]
-    y_valid = X_valid[target]
-    dtrain = xgb.DMatrix(X_train[features], y_train)
-    dvalid = xgb.DMatrix(X_valid[features], y_valid)
+X_train_text = tfidf.transform(train_texts)
+X_test_text = tfidf.transform(test_texts)
 
-    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
-    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+train = pd.read_csv(path+"training_variants")
+test = pd.read_csv(path+"test_variants")
 
-    print("Validating...")
-    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_iteration)
-    score = log_loss(y_valid.tolist(), check)
+ID_train = train.ID
+ID_test = test.ID
 
-    print("Predict test set...")
-    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_iteration)
+y = train.Class.values-1
 
-    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
-    return test_prediction.tolist(), score
+train = train.drop(['ID','Class'], axis=1)
+test = test.drop(['ID'], axis=1)
 
+data = train.append(test)
 
-def create_submission(score, test, prediction):
-    # Make Submission
-    now = datetime.datetime.now()
-    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    print('Writing submission: ', sub_file)
-    f = open(sub_file, 'w')
-    f.write('device_id,F23-,F24-26,F27-28,F29-32,F33-42,F43+,M22-,M23-26,M27-28,M29-31,M32-38,M39+\n')
-    total = 0
-    test_val = test['device_id'].values
-    for i in range(len(test_val)):
-        str1 = str(test_val[i])
-        for j in range(12):
-            str1 += ',' + str(prediction[i][j])
-        str1 += '\n'
-        total += 1
-        f.write(str1)
-    f.close()
+X_data = pd.get_dummies(data).values
 
+X = X_data[:train.shape[0]]
+X_test = X_data[train.shape[0]:]
 
-def map_column(table, f):
-    labels = sorted(table[f].unique())
-    mappings = dict()
-    for i in range(len(labels)):
-        mappings[labels[i]] = i
-    table = table.replace({f: mappings})
-    return table
+X = ssp.hstack((X_train_text, X), format='csr')
+X_test = ssp.hstack((X_test_text, X_test), format='csr')
 
+print(X.shape, X_test.shape)
 
-def read_train_test():
-    # Events
-    print('Read events...')
-    events = pd.read_csv("../input/events.csv", dtype={'device_id': np.str})
-    events['counts'] = events.groupby(['device_id'])['event_id'].transform('count')
-    events_small = events[['device_id', 'counts']].drop_duplicates('device_id', keep='first')
+y_test = np.zeros((X_test.shape[0], max(y)+1))
 
-    # Phone brand
-    print('Read brands...')
-    pbd = pd.read_csv("../input/phone_brand_device_model.csv", dtype={'device_id': np.str})
-    pbd.drop_duplicates('device_id', keep='first', inplace=True)
-    pbd = map_column(pbd, 'phone_brand')
-    pbd = map_column(pbd, 'device_model')
+n_folds = 5
 
-    # Train
-    print('Read train...')
-    train = pd.read_csv("../input/gender_age_train.csv", dtype={'device_id': np.str})
-    train = map_column(train, 'group')
-    train = train.drop(['age'], axis=1)
-    train = train.drop(['gender'], axis=1)
-    train = pd.merge(train, pbd, how='left', on='device_id', left_index=True)
-    train = pd.merge(train, events_small, how='left', on='device_id', left_index=True)
-    train.fillna(-1, inplace=True)
+kf = model_selection.StratifiedKFold(n_splits=n_folds, random_state=1, shuffle=True)
 
-    # Test
-    print('Read test...')
-    test = pd.read_csv("../input/gender_age_test.csv", dtype={'device_id': np.str})
-    test = pd.merge(test, pbd, how='left', on='device_id', left_index=True)
-    test = pd.merge(test, events_small, how='left', on='device_id', left_index=True)
-    test.fillna(-1, inplace=True)
+fold = 0
+for train_index, test_index in kf.split(X, y):
 
-    # Features
-    features = list(test.columns.values)
-    features.remove('device_id')
+	fold += 1
 
-    return train, test, features
+	X_train, X_valid    = X[train_index], 	X[test_index]
+	y_train, y_valid    = y[train_index],   y[test_index]
 
+	print("Fold", fold, X_train.shape, X_valid.shape)
 
-train, test, features = read_train_test()
-print('Length of train: ', len(train))
-print('Length of test: ', len(test))
-print('Features [{}]: {}'.format(len(features), sorted(features)))
-test_prediction, score = run_xgb(train, test, features, 'group')
-print("LS: {}".format(round(score, 5)))
-create_submission(score, test, test_prediction)
+	clf = LogisticRegression(C=3)
+
+	clf.fit(X_train, y_train)
+
+	p_train = clf.predict_proba(X_train)
+	p_valid = clf.predict_proba(X_valid)
+	p_test = clf.predict_proba(X_test)
+
+	print(metrics.log_loss(y_train, p_train))
+	print(metrics.log_loss(y_valid, p_valid))
+	
+	y_test += p_test/n_folds
+	
+classes = "class1,class2,class3,class4,class5,class6,class7,class8,class9".split(',')
+subm = pd.DataFrame(y_test, columns=classes)
+subm['ID'] = ID_test
+
+subm.to_csv('basic_two.csv', index=False)	
+	

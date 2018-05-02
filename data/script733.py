@@ -1,195 +1,175 @@
 
 # coding: utf-8
 
-# This tutorial will walk you through the essentials of how to index & filter data with Pandas. Think of it as a greatly condensed, opinionated, version of [the official indexing documentation.](http://pandas.pydata.org/pandas-docs/stable/indexing.html#).
+# This is the direct translation of the Matlab getting started code shared by the organizers. 
+# This feature extractor was used as part of a winning solution in a past competition.
+# EDIT: I have fixed the mistakes in the original Matlab code in this new version.
 # 
-# We'll start by loading Pandas and the data:
+# NOTE: I just tried to translate it from the Matlab version as close as possible. 
+#             Use at your own risk. Correctness is not guaranteed and there might be bugs in 
+#             this translation and/or the original Matalb version. So, debug very well before 
+#             incorporating it to your pipeline.
+# 
+# DISCLAIMER: I still haven't tried it with my training pipeline so I am not sure for correctness yet.
+#                           
+# GIVE BACK: Please, consider to fork and contribute back your feature additions and/or corrections.
 
-# In[1]:
+# In[ ]:
 
 
+# translation of the Matlab feature extractor
+import sys
+import os
+import numpy as np
 import pandas as pd
+from math import *
+from scipy.io import loadmat
+from scipy.stats import skew, kurtosis
+#import pyeeg 
+# pyeeg is the one that has very good fractal dimensions 
+# computation but not installed here
+
+def mat_to_data(path):
+    mat = loadmat(path)
+    names = mat['dataStruct'].dtype.names
+    ndata = {n: mat['dataStruct'][n][0, 0] for n in names}
+    return ndata
+
+def corr(data,type_corr):
+    C = np.array(data.corr(type_corr))
+    C[np.isnan(C)] = 0
+    C[np.isinf(C)] = 0
+    w,v = np.linalg.eig(C)
+    #print(w)
+    x = np.sort(w)
+    x = np.real(x)
+    return x
+
+def calculate_features(file_name):
+    f = mat_to_data(file_name)
+    fs = f['iEEGsamplingRate'][0,0]
+    eegData = f['data']
+    [nt, nc] = eegData.shape
+    print((nt, nc))
+    subsampLen = floor(fs * 60)
+    numSamps = int(floor(nt / subsampLen));      # Num of 1-min samples
+    sampIdx = range(0,(numSamps+1)*subsampLen,subsampLen)
+    #print(sampIdx)
+    feat = [] # Feature Vector
+    for i in range(1, numSamps+1):
+        print('processing file {} epoch {}'.format(file_name,i))
+        epoch = eegData[sampIdx[i-1]:sampIdx[i], :]
+
+        # compute Shannon's entropy, spectral edge and correlation matrix
+        # segments corresponding to frequency bands
+        lvl = np.array([0.1, 4, 8, 12, 30, 70, 180])  # Frequency levels in Hz
+        lseg = np.round(nt/fs*lvl).astype('int')
+        D = np.absolute(np.fft.fft(epoch, n=lseg[-1], axis=0))
+        D[0,:]=0                                # set the DC component to zero
+        D /= D.sum()                      # Normalize each channel               
+        
+        dspect = np.zeros((len(lvl)-1,nc))
+        for j in range(len(dspect)):
+            dspect[j,:] = 2*np.sum(D[lseg[j]:lseg[j+1],:], axis=0)
+
+        # Find the shannon's entropy
+        spentropy = -1*np.sum(np.multiply(dspect,np.log(dspect)), axis=0)
+
+        # Find the spectral edge frequency
+        sfreq = fs
+        tfreq = 40
+        ppow = 0.5
+
+        topfreq = int(round(nt/sfreq*tfreq))+1
+        A = np.cumsum(D[:topfreq,:])
+        B = A - (A.max()*ppow)
+        spedge = np.min(np.abs(B))
+        spedge = (spedge - 1)/(topfreq-1)*tfreq
+
+        # Calculate correlation matrix and its eigenvalues (b/w channels)
+        data = pd.DataFrame(data=epoch)
+        type_corr = 'pearson'
+        lxchannels = corr(data, type_corr)
+        
+        # Calculate correlation matrix and its eigenvalues (b/w freq)
+        data = pd.DataFrame(data=dspect)
+        lxfreqbands = corr(data, type_corr)
+        
+        # Spectral entropy for dyadic bands
+        # Find number of dyadic levels
+        ldat = int(floor(nt/2.0))
+        no_levels = int(floor(log(ldat,2.0)))
+        seg = floor(ldat/pow(2.0, no_levels-1))
+
+        # Find the power spectrum at each dyadic level
+        dspect = np.zeros((no_levels,nc))
+        for j in range(no_levels-1,-1,-1):
+            dspect[j,:] = 2*np.sum(D[int(floor(ldat/2.0))+1:ldat,:], axis=0)
+            ldat = int(floor(ldat/2.0))
+
+        # Find the Shannon's entropy
+        spentropyDyd = -1*np.sum(np.multiply(dspect,np.log(dspect)), axis=0)
+
+        # Find correlation between channels
+        data = pd.DataFrame(data=dspect)
+        lxchannelsDyd = corr(data, type_corr)
+        
+        # Fractal dimensions
+        no_channels = nc
+        #fd = np.zeros((2,no_channels))
+        #for j in range(no_channels):
+        #    fd[0,j] = pyeeg.pfd(epoch[:,j])
+        #    fd[1,j] = pyeeg.hfd(epoch[:,j],3)
+        #    fd[2,j] = pyeeg.hurst(epoch[:,j])
+
+        #[mobility[j], complexity[j]] = pyeeg.hjorth(epoch[:,j)
+        # Hjorth parameters
+        # Activity
+        activity = np.var(epoch, axis=0)
+        #print('Activity shape: {}'.format(activity.shape))
+        # Mobility
+        mobility = np.divide(
+                            np.std(np.diff(epoch, axis=0)), 
+                            np.std(epoch, axis=0))
+        #print('Mobility shape: {}'.format(mobility.shape))
+        # Complexity
+        complexity = np.divide(np.divide(
+                                        # std of second derivative for each channel
+                                        np.std(np.diff(np.diff(epoch, axis=0), axis=0), axis=0),
+                                        # std of second derivative for each channel
+                                        np.std(np.diff(epoch, axis=0), axis=0))
+                               , mobility)
+        #print('Complexity shape: {}'.format(complexity.shape))
+        # Statistical properties
+        # Skewness
+        sk = skew(epoch)
+
+        # Kurtosis
+        kurt = kurtosis(epoch)
+
+        # compile all the features
+        feat = np.concatenate((feat,
+                               spentropy.ravel(),
+                               spedge.ravel(),
+                               lxchannels.ravel(),
+                               lxfreqbands.ravel(),
+                               spentropyDyd.ravel(),
+                               lxchannelsDyd.ravel(),
+                               #fd.ravel(),
+                               activity.ravel(),
+                               mobility.ravel(),
+                               complexity.ravel(),
+                               sk.ravel(),
+                               kurt.ravel()
+                                ))
+
+    return feat
+
+
+# In[ ]:
+
+
+feat = calculate_features('../input/train_1/1_1_1.mat')
+print(feat)
+print(feat.shape)
 
-
-# In[2]:
-
-
-df = pd.read_csv('../input/parks.csv', index_col=['Park Code'])
-
-
-# In[3]:
-
-
-df.head(3)
-
-
-# ### Indexing: Single Rows
-# The simplest way to access a row is to pass the row number to the `.iloc` method. Note that first row is zero, just like list indexes.
-
-# In[4]:
-
-
-df.iloc[2]
-
-
-# The other main approach is to pass a value from your dataframe's index to the `.loc` method:
-
-# In[5]:
-
-
-df.loc['BADL']
-
-
-# ### Indexing: Multiple Rows
-# If we need multiple rows, we can pass in multiple index values. Note that this changes the order of the results!
-
-# In[6]:
-
-
-df.loc[['BADL', 'ARCH', 'ACAD']]
-
-
-# In[7]:
-
-
-df.iloc[[2, 1, 0]]
-
-
-# Slicing the dataframe just as if it were a list also works.
-
-# In[8]:
-
-
-df[:3]
-
-
-# In[9]:
-
-
-df[3:6]
-
-
-# ### Indexing: Columns
-# We can access a subset of the columns in a dataframe by placing the list of columns in brackets like so:
-
-# In[10]:
-
-
-df['State'].head(3)
-
-
-# You can also access a single column as if it were an attribute of the dataframe, but only if the name has no spaces, uses only basic characters, and doesn't share a name with a dataframe method. So, `df.State` works:
-
-# In[11]:
-
-
-df.State.head(3)
-
-
-# but `df.Park Code` will fail as there's a space in the name:
-
-# In[12]:
-
-
-df.Park Code
-
-
-# We can only access the 'Park Code' column by passing its name as a string in brackets, like `df['Park Code']`. I recommend either always using that approach or always converting your column names into a valid format as soon as you read in the data so that you don't have to mix the two methods. It's just a bit tidier.
-# 
-# It's a good practice to clean your column names to prevent this sort of error. I'll use a very short cleaning function here since the names don't have any odd characters. By convention, the names should also be converted to lower case. Pandas is case sensitive, so future calls to all of the columns will need to be updated.
-
-# In[13]:
-
-
-df.columns = [col.replace(' ', '_').lower() for col in df.columns]
-print(df.columns)
-
-
-# ### Indexing: Columns and Rows
-# If we need to subset by both columns and rows, you can stack the commands we've already learned.
-
-# In[16]:
-
-
-df[['state', 'acres']][:3]
-
-
-# ### Indexing: Scalar Values
-# As you may have noticed, everything we've tried so far returns a small dataframe or series. If you need a single value, simply pass in a single column and index value.
-
-# In[17]:
-
-
-df.state.iloc[2]
-
-
-# Note that you will get a different return type if you pass a single value in a list.
-
-# In[18]:
-
-
-df.state.iloc[[2]]
-
-
-# ### Selecting a Subset of the Data
-
-# The main method for subsetting data in Pandas is called [boolean indexing](http://pandas.pydata.org/pandas-docs/stable/indexing.html#boolean-indexing). First, let's take a look at what pandas does when we ask it to evaluate a boolean:
-
-# In[19]:
-
-
-(df.state == 'UT').head(3)
-
-
-# We get a series of the results of the boolean. Passing that series into a dataframe gives us the subset of the dataframe where the boolean evaluates to `True`.
-
-# In[20]:
-
-
-df[df.state == 'UT']
-
-
-# Some of the logical operators are different:
-# - `~` replaces `not`
-# - `|` replaces `or`
-# - `&` replaces `and`
-# 
-# If you have multiple arguments they'll need to be wrapped in parentheses. For example:
-
-# In[21]:
-
-
-df[(df.latitude > 60) | (df.acres > 10**6)].head(3)
-
-
-# You can also use more complicated expressions, including lambdas.
-
-# In[22]:
-
-
-df[df['park_name'].str.split().apply(lambda x: len(x) == 3)].head(3)
-
-
-# ### Key Companion Methods: `isin` and `isnull`
-# These methods make it much easier and faster to perform some very common tasks. Suppose we wanted to find all parks on the West coast. `isin` makes that simple:
-
-# In[23]:
-
-
-df[df.state.isin(['WA', 'OR', 'CA'])].head()
-
-
-# ### Less Common Methods
-# Pandas offers many more indexing methods. You should probably stick to a few of them for the sake of keeping your code readable, but it's worth knowing they exist in case you need to read other people's code or have an unusual use case:
-# 
-# - There are other ways to slice data with brackets. For the sake of readability, please don't use of them.
-# - `.at` and `.iat`: like `.loc` and `.iloc` but much faster in exchange for only working on a single column and only returning a single result.
-# - `.eval`: fast evaluation of a limited set of simple operators. `.query` works by calling this.
-# - `.ix`: deprecated method that tried to determine if an index should be evaluated with .loc or .iloc. This led to a lot of subtle bugs! If you see this, you're looking at old code that won't work any more.
-# - `.get`: like `.loc`, but will return a default value if the key doesn't exist in the index. Only works on a single column/series.
-# - `.lookup`: Not recommended. It's in the documentation, but it's unclear if this is actually still supported.
-# - `.mask`: like boolean indexing, but returns a dataframe/series of the same size as the original and anywhere that the boolean evaluates to `True` is set to `nan`.
-# - `.query`: similar to boolean indexing. Faster for large dataframes. Only supports a restricted set of operations; don't use if you need `isnull()` or other dataframe methods.
-# - `.take`: equivalent to `.iloc`, but can operate on either rows or columns.
-# - `.where`: like boolean indexing, but returns a dataframe/series of the same size as the original and anywhere that the boolean evaluates to `False` is set to `nan`.
-# - [Multi-indexing](http://pandas.pydata.org/pandas-docs/stable/advanced.html): potentially useful for small to mid sized heirarchical datasets. Slow on larger datasets.

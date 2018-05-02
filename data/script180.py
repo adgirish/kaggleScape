@@ -1,262 +1,139 @@
 
 # coding: utf-8
 
+# I used this approach in my solution which is the 11th on the Leaderboard. Here I'm infering 4 components in the target's value distribution and I'm showing how did I identify to which of these components does the particular object belong.
+# Of course I should mention this forum thread as the main source of the idea: https://www.kaggle.com/c/mercedes-benz-greener-manufacturing/discussion/35382.
+# My solution itself is here: https://www.kaggle.com/c/mercedes-benz-greener-manufacturing/discussion/36242
+
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-import keras as k
-from keras.layers import Merge
-from keras.layers.normalization import BatchNormalization
-from keras.callbacks import ModelCheckpoint,EarlyStopping,ReduceLROnPlateau
-from keras.callbacks import History
-from keras.layers import Activation
-from keras.models import model_from_json
-from keras.optimizers import Adam
-from matplotlib import pyplot as plt
-from scipy.ndimage import rotate as rot
-np.random.seed(100)
+from sklearn.cluster import KMeans
+import seaborn as sns
+import xgboost as xgb
+from sklearn.model_selection import cross_val_score,cross_val_predict
+train = pd.read_csv('../input/train.csv')
+X_train = train.drop(['y'],axis=1)
+y_train = train['y']
+X_test = pd.read_csv('../input/test.csv')
+
+#
+#   Here we drop columns with zero std
+#
+
+zero_std = X_train.std()[X_train.std()==0].index
+X_train = X_train.drop(zero_std,axis=1)
+X_test = X_test.drop(zero_std,axis=1)
 
 
-# In[ ]:
-
-
-file_path = '/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/data/processed/train.json'
-
-
-# In[ ]:
-
-
-train = pd.read_json(file_path)
-
+# The four components I've mentioned are clearly observable on the distplot
 
 # In[ ]:
 
 
-print(train.head())
-train.shape
+sns.distplot(y_train[y_train<170],bins=100,kde=False)
 
 
-# In[ ]:
-
-
-train[train['inc_angle'] == 'na'].count()
-
+# So we are trying using our features to figure out where (to what component) does the particular object belongs. 
+# Here we build a kind of "cluster encoder". It takes categorical feature, computes group means and clusters them to four groups.
 
 # In[ ]:
 
 
-train.inc_angle = train.inc_angle.map(lambda x: 0.0 if x == 'na' else x)
+class cluster_target_encoder:
+    def make_encoding(self,df):
+        self.encoding = df.groupby('X')['y'].mean()
+    def fit(self,X,y):
+        df = pd.DataFrame(columns=['X','y'],index=X.index)
+        df['X'] = X
+        df['y'] = y
+        self.make_encoding(df)
+        clust = KMeans(4,random_state=0)
+        labels = clust.fit_predict(self.encoding[df['X'].values].values.reshape(-1,1))
+        df['labels'] = labels
+        self.clust_encoding = df.groupby('X')['labels'].median()
+    def transform(self,X):
+        res = X.map(self.clust_encoding).astype(float)
+        return res
+    def fit_transform(self,X,y):
+        self.fit(X,y)
+        return self.transform(X)
 
 
-# In[ ]:
-
-
-def transform (df):
-    images = []
-    for i, row in df.iterrows():
-        band_1 = np.array(row['band_1']).reshape(75,75)
-        band_2 = np.array(row['band_2']).reshape(75,75)
-        band_3 = band_1 + band_2
-        
-        band_1_norm = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
-        band_2_norm = (band_2 - band_2. mean()) / (band_2.max() - band_2.min())
-        band_3_norm = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
-        
-        images.append(np.dstack((band_1_norm, band_2_norm, band_3_norm)))
-    
-    return np.array(images)
-
-
-# In[ ]:
-
-
-def augment(images):
-    image_mirror_lr = []
-    image_mirror_ud = []
-    image_rotate = []
-    for i in range(0,images.shape[0]):
-        band_1 = images[i,:,:,0]
-        band_2 = images[i,:,:,1]
-        band_3 = images[i,:,:,2]
-            
-        # mirror left-right
-        band_1_mirror_lr = np.flip(band_1, 0)
-        band_2_mirror_lr = np.flip(band_2, 0)
-        band_3_mirror_lr = np.flip(band_3, 0)
-        image_mirror_lr.append(np.dstack((band_1_mirror_lr, band_2_mirror_lr, band_3_mirror_lr)))
-        
-        # mirror up-down
-        band_1_mirror_ud = np.flip(band_1, 1)
-        band_2_mirror_ud = np.flip(band_2, 1)
-        band_3_mirror_ud = np.flip(band_3, 1)
-        image_mirror_ud.append(np.dstack((band_1_mirror_ud, band_2_mirror_ud, band_3_mirror_ud)))
-        
-        #rotate 
-        band_1_rotate = rot(band_1, 30, reshape=False)
-        band_2_rotate = rot(band_2, 30, reshape=False)
-        band_3_rotate = rot(band_3, 30, reshape=False)
-        image_rotate.append(np.dstack((band_1_rotate, band_2_rotate, band_3_rotate)))
-        
-    mirrorlr = np.array(image_mirror_lr)
-    mirrorud = np.array(image_mirror_ud)
-    rotated = np.array(image_rotate)
-    images = np.concatenate((images, mirrorlr, mirrorud, rotated))
-    return images
-
+# Now as mentioned on forum we use X0 to split the components
 
 # In[ ]:
 
 
-train_X = transform(train)
-train_y = np.array(train ['is_iceberg'])
-
-indx_tr = np.where(train.inc_angle > 0)
-print (indx_tr[0].shape)
-
-train_y = train_y[indx_tr[0]]
-train_X = train_X[indx_tr[0], ...]
-
-train_X = augment(train_X)
-train_y = np.concatenate((train_y,train_y, train_y, train_y))
-
-print (train_X.shape)
-print (train_y.shape)
-
-
-# In[ ]:
-
-
-model = k.models.Sequential()
-
-model.add(k.layers.convolutional.Conv2D(64, kernel_size=(3,3), input_shape=(75,75,3)))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.convolutional.MaxPooling2D(pool_size=(3,3), strides=(2,2)))
-model.add(k.layers.Dropout(0.2))
-
-model.add(k.layers.convolutional.Conv2D(128, kernel_size=(3, 3)))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-model.add(k.layers.Dropout(0.2))
-
-model.add(k.layers.convolutional.Conv2D(128, kernel_size=(3, 3)))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-model.add(k.layers.Dropout(0.3))
-
-model.add(k.layers.convolutional.Conv2D(64, kernel_size=(3, 3)))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-model.add(k.layers.Dropout(0.3))
-
-model.add(k.layers.Flatten())
-
-model.add(k.layers.Dense(512))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.Dropout(0.2))
-
-model.add(k.layers.Dense(256))
-model.add(Activation('relu'))
-model.add(BatchNormalization())
-model.add(k.layers.Dropout(0.2))
-
-
-model.add(k.layers.Dense(1))
-model.add(Activation('sigmoid'))
-
-mypotim=Adam(lr=0.01, decay=0.0)
-model.compile(loss='binary_crossentropy', optimizer = mypotim, metrics=['accuracy'])
-
-model.summary()
-
-
-# In[ ]:
-
-
-batch_size = 64
-early_stopping = EarlyStopping(monitor = 'val_loss', patience = 10, verbose = 0, mode= 'min')
-reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor = 0.1, patience = 7, verbose =1, 
-                                   epsilon = 1e-4, mode='min', min_lr = 0.0001)
-model_filepath='/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/weights.best.hdf5'
-checkpoint = ModelCheckpoint(model_filepath, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
-callbacks_list = [early_stopping, checkpoint]
-
-
-# In[ ]:
-
-
-history = model.fit(train_X, train_y, batch_size = batch_size, epochs =20, verbose =1, validation_split = 0.1, 
-          callbacks=callbacks_list)
-
-
-# In[ ]:
-
-
-print (history.history.keys())
-fig = plt.figure()
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('model accuracy')
-plt.ylabel('accuracy')
-plt.xlabel('epoch')
-plt.legend(['train','test'],loc='upper left')
+enc1 = cluster_target_encoder()
+labels_train = enc1.fit_transform(X_train['X0'],train['y'])
+labels_test = enc1.transform(X_test['X0'])
+get_ipython().run_line_magic('pylab', 'inline')
+plt.figure(figsize(10,5))
+plt.hist(y_train.values[labels_train==0],bins=70,label='cluster 0')
+plt.hist(y_train.values[labels_train==1],bins=100,label='cluster 1')
+plt.hist(y_train.values[labels_train==2],bins=70,label='cluster 2')
+plt.hist(y_train.values[labels_train==3],bins=70,label='cluster 3')
+plt.legend()
+plt.title('Train targets distribution for all clusters')
+plt.xlim((60,170))
 plt.show()
 
 
+# Brilliant, isn't it? But we have a problem. We have some values of X0 in test which we don't have in train, so we have some NaNs in labels_test
+
 # In[ ]:
 
 
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper right')
+labels_test[np.isnan(labels_test)].shape
+
+
+# In fact we can just do nothing. 6 objects is to few to worry about. But instead we can predict these labels using other features. Actually this global four "car clusters" are obvious for most of the algorithms and it's really not a problem to predict them. The problem is to predict what's happening inside the cluster (you can read the Discussions thread for more).
+# Let's ensure that we can predict the labels well.
+
+# In[ ]:
+
+
+cross_val_score(
+    X = X_train.select_dtypes(include=[np.number]),
+    y = labels_train,
+    estimator = xgb.XGBClassifier(),
+    cv = 5,
+    scoring = 'accuracy')
+
+
+# As you see the accuracy is super. The last thing we have to do is to predict NaNs in labels_test and we have almost perfect split of these four parts of the mixture
+
+# In[ ]:
+
+
+est = xgb.XGBClassifier()
+est.fit(X_train.select_dtypes(include=[np.number]),labels_train)
+labels_test[np.isnan(labels_test)] = est.predict(
+    X_test.select_dtypes(include=[np.number]))[np.isnan(labels_test)]
+np.isnan(labels_test).any()
+
+
+# And the last note here. This feature is not the silver bullet. In fact we did not add much information, machine learning algorithms are capable to understand this structure without our help. Take a look how well does xgboost separate these clusters when predicting the y.
+
+# In[ ]:
+
+
+y_pred = cross_val_predict(
+    X = X_train.select_dtypes(include=[np.number]),
+    y = y_train,
+    estimator = xgb.XGBRegressor(),
+    cv = 5)
+plt.figure(figsize(10,5))
+plt.hist(y_pred[labels_train==0],bins=70,label='cluster 0')
+plt.hist(y_pred[labels_train==1],bins=100,label='cluster 1')
+plt.hist(y_pred[labels_train==2],bins=70,label='cluster 2')
+plt.hist(y_pred[labels_train==3],bins=70,label='cluster 3')
+plt.legend()
+plt.title('Cross_val_predict distribution for all clusters')
 plt.show()
 
 
-# In[ ]:
-
-
-model_json = model.to_json()
-with open("/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/model.json", "w") as json_file:
-    json_file.write(model_json)
-
-
-# In[ ]:
-
-
-# load json and create model
-json_file = open('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/model.json', 'r')
-loaded_model_json = json_file.read()
-json_file.close()
-loaded_model = model_from_json(loaded_model_json)
-# load weights into new model
-loaded_model.load_weights('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/weights.best.hdf5')
-print("Loaded model from disk")
-loaded_model.compile(loss='binary_crossentropy', optimizer = mypotim, metrics=['accuracy'])
-
-
-# In[ ]:
-
-
-test_file = '/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/data-1/processed/test.json'
-test = pd.read_json(test_file)
-test.inc_angle = test.inc_angle.replace('na',0)
-test_X = transform(test)
-print (test_X.shape)
-
-
-# In[ ]:
-
-
-pred_test = loaded_model.predict(test_X, verbose=1)
-submission = pd.DataFrame({'id': test["id"], 'is_iceberg': pred_test.reshape((pred_test.shape[0]))})
-submission.to_csv('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/submission.csv', index=False)
-
+# But this new feature was really very useful for me, you can check my solution to figure out how.

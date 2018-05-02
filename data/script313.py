@@ -1,151 +1,385 @@
 
 # coding: utf-8
 
-# # Matthews correlation coefficient
+# ## Quick Visual ##
 # 
-# See https://en.wikipedia.org/wiki/Matthews_correlation_coefficient
-# 
-# Author: [CPMP](https://www.kaggle.com/cpmpml)
-# 
-# A fast implementation of [Anokas mcc optimization code](https://www.kaggle.com/c/bosch-production-line-performance/forums/t/22917/optimising-probabilities-binary-prediction-script).
-# 
-# This code takes as input probabilities, and selects the threshold that yields the best MCC score.  It is efficient enough to be used as a custom evaluation function in xgboost
+# Trying to get a quick visual of this competition.
 
 # In[ ]:
 
+
+import pandas as pd
+import numpy as np
+import datetime
+
+
+import warnings
+warnings.filterwarnings("ignore")
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(style="white", color_codes=True)
+
+
+
+# Read data 
+
+dateparse = lambda x: datetime.datetime.strptime(x,'%Y-%m-%d %H:%M:%S')
+
+# Read/clean data
 
 # This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+FILE="../input/gifts.csv"
+d=pd.read_csv(FILE, encoding = "ISO-8859-1")
 
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-from sklearn.metrics import matthews_corrcoef
-
-import matplotlib.pyplot as plt
-import numpy as np
+d['type'] = d['GiftId'].apply(lambda x: x.split('_')[0])
+d['id'] = d['GiftId'].apply(lambda x: x.split('_')[1])
 
 
-# We compile the code with Numba.  If you don't have it installed, then just comment out the import and the @jit lines below.
 
 # In[ ]:
 
 
-from numba import jit
+d['type'].value_counts()
 
-@jit
-def mcc(tp, tn, fp, fn):
-    sup = tp * tn - fp * fn
-    inf = (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
-    if inf==0:
-        return 0
-    else:
-        return sup / np.sqrt(inf)
-
-@jit
-def eval_mcc(y_true, y_prob, show=False):
-    idx = np.argsort(y_prob)
-    y_true_sort = y_true[idx]
-    n = y_true.shape[0]
-    nump = 1.0 * np.sum(y_true) # number of positive
-    numn = n - nump # number of negative
-    tp = nump
-    tn = 0.0
-    fp = numn
-    fn = 0.0
-    best_mcc = 0.0
-    best_id = -1
-    prev_proba = -1
-    best_proba = -1
-    mccs = np.zeros(n)
-    for i in range(n):
-        # all items with idx < i are predicted negative while others are predicted positive
-        # only evaluate mcc when probability changes
-        proba = y_prob[idx[i]]
-        if proba != prev_proba:
-            prev_proba = proba
-            new_mcc = mcc(tp, tn, fp, fn)
-            if new_mcc >= best_mcc:
-                best_mcc = new_mcc
-                best_id = i
-                best_proba = proba
-        mccs[i] = new_mcc
-        if y_true_sort[i] == 1:
-            tp -= 1.0
-            fn += 1.0
-        else:
-            fp -= 1.0
-            tn += 1.0
-    if show:
-        y_pred = (y_prob >= best_proba).astype(int)
-        score = matthews_corrcoef(y_true, y_pred)
-        print(score, best_mcc)
-        plt.plot(mccs)
-        return best_proba, best_mcc, y_pred
-    else:
-        return best_mcc
-
-
-# Let's see what this gives on an example.  We also compute the MCC using scikit-learn function to make sure we compute the same.
 
 # In[ ]:
 
 
-y_prob0 = np.random.rand(1000000)
-y_prob = y_prob0 + 0.4 * np.random.rand(1000000) - 0.02
+def Weight(mType):
+    if mType == "horse":
+        return max(0, np.random.normal(5,2,1)[0])
+    if mType == "ball":
+        return max(0, 1 + np.random.normal(1,0.3,1)[0])
+    if mType == "bike":
+        return max(0, np.random.normal(20,10,1)[0])
+    if mType == "train":
+        return max(0, np.random.normal(10,5,1)[0])
+    if mType == "coal":
+        return 47 * np.random.beta(0.5,0.5,1)[0]
+    if mType == "book":
+        return np.random.chisquare(2,1)[0]
+    if mType == "doll":
+        return np.random.gamma(5,1,1)[0]
+    if mType == "blocks":
+        return np.random.triangular(5,10,20,1)[0]
+    if mType == "gloves":
+        return 3.0 + np.random.rand(1)[0] if np.random.rand(1) < 0.3 else np.random.rand(1)[0]
 
-
-y_true = (y_prob0 > 0.6).astype(int)
-best_proba, best_mcc, y_pred = eval_mcc(y_true, y_prob, True)
-
-
-# It is fast.  For a one million items input:
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('timeit', 'eval_mcc(y_true, y_prob)')
+# Build Weights
+d['weight'] = d['type'].apply(lambda x: Weight(x))
 
-
-# Probabilities can be identical for several values as pointed out by @Commander.  Let's test it.
 
 # In[ ]:
 
 
-def roundn(yprob, scale):
-    return np.around(y_prob * scale) / scale
+d.head()
 
-best_proba, best_mcc, y_pred = eval_mcc(y_true, roundn(y_prob, 100), True)
+
+# In[ ]:
+
+
+sns.distplot(d[d['type']=='horse'] ['weight'],bins=100, label="horse" );
+sns.distplot(d[d['type']=='ball'] ['weight'],bins=100,  label="ball"  );
+sns.distplot(d[d['type']=='bike']['weight'],bins=100,   label="bike"  );
+sns.distplot(d[d['type']=='train']['weight'],bins=100,  label="train" );
+sns.distplot(d[d['type']=='coal']['weight'],bins=100,   label="coal"  );
+sns.distplot(d[d['type']=='book']['weight'],bins=100,   label="book"  );
+sns.distplot(d[d['type']=='doll']['weight'],bins=100,   label="doll"  );
+sns.distplot(d[d['type']=='blocks']['weight'],bins=100,   label="blocks"  );
+sns.distplot(d[d['type']=='gloves']['weight'],bins=100,   label="gloves"  );
+plt.legend();
+
+
+# ## Light Items ##
+# 
+# Find maximum weights for each item
+
+# In[ ]:
+
+
+g = d.groupby(['type']).agg({'weight':max})
+g = g.reset_index()
+g.sort_values(by=['weight'],ascending=True,inplace=True)
+g
+
+
+# ## Only One of This Item (Heavy)##
+# 
+# The maximum weight is 50.  So, which items go over 25 in weight?  That could be a potential problem with 2 or more.
+
+# In[ ]:
+
+
+# Bike and Coal only ones over 25
+d[d['weight']> 25]['type'].unique()
+
+
+# In[ ]:
+
+
+#sns.distplot(d[d['type']=='horse'] ['weight'],bins=100, label="horse" );
+#sns.distplot(d[d['type']=='ball'] ['weight'],bins=100,  label="ball"  );
+sns.distplot(d[d['type']=='bike']['weight'],bins=100,   label="bike"  );
+sns.distplot(d[d['type']=='train']['weight'],bins=100,  label="train" );
+sns.distplot(d[d['type']=='coal']['weight'],bins=100,   label="coal"  );
+#sns.distplot(d[d['type']=='book']['weight'],bins=100,   label="book"  );
+#sns.distplot(d[d['type']=='doll']['weight'],bins=100,   label="doll"  );
+#sns.distplot(d[d['type']=='blocks']['weight'],bins=100,   label="blocks"  );
+#sns.distplot(d[d['type']=='gloves']['weight'],bins=100,   label="gloves"  );
+plt.legend();
+
+
+# In[ ]:
+
+
+sns.distplot(d[d['type']=='coal']['weight'],bins=100,   label="coal"  );
+
+plt.legend();
+
+
+# In[ ]:
+
+
+sns.distplot(d[d['type']=='bike']['weight'],bins=100,   label="bike"  );
+
+plt.legend();
+
+
+# In[ ]:
+
+
+# So you could have 2 trains...maybe
+sns.distplot(d[d['type']=='train']['weight'],bins=100,   label="train"  );
+plt.legend();
+
+
+# ## Submit Requirements ##
+# 
+#  - Must have at least 3 items in each bag
+#  - 1000 bags
+#  - Bag over 50 lbs gets removed
+# 
+
+# In[ ]:
+
+
+# Total amount of weight
+d['weight'].sum()
+
+
+# ## Combinations - How does the distribution look? ##
+
+# In[ ]:
+
+
+# Use this to create  multiples
+def mul(mType,number):
+    a=[]
+    for i in range(0,number):
+        a.append(Weight(mType))
+    return a
+
+
+# In[ ]:
+
+
+# Working with combinations
+# Combine coal and books
+# This is just to show the distribution..
+
+a=[]
+for i in range(0,10000):
+    tmp = mul("coal",1)+mul("book",3) 
+    a.append(sum(tmp))
+
+t=pd.DataFrame(a,columns=['weights'])
+sns.distplot(t,bins=100,   label="(1) coal and (3) books"  );
+print("Greater than 50lb {:03.2f} %".format( t[t['weights'] > 50].sum()[0]/10000)  )
+print('Greater than 40lb and less 50lb {:03.2f}%'.format(t[(t['weights'] > 40) & (t['weights'] < 50)   ].sum()[0]/10000.0))
+plt.legend();
+
+
+
+# In[ ]:
+
+
+# 2 Coals are more interesting
+# ..but probably not a good pick...
+
+a=[]
+for i in range(0,10000):
+    tmp = mul("coal",2) 
+    a.append(sum(tmp))
+
+t=pd.DataFrame(a,columns=['weights'])
+sns.distplot(t,bins=100,   label="(2) coal "  );
+print("Greater than 50lb {:03.2f} %".format( t[t['weights'] > 50].sum()[0]/10000)  )
+print('Greater than 40lb and less 50lb {:03.2f}%'.format(t[(t['weights'] > 40) & (t['weights'] < 50)   ].sum()[0]/10000.0))
+plt.legend();
+
+
+# ## Quantile Table with Counts ##
+# 
+# Build a table to see what combinations we can do by hand... just to get an idea if we're going in the right direction.
+
+# In[ ]:
+
+
+def BuildDef():
+    b=[]
+    for atype in  ["book","ball","horse","blocks","doll","train","bike","gloves","coal"]:
+        b.append([atype, 
+                  d[d['type']==atype].quantile(q=0.95, interpolation='linear')[0],
+                  d[d['type']==atype].quantile(q=0.85, interpolation='linear')[0],
+                  d[d['type']==atype].quantile(q=0.60, interpolation='linear')[0],
+                  d[d['type']==atype].quantile(q=0.40, interpolation='linear')[0],
+                  d[d['type']==atype].quantile(q=0.20, interpolation='linear')[0]]
+                )
+    dk=pd.DataFrame(b,columns=['type','q95','q85','q60','q40','q20'])
+    return dk
+        
+        
+
+
+# In[ ]:
+
+
+dk = BuildDef()
+# Take a look at what we have
+dk['type'].head()
+
+
+# In[ ]:
+
+
+j=d['type'].value_counts().to_frame().reset_index()
+def getCount(atype):
+    val = j[j['index']==atype].iloc[0]['type']
+    return val
+
+
+dk['count'] = dk['type'].apply(lambda x: getCount(x))
+dk.sort_values(by=['q85'],ascending=True,inplace=True)
+dk
+
+
+# ## Sample Submission ##
+# 
+# Score: 31212.68873
+
+# In[ ]:
+
+
+coal=0
+book=0
+bike=0
+train=0
+blocks=0
+doll=0
+horse=0
+gloves=0
+ball=0
+with open("Santa_03.csv", 'w') as f:
+        f.write("Gifts\n")
+        for i in range(1000):
+            if coal < 166:
+                f.write('coal_'+str(coal)+' book_'+str(book))
+                coal+=1
+                book+=1
+                f.write(' book_'+str(book)+'\n')
+                book+=1
+            elif blocks < 1000 and train < 1000:
+                f.write('blocks_'+str(blocks)+' train_'+str(train))
+                blocks+=1
+                train+=1
+                f.write(' blocks_'+str(blocks)+' train_'+str(train)+'\n')
+                blocks+=1
+                train+=1
+            elif bike < 500 and blocks < 1000:
+                f.write('bike_'+str(bike)+' train_'+str(train)+' blocks_'+str(blocks)+'\n')
+                bike+=1
+                train+=1
+                blocks+=1
+            elif book < 1000 and gloves < 200: 
+                f.write('doll_'+str(doll))
+                doll+=1
+                f.write(' doll_'+str(doll))
+                doll+=1
+                f.write(' doll_'+str(doll))
+                doll+=1
+                f.write(' horse_'+str(horse))
+                horse+=1
+                f.write(' horse_'+str(horse))
+                horse+=1
+                f.write(' horse_'+str(horse))
+                horse+=1
+                f.write(' gloves_'+str(gloves))
+                gloves+=1
+                f.write(' ball_'+str(ball))
+                ball+=1
+                f.write(' ball_'+str(ball))
+                ball+=1
+                f.write(' ball_'+str(ball))
+                ball+=1
+                f.write(' ball_'+str(ball))
+                ball+=1
+                f.write(' ball_'+str(ball))
+                ball+=1
+                f.write(' book_'+str(book)+'\n')
+                book+=1
+            # (1) bike  (4) books  (2) horse -- See Graph below    
+            elif bike < 500 and horse < 1000 and book < 1200: 
+                f.write('bike_'+str(bike))
+                bike+=1
+                f.write(' book_'+str(book))
+                book+=1
+                f.write(' book_'+str(book))
+                book+=1
+                f.write(' book_'+str(book))
+                book+=1
+                f.write(' book_'+str(book))
+                book+=1
+                f.write(' horse_'+str(horse))
+                horse+=1
+                f.write(' horse_'+str(horse)+'\n')
+                horse+=1
             
+                
 
 
-# We see that the best mcc is lower than when probabilities were all different.
+print("coal max(166)",coal)                
+print("horse max(1000)",horse)
+print("book max(1200)",book)
+print("bike max(500)",bike)
+print("gloves max(200)",gloves)
+print("train max(1000)",train)
+print("ball max(1100)",ball)
+print("doll max(1000)",doll)
+print("blocks max(1000)",blocks)
 
-# For use with xgboost, we wrap it to get the right input and output. 
 
 # In[ ]:
 
 
-def mcc_eval(y_prob, dtrain):
-    y_true = dtrain.get_label()
-    best_mcc = eval_mcc(y_true, y_prob)
-    return 'MCC', best_mcc
+a=[]
+for i in range(0,10000):
+    tmp = mul("bike",1)+mul("book",4)+mul("horse",2)
+    a.append(sum(tmp))
+
+t=pd.DataFrame(a,columns=['weights'])
+sns.distplot(t,bins=100,   label="(1) bike  (4) books  (2) horse"  );
+print("Greater than 50lb {:03.2f} %".format( t[t['weights'] > 50].sum()[0]/10000)  )
+print('Greater than 40lb and less 50lb {:03.2f}%'.format(t[(t['weights'] > 40) & (t['weights'] < 50)   ].sum()[0]/10000.0))
+print('Greater than 20lb and less 50lb {:03.2f}%'.format(t[(t['weights'] > 20) & (t['weights'] < 50)   ].sum()[0]/10000.0))
 
 
-# We can then use it with xgboost, for instance passing it as feval parameter as follow:
+plt.legend();
 
-#     bst = xgb.train(params, Xtrain, 
-#                         num_boost_round=num_round, 
-#                         evals=watchlist,
-#                         early_stopping_rounds=early_stopping_rounds, 
-#                         evals_result=evals_result, 
-#                         verbose_eval=verbose_eval,
-#                         feval=mcc_eval, 
-#                         maximize=True,)

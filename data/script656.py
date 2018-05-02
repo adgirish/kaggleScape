@@ -1,391 +1,278 @@
 
 # coding: utf-8
 
-# In[ ]:
+# In[1]:
 
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
 
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+import os
+from keras.layers import Dense,Input,LSTM,Bidirectional,Activation,Conv1D,GRU
+from keras.callbacks import Callback
+from keras.layers import Dropout,Embedding,GlobalMaxPooling1D, MaxPooling1D, Add, Flatten
+from keras.preprocessing import text, sequence
+from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
+from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
+from keras.callbacks import EarlyStopping,ModelCheckpoint
+from keras.models import Model
+from keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import roc_auc_score
+print(os.listdir("../input"))
 
-mushrooms = pd.read_csv('../input/mushrooms.csv')
-
-
-# In[ ]:
-
-
-mushrooms.head()
-
-
-# In[ ]:
-
-
-#Idea: 1) Pick two features for classification (cap color, odor)
-#      2) Run some statistical analysis
-#      3) Assign numerical values to the letter values in order to feed the Logistic Regression Algo.
+# Any results you write to the current directory are saved as output.
 
 
-# In[ ]:
+# In[2]:
 
 
-mushrooms.shape
+EMBEDDING_FILE = '../input/glove840b300dtxt/glove.840B.300d.txt'
+#train = pd.read_csv('../input/cleaned-toxic-comments/train_preprocessed.csv')
+train= pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+#test = pd.read_csv('../input/cleaned-toxic-comments/test_preprocessed.csv')
+test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
 
 
-# In[ ]:
+# In[3]:
 
 
-mushrooms.describe()
+train["comment_text"].fillna("fillna")
+test["comment_text"].fillna("fillna")
+X_train = train["comment_text"].str.lower()
+y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
+
+X_test = test["comment_text"].str.lower()
 
 
-# In[ ]:
+# In[4]:
 
 
-'To visualize the number of mushrooms for each cap color categorize. We will build a bar chart'
+max_features=100000
+maxlen=200
+embed_size=300
 
 
-# In[ ]:
+# In[5]:
 
 
-#Obtain total number of mushrooms for each 'cap-color' (Entire DataFrame)
-cap_colors = mushrooms['cap-color'].value_counts()
-m_height = cap_colors.values.tolist() #Provides numerical values
-cap_colors.axes #Provides row labels
-cap_color_labels = cap_colors.axes[0].tolist() #Converts index object to list
+class RocAucEvaluation(Callback):
+    def __init__(self, validation_data=(), interval=1):
+        super(Callback, self).__init__()
 
-#=====PLOT Preparations and Plotting====#
-ind = np.arange(10)  # the x locations for the groups
-width = 0.7        # the width of the bars
-colors = ['#DEB887','#778899','#DC143C','#FFFF99','#f8f8ff','#F0DC82','#FF69B4','#D22D1E','#C000C5','g']
-#FFFFF0
-fig, ax = plt.subplots(figsize=(10,7))
-mushroom_bars = ax.bar(ind, m_height , width, color=colors)
+        self.interval = interval
+        self.X_val, self.y_val = validation_data
 
-#Add some text for labels, title and axes ticks
-ax.set_xlabel("Cap Color",fontsize=20)
-ax.set_ylabel('Quantity',fontsize=20)
-ax.set_title('Mushroom Cap Color Quantity',fontsize=22)
-ax.set_xticks(ind) #Positioning on the x axis
-ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
-                  fontsize = 12)
-
-#Auto-labels the number of mushrooms for each bar color.
-def autolabel(rects,fontsize=14):
-    """
-    Attach a text label above each bar displaying its height
-    """
-    for rect in rects:
-        height = rect.get_height()
-        ax.text(rect.get_x() + rect.get_width()/2., 1*height,'%d' % int(height),
-                ha='center', va='bottom',fontsize=fontsize)
-autolabel(mushroom_bars)        
-plt.show() #Display bars. 
+    def on_epoch_end(self, epoch, logs={}):
+        if epoch % self.interval == 0:
+            y_pred = self.model.predict(self.X_val, verbose=0)
+            score = roc_auc_score(self.y_val, y_pred)
+            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
 
 
-# In[ ]:
+# In[7]:
 
 
-'Following bar chart shows the # of mushrooms which are edible or poisonous based on cap-color'
+tok=text.Tokenizer(num_words=max_features,lower=True)
+tok.fit_on_texts(list(X_train)+list(X_test))
+X_train=tok.texts_to_sequences(X_train)
+X_test=tok.texts_to_sequences(X_test)
+x_train=sequence.pad_sequences(X_train,maxlen=maxlen)
+x_test=sequence.pad_sequences(X_test,maxlen=maxlen)
 
 
 # In[ ]:
 
 
-poisonous_cc = [] #Poisonous color cap list
-edible_cc = []    #Edible color cap list
-for capColor in cap_color_labels:
-    size = len(mushrooms[mushrooms['cap-color'] == capColor].index)
-    edibles = len(mushrooms[(mushrooms['cap-color'] == capColor) & (mushrooms['class'] == 'e')].index)
-    edible_cc.append(edibles)
-    poisonous_cc.append(size-edibles)
-                        
-#=====PLOT Preparations and Plotting====#
-width = 0.40
-fig, ax = plt.subplots(figsize=(12,7))
-edible_bars = ax.bar(ind, edible_cc , width, color='#ADFF2F')
-poison_bars = ax.bar(ind+width, poisonous_cc , width, color='#DA70D6')
-
-#Add some text for labels, title and axes ticks
-ax.set_xlabel("Cap Color",fontsize=20)
-ax.set_ylabel('Quantity',fontsize=20)
-ax.set_title('Edible and Poisonous Mushrooms Based on Cap Color',fontsize=22)
-ax.set_xticks(ind + width / 2) #Positioning on the x axis
-ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
-                  fontsize = 12)
-ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
-autolabel(edible_bars, 10)
-autolabel(poison_bars, 10)
-plt.show()
-print(edible_cc)
-print(poisonous_cc)
+embeddings_index = {}
+with open(EMBEDDING_FILE,encoding='utf8') as f:
+    for line in f:
+        values = line.rstrip().rsplit(' ')
+        word = values[0]
+        coefs = np.asarray(values[1:], dtype='float32')
+        embeddings_index[word] = coefs
 
 
 # In[ ]:
 
 
-'The next bar chart shows the number of mushrooms based on "odor"'
+word_index = tok.word_index
+#prepare embedding matrix
+num_words = min(max_features, len(word_index) + 1)
+embedding_matrix = np.zeros((num_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features:
+        continue
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None:
+        # words not found in embedding index will be all-zeros.
+        embedding_matrix[i] = embedding_vector
 
 
 # In[ ]:
 
 
-#Obtain total number of mushrooms for each 'odor' (Entire DataFrame)
-odors = mushrooms['odor'].value_counts()
-odor_height = odors.values.tolist() #Provides numerical values
-odor_labels = odors.axes[0].tolist() #Converts index labels object to list
+from keras.layers import K, Activation
+from keras.engine import Layer
+from keras.layers import Dense, Input, Embedding, Dropout, Bidirectional, GRU, Flatten, SpatialDropout1D
+gru_len = 128
+Routings = 5
+Num_capsule = 10
+Dim_capsule = 16
+dropout_p = 0.25
+rate_drop_dense = 0.28
 
-#=====PLOT Preparations and Plotting====#
-width = 0.7 
-ind = np.arange(9)  # the x locations for the groups
-colors = ['#FFFF99','#ADFF2F','#00BFFF','#FA8072','#FFEBCD','#800000','#40E0D0','#808080','#2E8B57']
-
-fig, ax = plt.subplots(figsize=(10,7))
-odor_bars = ax.bar(ind, odor_height , width, color=colors)
-
-#Add some text for labels, title and axes ticks
-ax.set_xlabel("Odor",fontsize=20)
-ax.set_ylabel('Quantity',fontsize=20)
-ax.set_title('Mushroom Odor and Quantity',fontsize=22)
-ax.set_xticks(ind) #Positioning on the x axis
-ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
-                  fontsize = 12)
-ax.legend(odor_bars, ['none: no smell','foul: rotten eggs', 'fishy: fresh fish','spicy: pepper',
-                      'almond: nutlike kernel', 'anise: sweet herbal', 'pungent: vinegar',
-                     'creosote: smoky chimney', 'musty: mold mildew'],fontsize=17)
-autolabel(odor_bars)        
-plt.show() #Display bars. 
+def squash(x, axis=-1):
+    # s_squared_norm is really small
+    # s_squared_norm = K.sum(K.square(x), axis, keepdims=True) + K.epsilon()
+    # scale = K.sqrt(s_squared_norm)/ (0.5 + s_squared_norm)
+    # return scale * x
+    s_squared_norm = K.sum(K.square(x), axis, keepdims=True)
+    scale = K.sqrt(s_squared_norm + K.epsilon())
+    return x / scale
 
 
-# In[ ]:
+# A Capsule Implement with Pure Keras
+class Capsule(Layer):
+    def __init__(self, num_capsule, dim_capsule, routings=3, kernel_size=(9, 1), share_weights=True,
+                 activation='default', **kwargs):
+        super(Capsule, self).__init__(**kwargs)
+        self.num_capsule = num_capsule
+        self.dim_capsule = dim_capsule
+        self.routings = routings
+        self.kernel_size = kernel_size
+        self.share_weights = share_weights
+        if activation == 'default':
+            self.activation = squash
+        else:
+            self.activation = Activation(activation)
+
+    def build(self, input_shape):
+        super(Capsule, self).build(input_shape)
+        input_dim_capsule = input_shape[-1]
+        if self.share_weights:
+            self.W = self.add_weight(name='capsule_kernel',
+                                     shape=(1, input_dim_capsule,
+                                            self.num_capsule * self.dim_capsule),
+                                     # shape=self.kernel_size,
+                                     initializer='glorot_uniform',
+                                     trainable=True)
+        else:
+            input_num_capsule = input_shape[-2]
+            self.W = self.add_weight(name='capsule_kernel',
+                                     shape=(input_num_capsule,
+                                            input_dim_capsule,
+                                            self.num_capsule * self.dim_capsule),
+                                     initializer='glorot_uniform',
+                                     trainable=True)
+
+    def call(self, u_vecs):
+        if self.share_weights:
+            u_hat_vecs = K.conv1d(u_vecs, self.W)
+        else:
+            u_hat_vecs = K.local_conv1d(u_vecs, self.W, [1], [1])
+
+        batch_size = K.shape(u_vecs)[0]
+        input_num_capsule = K.shape(u_vecs)[1]
+        u_hat_vecs = K.reshape(u_hat_vecs, (batch_size, input_num_capsule,
+                                            self.num_capsule, self.dim_capsule))
+        u_hat_vecs = K.permute_dimensions(u_hat_vecs, (0, 2, 1, 3))
+        # final u_hat_vecs.shape = [None, num_capsule, input_num_capsule, dim_capsule]
+
+        b = K.zeros_like(u_hat_vecs[:, :, :, 0])  # shape = [None, num_capsule, input_num_capsule]
+        for i in range(self.routings):
+            b = K.permute_dimensions(b, (0, 2, 1))  # shape = [None, input_num_capsule, num_capsule]
+            c = K.softmax(b)
+            c = K.permute_dimensions(c, (0, 2, 1))
+            b = K.permute_dimensions(b, (0, 2, 1))
+            outputs = self.activation(K.batch_dot(c, u_hat_vecs, [2, 2]))
+            if i < self.routings - 1:
+                b = K.batch_dot(outputs, u_hat_vecs, [2, 3])
+
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        return (None, self.num_capsule, self.dim_capsule)
 
 
-'Following bar: # of mushrooms which are edible|poisonous based on odor'
+def get_model():
+    input1 = Input(shape=(maxlen,))
+    embed_layer = Embedding(max_features,
+                            embed_size,
+                            input_length=maxlen,
+                            weights=[embedding_matrix],
+                            trainable=False)(input1)
+    embed_layer = SpatialDropout1D(rate_drop_dense)(embed_layer)
 
-
-# In[ ]:
-
-
-poisonous_od = [] #Poisonous odor list
-edible_od = []    #Edible odor list
-for odor in odor_labels:
-    size = len(mushrooms[mushrooms['odor'] == odor].index)
-    edibles = len(mushrooms[(mushrooms['odor'] == odor) & (mushrooms['class'] == 'e')].index)
-    edible_od.append(edibles)
-    poisonous_od.append(size-edibles)
-                        
-#=====PLOT Preparations and Plotting====#
-width = 0.40
-fig, ax = plt.subplots(figsize=(12,7))
-edible_bars = ax.bar(ind, edible_od , width, color='#ADFF2F')
-poison_bars = ax.bar(ind+width, poisonous_od , width, color='#DA70D6')
-
-#Add some text for labels, title and axes ticks
-ax.set_xlabel("Odor",fontsize=20)
-ax.set_ylabel('Quantity',fontsize=20)
-ax.set_title('Edible and Poisonous Mushrooms Based on Odor',fontsize=22)
-ax.set_xticks(ind + width / 2) #Positioning on the x axis
-ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
-                  fontsize = 12)
-ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
-autolabel(edible_bars, 10)
-autolabel(poison_bars, 10)
-plt.show()
-print(edible_od)
-print(poisonous_od)
-
-
-# In[ ]:
-
-
-'***Th0ugHT[0]: According to my expectations, at least some of the "not nose friendly" mushrooms'
-'could be edible. However, the above contradicts that thought. All smelly and stingy mushrooms' 
-'are poisonous. To my surprise all the almond and anise mushrooms are edible. Finally, we must be'
-'careful for mushrooms with no smell, there seems to be a small chance of getting poisoned.***'
-
-
-# In[ ]:
-
-
-'Pie Chart: Show the type of mushroom population.'
-'Double Pie Chart: Show edibles and poisonous percentages of mushrrom population types.'
-
-
-# In[ ]:
-
-
-#Get the population types and its values for Single Pie chart
-populations = mushrooms['population'].value_counts()
-pop_size = populations.values.tolist() #Provides numerical values
-pop_types = populations.axes[0].tolist() #Converts index labels object to list
-print(pop_size)
-# Data to plot
-pop_labels = 'Several', 'Solitary', 'Scattered', 'Numerous', 'Abundant', 'Clustered'
-colors = ['#F38181','#EAFFD0','#95E1D3','#FCE38A','#BDE4F4','#9EF4E6']
-explode = (0, 0.1, 0, 0, 0, 0)  # explode 1st slice
-fig = plt.figure(figsize=(12,8))
-# Plot
-plt.title('Mushroom Population Type Percentange', fontsize=22)
-patches, texts, autotexts = plt.pie(pop_size, explode=explode, labels=pop_labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=150)
-for text,autotext in zip(texts,autotexts):
-    text.set_fontsize(14)
-    autotext.set_fontsize(14)
-
-plt.axis('equal')
-plt.show()
-
-
-# In[ ]:
-
-
-#DOUBLE PIE CHART
-poisonous_pop = [] #Poisonous population type list
-edible_pop = []    #Edible population type list
-for pop in pop_types: 
-    size = len(mushrooms[mushrooms['population'] == pop].index)
-    edibles = len(mushrooms[(mushrooms['population'] == pop) & (mushrooms['class'] == 'e')].index)
-    edible_pop.append(edibles) #Gets edibles
-    poisonous_pop.append(size-edibles) #Gets poisonous
-combine_ed_poi = []
-for i in range(0,len(edible_pop)): #Combines both edible and poisonous in a single list. 
-    combine_ed_poi.append(edible_pop[i])
-    combine_ed_poi.append(poisonous_pop[i])
-#print(edible_pop) print(poisonous_pop) print(combine_ed_poi)
-
-#Preparations for DOUBLE pie chart.
-fig = plt.subplots(figsize=(13,8))
-plt.title('Edible & Poisonous Mushroom Population Type Percentage', fontsize=22)
-percentages_e_p = ['14.67%','35.06%','13.10%', '7.98%','10.83%','4.53%','4.92%','0%','4.73%','0%',
-                  '3.55%','0.64%'] #Percetanges for edible and poisonous
-#===First pie===
-patches1, texts1 = plt.pie(combine_ed_poi,radius = 2, labels= percentages_e_p,
-                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
-for i in range(0,len(texts1)):
-    if(i%2==0):
-        texts1[i].set_color('#7CB721') #Color % labels with dark green
-    else:
-        texts1[i].set_color('#AE59AB') # " " dark purple
-    texts1[i].set_fontsize(14)         #make labels bigger
-#===Second pie===
-patches2, texts2, autotexts2 = plt.pie(pop_size, colors=colors, radius = 1.5,
-        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
-for aut in autotexts2:
-    aut.set_fontsize(14)  #Inner autotext fontsize
-    aut.set_horizontalalignment('center') #Center
-#==Set 2 Legends to the plot.
-first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
-second_ledgend = plt.legend(patches2, pop_labels, loc="best",fontsize=13)
-plt.gca().add_artist(first_legend) #To display two legends
-#Align both pie charts in the same position
-plt.axis('equal')
-plt.show()
-
-
-# # Mushroom Habitat
-# ### Let's see where you can find those mushrooms and find out if they want to be eaten or not according to their habitat. (Please don't go eating random mushrooms you find >.<)
-
-# In[ ]:
-
-
-#Get the habitat types and its values for a Single Pie chart
-habitats = mushrooms['habitat'].value_counts()
-hab_size = habitats.values.tolist() #Provides numerical values
-hab_types = habitats.axes[0].tolist() #Converts index labels object to list
-print(habitats)
-# Data to plot
-hab_labels = 'Woods', 'Grasses', 'Paths', 'Leaves', 'Urban', 'Meadows', 'Waste'
-colors = ['#F5AD6F','#EAFFD0','#FFFF66','#84D9E2','#C0C0C0','#DE7E7E', '#FFB6C1']
-explode = (0, 0, 0, 0, 0, 0,0.5)  # explode 1st slice
-fig = plt.figure(figsize=(12,8))
-# Plot
-plt.title('Mushroom Habitat Type Percentange', fontsize=22)
-patches, texts, autotexts = plt.pie(hab_size, explode=explode, labels=hab_labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=360)
-for text,autotext in zip(texts,autotexts):
-    text.set_fontsize(14)
-    autotext.set_fontsize(14)
-
-plt.axis('equal')
-plt.show()
+    x = Bidirectional(
+        GRU(gru_len, activation='relu', dropout=dropout_p, recurrent_dropout=dropout_p, return_sequences=True))(
+        embed_layer)
+    capsule = Capsule(num_capsule=Num_capsule, dim_capsule=Dim_capsule, routings=Routings,
+                      share_weights=True)(x)
+    # output_capsule = Lambda(lambda x: K.sqrt(K.sum(K.square(x), 2)))(capsule)
+    capsule = Flatten()(capsule)
+    capsule = Dropout(dropout_p)(capsule)
+    output = Dense(6, activation='sigmoid')(capsule)
+    model = Model(inputs=input1, outputs=output)
+    model.compile(
+        loss='binary_crossentropy',
+        optimizer='adam',
+        metrics=['accuracy'])
+    model.summary()
+    return model
 
 
 # In[ ]:
 
 
-#DOUBLE PIE CHART
-poisonous_hab = [] #Poisonous habitat type list
-edible_hab = []    #Edible habitat type list
-for hab in hab_types: 
-    size = len(mushrooms[mushrooms['habitat'] == hab].index)
-    edibles = len(mushrooms[(mushrooms['habitat'] == hab) & (mushrooms['class'] == 'e')].index)
-    edible_hab.append(edibles) #Gets edibles
-    poisonous_hab.append(size-edibles) #Gets poisonous
-combine_ed_poi = []
-for i in range(0,len(edible_hab)): #Combines both edible and poisonous in a single list. 
-    combine_ed_poi.append(edible_hab[i])
-    combine_ed_poi.append(poisonous_hab[i])
-print(edible_hab) 
-print(poisonous_hab) 
-print(combine_ed_poi)
+model = get_model()
 
-#Preparations for DOUBLE pie chart.
-fig = plt.subplots(figsize=(13,8))
-plt.title('Edible & Poisonous Mushroom Habitat Type Percentage', fontsize=22)
-percentages_e_p = ['23.14%','15.61%','17.33%', '9.11%','1.67%','12.41%','2.95%','7.29%','1.18%','3.35%',
-                  '3.15%','0.44%','2.36%','0%'] #Percetanges for edible and poisonous
-#===First pie===
-patches1, texts1= plt.pie(combine_ed_poi,radius = 2, labels=percentages_e_p,
-                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
-for i in range(0,len(texts1)):
-    if(i%2==0):
-        texts1[i].set_color('#7CB721') #Color % labels with dark green
-    else:
-        texts1[i].set_color('#AE59AB') # " " dark purple
-    texts1[i].set_fontsize(14)         #make labels bigger
-#===Second pie===
-patches2, texts2, autotexts2 = plt.pie(hab_size, colors=colors, radius = 1.5,
-        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
-for aut in autotexts2:
-    aut.set_fontsize(14)  #Inner autotext fontsize
-    aut.set_horizontalalignment('center') #Center
-#==Set 2 Legends to the plot.
-first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
-second_ledgend = plt.legend(patches2, hab_labels, loc="best",fontsize=13)
-plt.gca().add_artist(first_legend) #To display two legends
-#Align both pie charts in the same position
-plt.axis('equal')
-plt.show()
-
-
-# ### How strange...mushrooms with habitat 'waste' are edible. I wouldn't do it. Urban, leaves or path mushrooms are mostly poisionous. And if you ever go out to the woods or find a mushroom in the grass there is always the probability that it might not be edible.
-
-# In[ ]:
-
-
-#Let's pick a random sample of the dataset of 500 mushrooms
-mushrooms_sample = mushrooms.loc[np.random.choice(mushrooms.index, 1000, False)]
+batch_size = 256
+epochs = 3
+X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
+RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
 
 
 # In[ ]:
 
 
-#Get all unique cap-colors
-mushrooms_sample['cap-color'].unique()
+hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
+                 callbacks=[RocAuc], verbose=1)
 
 
 # In[ ]:
 
 
-#mushrooms_sample.groupby('cap-color', 0).nunique()
+hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
+                 callbacks=[RocAuc], verbose=1)
 
-#Get 'cap-color' Series
-capColors = mushrooms_sample['cap-color']
 
-#Get the total number of mushrooms for each unique cap color. 
-capColors.value_counts()
+# In[ ]:
+
+
+hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
+                 callbacks=[RocAuc], verbose=1)
+
+
+# In[ ]:
+
+
+y_pred = model.predict(x_test, batch_size=1024, verbose=1)
+
+
+# In[ ]:
+
+
+submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
+submission.to_csv('submission.csv', index=False)
+model.save_weights('best.hdf5')
 

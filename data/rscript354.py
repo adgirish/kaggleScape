@@ -1,258 +1,246 @@
-# Based on Bojan -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
-# and Nishant -> https://www.kaggle.com/nishkgp/more-improved-ridge-2-lgbm
-# The latest version incorporates changes suggested by Bruno G. do Amaral: https://www.kaggle.com/tunguz/wordbatch-ftrl-fm-lgb-lbl-0-42506/comments#272783
-
-import gc
-import time
+from __future__ import print_function
 import numpy as np
-import pandas as pd
-from scipy.sparse import csr_matrix, hstack
-
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
-
-import sys
-
-#Add https://www.kaggle.com/anttip/wordbatch to your kernel Data Sources, 
-#until Kaggle admins fix the wordbatch pip package installation
-sys.path.insert(0, '../input/wordbatch/wordbatch/')
-import wordbatch
-
-from wordbatch.extractors import WordBag, WordHash
-from wordbatch.models import FTRL, FM_FTRL
-
-from nltk.corpus import stopwords
-import re
-
-NUM_BRANDS = 4500
-NUM_CATEGORIES = 1250
-
-develop = False
-# develop= True
-
-def rmsle(y, y0):
-    assert len(y) == len(y0)
-    return np.sqrt(np.mean(np.power(np.log1p(y) - np.log1p(y0), 2)))
+import datetime
+import csv
+from lasagne.layers import InputLayer, DropoutLayer, DenseLayer
+from lasagne.updates import nesterov_momentum
+from lasagne.objectives import binary_crossentropy
+from nolearn.lasagne import NeuralNet
+import theano
+from theano import tensor as T
+from theano.tensor.nnet import sigmoid
+from sklearn import metrics
+from sklearn.utils import shuffle
 
 
-def split_cat(text):
-    try:
-        return text.split("/")
-    except:
-        return ("No Label", "No Label", "No Label")
+species_map = {'CULEX RESTUANS' : "100000",
+              'CULEX TERRITANS' : "010000", 
+              'CULEX PIPIENS'   : "001000", 
+              'CULEX PIPIENS/RESTUANS' : "101000", 
+              'CULEX ERRATICUS' : "000100", 
+              'CULEX SALINARIUS': "000010", 
+              'CULEX TARSALIS' :  "000001",
+              'UNSPECIFIED CULEX': "001000"} # Treating unspecified as PIPIENS (http://www.ajtmh.org/content/80/2/268.full)
+
+def date(text):
+    return datetime.datetime.strptime(text, "%Y-%m-%d").date()
+    
+def precip(text):
+    TRACE = 1e-3
+    text = text.strip()
+    if text == "M":
+        return None
+    if text == "T":
+        return TRACE
+    return float(text)
+
+def impute_missing_weather_station_values(weather):
+    # Stupid simple
+    for k, v in weather.items():
+        if v[0] is None:
+            v[0] = v[1]
+        elif v[1] is None:
+            v[1] = v[0]
+        for k1 in v[0]:
+            if v[0][k1] is None:
+                v[0][k1] = v[1][k1]
+        for k1 in v[1]:
+            if v[1][k1] is None:
+                v[1][k1] = v[0][k1]
+    
+def load_weather():
+    weather = {}
+    for line in csv.DictReader(open("../input/weather.csv")):
+        for name, converter in {"Date" : date,
+                                "Tmax" : float,"Tmin" : float,"Tavg" : float,
+                                "DewPoint" : float, "WetBulb" : float,
+                                "PrecipTotal" : precip,
+                                "Depart" : float, 
+                                "ResultSpeed" : float,"ResultDir" : float,"AvgSpeed" : float,
+                                "StnPressure" : float, "SeaLevel" : float}.items():
+            x = line[name].strip()
+            line[name] = converter(x) if (x != "M") else None
+        station = int(line["Station"]) - 1
+        assert station in [0,1]
+        dt = line["Date"]
+        if dt not in weather:
+            weather[dt] = [None, None]
+        assert weather[dt][station] is None, "duplicate weather reading {0}:{1}".format(dt, station)
+        weather[dt][station] = line
+    impute_missing_weather_station_values(weather)        
+    return weather
+    
+    
+def load_training():
+    training = []
+    for line in csv.DictReader(open("../input/train.csv")):
+        for name, converter in {"Date" : date, 
+                                "Latitude" : float, "Longitude" : float,
+                                "NumMosquitos" : int, "WnvPresent" : int}.items():
+            line[name] = converter(line[name])
+        training.append(line)
+    return training
+    
+def load_testing():
+    training = []
+    for line in csv.DictReader(open("../input/test.csv")):
+        for name, converter in {"Date" : date, 
+                                "Latitude" : float, "Longitude" : float}.items():
+            line[name] = converter(line[name])
+        training.append(line)
+    return training
+    
+    
+def closest_station(lat, long):
+    # Chicago is small enough that we can treat coordinates as rectangular.
+    stations = np.array([[41.995, -87.933],
+                         [41.786, -87.752]])
+    loc = np.array([lat, long])
+    deltas = stations - loc[None, :]
+    dist2 = (deltas**2).sum(1)
+    return np.argmin(dist2)
+       
+def normalize(X, mean=None, std=None):
+    count = X.shape[1]
+    if mean is None:
+        mean = np.nanmean(X, axis=0)
+    for i in range(count):
+        X[np.isnan(X[:,i]), i] = mean[i]
+    if std is None:
+        std = np.std(X, axis=0)
+    for i in range(count):
+        X[:,i] = (X[:,i] - mean[i]) / std[i]
+    return mean, std
+    
+def scaled_count(record):
+    SCALE = 10.0
+    if "NumMosquitos" not in record:
+        # This is test data
+        return 1
+    return int(np.ceil(record["NumMosquitos"] / SCALE))
+    
+    
+def assemble_X(base, weather):
+    X = []
+    for b in base:
+        date = b["Date"]
+        lat, long = b["Latitude"], b["Longitude"]
+        case = [date.year, date.month, date.day, lat, long]
+        # Look at a selection of past weather values
+        for days_ago in [1,3,7,14]:
+            day = date - datetime.timedelta(days=days_ago)
+            for obs in ["Tmax","Tmin","Tavg","DewPoint","WetBulb","PrecipTotal","Depart"]:
+                station = closest_station(lat, long)
+                case.append(weather[day][station][obs])
+        # Specify which mosquitos are present
+        species_vector = [float(x) for x in species_map[b["Species"]]]
+        case.extend(species_vector)
+        # Weight each observation by the number of mosquitos seen. Test data
+        # Doesn't have this column, so in that case use 1. This accidentally
+        # Takes into account multiple entries that result from >50 mosquitos
+        # on one day. 
+        for repeat in range(scaled_count(b)):
+            X.append(case)    
+    X = np.asarray(X, dtype=np.float32)
+    return X
+    
+def assemble_y(base):
+    y = []
+    for b in base:
+        present = b["WnvPresent"]
+        for repeat in range(scaled_count(b)):
+            y.append(present)    
+    return np.asarray(y, dtype=np.int32).reshape(-1,1)
 
 
-def handle_missing_inplace(dataset):
-    dataset['general_cat'].fillna(value='missing', inplace=True)
-    dataset['subcat_1'].fillna(value='missing', inplace=True)
-    dataset['subcat_2'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
+class AdjustVariable(object):
+    def __init__(self, variable, target, half_life=20):
+        self.variable = variable
+        self.target = target
+        self.half_life = half_life
+    def __call__(self, nn, train_history):
+        delta = self.variable.get_value() - self.target
+        delta /= 2**(1.0/self.half_life)
+        self.variable.set_value(np.float32(self.target + delta))
+
+def train():
+    weather = load_weather()
+    training = load_training()
+    
+    X = assemble_X(training, weather)
+    mean, std = normalize(X)
+    y = assemble_y(training)
+        
+    input_size = len(X[0])
+    
+    learning_rate = theano.shared(np.float32(0.1))
+    
+    net = NeuralNet(
+    layers=[  
+        ('input', InputLayer),
+         ('hidden1', DenseLayer),
+        ('dropout1', DropoutLayer),
+        ('hidden2', DenseLayer),
+        ('dropout2', DropoutLayer),
+        ('output', DenseLayer),
+        ],
+    # layer parameters:
+    input_shape=(None, input_size), 
+    hidden1_num_units=256, 
+    dropout1_p=0.4,
+    hidden2_num_units=256, 
+    dropout2_p=0.4,
+    output_nonlinearity=sigmoid, 
+    output_num_units=1, 
+
+    # optimization method:
+    update=nesterov_momentum,
+    update_learning_rate=learning_rate,
+    update_momentum=0.9,
+    
+    # Decay the learning rate
+    on_epoch_finished=[
+            AdjustVariable(learning_rate, target=0, half_life=4),
+            ],
+
+    # This is silly, but we don't want a stratified K-Fold here
+    # To compensate we need to pass in the y_tensor_type and the loss.
+    regression=True,
+    y_tensor_type = T.imatrix,
+    objective_loss_function = binary_crossentropy,
+     
+    max_epochs=32, 
+    eval_size=0.1,
+    verbose=1,
+    )
+
+    X, y = shuffle(X, y, random_state=123)
+    net.fit(X, y)
+    
+    _, X_valid, _, y_valid = net.train_test_split(X, y, net.eval_size)
+    probas = net.predict_proba(X_valid)[:,0]
+    print("ROC score", metrics.roc_auc_score(y_valid, probas))
+
+    return net, mean, std     
+    
+
+def submit(net, mean, std):
+    weather = load_weather()
+    testing = load_testing()
+    X = assemble_X(testing, weather) 
+    normalize(X, mean, std)
+    predictions = net.predict_proba(X)[:,0]    
+    #
+    out = csv.writer(open("west_nile.csv", "w"))
+    out.writerow(["Id","WnvPresent"])
+    for row, p in zip(testing, predictions):
+        out.writerow([row["Id"], p])
 
 
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
-    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
-    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
+if __name__ == "__main__":
+    net, mean, std = train()
+    submit(net, mean, std)
 
 
-def to_categorical(dataset):
-    dataset['general_cat'] = dataset['general_cat'].astype('category')
-    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
-    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
 
-
-# Define helpers for text normalization
-stopwords = {x: 1 for x in stopwords.words('english')}
-non_alphanums = re.compile(u'[^A-Za-z0-9]+')
-
-
-def normalize_text(text):
-    return u" ".join(
-        [x for x in [y for y in non_alphanums.sub(' ', text).lower().strip().split(" ")] \
-         if len(x) > 1 and x not in stopwords])
-
-
-def main():
-    start_time = time.time()
-    from time import gmtime, strftime
-    print(strftime("%Y-%m-%d %H:%M:%S", gmtime()))
-
-    # if 1 == 1:
-    train = pd.read_table('../input/mercari-price-suggestion-challenge/train.tsv', engine='c')
-    test = pd.read_table('../input/mercari-price-suggestion-challenge/test.tsv', engine='c')
-
-    #train = pd.read_table('../input/train.tsv', engine='c')
-    #test = pd.read_table('../input/test.tsv', engine='c')
-
-    print('[{}] Finished to load data'.format(time.time() - start_time))
-    print('Train shape: ', train.shape)
-    print('Test shape: ', test.shape)
-    nrow_test = train.shape[0]  # -dftt.shape[0]
-    dftt = train[(train.price < 1.0)]
-    train = train.drop(train[(train.price < 1.0)].index)
-    del dftt['price']
-    nrow_train = train.shape[0]
-    # print(nrow_train, nrow_test)
-    y = np.log1p(train["price"])
-    merge: pd.DataFrame = pd.concat([train, dftt, test])
-    submission: pd.DataFrame = test[['test_id']]
-
-    del train
-    del test
-    gc.collect()
-
-    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
-        zip(*merge['category_name'].apply(lambda x: split_cat(x)))
-    merge.drop('category_name', axis=1, inplace=True)
-    print('[{}] Split categories completed.'.format(time.time() - start_time))
-
-    handle_missing_inplace(merge)
-    print('[{}] Handle missing completed.'.format(time.time() - start_time))
-
-    cutting(merge)
-    print('[{}] Cut completed.'.format(time.time() - start_time))
-
-    to_categorical(merge)
-    print('[{}] Convert categorical completed'.format(time.time() - start_time))
-
-    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.5, 1.0],
-                                                                  "hash_size": 2 ** 29, "norm": None, "tf": 'binary',
-                                                                  "idf": None,
-                                                                  }), procs=8)
-    wb.dictionary_freeze= True
-    X_name = wb.fit_transform(merge['name'])
-    del(wb)
-    X_name = X_name[:, np.where(X_name.getnnz(axis=0) > 1)[0]]
-    print('[{}] Vectorize `name` completed.'.format(time.time() - start_time))
-
-    wb = CountVectorizer()
-    X_category1 = wb.fit_transform(merge['general_cat'])
-    X_category2 = wb.fit_transform(merge['subcat_1'])
-    X_category3 = wb.fit_transform(merge['subcat_2'])
-    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
-
-    # wb= wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 3, "hash_ngrams_weights": [1.0, 1.0, 0.5],
-    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.0, 1.0],
-                                                                  "hash_size": 2 ** 28, "norm": "l2", "tf": 1.0,
-                                                                  "idf": None})
-                             , procs=8)
-    wb.dictionary_freeze= True
-    X_description = wb.fit_transform(merge['item_description'])
-    del(wb)
-    X_description = X_description[:, np.where(X_description.getnnz(axis=0) > 1)[0]]
-    print('[{}] Vectorize `item_description` completed.'.format(time.time() - start_time))
-
-    lb = LabelBinarizer(sparse_output=True)
-    X_brand = lb.fit_transform(merge['brand_name'])
-    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
-
-    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
-    print(X_dummies.shape, X_description.shape, X_brand.shape, X_category1.shape, X_category2.shape, X_category3.shape,
-          X_name.shape)
-    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
-
-    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
-
-    #    pd.to_pickle((sparse_merge, y), "xy.pkl")
-    # else:
-    #    nrow_train, nrow_test= 1481661, 1482535
-    #    sparse_merge, y = pd.read_pickle("xy.pkl")
-
-    # Remove features with document frequency <=1
-    print(sparse_merge.shape)
-    sparse_merge = sparse_merge[:, np.where(sparse_merge.getnnz(axis=0) > 100)[0]]
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_test:]
-    print(sparse_merge.shape)
-
-    gc.collect()
-    train_X, train_y = X, y
-    if develop:
-        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
-
-    model = FTRL(alpha=0.01, beta=0.1, L1=0.00001, L2=1.0, D=sparse_merge.shape[1], iters=50, inv_link="identity", threads=1)
-
-    model.fit(train_X, train_y)
-    print('[{}] Train FTRL completed'.format(time.time() - start_time))
-    if develop:
-        preds = model.predict(X=valid_X)
-        print("FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
-
-    predsF = model.predict(X_test)
-    print('[{}] Predict FTRL completed'.format(time.time() - start_time))
-
-    model = FM_FTRL(alpha=0.01, beta=0.01, L1=0.00001, L2=0.1, D=sparse_merge.shape[1], alpha_fm=0.01, L2_fm=0.0, init_fm=0.01,
-                    D_fm=200, e_noise=0.0001, iters=17, inv_link="identity", threads=4)
-
-    model.fit(train_X, train_y)
-    print('[{}] Train ridge v2 completed'.format(time.time() - start_time))
-    if develop:
-        preds = model.predict(X=valid_X)
-        print("FM_FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
-
-    predsFM = model.predict(X_test)
-    print('[{}] Predict FM_FTRL completed'.format(time.time() - start_time))
-
-    params = {
-        'learning_rate': 0.6,
-        'application': 'regression',
-        'max_depth': 4,
-        'num_leaves': 31,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 1,
-        'bagging_fraction': 0.6,
-        'bagging_freq': 5,
-        'feature_fraction': 0.65,
-        'nthread': 4,
-        'min_data_in_leaf': 100,
-        'max_bin': 31
-    }
-
-    # Remove features with document frequency <=100
-    print(sparse_merge.shape)
-    sparse_merge = sparse_merge[:, np.where(sparse_merge.getnnz(axis=0) > 100)[0]]
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_test:]
-    print(sparse_merge.shape)
-
-    train_X, train_y = X, y
-    if develop:
-        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
-
-    d_train = lgb.Dataset(train_X, label=train_y)
-    watchlist = [d_train]
-    if develop:
-        d_valid = lgb.Dataset(valid_X, label=valid_y)
-        watchlist = [d_train, d_valid]
-
-    model = lgb.train(params, train_set=d_train, num_boost_round=7100, valid_sets=watchlist, \
-                      early_stopping_rounds=1000, verbose_eval=1000)
-
-    if develop:
-        preds = model.predict(valid_X)
-        print("LGB dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
-
-    predsL = model.predict(X_test)
-
-    print('[{}] Predict LGB completed.'.format(time.time() - start_time))
-
-    preds = (predsF * 0.18 + predsL * 0.27 + predsFM * 0.55)
-
-    submission['price'] = np.expm1(preds)
-    submission.to_csv("submission_wordbatch_ftrl_fm_lgb.csv", index=False)
-
-
-if __name__ == '__main__':
-    main()
+    

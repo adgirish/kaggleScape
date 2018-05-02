@@ -1,265 +1,267 @@
 
 # coding: utf-8
 
+# # Stratified KFold+XGBoost+EDA Tutorial
+# ### **Hyungsuk Kang, Sungkyunkwan University**
+# #### 2017/10/8
+# # Outline
+# * **1. Introduction**
+# * **2. Data preparation**
+#     * 2.1 Load data
+#     * 2.2 Check for missing values
+#     * 2.3 Split features and targets from the data
+#     * 2.4 Exploratory Visualization
+# * **3. Training/Predicting Pipeline**
+#     * 3.1  Define Gini metric
+#     * 3.2 Drop Unnecessary Features
+#     * 3.3 Stratified KFold
+#     * 3.4 XGBoost
+# * **4. Prediction and submission**
+#     * 4.1 Predict and Submit results
+# 
+
+# # **1. Introduction**
+# 
+# This is a full walkthrough for building the machine learning model for Porto Seguro’s Safe Driver Prediction dataset provided by Porto Seguro. Stratified KFold is used due to inbalance of the output variable. XGBoost is used because it is like the winning ticket for classification problem with formatted data. You can check its success on this link. ([XGBoost winning solutions](https://github.com/dmlc/xgboost/tree/master/demo#machine-learning-challenge-winning-solutions)) First, I will prepare the data (driver's information and whether the driver initiated auto insurance or not) then I will focus on prediction.
+# 
+# For more information on XGBoost, click this link.
+# 
+# # [XGBoost](https://xgboost.readthedocs.io/en/latest/)
+# 
+
 # In[ ]:
 
 
-import os, sys, email
-import numpy as np 
+import numpy as np
 import pandas as pd
-# Plotting
+import seaborn as sns
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn as sns; sns.set_style('whitegrid')
-#import plotly
-#plotly.offline.init_notebook_mode()
-#import plotly.graph_objs as go
-import wordcloud
+from sklearn.model_selection import StratifiedKFold
+import xgboost as xgb
 
-# Network analysis
-import networkx as nx
-# NLP
-from nltk.tokenize.regexp import RegexpTokenizer
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# # 1. Loading and cleaning data
-
-# In[ ]:
-
-
-# Read the data into a DataFrame
-emails_df = pd.read_csv('../input/emails.csv')
-print(emails_df.shape)
-emails_df.head()
-
-
-# In[ ]:
-
-
-# A single message looks like this
-print(emails_df['message'][0])
-
-
-# In[ ]:
-
-
-## Helper functions
-def get_text_from_email(msg):
-    '''To get the content from email objects'''
-    parts = []
-    for part in msg.walk():
-        if part.get_content_type() == 'text/plain':
-            parts.append( part.get_payload() )
-    return ''.join(parts)
-
-def split_email_addresses(line):
-    '''To separate multiple email addresses'''
-    if line:
-        addrs = line.split(',')
-        addrs = frozenset(map(lambda x: x.strip(), addrs))
-    else:
-        addrs = None
-    return addrs
-
-
-# In[ ]:
-
-
-# Parse the emails into a list email objects
-messages = list(map(email.message_from_string, emails_df['message']))
-emails_df.drop('message', axis=1, inplace=True)
-# Get fields from parsed email objects
-keys = messages[0].keys()
-for key in keys:
-    emails_df[key] = [doc[key] for doc in messages]
-# Parse content from emails
-emails_df['content'] = list(map(get_text_from_email, messages))
-# Split multiple email addresses
-emails_df['From'] = emails_df['From'].map(split_email_addresses)
-emails_df['To'] = emails_df['To'].map(split_email_addresses)
-
-# Extract the root of 'file' as 'user'
-emails_df['user'] = emails_df['file'].map(lambda x:x.split('/')[0])
-del messages
-
-emails_df.head()
-
-
-# In[ ]:
-
-
-print('shape of the dataframe:', emails_df.shape)
-# Find number of unique values in each columns
-for col in emails_df.columns:
-    print(col, emails_df[col].nunique())
-
-
-# In[ ]:
-
-
-# Set index and drop columns with two few values
-emails_df = emails_df.set_index('Message-ID')    .drop(['file', 'Mime-Version', 'Content-Type', 'Content-Transfer-Encoding'], axis=1)
-# Parse datetime
-emails_df['Date'] = pd.to_datetime(emails_df['Date'], infer_datetime_format=True)
-emails_df.dtypes
-
-
-# # 2. Exploratory analyses
-# ## When do people send emails?
-
-# In[ ]:
-
-
-ax = emails_df.groupby(emails_df['Date'].dt.year)['content'].count().plot()
-ax.set_xlabel('Year', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
-
-
-# In[ ]:
-
-
-ax = emails_df.groupby(emails_df['Date'].dt.dayofweek)['content'].count().plot()
-ax.set_xlabel('Day of week', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
-
-
-# In[ ]:
-
-
-ax = emails_df.groupby(emails_df['Date'].dt.hour)['content'].count().plot()
-ax.set_xlabel('Hour', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
-
-
-# ## Who sends most emails?
-
-# In[ ]:
-
-
-# Count words in Subjects and content
-tokenizer = RegexpTokenizer(r'(?u)\b\w\w+\b')
-emails_df['subject_wc'] = emails_df['Subject'].map(lambda x: len(tokenizer.tokenize(x)))
-emails_df['content_wc'] = emails_df['content'].map(lambda x: len(tokenizer.tokenize(x)))
-
-
-# In[ ]:
-
-
-grouped_by_people = emails_df.groupby('user').agg({
-        'content': 'count', 
-        'subject_wc': 'mean',
-        'content_wc': 'mean',
-    })
-grouped_by_people.rename(columns={'content': 'N emails', 
-                                  'subject_wc': 'Subject word count', 
-                                  'content_wc': 'Content word count'}, inplace=True)
-grouped_by_people.sort('N emails', ascending=False).head()
-
-
-# In[ ]:
-
-
-sns.pairplot(grouped_by_people.reset_index(), hue='user')
-
-
-# ## Social network analyses of email senders and recipients
-# ### Let's see who sends the most emails to whom
-# First we'll only look at emails sent to single email address, which may be more important personal communications
-
-# In[ ]:
-
-
-sub_df = emails_df[['From', 'To', 'Date']].dropna()
-print(sub_df.shape)
-# drop emails sending to multiple addresses
-sub_df = sub_df.loc[sub_df['To'].map(len) == 1]
-print(sub_df.shape)
-
-
-# In[ ]:
-
-
-sub_df = sub_df.groupby(['From', 'To']).count().reset_index()
-# Unpack frozensets
-sub_df['From'] = sub_df['From'].map(lambda x: next(iter(x)))
-sub_df['To'] = sub_df['To'].map(lambda x: next(iter(x)))
-# rename column
-sub_df.rename(columns={'Date': 'count'}, inplace=True)
-sub_df.sort('count', ascending=False).head(10)
-
-
-# Apparently some people send a lot of emails to themselves. It maybe very interesting to look at the differences between emails sent to selves and to others.
-
-# In[ ]:
-
-
-# Make a network of email sender and receipients
-G = nx.from_pandas_dataframe(sub_df, 'From', 'To', edge_attr='count', create_using=nx.DiGraph())
-print('Number of nodes: %d, Number of edges: %d' % (G.number_of_nodes(), G.number_of_edges()))
-
-
-# In[ ]:
-
-
-fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12, 8))
-ax1.hist(list(G.in_degree(weight='count').values()), log=True, bins=20)
-ax1.set_xlabel('In-degrees', fontsize=18)
-
-ax2.hist(list(G.out_degree(weight='count').values()), log=True, bins=20)
-ax2.set_xlabel('Out-degrees', fontsize=18)
-
-
-# Looks like scale-free degree distribution
+# # **2. Data Preparation**
 # 
-# ---
-# ### Examine connected components in the network
+# ## **2.1 Load Data**
+
+# In[ ]:
+
+
+train=pd.read_csv('../input/train.csv', na_values=-1)
+test=pd.read_csv('../input/test.csv', na_values=-1)
+
+
+# ## 2.2 Check for missing values(NaN)
+
+# In[ ]:
+
+
+train.isnull().values.any()
+
+
+# ### Fill it with median value of the column
 # 
+# this does not harm the distribution of the model
+
+# ## 2.3 Split features and targets from the data
 
 # In[ ]:
 
 
-n_nodes_in_cc = []
-for nodes in nx.connected_components(G.to_undirected()):
-    n_nodes_in_cc.append(len(nodes))
-
-plt.hist(n_nodes_in_cc, bins=20, log=True)
-plt.xlabel('# Nodes in connected components', fontsize=18)
-plt.ylim([.1,1e4])
+features = train.drop(['id','target'], axis=1).values
+targets = train.target.values
 
 
-# ## What do the emails say?
+# ## 2.3 Exploratory Visualization
 # 
-# ### In the subjects:
+# ### Distribution of targets
 
 # In[ ]:
 
 
-from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
+ax = sns.countplot(x = targets ,palette="Set2")
+sns.set(font_scale=1.5)
+ax.set_xlabel(' ')
+ax.set_ylabel(' ')
+fig = plt.gcf()
+fig.set_size_inches(10,5)
+ax.set_ylim(top=700000)
+for p in ax.patches:
+    ax.annotate('{:.2f}%'.format(100*p.get_height()/len(targets)), (p.get_x()+ 0.3, p.get_height()+10000))
 
-subjects = ' '.join(emails_df['Subject'])
-fig, ax = plt.subplots(figsize=(16, 12))
-wc = wordcloud.WordCloud(width=800, 
-                         height=600, 
-                         max_words=200,
-                         stopwords=ENGLISH_STOP_WORDS).generate(subjects)
-ax.imshow(wc)
-ax.axis("off")
+plt.title('Distribution of 595212 Targets')
+plt.xlabel('Initiation of Auto Insurance Claim Next Year')
+plt.ylabel('Frequency [%]')
+plt.show()
 
 
-# ### In the contents:
+# ### The plot shows that:
+# - the target is imbalanced
+# - high bias is expected to 0
+# - class weight has to be balanced on training
+
+# ### Correlation matrix
 
 # In[ ]:
 
 
-contents = ' '.join(emails_df.sample(1000)['content'])
-fig, ax = plt.subplots(figsize=(16, 12))
-wc = wordcloud.WordCloud(width=800, 
-                         height=600, 
-                         max_words=200,
-                         stopwords=ENGLISH_STOP_WORDS).generate(contents)
-ax.imshow(wc)
-ax.axis("off")
+sns.set(style="white")
+
+
+# Compute the correlation matrix
+corr = train.corr()
+
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(11, 9))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, cmap=cmap, vmax=.3, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5})
+
+plt.show()
+
+
+# ### It can be seen that:
+#  - ps\_calc\_\*  features are not related to target at all.
+#  - Removing them would prevent the curse of dimensionality.
+#     
+#     
+
+# # 3. Training/Predicting Pipeline
+
+# ## 3.1 Define Gini Metric
+
+# In[ ]:
+
+
+# Define the gini metric - from https://www.kaggle.com/c/ClaimPredictionChallenge/discussion/703#5897
+def gini(actual, pred, cmpcol = 0, sortcol = 1):
+    assert( len(actual) == len(pred) )
+    all = np.asarray(np.c_[ actual, pred, np.arange(len(actual)) ], dtype=np.float)
+    all = all[ np.lexsort((all[:,2], -1*all[:,1])) ]
+    totalLosses = all[:,0].sum()
+    giniSum = all[:,0].cumsum().sum() / totalLosses
+    
+    giniSum -= (len(actual) + 1) / 2.
+    return giniSum / len(actual)
+ 
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
+
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = gini_normalized(labels, preds)
+    return 'gini', gini_score
+
+
+# ## 3.2 Drop Unnecessary Columns
+
+# In[ ]:
+
+
+unwanted = train.columns[train.columns.str.startswith('ps_calc_')]
+
+
+# In[ ]:
+
+
+train = train.drop(unwanted, axis=1)  
+test = test.drop(unwanted, axis=1)  
+
+
+# ## 3.3 Stratified KFold
+# 
+# Stratified KFold is used to keep the distribution of each label consistent for each training batch.
+
+# In[ ]:
+
+
+kfold = 5
+skf = StratifiedKFold(n_splits=kfold, random_state=42)
+
+
+# ## 3.4. XGBoost
+
+# ### Set parameters
+
+# In[ ]:
+
+
+# More parameters has to be tuned. Good luck :)
+params = {
+    'min_child_weight': 10.0,
+    'objective': 'binary:logistic',
+    'max_depth': 7,
+    'max_delta_step': 1.8,
+    'colsample_bytree': 0.4,
+    'subsample': 0.8,
+    'eta': 0.025,
+    'gamma': 0.65,
+    'num_boost_round' : 700
+    }
+
+
+# # 4.  Prediction and submission
+
+# ## 4.1. Predict and Submit results
+
+# ### Define X and y
+
+# In[ ]:
+
+
+X = train.drop(['id', 'target'], axis=1).values
+y = train.target.values
+test_id = test.id.values
+test = test.drop('id', axis=1)
+
+
+# ### Create a submission file
+# 
+# This is a pipeline originated from [StratifiedShuffleSplit + XGBoost example (0.28)](https://www.kaggle.com/kueipo/stratifiedshufflesplit-xgboost-example-0-28) 
+# 
+# Original [Simple XGBoost BTB (0.27+)](https://www.kaggle.com/anokas/simple-xgboost-btb-0-27?scriptVersionId=1551232)
+
+# In[ ]:
+
+
+sub = pd.DataFrame()
+sub['id'] = test_id
+sub['target'] = np.zeros_like(test_id)
+
+
+# In[ ]:
+
+
+for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+    print('[Fold %d/%d]' % (i + 1, kfold))
+    X_train, X_valid = X[train_index], X[test_index]
+    y_train, y_valid = y[train_index], y[test_index]
+    # Convert our data into XGBoost format
+    d_train = xgb.DMatrix(X_train, y_train)
+    d_valid = xgb.DMatrix(X_valid, y_valid)
+    d_test = xgb.DMatrix(test.values)
+    watchlist = [(d_train, 'train'), (d_valid, 'valid')]
+
+    # Train the model! We pass in a max of 1,600 rounds (with early stopping after 70)
+    # and the custom metric (maximize=True tells xgb that higher metric is better)
+    mdl = xgb.train(params, d_train, 1600, watchlist, early_stopping_rounds=70, feval=gini_xgb, maximize=True, verbose_eval=100)
+
+    print('[Fold %d/%d Prediciton:]' % (i + 1, kfold))
+    # Predict on our test data
+    p_test = mdl.predict(d_test, ntree_limit=mdl.best_ntree_limit)
+    sub['target'] += p_test/kfold
+
+
+# ### Put submission to csv file
+
+# In[ ]:
+
+
+sub.to_csv('StratifiedKFold.csv', index=False)
 

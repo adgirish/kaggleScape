@@ -1,116 +1,131 @@
 
 # coding: utf-8
 
-# # Validation split via VGG-based clustering
+# # INTRODUCTION
+# 
+# This notebook will be a very simple and quick comparison between two widely used dimensionality reduction techniques, that of PCA ( Principal Component Analysis ) and TSNE ( T-Distributed Stochastic Neighbouring Entities).
 
-# In the NCFM competition it is challenging to set up a good validation strategy, since the training set contains many highly similar images. We use a clustering based on the level-4 VGG features in order separate similar images from non-similar ones.
-
-# First, we import standard libraries and fix constants.
-
-# In[ ]:
+# In[1]:
 
 
-import h5py
-import os
-
-from keras.applications import VGG16
-from keras.preprocessing import image
-from keras.applications.vgg16 import preprocess_input
-from keras.models import Model
-
+# Import our relevant libraries
 import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 
+
+# Load the data as a dataframe
+
+# In[2]:
+
+
+data = pd.read_csv('../input/data.csv')
+data.head()
+
+
+# From a quick look at the data, we can see a few things.  Our target column, **diagnosis** is in a non-numeric format, therefore if we need to carry out any visualisations, we will probably need to convert the strings to numeric values. Second point, there exists Null values in the dataframe and we need to get rid of that. Furthermore, the id column is probably irrelevant in our visualisation endeavours so we can get rid of that as well.
+
+# In[3]:
+
+
+# Drop the id column
+data = data.drop('id', axis=1)
+# Convert the diagnosis column to numeric format
+data['diagnosis'] = data['diagnosis'].factorize()[0]
+# Fill all Null values with zero
+data = data.fillna(value=0)
+# Store the diagnosis column in a target object and then drop it
+target = data['diagnosis']
+data = data.drop('diagnosis', axis=1)
+
+
+# # VISUALISING PCA AND TSNE PLOTS
+# 
+# Let's get to the meat of this notebook which is to produce high-level PCA and TSNE visuals 
+
+# In[4]:
+
+
+from sklearn.decomposition import PCA # Principal Component Analysis module
+from sklearn.manifold import TSNE # TSNE module
+
+
+# In[5]:
+
+
+# Turn dataframe into arrays
+X = data.values
+
+# Invoke the PCA method. Since this is a binary classification problem
+# let's call n_components = 2
+pca = PCA(n_components=2)
+pca_2d = pca.fit_transform(X)
+
+# Invoke the TSNE method
+tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=2000)
+tsne_results = tsne.fit_transform(X)
+
+
+# In[10]:
+
+
+# Plot the TSNE and PCA visuals side-by-side
+plt.figure(figsize = (16,11))
+plt.subplot(121)
+plt.scatter(pca_2d[:,0],pca_2d[:,1], c = target, 
+            cmap = "coolwarm", edgecolor = "None", alpha=0.35)
+plt.colorbar()
+plt.title('PCA Scatter Plot')
+plt.subplot(122)
+plt.scatter(tsne_results[:,0],tsne_results[:,1],  c = target, 
+            cmap = "coolwarm", edgecolor = "None", alpha=0.35)
+plt.colorbar()
+plt.title('TSNE Scatter Plot')
+plt.show()
+
+
+# As one can see from these high-level plots, even though PCA does quite a decent job of visualising our two target clusters ( M for Malignant and B for Benign - cheating a bit here with the labels), the visuals in TSNE is much more obvious in terms of the demarcation in the target.
+
+# # STANDARDISATION AND VISUALISATION
+# 
+# Let's now try scaling (or standardising) our features and see if we can get even more obvious/intuitive clusters in our plots.
+
+# In[7]:
+
+
+# Calling Sklearn scaling method
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-
-#path to training data
-DATA_PATH = '../input/train'
-
-#Number of clusters for K-Means
-N_CLUSTS = 5#250
-
-#Number of clusters used for validation
-N_VAL_CLUSTS = 1#50
-
-SEED = 42
-np.random.seed(SEED)
-
-##############################################
-#######NORMALIZED IMAGE SIZE
-##############################################
-IMG_WIDTH = 640
-IMG_HEIGHT = 360
-
-##############################################
-#######SUBSAMPLE DATA
-##############################################
-
-#how many images to take?
-SAMP_SIZE = 8
+X_std = StandardScaler().fit_transform(X)
 
 
-# ## Subsample data 
-
-# In order for the notebook to run on Kaggle scripts, we subsample the training data.
-
-# In[ ]:
+# In[8]:
 
 
-subsample = []
-for fish in os.listdir(DATA_PATH):
-    if(os.path.isfile(os.path.join(DATA_PATH, fish))): 
-        continue
-    subsample_class = [os.path.join(DATA_PATH, fish, fn) for 
-                       fn in os.listdir(os.path.join(DATA_PATH, fish))]
-    subsample += subsample_class
-subsample = subsample[:SAMP_SIZE]
+# Invoke the PCA method on the standardised data
+pca = PCA(n_components=2)
+pca_2d_std = pca.fit_transform(X_std)
+
+# Invoke the TSNE method
+tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=2000)
+tsne_results_std = tsne.fit_transform(X_std)
 
 
-# ## Extract VGG features
-
-# Next, we extract layer 4 VGG features from the images. The clustering will be based on these features. First, we load the VGG16 model pretrained on imagenet. Unfortunately, imagenet-weights are not available on Kaggle scripts.
-
-# In[ ]:
+# In[11]:
 
 
-base_model = VGG16(weights = None, include_top = False, input_shape = (IMG_HEIGHT, IMG_WIDTH, 3))
-#base_model = VGG16(weights = 'imagenet', include_top = False, input_shape = (IMG_HEIGHT, IMG_WIDTH, 3))
-model = Model(input = base_model.input, output = base_model.get_layer('block4_pool').output)
-
-
-# After a preprocessing the images can be fed to the pretrained VGG16.
-
-# In[ ]:
-
-
-def preprocess_image(path):
-    img = image.load_img(path, target_size = (IMG_HEIGHT, IMG_WIDTH))
-    arr = image.img_to_array(img)
-    arr = np.expand_dims(arr, axis = 0)
-    return preprocess_input(arr)
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'preprocessed_images = np.vstack([preprocess_image(fn) for fn in subsample])\nvgg_features = model.predict(preprocessed_images)\nvgg_features = vgg_features.reshape(len(subsample), -1)')
-
-
-# ## Cluster by K-Means 
-
-# We cluster the images according to the K-Means algorithm.
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'km = KMeans(n_clusters = N_CLUSTS, n_jobs = -1)\nclust_preds = km.fit_predict(StandardScaler().fit_transform(vgg_features))')
-
-
-# Then, we select at random the clusters that will form the validation set.
-
-# In[ ]:
-
-
-val_clusters = np.random.choice(range(N_CLUSTS), N_VAL_CLUSTS, replace = False)
-val_sample = np.array(subsample)[np.in1d(clust_preds, val_clusters)]
+# Plot the TSNE and PCA visuals side-by-side
+plt.figure(figsize = (16,11))
+plt.subplot(121)
+plt.scatter(pca_2d_std[:,0],pca_2d_std[:,1], c = target, 
+            cmap = "RdYlGn", edgecolor = "None", alpha=0.35)
+plt.colorbar()
+plt.title('PCA Scatter Plot')
+plt.subplot(122)
+plt.scatter(tsne_results_std[:,0],tsne_results_std[:,1],  c = target, 
+            cmap = "RdYlGn", edgecolor = "None", alpha=0.35)
+plt.colorbar()
+plt.title('TSNE Scatter Plot')
+plt.show()
 

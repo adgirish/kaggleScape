@@ -1,266 +1,651 @@
 
 # coding: utf-8
 
-# We know that for the private leaderboard, there will be a Stage 2 where all of our kernels are re-run with ~5x more test data that we have never seen before. Some, including me, have become concerned about run times for their kernels... will we be able to run our kernel in under an hour with 5x more test data? And, more importantly, how long can our Stage 1 kernel run for to be safe for Stage 2?
+# **This is my first attempt on Kaggle ever. I've learned a lot from the tutorials and some other kernels. Here I incorporate my ideas and what I learned into this kernel. Please upvote if you find this useful. Feel free to leave comments below.**
 # 
-# Here, I take the approach of creating a version of the Stage 2 test by duplicating the known Stage 1 test data 5x and inserting novel words to simulate the effect on time and memory load that Stage 2 will have. I find that pre-processing time approximately doubles, training time is (obviously) unaffected, and that predict times go up by ~6x.
+# **(09/12/2017 update) Neural network results in a score > 0.81**
+# 
+# **Let's begin now!**
 
 # In[ ]:
 
 
-# First let's look at the shapes of the data.
-
-import pandas as pd
-
-train = pd.read_table('../input/train.tsv', engine='c')
-stage_1_test = pd.read_table('../input/test.tsv', engine='c')
-
-print("Train shape: ", train.shape)
-print("Stage 1 Test shape: ", stage_1_test.shape)
-
-
-# In[ ]:
-
-
-# Now let's simulate Stage 2!
-
-import random
-import string
-
-# Make a stage 2 test by copying test five times...
-test1 = stage_1_test.copy()
-test2 = stage_1_test.copy()
-test3 = stage_1_test.copy()
-test4 = stage_1_test.copy()
-test5 = stage_1_test.copy()
-stage_2_test = pd.concat([test1, test2, test3, test4, test5], axis=0)
-
-# ...then introduce random new words
-def introduce_new_unseen_words(desc):
-    desc = desc.split(' ')
-    if random.randrange(0, 10) == 0: # 10% chance of adding an unseen word
-        new_word = ''.join(random.sample(string.ascii_letters, random.randrange(3, 15)))
-        desc.insert(0, new_word)
-    return ' '.join(desc)
-stage_2_test.item_description = stage_2_test.item_description.apply(introduce_new_unseen_words)
-
-# ...this should be a dataframe that roughly mimics the real Stage 2 in impact on TFIDF
-# and other functions.
-
-print("Stage 2 Test shape (guess): ", stage_2_test.shape)
-stage_2_test[["name", "item_description"]].head(20)
-
-
-# In[ ]:
-
-
-# How large in memory are these objects?
-# We can use `sys.getsizeof` to return size in bytes.
-
-import sys
-
-def object_size_in_mb(obj):
-    size_in_bytes = sys.getsizeof(obj)
-    size_in_kb = size_in_bytes / 1024
-    size_in_mb = size_in_kb / 1024
-    return size_in_mb
-
-print("Train size: %.2f mb" % object_size_in_mb(train))
-print("Stage 1 Test size: %.2f mb" % object_size_in_mb(stage_1_test))
-print("Stage 2 Test size (guess): %.2f mb" % object_size_in_mb(stage_2_test))
-
-
-# So we can see that Stage 2 is guessed to be a little over 5x in memory usage, but should still definitely fit in memory on a 16GB machine. How does this impact code run time? To check, I take [a popular well-scoring kernel](https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44341-2/code) by Bojan (with help from others) and run a portion of it (the `Ridge` model) with both the stage 1 test data and the guess from stage 2.
-
-# In[ ]:
-
-
-# Note: Code adapted from https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44341-2/code
-
-import gc
-import time
+# Import all the libraries I need
 import numpy as np
-from scipy.sparse import csr_matrix, hstack
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-NUM_CATS = 4000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 45000
+# ignore Deprecation Warning
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-def handle_missing_inplace(dataset):
-    dataset['category_name'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
+from sklearn.ensemble import RandomForestRegressor
+#from sklearn.ensemble import RandomForestClassifier
+#from xgboost import XGBClassifier
+#from sklearn.model_selection import cross_val_score
+#from sklearn.model_selection import GridSearchCV
 
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category = dataset['category_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATS]
-    dataset.loc[~dataset['category_name'].isin(pop_category), 'category_name'] = 'missing'
+import keras 
+from keras.models import Sequential # intitialize the ANN
+from keras.layers import Dense      # create layers
 
-def to_categorical(dataset):
-    dataset['category_name'] = dataset['category_name'].astype('category')
-    dataset['brand_name'] = dataset['brand_name'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
+# load the data
+df_train = pd.read_csv('../input/train.csv')
+df_test = pd.read_csv('../input/test.csv')
+df = df_train.append(df_test , ignore_index = True)
 
-start_time = time.time()
-nrow_train = train.shape[0]
-y = np.log1p(train["price"])
-merge: pd.DataFrame = pd.concat([train, stage_1_test])
-submission: pd.DataFrame = stage_1_test[['test_id']]
-handle_missing_inplace(merge)
-print('[{}] Finished to handle missing'.format(time.time() - start_time))
-cutting(merge)
-print('[{}] Finished to cut'.format(time.time() - start_time))
-to_categorical(merge)
-print('[{}] Finished to convert categorical'.format(time.time() - start_time))
-cv = CountVectorizer(min_df=NAME_MIN_DF)
-X_name = cv.fit_transform(merge['name'])
-print('[{}] Finished count vectorize `name`'.format(time.time() - start_time))
-cv = CountVectorizer()
-X_category = cv.fit_transform(merge['category_name'])
-print('[{}] Finished count vectorize `category_name`'.format(time.time() - start_time))
+# some quick inspections
+df_train.shape, df_test.shape, df_train.columns.values
 
-tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                     ngram_range=(1, 3),
-                     stop_words='english')
-X_description = tv.fit_transform(merge['item_description'])
-print('[{}] Finished TFIDF vectorize `item_description`'.format(time.time() - start_time))
 
-lb = LabelBinarizer(sparse_output=True)
-X_brand = lb.fit_transform(merge['brand_name'])
-print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
-X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                      sparse=True).values)
-print('[{}] Finished to get dummies on `item_condition_id` and `shipping`'.format(time.time() - start_time))
+# Let's look at individual features one by one:
+# 
+# ## Pclass
 
-sparse_merge = hstack((X_dummies, X_description, X_brand, X_category, X_name)).tocsr()
-print('[{}] Finished to create sparse merge'.format(time.time() - start_time))
+# In[ ]:
+
+
+# check if there is any NAN
+df['Pclass'].isnull().sum(axis=0)
 
 
 # In[ ]:
 
 
-# Same code as above, but now we use our guess at `stage_2_test` and check differences in timing.
-
-start_time = time.time()
-nrow_train = train.shape[0]
-y = np.log1p(train["price"])
-merge_2: pd.DataFrame = pd.concat([train, stage_2_test])
-submission_2: pd.DataFrame = stage_2_test[['test_id']]
-handle_missing_inplace(merge_2)
-print('[{}] Finished to handle missing 2'.format(time.time() - start_time))
-cutting(merge_2)
-print('[{}] Finished to cut 2'.format(time.time() - start_time))
-to_categorical(merge_2)
-print('[{}] Finished to convert categorical 2'.format(time.time() - start_time))
-cv = CountVectorizer(min_df=NAME_MIN_DF)
-X_name_2 = cv.fit_transform(merge_2['name'])
-print('[{}] Finished count vectorize `name` 2'.format(time.time() - start_time))
-cv = CountVectorizer()
-X_category_2 = cv.fit_transform(merge_2['category_name'])
-print('[{}] Finished count vectorize `category_name` 2'.format(time.time() - start_time))
-
-tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                     ngram_range=(1, 3),
-                     stop_words='english')
-X_description_2 = tv.fit_transform(merge_2['item_description'])
-print('[{}] Finished TFIDF vectorize `item_description` 2'.format(time.time() - start_time))
-
-lb = LabelBinarizer(sparse_output=True)
-X_brand_2 = lb.fit_transform(merge_2['brand_name'])
-print('[{}] Finished label binarize `brand_name` 2'.format(time.time() - start_time))
-X_dummies_2 = csr_matrix(pd.get_dummies(merge_2[['item_condition_id', 'shipping']],
-                                        sparse=True).values)
-print('[{}] Finished to get dummies on `item_condition_id` and `shipping` 2'.format(time.time() - start_time))
-
-sparse_merge_2 = hstack((X_dummies_2, X_description_2, X_brand_2, X_category_2, X_name_2)).tocsr()
-print('[{}] Finished to create sparse merge 2'.format(time.time() - start_time))
+# inspect the correlation between Pclass and Survived
+df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean()
 
 
-# Here we can see that Stage 1 took 5min52sec (352s), but Stage 2 is estimated to take 10min21sec (621s), which is a little under twice as long, instead of 5x as long.
-# 
-# Here are the individual times for each step:
-# 
-# **Handle missing** - **1s** for Stage 1, **2s** for Stage 2 (2x longer)
-# 
-# **Cut** - **6s** for Stage 1, **15s** for Stage 2 (2.5x longer)
-# 
-# **Convert categorical** - **1s** for Stage 1, **2s** for Stage 2 (2x longer)
-# 
-# **Count vectorize `name`** - **13s** for Stage 1, **29s** for Stage 2 (2.2x longer)
-#  
-# **Count vectorize `category_name`** - **11s** for Stage 1, **26s** for Stage 2 (2.3x longer)
-# 
-# **TFIDF `item_description`** - **300s** for Stage 1, **500s** for Stage 2 (1.7x longer)
-# 
-# **Label binarize `brand_name`** - **10s** for Stage 1, **25s** for Stage 2 (2.5x longer)
-# 
-# **Get dummies** - **5s** for Stage 1, **10s** for Stage 2 (2x longer)
-# 
-# **Create sparse merge** - **6s** for Stage 1, **13s** for Stage 2 (2.2x longer)
-# 
-# **Overall** - **352s** for Stage 1, **621s** for Stage 2 (1.8x longer)
+# Pclass should be a very useful featrue
+
+# ## Name
 
 # In[ ]:
 
 
-# How big is the resulting sparse matrix?
-
-print("Stage 1 Sparse Matrix Merge Shape: ", sparse_merge.shape)
-print("Stage 2 Sparse Matrix Merge Shape: ", sparse_merge_2.shape)
-
-# It looks like `sys.getsizeof` does not work for sparse matrices, but this does.
-# Thanks StackOverflow!
-def sparse_df_size_in_mb(sparse_df):
-    size_in_bytes = sparse_df.data.nbytes
-    size_in_kb = size_in_bytes / 1024
-    size_in_mb = size_in_kb / 1024
-    return size_in_mb
-
-print("Stage 1 Sparse Matrix Merge Size: %.2f mb" % sparse_df_size_in_mb(sparse_merge))
-print("Stage 2 Sparse Matrix Merge Size (guess): %.2f mb" % sparse_df_size_in_mb(sparse_merge_2))
+df.Name.head(10)
 
 
-# Another important aspect of the script is not just the pre-processing, but also the model scoring. How does that change in Stage 2?
+# Each name has a title, which is clearly what matters since it contains information of gender or status. Let's extract the titles from these names.
 
 # In[ ]:
 
 
-from sklearn.linear_model import Ridge
+df['Title'] = df.Name.map( lambda x: x.split(',')[1].split( '.' )[0].strip())
 
-X = sparse_merge[:nrow_train]
-X_test = sparse_merge[nrow_train:]
-
-X_2 = sparse_merge_2[:nrow_train]
-X_test_2 = sparse_merge_2[nrow_train:]
-
-start_time = time.time()
-model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3)
-model.fit(X, y)
-fit_finished = time.time()
-print("Finished Stage 1 Fit in %.1f sec" % (fit_finished - start_time))
-preds = model.predict(X_test)
-pred_finished = time.time()
-print("Finished Stage 1 Predict in %.1f sec" % (pred_finished - fit_finished))
-print("Stage 1 Total in %.1f sec" % (pred_finished - start_time))
-
-start_time_2 = time.time()
-model_2 = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3)
-model_2.fit(X_2, y)
-fit_finished_2 = time.time()
-print("Finished Stage 2 Fit (guess) in %.1f sec" % (fit_finished_2 - start_time_2))
-preds_2 = model_2.predict(X_test_2)
-pred_finished_2 = time.time()
-print("Finished Stage 2 Predict (guess) in %.1f sec" % (pred_finished_2 - fit_finished_2))
-print("Stage 2 Total (guess) in %.1f sec" % (pred_finished_2 - start_time_2))
+# inspect the amount of people for each title
+df['Title'].value_counts()
 
 
-# The training time is obviously the same for both Stage 1 and Stage 2, because the train data is unchanged. The predict time is 6x as long, but because the `Ridge` model predicts so quickly (under 1sec) this barely matters for our kernel.
+# Looks like the main ones are "Master", "Miss", "Mr", "Mrs". Some of the others can be be merged into some of these four categories. For the rest, I'll just call them 'Others'
+
+# In[ ]:
+
+
+df['Title'] = df['Title'].replace('Mlle', 'Miss')
+df['Title'] = df['Title'].replace(['Mme','Lady','Ms'], 'Mrs')
+df.Title.loc[ (df.Title !=  'Master') & (df.Title !=  'Mr') & (df.Title !=  'Miss') 
+             & (df.Title !=  'Mrs')] = 'Others'
+
+# inspect the correlation between Title and Survived
+df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+# inspect the amount of people for each title
+df['Title'].value_counts()
+
+
+# Now we can use dummy encoding for these titles and drop the original names
+
+# In[ ]:
+
+
+df = pd.concat([df, pd.get_dummies(df['Title'])], axis=1).drop(labels=['Name'], axis=1)
+
+
+# ## Sex
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Sex.isnull().sum(axis=0)
+
+
+# In[ ]:
+
+
+# inspect the correlation between Sex and Survived
+df[['Sex', 'Survived']].groupby(['Sex'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+# map the two genders to 0 and 1
+df.Sex = df.Sex.map({'male':0, 'female':1})
+
+
+# ## Age
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Age.isnull().sum(axis=0)
+
+
+# There are 263 missing values! Age can probably be inferred from other features such as Title, Fare, SibSp, Parch. So I decide to come back to Age after I finish inspecting the other features.
+
+# ## SibSp and Parch 
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.SibSp.isnull().sum(axis=0), df.Parch.isnull().sum(axis=0)
+
+
+# In[ ]:
+
+
+# create a new feature "Family"
+df['Family'] = df['SibSp'] + df['Parch'] + 1
+
+# inspect the correlation between Family and Survived
+df[['Family', 'Survived']].groupby(['Family'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+# inspect the amount of people for each Family size
+df['Family'].value_counts()
+
+
+# We can see that the survival rate increases with the family size, but not beyond Family = 4. Also, the amount of people in big families is much lower than those in small families. I will combine all the data with Family > 4 into one category. Since people in big families have an even lower survival rate (0.161290) than those who are alone, I decided to map data with Family > 4 to Family = 0, such that the survival rate always increases as Family increases.
+
+# In[ ]:
+
+
+df.Family = df.Family.map(lambda x: 0 if x > 4 else x)
+df[['Family', 'Survived']].groupby(['Family'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+df['Family'].value_counts()
+
+
+# ## Ticket
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Ticket.isnull().sum(axis=0)
+
+
+# In[ ]:
+
+
+df.Ticket.head(20)
+
+
+# It looks like there are two types of tickets: (1) number (2) letters + number
 # 
-# Based on this, I think assuming your pre-processing will roughly double to triple in time and that your predict time will roughly 6x should give you a good benchmark for your script may be safe. You should also assume your `to_csv` for submission will take longer too, though I'm not sure by how much.
+# Ticket names with letters probably represent some special classes. For the numbers, the majority of tickets have their first digit = 1, 2, or 3, which probably also represent different classes. So I just keep the first element (a letter or a single-digit  number) of these ticket names
+
+# In[ ]:
+
+
+df.Ticket = df.Ticket.map(lambda x: x[0])
+
+# inspect the correlation between Ticket and Survived
+df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+# inspect the amount of people for each type of tickets
+df['Ticket'].value_counts()
+
+
+# We can see that the majority of tickets are indeed "3", "2", and "1", and their corresponding survival rates are "1" > "2" > "3". For the others, the survival rate is low except for "9","C","F","P", and "S". However, "9" and "F" are very small sample. The correlation we see here probably comes from Pclass or Fare, so let's check.
+
+# In[ ]:
+
+
+df[['Ticket', 'Fare']].groupby(['Ticket'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+df[['Ticket', 'Pclass']].groupby(['Ticket'], as_index=False).mean()
+
+
+# Indeed, there is some relation between Ticket and Fare, or between Ticket and Pclass. Also, one interesting thing is that "P" corresponds to very high Fare and Pcalss (better than "1"). This is an additional information that cannot be seen in other features. So keeping Ticket as a feature might be useful.
 # 
-# Looking back at [Bojan's kernel](https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44341-2/code), the logs show pre-processing takes 5.4min and that predicting takes 0.1sec for the first Ridge, 0.1sec for the second Ridge, 2min18sec for the first LGB, and 1min15sec for the second LGB. Based on my analysis here, I would expect Stage 2 to add an additional ~6min in pre-processing and an extra 21min19sec for predicting, for a total of ~27min added. This would put the completion time at 71min22sec, which is too long for Stage 2.
+# I'll come back to Ticket later. I don't further transform it now because its current form might be useful for guessing some missing values in other features. 
+
+# ## Fare
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Fare.isnull().sum(axis=0)
+
+
+# Only one missing value. Fare can probably be inferred from Ticket, Pclass, Cabin and Embarked. Let's see the corresponding values of for these features.
+
+# In[ ]:
+
+
+df.Ticket[df.Fare.isnull()]
+
+
+# In[ ]:
+
+
+df.Pclass[df.Fare.isnull()]
+
+
+# In[ ]:
+
+
+df.Cabin[df.Fare.isnull()]
+
+
+# In[ ]:
+
+
+df.Embarked[df.Fare.isnull()]
+
+
+# There is no corresponding value for Cabin, so let's look at the relation between Fare and the three features.  
+
+# In[ ]:
+
+
+# use boxplot to visualize the distribution of Fare for each Pclass
+sns.boxplot('Pclass','Fare',data=df)
+plt.ylim(0, 300) # ignore one data point with Fare > 500
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the correlation between Pclass and Fare
+df[['Pclass', 'Fare']].groupby(['Pclass']).mean()
+
+
+# In[ ]:
+
+
+# divide the standard deviation by the mean. A lower ratio means a tighter 
+# distribution of Fare in each Pclass
+df[['Pclass', 'Fare']].groupby(['Pclass']).std() / df[['Pclass', 'Fare']].groupby(['Pclass']).mean()
+
+
+# In[ ]:
+
+
+# use boxplot to visualize the distribution of Fare for each Ticket
+sns.boxplot('Ticket','Fare',data=df)
+plt.ylim(0, 300) # ignore one data point with Fare > 500
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the correlation between Ticket and Fare 
+# (we saw this earlier)
+df[['Ticket', 'Fare']].groupby(['Ticket']).mean()
+
+
+# In[ ]:
+
+
+# divide the standard deviation by the mean. A lower ratio means a tighter 
+# distribution of Fare in each Ticket type
+df[['Ticket', 'Fare']].groupby(['Ticket']).std() /  df[['Ticket', 'Fare']].groupby(['Ticket']).mean()
+
+
+# In[ ]:
+
+
+# use boxplot to visualize the distribution of Fare for each Embarked
+sns.boxplot('Embarked','Fare',data=df)
+plt.ylim(0, 300) # ignore one data point with Fare > 500
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the correlation between Embarked and Fare
+df[['Embarked', 'Fare']].groupby(['Embarked']).mean()
+
+
+# In[ ]:
+
+
+# divide the standard deviation by the mean. A lower ratio means a tighter 
+# distribution of Fare in each Embarked
+df[['Embarked', 'Fare']].groupby(['Embarked']).std() /  df[['Embarked', 'Fare']].groupby(['Embarked']).mean()
+
+
+# Looks like Fare indeed has correlation with these three features. I'll guess the missing value using the median value of (Pcalss = 3) & (Ticket = 3) & (Embarked = S)
+
+# In[ ]:
+
+
+guess_Fare = df.Fare.loc[ (df.Ticket == '3') & (df.Pclass == 3) & (df.Embarked == 'S')].median()
+df.Fare.fillna(guess_Fare , inplace=True)
+
+# inspect the mean Fare values for people who died and survived
+df[['Fare', 'Survived']].groupby(['Survived'],as_index=False).mean()
+
+
+# In[ ]:
+
+
+# visualize the distribution of Fare for people who survived and died
+grid = sns.FacetGrid(df, hue='Survived', size=4, aspect=1.5)
+grid.map(plt.hist, 'Fare', alpha=.5, bins=range(0,210,10))
+grid.add_legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# visualize the correlation between Fare and Survived using a scatter plot
+df[['Fare', 'Survived']].groupby(['Fare'],as_index=False).mean().plot.scatter('Fare','Survived')
+plt.show()
+
+
+# We can see that people with lower Fare are less likely to survive. But this is certainly not a smooth curve if we don't bin the data. It would be better to feed machine learning algorithms with intervals of Fare, because using the original Fare values would likely cause over-fitting. 
+
+# In[ ]:
+
+
+# bin Fare into five intervals with equal amount of people
+df['Fare-bin'] = pd.qcut(df.Fare,5,labels=[1,2,3,4,5]).astype(int)
+
+# inspect the correlation between Fare-bin and Survived
+df[['Fare-bin', 'Survived']].groupby(['Fare-bin'], as_index=False).mean()
+
+
+# Now the correlation is clear after binning the data!
 # 
-# This is not to pick on Bojan (thanks for the great kernel!), but to help guide people toward being more successful in Stage 2. Feel free to try to use the `stage_2_test` object from this kernel to run your own experiments or to improve upon this kernel's accuracy!
+# ## Cabin
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Cabin.isnull().sum(axis=0)
+
+
+# This is highly incomplete. We have two choices: (1) map the missing ones to a new cabin category "unknown" (2) just drop this feature. I have tried both and I decided to choose (2)
+
+# In[ ]:
+
+
+df = df.drop(labels=['Cabin'], axis=1)
+
+
+# ## Embarked
+
+# In[ ]:
+
+
+# check if there is any NAN
+df.Embarked.isnull().sum(axis=0)
+
+
+# In[ ]:
+
+
+df.describe(include=['O']) # S is the most common
+
+
+# In[ ]:
+
+
+# fill the NAN
+df.Embarked.fillna('S' , inplace=True )
+
+
+# In[ ]:
+
+
+# inspect the correlation between Embarked and Survived as well as some other features
+df[['Embarked', 'Survived','Pclass','Fare', 'Age', 'Sex']].groupby(['Embarked'], as_index=False).mean()
+
+
+# The survival rate does change between different Embarked values. However, it is due to the changes of other features. For example, people from Embarked = C are more likely to survive because they are generally richer (Pclass, Fare). People from Embarked = S has the lowest survival rate because it has the lowest fraction of female passengers, even though they are a bit richer than people from Embarked = Q.
+# 
+# I therefore decided to drop this feature as well.
+
+# In[ ]:
+
+
+df = df.drop(labels='Embarked', axis=1)
+
+
+# Now we can go back to **Age** and try to fill the missing values. Let's see how it relates to other features
+
+# In[ ]:
+
+
+# visualize the correlation between Title and Age
+grid = sns.FacetGrid(df, col='Title', size=3, aspect=0.8, sharey=False)
+grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the mean Age for each Title
+df[['Title', 'Age']].groupby(['Title']).mean()
+
+
+# In[ ]:
+
+
+# inspect the standard deviation of Age for each Title
+df[['Title', 'Age']].groupby(['Title']).std()
+
+
+# In[ ]:
+
+
+# visualize the correlation between Fare-bin and Age
+grid = sns.FacetGrid(df, col='Fare-bin', size=3, aspect=0.8, sharey=False)
+grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the mean Age for each Fare-bin
+df[['Fare-bin', 'Age']].groupby(['Fare-bin']).mean()
+
+
+# In[ ]:
+
+
+# inspect the standard deviation of Age for each Fare-bin
+df[['Fare-bin', 'Age']].groupby(['Fare-bin']).std()
+
+
+# In[ ]:
+
+
+# visualize the correlation between SibSp and Age
+grid = sns.FacetGrid(df, col='SibSp', col_wrap=4, size=3.0, aspect=0.8, sharey=False)
+grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the mean Age for each SibSp
+df[['SibSp', 'Age']].groupby(['SibSp']).mean()
+
+
+# In[ ]:
+
+
+# inspect the standard deviation of Age for each SibSp
+df[['SibSp', 'Age']].groupby(['SibSp']).std()
+
+
+# In[ ]:
+
+
+# visualize the correlation between Parch and Age
+grid = sns.FacetGrid(df, col='Parch', col_wrap=4, size=3.0, aspect=0.8, sharey=False)
+grid.map(plt.hist, 'Age', alpha=.5, bins=range(0,105,5))
+plt.show()
+
+
+# In[ ]:
+
+
+# inspect the mean Age for each Parch
+df[['Parch', 'Age']].groupby(['Parch']).mean()
+
+
+# In[ ]:
+
+
+# inspect the standard deviation of Age for each Parch
+df[['Parch', 'Age']].groupby(['Parch']).std() 
+
+
+# The change of Age as a function of Title, Fare-bin, or SibSp is quite significant, so I'll use them to guess the missing values. I use a random forest regressor to do this. 
+
+# In[ ]:
+
+
+# notice that instead of using Title, we should use its corresponding dummy variables 
+df_sub = df[['Age','Master','Miss','Mr','Mrs','Others','Fare-bin','SibSp']]
+
+X_train  = df_sub.dropna().drop('Age', axis=1)
+y_train  = df['Age'].dropna()
+X_test = df_sub.loc[np.isnan(df.Age)].drop('Age', axis=1)
+
+regressor = RandomForestRegressor(n_estimators = 300)
+regressor.fit(X_train, y_train)
+y_pred = np.round(regressor.predict(X_test),1)
+df.Age.loc[df.Age.isnull()] = y_pred
+
+df.Age.isnull().sum(axis=0) # no more NAN now
+
+
+# And then we still need to bin the data into different Age intervals, for the same reason as Fare
+
+# In[ ]:
+
+
+bins = [ 0, 4, 12, 18, 30, 50, 65, 100] # This is somewhat arbitrary...
+age_index = (1,2,3,4,5,6,7)
+#('baby','child','teenager','young','mid-age','over-50','senior')
+df['Age-bin'] = pd.cut(df.Age, bins, labels=age_index).astype(int)
+
+df[['Age-bin', 'Survived']].groupby(['Age-bin'],as_index=False).mean()
+
+
+# Now we can look at **Ticket** again 
+
+# In[ ]:
+
+
+df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+df['Ticket'].value_counts()
+
+
+# The main categories of Ticket are "1", "2", "3", "P", "S", and "C", so I will combine all the others into "4"
+
+# In[ ]:
+
+
+df['Ticket'] = df['Ticket'].replace(['A','W','F','L','5','6','7','8','9'], '4')
+
+# check the correlation again
+df[['Ticket', 'Survived']].groupby(['Ticket'], as_index=False).mean()
+
+
+# In[ ]:
+
+
+# dummy encoding
+df = pd.get_dummies(df,columns=['Ticket'])
+
+
+# ## Modeling and Prediction
+# Now we can drop the features we don't need and split the data into training and test sets
+
+# In[ ]:
+
+
+df = df.drop(labels=['SibSp','Parch','Age','Fare','Title'], axis=1)
+y_train = df[0:891]['Survived'].values
+X_train = df[0:891].drop(['Survived','PassengerId'], axis=1).values
+X_test  = df[891:].drop(['Survived','PassengerId'], axis=1).values
+
+
+# (09/12/2017 update) Using NN gives better result than XGBoost and Random Forest do. 
+
+# In[ ]:
+
+
+# Initialising the NN
+model = Sequential()
+
+# layers
+model.add(Dense(units = 9, kernel_initializer = 'uniform', activation = 'relu', input_dim = 17))
+model.add(Dense(units = 9, kernel_initializer = 'uniform', activation = 'relu'))
+model.add(Dense(units = 5, kernel_initializer = 'uniform', activation = 'relu'))
+model.add(Dense(units = 1, kernel_initializer = 'uniform', activation = 'sigmoid'))
+
+# Compiling the ANN
+model.compile(optimizer = 'adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
+
+# Train the ANN
+model.fit(X_train, y_train, batch_size = 32, epochs = 200)
+
+
+# We can now get the prediction. I got a public score of 0.81339 using the output from my laptop (python 2.7), which is different from what is generated here.
+
+# In[ ]:
+
+
+y_pred = model.predict(X_test)
+y_final = (y_pred > 0.5).astype(int).reshape(X_test.shape[0])
+
+output = pd.DataFrame({'PassengerId': df_test['PassengerId'], 'Survived': y_final})
+output.to_csv('prediction-ann.csv', index=False)
+

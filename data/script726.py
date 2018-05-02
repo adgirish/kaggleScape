@@ -1,140 +1,278 @@
 
 # coding: utf-8
 
-# Reconstruction of 'ps_reg_03'
-# ============
-# Considering, that ps_reg_03 appears to be one of the most (if not the most) predictive feature in the data set, determining how it is constructed could be an important step in building very predictive new features and improving models.
-# The closed form guesser of [Wolfram|Alpha](https://www.wolframalpha.com/), applied to some high precision values of ps_reg_03 reveals the following pattern:
-# $$
-# \text{ps_reg_03}=\frac{\sqrt{I}}{40},\quad \text{ with } I\in \mathbb{N^+}.
-# $$
-# 
-# In other words:
-# $$
-# I=\left(40*\text{ps_reg_03}\right)^2
-# $$
-# 
-# yields an integer. ps_reg_03 is therefore likely a categorical feature or a combination of combinatorical features.
-# 
-# Lets confirm this pattern for the full data set:
+# Exploration of wine reviews data and text based logistic regression modeling 
+# Available on Gihub: https://github.com/carkar7/Classifying-wine-type-based-on-wine-reviews
 
-# In[1]:
+# In[ ]:
 
 
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.feature_extraction.text import CountVectorizer 
+from sklearn.model_selection import train_test_split
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[2]:
+# # Reading and Cleaning
+
+# In[ ]:
 
 
-# Load training data
-train = pd.read_csv('../input/train.csv')
-# and remove nan values for now
-train = train[train['ps_reg_03'] != -1]
+data = pd.read_csv('../input/winemag-data_first150k.csv')
+data.head(5)
 
 
-# In[3]:
+# ## Lots of duplicates
+# There are a lot of duplicates in this data. Oddly enough, I noticed that simply running data.drop_duplicates() did not remove all duplicates, which is the result of some columns between the duplicated rows differeing. Nevertheless, the fact that the "Description" columns were identical was a dead giveaway that these were not a different reviews. 
+
+# In[ ]:
 
 
-train['ps_reg_03_int'] = train['ps_reg_03'].apply(lambda x: (40*x)**2)
-train['ps_reg_03_int'].head(10)
+data[data.duplicated('description',keep=False)].sort_values('description').head(5)
 
 
-# This looks promising and indeed all ps_reg_03_int are very close to an integer.
+# I decided to drop all duplicates based on the description column alone and subsequently all missing price data:
 
-# In[4]:
-
-
-# Actually convert ps_reg_03_int to integer
-train['ps_reg_03_int'] = train['ps_reg_03_int'].apply(np.round).apply(int)
+# In[ ]:
 
 
-# As a cross-check, let us count the number of unique values of ps_reg_03 and the number of integer categories:
-
-# In[5]:
-
-
-print("Unique values of ps_reg_03: ", len(train['ps_reg_03'].unique()))
-print("Number of integer categories: ", len(train['ps_reg_03_int'].unique()))
+data = data.drop_duplicates('description')
+data = data[pd.notnull(data.price)]
+data.shape
 
 
-# Now let's have a look at their distribution:
+# # Exploratory Analysis
+# Not surprisingly, there's a significant correlation between the cost of wine and its rating, namely theres an average $1.18  increase for every one point incrase in rating.
 
-# In[6]:
-
-
-fig, ax = plt.subplots(1,2,figsize=(10,5))
-for i in range(2): ax[i].set_yscale('log') #Set y-axis to log-scale
-train['ps_reg_03'].hist(ax=ax[0])
-ax[0].set_xlabel('ps_reg_03')
-train['ps_reg_03_int'].hist(ax=ax[1])
-ax[1].set_xlabel('Integer')
+# In[ ]:
 
 
-# We can see that these integers are probably not the [municipalities of Brazil](https://en.wikipedia.org/wiki/Municipalities_of_Brazil) (1-5570), since values as large as 25000 exist. The skewness of the distribution supports this, although the data could have been sorted and municipalities relabeled.
+from scipy.stats import pearsonr
+import statsmodels.api as sm
+print("Pearson Correlation:", pearsonr(data.price, data.points))
+print(sm.OLS(data.points, data.price).fit().summary())
+sns.lmplot(y = 'price', x='points', data=data)
+
+
+# Plotting all the countries, there's some odd plots as a result of low sample size for certain countries.
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize = (20,7))
+chart = sns.boxplot(x='country',y='points', data=data, ax = ax)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# In[ ]:
+
+
+data.country.value_counts()[:17]
+
+
+# After removing all countries with less than 100 observations, it appears that Germany, Austria, and Canada have the highest median scores(points). However, the distribution overall appears to be fairly uniform.
+
+# In[ ]:
+
+
+country=data.groupby('country').filter(lambda x: len(x) >100)
+df2 = pd.DataFrame({col:vals['points'] for col,vals in country.groupby('country')})
+meds = df2.median()
+meds.sort_values(ascending=False, inplace=True)
+
+fig, ax = plt.subplots(figsize = (20,7))
+chart = sns.boxplot(x='country',y='points', data=country, order=meds.index, ax = ax)
+plt.xticks(rotation = 90)
+
+plt.show()
+
+
+# Below are the average wine prices sorted by median (highest to lowest) in order to evaluate price distortions due to outliers.
+
+# In[ ]:
+
+
+df3 = pd.DataFrame({col:vals['price'] for col,vals in country.groupby('country')})
+meds2 = df3.median()
+meds2.sort_values(ascending=False, inplace=True)
+
+fig, ax = plt.subplots(figsize = (20,5))
+chart = sns.barplot(x='country',y='price', data=country, order=meds2.index, ax = ax)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# In[ ]:
+
+
+# medians for the above barplot
+print(meds2)
+
+
+# There's a large variety of wines in the dataset (I never knew there was so many!) However, there's an exponential decline in the number of observations for each wine type, and since we'll be attempting to use these labels to classify our model, I'll be dropping any wine types with less than 200 observations, for the reason that I don't believe there's enough data in these buckets to generate an accuarte model for predicting their respective wine type
+
+# In[ ]:
+
+
+data = data.groupby('variety').filter(lambda x: len(x) >100)
+list = data.variety.value_counts().index.tolist()
+fig4, ax4 = plt.subplots(figsize = (20,7))
+sns.countplot(x='variety', data=data, order = list, ax=ax4)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# Below is a boxplot chart containing all wine varieties (w/ >200 observations) and their respective point distributions. Sangiovese Grosso (never tried it) appears to have the highest median score of all wines. There are some interesting dips occuring after Champagne Blend, Shiraz, Cabernet Sauvignon (my favorite), and Nero d'Avola. Of interest is Merlot, which tends to have a large number of highly reviewed outliers. Despite these slight variations, overall the point distibution is basically uniform.
+
+# In[ ]:
+
+
+data = data.groupby('variety').filter(lambda x: len(x) >200)
+
+df4 = pd.DataFrame({col:vals['points'] for col,vals in data.groupby('variety')})
+meds3 = df4.median()
+meds3.sort_values(ascending=False, inplace=True)
+
+fig3, ax3 = plt.subplots(figsize = (20,7))
+chart = sns.boxplot(x='variety',y='points', data=data, order=meds3.index, ax = ax3)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# In[ ]:
+
+
+df5 = pd.DataFrame({col:vals['points'] for col,vals in data.groupby('variety')})
+mean1 = df5.mean()
+mean1.sort_values(ascending=False, inplace=True)
+
+fig3, ax3 = plt.subplots(figsize = (20,7))
+chart = sns.barplot(x='variety',y='points', data=data, order=mean1.index, ax = ax3)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# It's definitely not the same story when you look at price. There's clear variation in here, which may help in predicting the wine type.
+
+# In[ ]:
+
+
+df6 = pd.DataFrame({col:vals['price'] for col,vals in data.groupby('variety')})
+mean2 = df6.mean()
+mean2.sort_values(ascending=False, inplace=True)
+
+fig3, ax3 = plt.subplots(figsize = (20,7))
+chart = sns.barplot(x='variety',y='price', data=data, order=mean2.index, ax = ax3)
+plt.xticks(rotation = 90)
+plt.show()
+
+
+# # Modeling: Logistic Regression
 # 
-# It seems more likely that something like [Glimmung's interpretation](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/41200) could be correct:
+
+# In[ ]:
+
+
+X = data.drop(['Unnamed: 0','country','designation','points','province','region_1','region_2','variety','winery'], axis = 1)
+y = data.variety
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=1)
+print(X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+
+
+# ### The Label Occurs in the Desciption!
+# My first time around with this dataset, I was getting accuracy scores around 80% but something didn't feel right... 
 # 
-# $$
-# \text{ps_reg_03}=\frac{\sqrt{27M + F}}{40},
-# $$
-# 
-# with F being the [federative unit of Brazil](https://en.wikipedia.org/wiki/Subdivisions_of_Brazil) (1-27) and M being the municipal number inside that administrative region, which can grow as large as a few hundred. Since there are only 27 federative units, the above equation yields a unique value for each combination of M and F.
-# 
-# For instance, the municipality 76 in unit 8 would yield the integer and ps_reg_03:
+# If you read the descriptions, the reviewers often times say "Cabertnet", "Pinot", "Red", etc. in the review itself, and these words need to be taken off if the aim is to create a model that doesn't rely on the probability that a word in the description that matches the label. WIth that said, I included tokenized versions of the feature labels as parts of the stopwords used in analysis.
 
-# In[7]:
+# In[ ]:
 
 
-print("Integer: ", 27*76+8)
-print("ps_reg_03: ", np.sqrt(27*76+8)/40)
+wine =data.variety.unique().tolist()
+wine.sort()
+wine[:10]
 
 
-# This would explain the skewness, since lower municipalities are much more common (every federative unit has a municipality #1, but not #270).
-# 
-# Assuming for now, that the above equation is the correct interpretation, let's reconstruct M and F of each integer category:
-
-# In[8]:
+# In[ ]:
 
 
-def recon(reg):
-    integer = int(np.round((40*reg)**2)) # gives 2060 for our example
-    for f in range(28):
-        if (integer - f) % 27 == 0:
-            F = f
-    M = (integer - F)//27
-    return F, M
+output = set()
+for x in data.variety:
+    x = x.lower()
+    x = x.split()
+    for y in x:
+        output.add(y)
 
-# Using the above example to test
-ps_reg_03_example = 1.13468057179
-print("Federative Unit (F): ", recon(ps_reg_03_example)[0])
-print("Municipality (M): ", recon(ps_reg_03_example)[1])
+variety_list =sorted(output)
+variety_list[:10]
 
 
-# Let's now apply this to the data set. The function above, despite being horribly inefficient, runs within a few seconds.
-
-# In[9]:
+# In[ ]:
 
 
-train['ps_reg_F'] = train['ps_reg_03'].apply(lambda x: recon(x)[0])
-train['ps_reg_M'] = train['ps_reg_03'].apply(lambda x: recon(x)[1])
-print(train[['ps_reg_03', 'ps_reg_F', 'ps_reg_M']].head(10))
+extras = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}', 'cab',"%"]
+from nltk.corpus import stopwords
+stop = set(stopwords.words('english'))
+stop.update(variety_list)
+stop.update(extras)
 
 
-# The administrative regions and municipalities are distributed as follows:
+# ### Features
+# The features being used in this model will be the wine price and it's description. 
 
-# In[10]:
-
-
-fig, ax = plt.subplots(1,2,figsize=(10,5))
-ax[0].set_yscale('log') #Set y-axis to log-scale only for M
-train['ps_reg_M'].hist(ax=ax[0])
-ax[0].set_xlabel('Municipality (M)')
-train['ps_reg_F'].hist(ax=ax[1], bins=27)
-ax[1].set_xlabel('Federative Unit (F)')
+# In[ ]:
 
 
-# The number of policy holders seems to be somewhat uniformly distributed over the federative units. The municipality is skewed right as expected.
+from scipy.sparse import hstack
+
+vect = CountVectorizer(stop_words = stop)
+X_train_dtm = vect.fit_transform(X_train.description)
+price = X_train.price.values[:,None]
+X_train_dtm = hstack((X_train_dtm, price))
+X_train_dtm
+
+
+# In[ ]:
+
+
+X_test_dtm = vect.transform(X_test.description)
+price_test = X_test.price.values[:,None]
+X_test_dtm = hstack((X_test_dtm, price_test))
+X_test_dtm
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+models = {}
+for z in wine:
+    model = LogisticRegression()
+    y = y_train == z
+    model.fit(X_train_dtm, y)
+    models[z] = model
+
+testing_probs = pd.DataFrame(columns = wine)
+
+
+# # Final Accuracy: 53%
+# There's definitely room for improvement, and I could include other features to see if accuracy increases, but for now I'll settle with this and grab a glass of wine for myself :)
+
+# In[ ]:
+
+
+for variety in wine:
+    testing_probs[variety] = models[variety].predict_proba(X_test_dtm)[:,1]
+    
+predicted_wine = testing_probs.idxmax(axis=1)
+
+comparison = pd.DataFrame({'actual':y_test.values, 'predicted':predicted_wine.values})   
+
+from sklearn.metrics import accuracy_score
+print('Accuracy Score:',accuracy_score(comparison.actual, comparison.predicted)*100,"%")
+comparison.head(5)
+

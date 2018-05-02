@@ -1,269 +1,278 @@
 
 # coding: utf-8
 
-# # EDA of the NCAA Women's Basketball Data
+# # ** Introduction **
+# >**About Zillow:** Zillow's Economic Research Team collects, cleans and publishes housing and economic data from a variety of public and proprietary sources. Public property record data filed with local municipalities -- including deeds, property facts, parcel information and transactional histories -- forms the backbone of our data products, and is fleshed out with proprietary data derived from property listings and user behavior on Zillow.
+# 
+# > In this notebook, I will be analysing Zillow Economics Data.  
+# 
+# ## Table of Contents
+# > 1. [Load the data](#load_the_data)
+# > 2. [Value of all homes per square in different year ](#value_per_sq_diff_ye)
+# > 3. [Median of list prices per square foot in different year](#value_listing_per_sq_diff_ye)
+# > 4. [Median of rental prices per square foot in different year](#rental_price_per_sq_diff_ye)
+# > 5. [Zillow's different home value in different year](#dif_hom_va_dif_ye)
+# > 6. [Percentage of home sold in previous year](#perce_home_sold_pre_year)
+# > 7. [Median of the value of all homes per square foot in different states](#value_home_per_sqft_dif_states)
+# > 8. [The percentage of all homes in a given area that sold in the past years](#value_home_sold_dif_states)
 
-# In[ ]:
+# In[1]:
 
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from matplotlib import pyplot
+import matplotlib.pyplot as plt
+plt.style.use('ggplot')
 import seaborn as sns
-pyplot.style.use('ggplot')
+from IPython.display import Image, display
+
+# import plotly
+import plotly
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.tools as tls
+import plotly.graph_objs as go
+import plotly.tools as tls
+import plotly.figure_factory as fig_fact
+plotly.tools.set_config_file(world_readable=True, sharing='public')
 
 
-# ## Load all the data as pandas Dataframes
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# In[ ]:
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-cities = pd.read_csv('../input/WCities.csv')
-gamecities = pd.read_csv('../input/WGameCities.csv')
-tourneycompactresults = pd.read_csv('../input/WNCAATourneyCompactResults.csv')
-tourneyseeds = pd.read_csv('../input/WNCAATourneySeeds.csv')
-tourneyslots = pd.read_csv('../input/WNCAATourneySlots.csv')
-regseasoncompactresults = pd.read_csv('../input/WRegularSeasonCompactResults.csv')
-seasons = pd.read_csv('../input/WSeasons.csv')
-teamspellings = pd.read_csv('../input/WTeamSpellings.csv', engine='python')
-teams = pd.read_csv('../input/WTeams.csv')
+# Any results you write to the current directory are saved as output.
 
 
-# In[ ]:
+# <a id="load_the_data"></a>
+# > # 1. **Load the data**
+# >> *In this section, I will load the necessary data. For this notebook, I will need only two file. a) **City_time_series.csv** b) **cities_crosswalk.csv***. 
+
+# In[2]:
 
 
-# Convert Tourney Seed to a Number
-tourneyseeds['SeedNumber'] = tourneyseeds['Seed'].apply(lambda x: int(x[-2:]))
+# let's read the 'City_time_series.csv' 
+df_city_time_seris = pd.read_csv('../input/City_time_series.csv')
+# print top 10 item 
+df_city_time_seris.head()
 
-# Credit much of the merge code to Teza (Thanks!)
-# https://www.kaggle.com/tejasrinivas/preprocessing-code-to-join-all-the-tables-eda
-tourneycompactresults['WSeed'] =     tourneycompactresults[['Season','WTeamID']].merge(tourneyseeds,
-                                                      left_on = ['Season','WTeamID'],
-                                                      right_on = ['Season','TeamID'],
-                                                      how='left')[['SeedNumber']]
-tourneycompactresults['LSeed'] =     tourneycompactresults[['Season','LTeamID']].merge(tourneyseeds,
-                                                      left_on = ['Season','LTeamID'],
-                                                      right_on = ['Season','TeamID'],
-                                                      how='left')[['SeedNumber']]
 
-tourneycompactresults =     tourneycompactresults.merge(gamecities,
-                                how='left',
-                                on=['Season','DayNum','WTeamID','LTeamID'])
+# In[3]:
 
-regseasoncompactresults['WSeed'] =     regseasoncompactresults[['Season','WTeamID']].merge(tourneyseeds,
-                                                        left_on = ['Season','WTeamID'],
-                                                        right_on = ['Season','TeamID'],
-                                                        how='left')[['SeedNumber']]
-regseasoncompactresults['LSeed'] =     regseasoncompactresults[['Season','LTeamID']].merge(tourneyseeds,
-                                                        left_on = ['Season','LTeamID'],
-                                                        right_on = ['Season','TeamID'],
-                                                        how='left')[['SeedNumber']]
 
-regseasoncompactresults =     regseasoncompactresults.merge(gamecities,
-                                  how='left',
-                                  on=['Season',
-                                      'DayNum',
-                                      'WTeamID',
-                                      'LTeamID'])
+df_cities_crosswalk = pd.read_csv('../input/cities_crosswalk.csv')
+df_cities_crosswalk.head()
 
-# Add Season Results
-regseasoncompactresults = regseasoncompactresults.merge(seasons,
-                                                        how='left',
-                                                        on='Season')
-tourneycompactresults = tourneycompactresults.merge(seasons,
-                                                    how='left',
-                                                    on='Season')
 
-# Add Team Names
-regseasoncompactresults['WTeamName'] =     regseasoncompactresults[['WTeamID']].merge(teams,
-                                               how='left',
-                                               left_on='WTeamID',
-                                               right_on='TeamID')[['TeamName']]
-regseasoncompactresults['LTeamName'] =     regseasoncompactresults[['LTeamID']].merge(teams,
-                                               how='left',
-                                               left_on='LTeamID',
-                                               right_on='TeamID')[['TeamName']]
+# <a id="value_per_sq_diff_ye"></a>
+# > # ** 2. Value of all homes per square in different year **
+# >> **Value of all homes per square** -  Median of the value of all homes per square foot. This number is calculated by taking the estimated home value for each home in a given region and dividing it by the home's square footage. 
 
-tourneycompactresults['WTeamName'] =     tourneycompactresults[['WTeamID']].merge(teams,
-                                             how='left',
-                                             left_on='WTeamID',
-                                             right_on='TeamID')[['TeamName']]
-tourneycompactresults['LTeamName'] =     tourneycompactresults[['LTeamID']].merge(teams,
-                                             how='left',
-                                             left_on='LTeamID',
-                                             right_on='TeamID')[['TeamName']]
+# In[4]:
+
+
+df_city_time_seris.Date = pd.to_datetime(df_city_time_seris.Date)
+df_city_time_seris.groupby(df_city_time_seris.Date.dt.year)['ZHVIPerSqft_AllHomes'].mean().plot(kind='bar', figsize=(10, 6))
+plt.suptitle('Median of the value of all homes per square foot in different year', fontsize=12)
+plt.ylabel('Zillow home value per square foot')
+plt.xlabel('Year')
+plt.show()
+
+
+# > ** It' seems like Zelow home value per square foot is higher in 2005 - 2009 and again high in 2017 **
+
+# <a id="value_listing_per_sq_diff_ye"></a>
+# # ** 3. Median of list prices per square foot in different year ** 
+# > ** How median of list prices are calculated: ** *Median of list prices divided by the square footage of a home*
+
+# In[5]:
+
+
+df_city_time_seris_without_null = df_city_time_seris.dropna(subset=['MedianListingPricePerSqft_AllHomes'], how='any')
+df_city_time_seris_without_null.groupby(df_city_time_seris_without_null.Date.dt.year)['MedianListingPricePerSqft_AllHomes'].mean().plot(kind='bar', figsize=(10, 6))
+plt.suptitle('Median of list prices per square foot in different year', fontsize=24)
+plt.ylabel('Median Listing Price Per Square foot')
+plt.xlabel('Year')
+plt.show()
+
+
+# > It looks like list prices are high in 2017 compares to the previous year. 
+
+# <a id="rental_price_per_sq_diff_ye"></a>
+# # ** 4. Median of rental prices per square foot in different year **
+# > ** How median of rental prices are calculated: ** *Median of the rental price per square foot of homes listed for rent on Zillow in a given region*
+
+# In[6]:
+
+
+df_city_time_seris_without_null_rent = df_city_time_seris.dropna(subset=['MedianRentalPricePerSqft_AllHomes'], how='any')
+df_city_time_seris_without_null_rent.groupby(df_city_time_seris_without_null_rent.Date.dt.year)['MedianListingPricePerSqft_AllHomes'].mean().plot(kind='bar', figsize=(10, 6))
+plt.suptitle('Median of rental prices per square foot in different year', fontsize=24)
+plt.ylabel('Median rental Price Per Square foot')
+plt.xlabel('Year')
+plt.show()
+
+
+# > 
+
+# <a id="dif_hom_va_dif_ye"></a>
+# # **5. Zillow's different home value in different year **
+# > **Zillow home differs from many housing types. Like 2, 3 or 4 bedrooms. Let's see how value differs from different house type.**
+
+# In[7]:
+
+
+df_city_time_seris.groupby(df_city_time_seris.Date.dt.year)[['ZHVI_2bedroom','ZHVI_3bedroom','ZHVI_4bedroom']].mean().plot(kind='bar', figsize=(10, 6))
+plt.suptitle("Zillow's different home value in different year", fontsize=24)
+plt.ylabel('Zillow home value in different housing type')
+plt.xlabel('Year')
+plt.show()
+
+
+# > It looks like the comparison of 2,3 and 4 bedroom house price is always same.
+
+#  <a id="perce_home_sold_pre_year"></a>
+#  # **6. Percentage of home sold in previous year **
+#  > ** Let's find out the percentage of home sold in the previous year.**
+
+# In[8]:
+
+
+df_city_time_seris_without_null_h_sold = df_city_time_seris.dropna(subset=['Turnover_AllHomes'], how='any')
+df_city_time_seris_without_null_h_sold.groupby(df_city_time_seris_without_null_h_sold.Date.dt.year)['Turnover_AllHomes'].mean().plot(kind='bar', figsize=(10, 6))
+plt.suptitle("The percentage of all homes in a given area that sold in the past years", fontsize=18)
+plt.ylabel('Percentage of sold', fontsize=18)
+plt.xlabel('Year')
+plt.show()
+
+
+# > Wow! That's interesting. In 2003 - 2007, more homes sold compared to others year. And in 2017, the percentage of the house sells is really low compared to previous year.
+
+# In[9]:
+
+
+# let's replace the regionName column value with State name from cities_crosswalk.csv
+df_city_time_seris['RegionName'] = df_city_time_seris['RegionName'].map(df_cities_crosswalk.set_index('Unique_City_ID')['State'])
+df_city_time_seris
+
+
+# In[10]:
+
+
+# group regionName with ZHVIpersqft mean value
+df_regi_zhvi_sq_mean = df_city_time_seris.groupby(df_city_time_seris.RegionName)['ZHVIPerSqft_AllHomes'].mean().reset_index(name = "ZHVIpersqft_mean")
+# drop null values
+df_regi_zhvi_sq_mean = df_regi_zhvi_sq_mean.dropna(subset=['ZHVIpersqft_mean'], how='any')
+df_regi_zhvi_sq_mean
+
+
+#  <a id="value_home_per_sqft_dif_states"></a>
+# # ** 7. Median of the value of all homes per square foot in different states**
+# > ** Let's see the median value of per square of all homes in different country **
+
+# In[11]:
+
+
+scl = [[0.0, 'rgb(242,240,247)'],[0.2, 'rgb(218,218,235)'],[0.4, 'rgb(188,189,220)'],[0.6, 'rgb(158,154,200)'],[0.8, 'rgb(117,107,177)'],[1.0, 'rgb(84,39,143)']]
+
+
+# difine our data for plotting
+data = [ dict(
+        type='choropleth',
+        colorscale = scl,
+        autocolorscale = False,
+        locations = df_regi_zhvi_sq_mean['RegionName'], # location (states)
+        z = df_regi_zhvi_sq_mean['ZHVIpersqft_mean'].astype(float), # Zillow Home value per square foot
+        locationmode = 'USA-states', # let's define the location mode to USA_states
+        text = 'Median home value per square foot',
+        marker = dict(
+            line = dict (
+                color = 'rgb(255,255,255)',
+                width = 2
+            ) ),
+        colorbar = dict(
+            title = "Home value per square foot")
+        ) ]
+
+layout = dict(
+        title = 'Median of the value of all homes per square foot in different states<br>(Hover for breakdown)',
+        geo = dict(
+            scope='usa',
+            projection=dict( type='albers usa' ),
+            showlakes = True,
+            lakecolor = 'rgb(255, 255, 255)'),
+             )
+
+
+
+
     
-tourneycompactresults['ScoreDiff'] = tourneycompactresults['WScore'] - tourneycompactresults['LScore'] 
+fig = dict( data=data, layout=layout )
+# let's plot
+py.iplot( fig, filename='d3-cloropleth-map' )
 
 
-# # Start by Looking at Historic Tournament Seeds
+# In[12]:
 
-# In[ ]:
 
+# group region with percentage of house sold
+df_city_time_seris_house_sold = df_city_time_seris.groupby(df_city_time_seris.RegionName)['Turnover_AllHomes'].mean().reset_index(name = "percen_sold_house")
+# drop null values
+df_city_time_seris_house_sold = df_city_time_seris_house_sold.dropna(subset=['percen_sold_house'], how='any')
+df_city_time_seris_house_sold
 
-# Calculate the Average Team Seed
-averageseed = tourneyseeds.groupby(['TeamID']).agg(np.mean).sort_values('SeedNumber')
-averageseed = averageseed.merge(teams, left_index=True, right_on='TeamID') #Add Teamnname
-averageseed.head(20).plot(x='TeamName',
-                          y='SeedNumber',
-                          kind='bar',
-                          figsize=(15,5),
-                          title='Top 20 Average Tournament Seed',
-                          rot=45)
 
+#  <a id="value_home_sold_dif_states"></a>
+# # ** 8. The percentage of all homes in a given area that sold in the past years **
+# > **Okay! Let's see the percentage of sold of the house in different states.**
 
-# In[ ]:
+# In[13]:
 
 
-# Pairplot of the Tourney Seed and Scores
-sns.pairplot(tourneycompactresults[['WScore',
-                                    'LScore',
-                                    'ScoreDiff',
-                                    'WSeed',
-                                    'LSeed',
-                                    'Season']], hue='Season')
+scl = [[0.0, 'rgb(242,240,247)'],[0.2, 'rgb(218,218,235)'],[0.4, 'rgb(188,189,220)'],[0.6, 'rgb(158,154,200)'],[0.8, 'rgb(117,107,177)'],[1.0, 'rgb(84,39,143)']]
 
 
-# ## Regular Season Games of Tourney Teams
+data = [ dict(
+        type='choropleth',
+        colorscale = scl,
+        autocolorscale = False,
+        locations = df_city_time_seris_house_sold['RegionName'],
+        z = df_city_time_seris_house_sold['percen_sold_house'].astype(float),
+        locationmode = 'USA-states',
+        text = 'Percentage of sold',
+        marker = dict(
+            line = dict (
+                color = 'rgb(255,255,255)',
+                width = 2
+            ) ),
+        colorbar = dict(
+            title = "% of sold")
+        ) ]
 
-# In[ ]:
+layout = dict(
+        title = 'The percentage of all homes in a given area that sold in the past years<br>(Hover for breakdown)',
+        geo = dict(
+            scope='usa',
+            projection=dict( type='albers usa' ),
+            showlakes = True,
+            lakecolor = 'rgb(255, 255, 255)'),
+             )
 
 
-# Pairplot of Regular Season Games
-# Only include teams who are both seeded in the tournament
-regseason_in_tourney = regseasoncompactresults.dropna(subset=['WSeed','LSeed'])
-sns.pairplot(data = regseason_in_tourney,
-             vars=['WScore','LScore','WSeed','LSeed'],
-             hue='WSeed')
 
 
-# > ## Winning Vs. Losing Score Distributions
+    
+fig = dict( data=data, layout=layout )
+py.iplot( fig, filename='d3-cloropleth-map' )
 
-# In[ ]:
 
-
-regseason2017 = regseasoncompactresults.loc[regseasoncompactresults['Season'] == 2017]
-
-
-# In[ ]:
-
-
-bins = np.linspace(0, 120, 61)
-pyplot.figure(figsize=(15,5))
-pyplot.title('Distribution of Winning and Losing Scores 2017')
-pyplot.hist(regseason2017['WScore'], bins, alpha=0.5, label='Winning Score')
-pyplot.hist(regseason2017['LScore'], bins, alpha=0.5, label='Losing Score')
-pyplot.legend(loc='upper right')
-pyplot.show()
-
-
-# In[ ]:
-
-
-bins = np.linspace(0, 120, 61)
-pyplot.figure(figsize=(15,5))
-pyplot.title('Distribution of Winning and Losing Scores All Years')
-pyplot.hist(regseasoncompactresults['WScore'], bins, alpha=0.5, label='Winning Score')
-pyplot.hist(regseasoncompactresults['LScore'], bins, alpha=0.5, label='Losing Score')
-pyplot.legend(loc='upper right')
-pyplot.show()
-
-
-# > # Teams with the Most Wins and Losses since 1998
-
-# In[ ]:
-
-
-# Teams with the Most Losses
-count_of_losses = regseasoncompactresults.groupby('LTeamID')['LTeamID'].agg('count')
-count_of_losses = count_of_losses.sort_values(ascending=False)
-team_loss_count = pd.DataFrame(count_of_losses).merge(teams, left_index=True, right_on='TeamID')[['TeamName','LTeamID']]
-team_loss_count.rename(columns={'LTeamID':'Loss Count'}).head(10)
-
-# These teams aren't super great at basketball
-
-
-# In[ ]:
-
-
-# Teams with the Most Wins
-count_of_wins = regseasoncompactresults.groupby('WTeamID')['WTeamID'].agg('count')
-count_of_wins = count_of_wins.sort_values(ascending=False)
-team_wins_count = pd.DataFrame(count_of_wins).merge(teams, left_index=True, right_on='TeamID')[['TeamName','WTeamID']]
-team_wins_count.rename(columns={'WTeamID':'Win Count'}).head(10)
-# These teams are super good at basketball
-
-
-# In[ ]:
-
-
-winloss_since1998 = pd.merge(team_wins_count, team_loss_count, how='outer')
-
-
-# In[ ]:
-
-
-winloss_since1998.sort_values('WTeamID', ascending=False).head(20)
-
-
-# ## The Winningest Teams of the 2017 Season
-
-# In[ ]:
-
-
-# Teams with the Most Wins
-count_of_wins2017 = regseason2017.groupby('WTeamID')['WTeamID'].agg('count')
-count_of_wins2017 = count_of_wins2017.sort_values(ascending=False)
-team_wins_count2017 = pd.DataFrame(count_of_wins2017).merge(teams, left_index=True, right_on='TeamID')[['TeamName','WTeamID']]
-team_wins_count2017 = team_wins_count2017.rename(columns={'WTeamID':'Win Count'})
-
-count_of_losses2017 = regseason2017.groupby('LTeamID')['LTeamID'].agg('count')
-count_of_losses2017 = count_of_losses2017.sort_values(ascending=False)
-team_losses_count2017 = pd.DataFrame(count_of_losses2017).merge(teams, left_index=True, right_on='TeamID')[['TeamName','LTeamID']]
-team_losses_count2017 = team_losses_count2017.rename(columns={'LTeamID':'Loss Count'})
-
-winloss2017 = pd.merge(team_wins_count2017, team_losses_count2017, how='outer')
-winloss2017.sort_values('Win Count', ascending=False).head(26)
-winloss2017 = winloss2017.fillna(0)
-winloss2017.head(15)
-
-
-# # Distribution of Game Point Differential 
-# Point Differential (Winning Points - Losing Team Points)
-
-# In[ ]:
-
-
-regseasoncompactresults['ScoreDiff'] = regseasoncompactresults['WScore'] - regseasoncompactresults['LScore'] 
-
-
-# In[ ]:
-
-
-regseasoncompactresults['ScoreDiff'].hist(bins=30)
-
-
-# # Check out the Historic Tourney Results
-
-# In[ ]:
-
-
-# Point Differential when Home Team wins (favorite)
-# The Home Team is the favortie
-tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'H']['ScoreDiff'].hist()
-
-
-# In[ ]:
-
-
-# Point Differential when Away Team wins (favorite)
-# More close games
-tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'A']['ScoreDiff'].hist()
-
-
-# In[ ]:
-
-
-# Point Differential for neutral site games
-tourneycompactresults.loc[tourneycompactresults['WLoc'] == 'N']['ScoreDiff'].hist()
-
+# # **Conclusion**
+# > *Thanks for reading this notebook. I am new to data science. So if you have any suggestions feel free to tell me. Don't forget to upvote!*

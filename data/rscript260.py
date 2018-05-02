@@ -1,187 +1,157 @@
-import numpy as np
 import pandas as pd
-import csv
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
+import numpy as np
 import gc
-import datetime
-import matplotlib.pyplot as plt
-start_datetime = datetime.datetime.now()
-print('Start at {}'.format(start_datetime.strftime("%Y-%m-%d %H:%M:%S")))
-df_train = pd.read_csv('../input/train.tsv', sep='\t', encoding='utf-8', quoting=csv.QUOTE_NONE)
-df_test = pd.read_csv('../input/test.tsv', sep='\t', encoding='utf-8', quoting=csv.QUOTE_NONE)
+from sklearn.metrics import roc_auc_score
+train_df = pd.read_csv('../input/train.csv', nrows=40000000)
+test_df = pd.read_csv('../input/test.csv')
+print("load done")
+#dask_df = train_df
+#df_pos = dask_df[(dask_df['is_attributed'] == 1)]
+#df_neg = dask_df[(dask_df['is_attributed'] == 0)]
+#df_pos = df_pos.sample(n=5000)
+#print(len(df_pos))
+#print(len(df_neg))
+#df_neg = df_neg.sample(n=2000000)
+#train_df = pd.concat([df_pos,df_neg]).sample(frac=1)
+#del df_pos, df_neg
+#gc.collect()
+def remove_unkonwn_tag(col, train_df = train_df, test_df = test_df):
+    test_df.loc[~test_df[col].isin(train_df[col]),col] = 9999999
 
-print('Load data complete\nShape train: {}\nShape test: {}'.format(df_train.shape,df_test.shape))
-median_price = df_train['price'].median()
-mean_price = df_train['price'].mean()
-exclude_cols = ['name', 'category_name', 'brand_name', 'item_description', 'category_1', 'category_2', 'category_3']
+def remove_lowfreq_tag(col, train_df = train_df,test_df = test_df, N=3):
+    topN_address_list = train_df[col].value_counts()
+    #print(topN_address_list)
+    topN_address_list = topN_address_list[topN_address_list <= N]
+    topN_address_list = topN_address_list.index
+    remove_list = train_df.loc[train_df[col].isin(topN_address_list), col]
+    print('remove:',len(remove_list))
+    print('reserve',len(train_df) - len(remove_list))
+    remove_list = 9999998
+    test_df.loc[test_df[col].isin(topN_address_list), col] = 9999998
 
-def category_detail(x, i):
-    try:
-        x = x.split('/')[i]
-        return x
-    except:
-        return ''
-def category_detail_1(x):
-    return category_detail(x, 0)
-def category_detail_2(x):
-    return category_detail(x, 1)
-def category_detail_3(x):
-    return category_detail(x, 2)
+def preprocess(df):
+    df['time_t'] = df.click_time.str[11:13] + df.click_time.str[14:16]
 
-def price_features_groupby(df_train, col, type):
-    if(type == 'median'):
-        price_dict = df_train.groupby(col)['price'].median().to_dict()
-    elif(type == 'mean'):
-        price_dict = df_train.groupby(col)['price'].mean().to_dict()
-    elif(type == 'max'):
-        price_dict = df_train.groupby(col)['price'].max().to_dict()
-    else:
-        price_dict = df_train.groupby(col)['price'].min().to_dict()
-    tmp = pd.DataFrame({
-        col:list(price_dict.keys()),
-        '{}_{}_price'.format(col, type):list(price_dict.values())})
-    return tmp
-def price_features(df_train, df_test, col, type):
-    na_value = -1
-    if(type == 'median'):
-        na_value = median_price
-    elif(type == 'mean'):
-        na_value = mean_price
-        
-    tmp = price_features_groupby(df_train, col, type)
-    df_train = pd.merge(df_train, tmp, how='left', on=col)
-    df_train['{}_{}_price'.format(col, type)].fillna(na_value, inplace=True)
-    df_train['{}_{}_price'.format(col, type)] = df_train['{}_{}_price'.format(col, type)].astype(np.int16)
+for i,j in zip(['app','ip','device','os','channel'],[5,4,4,5,5]):
+    remove_lowfreq_tag(i,N=j)
+
+
+for i in ['app','ip','device','os','channel']:
+    remove_unkonwn_tag(i)
+
+from sklearn.preprocessing import LabelEncoder
+def process_lable_encoder(col, train_df = train_df, test_df = test_df):
+    le = LabelEncoder()
+    le.fit(np.hstack([train_df[col], test_df[col]]))
+    train_df[col] = le.transform(train_df[col])
+    test_df[col] = le.transform(test_df[col])
+
+coding_list = ['ip','app','device','os','channel','time_t']
+
+preprocess(train_df)
+preprocess(test_df)
+print("load done")
+
+for i in coding_list:
+    process_lable_encoder(i)
     
-    df_test = pd.merge(df_test, tmp, how='left', on=col)
-    df_test['{}_{}_price'.format(col, type)].fillna(na_value, inplace=True)
-    df_test['{}_{}_price'.format(col, type)] = df_test['{}_{}_price'.format(col, type)].astype(np.int16)
-    
-    return df_train, df_test
-    
+print("label gen done")
+MAX_IP = np.max(train_df.ip.max()) + 2 #39612 #277396
+MAX_DEVICE = np.max(train_df.device.max()) + 2 #299 #3475
+MAX_OS = np.max(train_df.os.max()) + 2 #161 #3475
+MAX_APP = np.max(train_df.app.max()) + 2 #214 #3475
+MAX_CHANNEL = np.max(train_df.channel.max()) + 2  #155
+MAX_TIME = np.max(train_df.time_t.max()) + 2 #24*60+1
+print("MAX gen done")
 
-def category_features(df_train, df_test, col):
-    cate_train = set(df_train[col].unique())
-    cate_test = set(df_test[col].unique())
-    cate_all = cate_train.union(cate_test)
-    print('category {} in train have {} unique values'.format(col, len(cate_train)))
-    print('category {} in test have {} unique values'.format(col, len(cate_test)))
-    print('category {} in train ∪ test have {} unique values'.format(col, len(cate_all)))
-    print()
-    tmp = pd.DataFrame({
-        col:list(cate_all),
-        '{}_cat'.format(col):[i+1 for i in range(len(cate_all))]})
-    df_train = pd.merge(df_train, tmp, how='left', on=col) 
-    df_train['{}_cat'.format(col)].fillna(-1, inplace=True) 
-    df_test = pd.merge(df_test, tmp, how='left', on=col)
-    df_test['{}_cat'.format(col)].fillna(-1, inplace=True)
-    return df_train, df_test
-df_train['category_1'] = df_train['category_name'].apply(category_detail_1)
-df_train['category_2'] = df_train['category_name'].apply(category_detail_2)
-df_train['category_3'] = df_train['category_name'].apply(category_detail_3)
+def get_keras_data(df):
+    X = {
+        'ip': np.array(df.ip),
+	    'app': np.array(df.app),
+        'device': np.array(df.device),
+        'os': np.array(df.os),
+        'channel': np.array(df.channel),
+        'clicktime': np.array(df.time_t),
+    }
+    return X
 
-df_test['category_1'] = df_test['category_name'].apply(category_detail_1)
-df_test['category_2'] = df_test['category_name'].apply(category_detail_2)
-df_test['category_3'] = df_test['category_name'].apply(category_detail_3)
+from keras.layers import Input, Dropout, Dense, concatenate, GRU, Embedding, Flatten, Activation
+from keras.optimizers import Adam
+from keras.models import Model
+from keras import backend as K
 
-for col in ['category_name','brand_name','category_1','category_2','category_3']:
-    df_train, df_test = category_features(df_train, df_test, col)
+def get_model(lr=0.001, decay=0.0):
+    ip = Input(shape=[1], name="ip")
+    app = Input(shape=[1], name="app")
+    device = Input(shape=[1], name="device")
+    os = Input(shape=[1], name="os")
+    channel = Input(shape=[1], name="channel")
+    clicktime = Input(shape=[1], name="clicktime")
 
-for col in ['category_name','brand_name','category_1','category_2','category_3','item_condition_id']:
-    for type in ['median','mean','max','min']:
-        df_train, df_test = price_features(df_train, df_test, col, type)
+    emb_ip = Embedding(MAX_IP, 64)(ip)
+    emb_device = Embedding(MAX_DEVICE, 16)(device)
+    emb_os= Embedding(MAX_OS, 16)(os)
+    emb_app = Embedding(MAX_APP, 16)(app)
+    emb_channel = Embedding(MAX_CHANNEL, 8)(channel)
+    emb_time = Embedding(MAX_TIME, 32)(clicktime)
 
-# start https://www.kaggle.com/golubev/naive-xgboost-v2
-c_texts = ['name', 'item_description']
-def count_words(key):
-    return len(str(key).split())
-def count_numbers(key):
-    return sum(c.isalpha() for c in str(key))
-def count_upper(key):
-    return sum(c.isupper() for c in str(key))
-for c in c_texts:
-    df_train[c + '_c_words'] = df_train[c].apply(count_words)
-    df_train[c + '_c_upper'] = df_train[c].apply(count_upper)
-    df_train[c + '_c_numbers'] = df_train[c].apply(count_numbers)
-    df_train[c + '_len'] = df_train[c].str.len()
-    df_train[c + '_mean_len_words'] = df_train[c + '_len'] / df_train[c + '_c_words']
-    df_train[c + '_mean_upper'] = df_train[c + '_len'] / df_train[c + '_c_upper']
-    df_train[c + '_mean_numbers'] = df_train[c + '_len'] / df_train[c + '_c_numbers']
-
-for c in c_texts:
-    df_test[c + '_c_words'] = df_test[c].apply(count_words)
-    df_test[c + '_c_upper'] = df_test[c].apply(count_upper)
-    df_test[c + '_c_numbers'] = df_test[c].apply(count_numbers)
-    df_test[c + '_len'] = df_test[c].str.len()
-    df_test[c + '_mean_len_words'] = df_test[c + '_len'] / df_test[c + '_c_words']
-    df_test[c + '_mean_upper'] = df_test[c + '_len'] / df_test[c + '_c_upper']
-    df_test[c + '_mean_numbers'] = df_test[c + '_len'] / df_test[c + '_c_numbers']
-# end https://www.kaggle.com/golubev/naive-xgboost-v2
+    main = concatenate([Flatten()(emb_ip), 
+                        Flatten()(emb_device), 
+                        Flatten()(emb_os),
+                        Flatten()(emb_app),
+                        Flatten()(emb_channel), 
+                        Flatten()(emb_time)])
+    main = Dense(128,kernel_initializer='normal', activation="tanh")(main)
+    main = Dropout(0.2)(main)
+    main = Dense(64,kernel_initializer='normal', activation="tanh")(main)
+    main = Dropout(0.2)(main)    
+    main = Dense(32,kernel_initializer='normal', activation="relu")(main)
+    output = Dense(1,activation="sigmoid") (main)
+    #model
+    model = Model([ip, app, device, os, channel, clicktime], output)
+    optimizer = Adam(lr=lr, decay=decay)
+    model.compile(loss="binary_crossentropy", 
+                  optimizer=optimizer)
+    return model
 
 
-
-print('After adding features\nShape train: {}\nShape test: {}'.format(df_train.shape,df_test.shape))
-
-gc.collect()
-# from https://www.kaggle.com/shikhar1/base-random-forest-lb-532
-df_train['price'] = df_train['price'].apply(lambda x: np.log(x+1))
-target_train = df_train['price'].values
-train = np.array(df_train['train_id'])
-df_train = df_train.drop(['train_id', 'price']+exclude_cols, axis=1)
-
-cat_features = []
-for i, c in enumerate(df_train.columns):
-    if('_cat' in c):
-        cat_features.append(c)
+from sklearn.model_selection import train_test_split
 
 
+Y_train = train_df.is_attributed.values.reshape(-1, 1)
 
-params = {
-    'learning_rate': 0.25,
-    'application': 'regression',
-    'max_depth': 10,
-    'num_leaves': 256,
-    'verbosity': -1,
-    'metric': 'RMSE'
-}
-moedels = []
-for i in range(3):
-    train_X, valid_X, train_y, valid_y = train_test_split(df_train, target_train, test_size = 0.1, random_state = i) 
-    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
-    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
-    watchlist = [d_train, d_valid]
+X_train, X_valid, y_train, y_valid = train_test_split(train_df[coding_list], Y_train, test_size = 0.1, random_state= 1984, stratify = Y_train)
+X_train = get_keras_data(X_train[coding_list])
+X_valid = get_keras_data(X_valid[coding_list])
 
-    model = lgb.train(params, train_set=d_train, num_boost_round=240, valid_sets=watchlist, \
-    early_stopping_rounds=20, verbose_eval=10, categorical_feature=cat_features) 
-    moedels.append(model)
-    ax = lgb.plot_importance(model)
-    plt.tight_layout()
-    plt.savefig('feature_importance_{}.png'.format(i))
+print("Defining  model...")
 
-del target_train, train
-gc.collect()
+# Model hyper parameters.
+BATCH_SIZE = 1024*2
+epochs = 1
 
+# Calculate learning rate decay.
+exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
+steps = int(len(train_df['ip']) / BATCH_SIZE) * epochs
+lr_init, lr_fin = 0.001, 0.0003
+lr_decay = exp_decay(lr_init, lr_fin, steps)
 
-train_end_datetime = datetime.datetime.now()
-print('Training end at {}'.format(train_end_datetime.strftime("%Y-%m-%d %H:%M:%S")))
-print('Total training time: {} seconds'.format((train_end_datetime-start_datetime).total_seconds()))    
-preds = None
-for i, model in enumerate(moedels):
-    pred = model.predict(df_test.drop(['test_id']+exclude_cols, axis=1))
-    pred = pd.Series(np.exp(pred)-1)
-    if(i == 0):
-        preds = pred
-    else:
-        preds += pred
-preds /= len(moedels)
-preds[preds < 0] = 0.01    
+model = get_model(lr=lr_init, decay=lr_decay)
 
-output = pd.DataFrame({'price': preds, 'test_id': df_test['test_id']})
-output = output[['test_id', 'price']]
-output.to_csv('sub.csv', index=False)   
+print("Fitting  model to training examples...")
+cw = {0: 1, 1: 3}
+for i in range(1):
+    model.fit(
+            X_train, y_train, epochs=1, batch_size=BATCH_SIZE,
+            validation_data=(X_valid, y_valid), verbose=1,class_weight=cw
+    )
+    y_val_pred = model.predict(X_valid)[:, 0]
+    print('Valid AUC: {:.4f}'.format(roc_auc_score(y_valid, y_val_pred)))
 
-end_datetime = datetime.datetime.now()
-print('End at {}'.format(end_datetime.strftime("%Y-%m-%d %H:%M:%S")))
-print('Total testing time: {} seconds'.format((end_datetime-train_end_datetime).total_seconds()))    
-print('Training + Testing time: {} seconds'.format((end_datetime-start_datetime).total_seconds()))
+X_test = get_keras_data(test_df[coding_list])
+preds = model.predict(X_test, batch_size=BATCH_SIZE)
+sub = pd.DataFrame()
+sub['click_id'] = test_df['click_id']
+sub['is_attributed'] = preds
+sub.to_csv('sub_nn.csv', index=False)
+print(sub.head())
